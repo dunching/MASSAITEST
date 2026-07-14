@@ -1,0 +1,27 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.7",
+  "Category": "Prototype",
+  "Description": "Isolated 500-entity MassAI crowd replication and movement demo.",
+  "Modules": [
+    {
+      "Name": "MassAICrowdDemo",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "PythonScriptPlugin",
+      "Enabled": true
+    },
+    {
+      "Name": "MassGameplay",
+      "Enabled": true
+    },
+    {
+      "Name": "MassAI",
+      "Enabled": true
+    }
+  ]
+}
