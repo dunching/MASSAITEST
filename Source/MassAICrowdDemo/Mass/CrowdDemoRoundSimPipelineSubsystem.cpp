@@ -302,6 +302,10 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   }
   ActivePlan = Packet;
   bPlanActive = true;
+  bTargetInfluenceExecutionDiagnosticPlanEnabled = FParse::Param(
+      FCommandLine::Get(), TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic"))
+    && Packet.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+    && Packet.Rules.TargetInfluenceSettings.bEnabled != 0;
   CurrentFixedStepSeconds = FMath::Max(1.0f / 120.0f, Packet.Rules.FixedStepSeconds);
   if (LastCompareMetrics.RoundPlanAppliedCount == 0 || SimulatedServerTimeSeconds < Packet.StartServerTimeSeconds)
   {
@@ -361,6 +365,56 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     ParticlePreviousSoftErrorP95 = -1.0f;
     bParticleConstraintRunFailure = false;
     ParticleFailureFixture = FCrowdDemoParticleFailureFixture();
+    SoftPressureRouteDiagnosticRuntime = {};
+    SoftPressureRouteDiagnosticSummary = {};
+    TargetApproachFact = FCrowdDemoTargetFact();
+    PreparedTargetSlotLayout = FCrowdDemoTargetSlotLayout();
+    TargetSlotLayoutSummary = FCrowdDemoTargetSlotLayoutSummary();
+    PreparedTargetApproachDecisions.Reset();
+    PreparedTargetApproachGuidance.Reset();
+    TargetApproachSummary = FCrowdDemoTargetApproachSummary();
+    TargetApproachCommitHash = 2166136261u;
+    PreparedTargetInfluenceResults.Reset();
+    TargetInfluenceSummary = FCrowdDemoTargetInfluenceSummary();
+    TargetInfluenceRoundHash = 2166136261u;
+    TargetInfluenceExecutionRuntime = {};
+    TargetInfluenceExecutionSummary = {};
+    PreparedTargetRegionTopology = {};
+    TargetRegionTopologySummary = {};
+    PreparedTargetRegionAgents.Reset();
+    PreparedTargetRegionDemand = {};
+    PreparedTargetRegionPlan = {};
+    TargetRegionPlanValidation = {};
+    PreparedTargetRegionGuidance.Reset();
+    TargetRegionGuidanceSummary = {};
+    TargetRegionTopologyRoundHash = 2166136261u;
+    TargetRegionDemandRoundHash = 2166136261u;
+    TargetRegionTransportRoundHash = 2166136261u;
+    TargetRegionGuidanceRoundHash = 2166136261u;
+    TargetRegionPlanRebuildCount = 0;
+    TargetRegionLifetimeRebuildCount = 0;
+    TargetRegionTargetRebuildCount = 0;
+    TargetRegionEnvironmentRebuildCount = 0;
+    TargetRegionMembershipRebuildCount = 0;
+    TargetRegionDemandSatisfiedRebuildCount = 0;
+    TargetRegionPathInvalidRebuildCount = 0;
+    TargetRegionSolverMillisecondsSamples.Reset();
+    bTargetRegionRoundValid = true;
+    TargetRegionInvalidStepCount = 0;
+    TargetRegionLastInvalidStep = INDEX_NONE;
+    TargetRegionValidationFailureCount = 0;
+    TargetRegionValidationRoundHash = 2166136261u;
+    TargetRegionGuidanceUnroutedStepCount = 0;
+    TargetRegionGuidanceUnroutedAgentSampleCount = 0;
+    TargetRegionGuidanceUnroutedAgentMax = 0;
+    TargetRegionGuidanceFirstFailureStep = INDEX_NONE;
+    TargetRegionGuidanceFirstFailureAgentId = INDEX_NONE;
+    bTargetRegionFailureFixtureValid = false;
+    TargetRegionFailureFixtureStep = INDEX_NONE;
+    TargetRegionFailureFixtureKind = 0;
+    TargetRegionFailureFixtureAgentId = INDEX_NONE;
+    TargetRegionFailureFixtureCellKey = INDEX_NONE;
+    TargetRegionFailureFixtureHash = 0;
     LastCompareMetrics.InitialOverlapPairCount = 0;
     LastCompareMetrics.OverlapPairCountP50 = -1.0f;
     LastCompareMetrics.OverlapPairCountP95 = -1.0f;
@@ -515,6 +569,13 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureSharedFlowField(
 {
   const bool bNeedsRebuild = !SharedFlowField.IsValid()
     || SharedFlowField.Config.Revision != Config.Revision
+    || SharedFlowField.Config.ConnectivityContractVersion != Config.ConnectivityContractVersion
+    || !FMath::IsNearlyEqual(
+      SharedFlowField.Config.CellSizeCm, Config.CellSizeCm, 0.001f)
+    || !FMath::IsNearlyEqual(
+      SharedFlowField.Config.AgentInflateCm, Config.AgentInflateCm, 0.001f)
+    || !FVector(SharedFlowField.Config.BoundsMin).Equals(FVector(Config.BoundsMin), 0.01f)
+    || !FVector(SharedFlowField.Config.BoundsMax).Equals(FVector(Config.BoundsMax), 0.01f)
     || !FVector(SharedFlowField.Config.GoalLocation).Equals(FVector(Config.GoalLocation), 0.01f);
   if (bNeedsRebuild)
   {
@@ -1543,10 +1604,39 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSf3OverlapSample(
   LastCompareMetrics.TrafficMetrics.FinalObstaclePenetrationCount += ObstaclePenetrations;
 }
 
+void UCrowdDemoRoundSimPipelineSubsystem::RecordFlowConnectivityStep(
+  const int32 RecoveredCount,
+  const int32 DesiredSegmentViolationCount,
+  const int32 SourceAttachmentSuccessCount,
+  const int32 UnreachableSampleCount)
+{
+  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
+  Metrics.FlowRecoveredFromRasterMismatchCount += FMath::Max(0, RecoveredCount);
+  Metrics.FlowDesiredSegmentHardObstacleViolationCount +=
+    FMath::Max(0, DesiredSegmentViolationCount);
+  Metrics.SourceAttachmentSuccessCount += FMath::Max(0, SourceAttachmentSuccessCount);
+  Metrics.NavigationUnreachableSampleCount += FMath::Max(0, UnreachableSampleCount);
+}
+
 FCrowdDemoTrafficMetrics UCrowdDemoRoundSimPipelineSubsystem::BuildTrafficMetrics(
   const TConstArrayView<FCrowdDemoRoundAgentState> States) const
 {
   FCrowdDemoTrafficMetrics Metrics = LastCompareMetrics.TrafficMetrics;
+  Metrics.SharedFlowFieldBuildHash = SharedFlowField.BuildHash;
+  Metrics.SharedFlowConnectivityContractVersion =
+    SharedFlowField.Config.ConnectivityContractVersion;
+  Metrics.SharedFlowValidDirectedEdgeCount = SharedFlowField.ValidDirectedEdgeCount;
+  Metrics.NavigationHardClearanceCm = GetRules().ParticleProfile.GetNavigationHardClearanceCm();
+  Metrics.NavigationCenterAnchorCount = SharedFlowField.NavigationCenterAnchorCount;
+  Metrics.NavigationConnectionPointCount = SharedFlowField.NavigationConnectionPointCount;
+  Metrics.NavigationSafeIntervalCount = SharedFlowField.NavigationSafeIntervalCount;
+  Metrics.NavigationInternalEdgeCount = SharedFlowField.NavigationInternalEdgeCount;
+  Metrics.NavigationDirectedEdgeCount = SharedFlowField.ValidDirectedEdgeCount;
+  Metrics.CenterInvalidButConnectedCellCount =
+    SharedFlowField.CenterInvalidButConnectedCellCount;
+  Metrics.GoalAttachmentCount = SharedFlowField.GoalAttachmentCount;
+  Metrics.NavigationV2Hash = SharedFlowField.Config.ConnectivityContractVersion >= 2
+    ? SharedFlowField.BuildHash : 0;
   uint32 Hash = 2166136261u;
   for (const FCrowdDemoRoundAgentState& State : States)
   {
@@ -2563,6 +2653,52 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.ParticlePreviousSoftErrorP95 = ParticlePreviousSoftErrorP95;
   Snapshot.bParticleConstraintRunFailure = bParticleConstraintRunFailure;
   Snapshot.ParticleFailureFixture = ParticleFailureFixture;
+  Snapshot.TargetFact = TargetApproachFact;
+  Snapshot.TargetSlotLayout = PreparedTargetSlotLayout;
+  Snapshot.TargetSlotLayoutSummary = TargetSlotLayoutSummary;
+  Snapshot.TargetApproachDecisions = PreparedTargetApproachDecisions;
+  Snapshot.TargetApproachGuidance = PreparedTargetApproachGuidance;
+  Snapshot.TargetApproachSummary = TargetApproachSummary;
+  Snapshot.TargetApproachCommitHash = TargetApproachCommitHash;
+  Snapshot.TargetInfluenceResults = PreparedTargetInfluenceResults;
+  Snapshot.TargetInfluenceSummary = TargetInfluenceSummary;
+  Snapshot.TargetInfluenceRoundHash = TargetInfluenceRoundHash;
+  Snapshot.TargetRegionTopology = PreparedTargetRegionTopology;
+  Snapshot.TargetRegionTopologySummary = TargetRegionTopologySummary;
+  Snapshot.TargetRegionAgents = PreparedTargetRegionAgents;
+  Snapshot.TargetRegionDemand = PreparedTargetRegionDemand;
+  Snapshot.TargetRegionPlan = PreparedTargetRegionPlan;
+  Snapshot.TargetRegionPlanValidation = TargetRegionPlanValidation;
+  Snapshot.TargetRegionGuidance = PreparedTargetRegionGuidance;
+  Snapshot.TargetRegionGuidanceSummary = TargetRegionGuidanceSummary;
+  Snapshot.TargetRegionTopologyRoundHash = TargetRegionTopologyRoundHash;
+  Snapshot.TargetRegionDemandRoundHash = TargetRegionDemandRoundHash;
+  Snapshot.TargetRegionTransportRoundHash = TargetRegionTransportRoundHash;
+  Snapshot.TargetRegionGuidanceRoundHash = TargetRegionGuidanceRoundHash;
+  Snapshot.TargetRegionPlanRebuildCount = TargetRegionPlanRebuildCount;
+  Snapshot.TargetRegionLifetimeRebuildCount = TargetRegionLifetimeRebuildCount;
+  Snapshot.TargetRegionTargetRebuildCount = TargetRegionTargetRebuildCount;
+  Snapshot.TargetRegionEnvironmentRebuildCount = TargetRegionEnvironmentRebuildCount;
+  Snapshot.TargetRegionMembershipRebuildCount = TargetRegionMembershipRebuildCount;
+  Snapshot.TargetRegionDemandSatisfiedRebuildCount = TargetRegionDemandSatisfiedRebuildCount;
+  Snapshot.TargetRegionPathInvalidRebuildCount = TargetRegionPathInvalidRebuildCount;
+  Snapshot.TargetRegionSolverMsSampleCount = TargetRegionSolverMillisecondsSamples.Num();
+  Snapshot.bTargetRegionRoundValid = bTargetRegionRoundValid;
+  Snapshot.TargetRegionInvalidStepCount = TargetRegionInvalidStepCount;
+  Snapshot.TargetRegionLastInvalidStep = TargetRegionLastInvalidStep;
+  Snapshot.TargetRegionValidationFailureCount = TargetRegionValidationFailureCount;
+  Snapshot.TargetRegionValidationRoundHash = TargetRegionValidationRoundHash;
+  Snapshot.TargetRegionGuidanceUnroutedStepCount = TargetRegionGuidanceUnroutedStepCount;
+  Snapshot.TargetRegionGuidanceUnroutedAgentSampleCount = TargetRegionGuidanceUnroutedAgentSampleCount;
+  Snapshot.TargetRegionGuidanceUnroutedAgentMax = TargetRegionGuidanceUnroutedAgentMax;
+  Snapshot.TargetRegionGuidanceFirstFailureStep = TargetRegionGuidanceFirstFailureStep;
+  Snapshot.TargetRegionGuidanceFirstFailureAgentId = TargetRegionGuidanceFirstFailureAgentId;
+  Snapshot.bTargetRegionFailureFixtureValid = bTargetRegionFailureFixtureValid;
+  Snapshot.TargetRegionFailureFixtureStep = TargetRegionFailureFixtureStep;
+  Snapshot.TargetRegionFailureFixtureKind = TargetRegionFailureFixtureKind;
+  Snapshot.TargetRegionFailureFixtureAgentId = TargetRegionFailureFixtureAgentId;
+  Snapshot.TargetRegionFailureFixtureCellKey = TargetRegionFailureFixtureCellKey;
+  Snapshot.TargetRegionFailureFixtureHash = TargetRegionFailureFixtureHash;
   Snapshot.FlowGoalReachedAgentIds = FlowGoalReachedAgentIds;
   Snapshot.FlowWallPassAgentIds = FlowWallPassAgentIds;
   Snapshot.FlowCorridorExitAgentIds = FlowCorridorExitAgentIds;
@@ -2570,6 +2706,14 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.FlowLowSpeedSecondsByAgentId = FlowLowSpeedSecondsByAgentId;
   Snapshot.FlowCorridorDeadlockAgentIds = FlowCorridorDeadlockAgentIds;
   Snapshot.CompareMetrics = LastCompareMetrics;
+  if (IsSoftPressureRouteDiagnosticEnabled())
+    Snapshot.RouteDiagnosticCheckpoint =
+      FCrowdDemoSoftPressureRouteDiagnosticKernel::MakeCheckpoint(
+        SoftPressureRouteDiagnosticRuntime);
+  if (IsTargetInfluenceExecutionDiagnosticEnabled())
+    Snapshot.TargetInfluenceExecutionCheckpoint =
+      FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::MakeCheckpoint(
+        TargetInfluenceExecutionRuntime);
   SoftPressureRollbackHistory.Remove(FixedStepIndex - 128);
 }
 
@@ -2597,6 +2741,53 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   ParticlePreviousSoftErrorP95 = Snapshot.ParticlePreviousSoftErrorP95;
   bParticleConstraintRunFailure = Snapshot.bParticleConstraintRunFailure;
   ParticleFailureFixture = Snapshot.ParticleFailureFixture;
+  TargetApproachFact = Snapshot.TargetFact;
+  PreparedTargetSlotLayout = Snapshot.TargetSlotLayout;
+  TargetSlotLayoutSummary = Snapshot.TargetSlotLayoutSummary;
+  PreparedTargetApproachDecisions = Snapshot.TargetApproachDecisions;
+  PreparedTargetApproachGuidance = Snapshot.TargetApproachGuidance;
+  TargetApproachSummary = Snapshot.TargetApproachSummary;
+  TargetApproachCommitHash = Snapshot.TargetApproachCommitHash;
+  PreparedTargetInfluenceResults = Snapshot.TargetInfluenceResults;
+  TargetInfluenceSummary = Snapshot.TargetInfluenceSummary;
+  TargetInfluenceRoundHash = Snapshot.TargetInfluenceRoundHash;
+  PreparedTargetRegionTopology = Snapshot.TargetRegionTopology;
+  TargetRegionTopologySummary = Snapshot.TargetRegionTopologySummary;
+  PreparedTargetRegionAgents = Snapshot.TargetRegionAgents;
+  PreparedTargetRegionDemand = Snapshot.TargetRegionDemand;
+  PreparedTargetRegionPlan = Snapshot.TargetRegionPlan;
+  TargetRegionPlanValidation = Snapshot.TargetRegionPlanValidation;
+  PreparedTargetRegionGuidance = Snapshot.TargetRegionGuidance;
+  TargetRegionGuidanceSummary = Snapshot.TargetRegionGuidanceSummary;
+  TargetRegionTopologyRoundHash = Snapshot.TargetRegionTopologyRoundHash;
+  TargetRegionDemandRoundHash = Snapshot.TargetRegionDemandRoundHash;
+  TargetRegionTransportRoundHash = Snapshot.TargetRegionTransportRoundHash;
+  TargetRegionGuidanceRoundHash = Snapshot.TargetRegionGuidanceRoundHash;
+  TargetRegionPlanRebuildCount = Snapshot.TargetRegionPlanRebuildCount;
+  TargetRegionLifetimeRebuildCount = Snapshot.TargetRegionLifetimeRebuildCount;
+  TargetRegionTargetRebuildCount = Snapshot.TargetRegionTargetRebuildCount;
+  TargetRegionEnvironmentRebuildCount = Snapshot.TargetRegionEnvironmentRebuildCount;
+  TargetRegionMembershipRebuildCount = Snapshot.TargetRegionMembershipRebuildCount;
+  TargetRegionDemandSatisfiedRebuildCount = Snapshot.TargetRegionDemandSatisfiedRebuildCount;
+  TargetRegionPathInvalidRebuildCount = Snapshot.TargetRegionPathInvalidRebuildCount;
+  TargetRegionSolverMillisecondsSamples.SetNum(FMath::Min(
+    TargetRegionSolverMillisecondsSamples.Num(), Snapshot.TargetRegionSolverMsSampleCount));
+  bTargetRegionRoundValid = Snapshot.bTargetRegionRoundValid;
+  TargetRegionInvalidStepCount = Snapshot.TargetRegionInvalidStepCount;
+  TargetRegionLastInvalidStep = Snapshot.TargetRegionLastInvalidStep;
+  TargetRegionValidationFailureCount = Snapshot.TargetRegionValidationFailureCount;
+  TargetRegionValidationRoundHash = Snapshot.TargetRegionValidationRoundHash;
+  TargetRegionGuidanceUnroutedStepCount = Snapshot.TargetRegionGuidanceUnroutedStepCount;
+  TargetRegionGuidanceUnroutedAgentSampleCount = Snapshot.TargetRegionGuidanceUnroutedAgentSampleCount;
+  TargetRegionGuidanceUnroutedAgentMax = Snapshot.TargetRegionGuidanceUnroutedAgentMax;
+  TargetRegionGuidanceFirstFailureStep = Snapshot.TargetRegionGuidanceFirstFailureStep;
+  TargetRegionGuidanceFirstFailureAgentId = Snapshot.TargetRegionGuidanceFirstFailureAgentId;
+  bTargetRegionFailureFixtureValid = Snapshot.bTargetRegionFailureFixtureValid;
+  TargetRegionFailureFixtureStep = Snapshot.TargetRegionFailureFixtureStep;
+  TargetRegionFailureFixtureKind = Snapshot.TargetRegionFailureFixtureKind;
+  TargetRegionFailureFixtureAgentId = Snapshot.TargetRegionFailureFixtureAgentId;
+  TargetRegionFailureFixtureCellKey = Snapshot.TargetRegionFailureFixtureCellKey;
+  TargetRegionFailureFixtureHash = Snapshot.TargetRegionFailureFixtureHash;
   FlowGoalReachedAgentIds = Snapshot.FlowGoalReachedAgentIds;
   FlowWallPassAgentIds = Snapshot.FlowWallPassAgentIds;
   FlowCorridorExitAgentIds = Snapshot.FlowCorridorExitAgentIds;
@@ -2604,6 +2795,148 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   FlowLowSpeedSecondsByAgentId = Snapshot.FlowLowSpeedSecondsByAgentId;
   FlowCorridorDeadlockAgentIds = Snapshot.FlowCorridorDeadlockAgentIds;
   LastCompareMetrics = Snapshot.CompareMetrics;
+  if (IsSoftPressureRouteDiagnosticEnabled())
+  {
+    FCrowdDemoSoftPressureRouteDiagnosticKernel::RestoreCheckpoint(
+      Snapshot.RouteDiagnosticCheckpoint, SoftPressureRouteDiagnosticRuntime);
+    SoftPressureRouteDiagnosticSummary = {};
+  }
+  if (IsTargetInfluenceExecutionDiagnosticEnabled())
+  {
+    FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::RestoreCheckpoint(
+      Snapshot.TargetInfluenceExecutionCheckpoint, TargetInfluenceExecutionRuntime);
+    TargetInfluenceExecutionSummary = {};
+  }
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetInfluenceStep(
+  TArray<FCrowdDemoTargetInfluenceResult>&& Results,
+  const FCrowdDemoTargetInfluenceSummary& Summary)
+{
+  PreparedTargetInfluenceResults = MoveTemp(Results);
+  TargetInfluenceSummary = Summary;
+  TargetInfluenceRoundHash = FoldHash(
+    FoldHash(TargetInfluenceRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    Summary.StableHash);
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetRegionTopologyStep()
+{
+  TargetRegionTopologyRoundHash = FoldHash(
+    FoldHash(TargetRegionTopologyRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    PreparedTargetRegionTopology.TopologyHash);
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetRegionDemandStep()
+{
+  TargetRegionDemandRoundHash = FoldHash(
+    FoldHash(TargetRegionDemandRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    PreparedTargetRegionDemand.DemandHash);
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetRegionTransportStep(
+  const float SolverMilliseconds, const int32 RebuildReason)
+{
+  TargetRegionTransportRoundHash = FoldHash(
+    FoldHash(TargetRegionTransportRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    PreparedTargetRegionPlan.TransportHash);
+  if (RebuildReason != 0)
+  {
+    ++TargetRegionPlanRebuildCount;
+    switch (RebuildReason)
+    {
+      case 1: ++TargetRegionLifetimeRebuildCount; break;
+      case 2: ++TargetRegionTargetRebuildCount; break;
+      case 3: ++TargetRegionEnvironmentRebuildCount; break;
+      case 4: ++TargetRegionMembershipRebuildCount; break;
+      case 5: ++TargetRegionDemandSatisfiedRebuildCount; break;
+      case 6: ++TargetRegionPathInvalidRebuildCount; break;
+      default: break;
+    }
+    TargetRegionSolverMillisecondsSamples.Add(FMath::Max(0.0f, SolverMilliseconds));
+  }
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetRegionGuidanceStep()
+{
+  TargetRegionGuidanceRoundHash = FoldHash(
+    FoldHash(TargetRegionGuidanceRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    TargetRegionGuidanceSummary.GuidanceHash);
+  if (!TargetRegionGuidanceSummary.bValid)
+  {
+    bTargetRegionRoundValid = false;
+    if (TargetRegionLastInvalidStep != GetCurrentFixedStepIndex())
+    {
+      TargetRegionLastInvalidStep = GetCurrentFixedStepIndex();
+      ++TargetRegionInvalidStepCount;
+    }
+    ++TargetRegionGuidanceUnroutedStepCount;
+    TargetRegionGuidanceUnroutedAgentSampleCount += TargetRegionGuidanceSummary.UnroutedAgentCount;
+    TargetRegionGuidanceUnroutedAgentMax = FMath::Max(
+      TargetRegionGuidanceUnroutedAgentMax, TargetRegionGuidanceSummary.UnroutedAgentCount);
+    if (TargetRegionGuidanceFirstFailureStep == INDEX_NONE)
+    {
+      TargetRegionGuidanceFirstFailureStep = GetCurrentFixedStepIndex();
+      TargetRegionGuidanceFirstFailureAgentId = TargetRegionGuidanceSummary.FirstUnroutedAgentId;
+    }
+  }
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetRegionValidationStep()
+{
+  TargetRegionValidationRoundHash = FoldHash(
+    FoldHash(TargetRegionValidationRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    TargetRegionPlanValidation.ValidationHash);
+  if (!TargetRegionPlanValidation.bValid)
+  {
+    bTargetRegionRoundValid = false;
+    if (TargetRegionLastInvalidStep != GetCurrentFixedStepIndex())
+    {
+      TargetRegionLastInvalidStep = GetCurrentFixedStepIndex();
+      ++TargetRegionInvalidStepCount;
+    }
+    ++TargetRegionValidationFailureCount;
+  }
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::PinTargetRegionFailureFixture(
+  const int32 Kind, const int32 AgentId, const int32 CellKey, const uint32 FixtureHash)
+{
+  if (bTargetRegionFailureFixtureValid || FixtureHash == 0) return;
+  bTargetRegionFailureFixtureValid = true;
+  TargetRegionFailureFixtureStep = GetCurrentFixedStepIndex();
+  TargetRegionFailureFixtureKind = Kind;
+  TargetRegionFailureFixtureAgentId = AgentId;
+  TargetRegionFailureFixtureCellKey = CellKey;
+  TargetRegionFailureFixtureHash = FixtureHash;
+}
+
+float UCrowdDemoRoundSimPipelineSubsystem::GetTargetRegionSolverMsP95() const
+{
+  return Percentile(TargetRegionSolverMillisecondsSamples, 0.95f);
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::IsTargetInfluenceExecutionDiagnosticEnabled() const
+{
+  return bTargetInfluenceExecutionDiagnosticPlanEnabled && IsActive();
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetInfluenceExecutionStep(
+  const TConstArrayView<FCrowdDemoTargetInfluenceExecutionSample> Samples,
+  const FCrowdDemoTargetPolarEnvironmentSummary& Environment)
+{
+  if (!IsTargetInfluenceExecutionDiagnosticEnabled()) return;
+  FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::RecordStep(
+    Samples, Environment, TargetInfluenceExecutionRuntime);
+  FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::BuildSummary(
+    TargetInfluenceExecutionRuntime, TargetInfluenceExecutionSummary);
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::PinTargetInfluenceExecutionDiagnosticForRoundResult()
+{
+  if (!IsTargetInfluenceExecutionDiagnosticEnabled()) return;
+  LastCompletedTargetInfluenceExecutionRuntime = TargetInfluenceExecutionRuntime;
+  LastCompletedTargetInfluenceExecutionSummary = TargetInfluenceExecutionSummary;
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackOutcome(
@@ -2997,6 +3330,33 @@ float UCrowdDemoRoundSimPipelineSubsystem::GetParticleSolverMsP95() const
   return Percentile(ParticleSolverMillisecondsSamples, 0.95f);
 }
 
+bool UCrowdDemoRoundSimPipelineSubsystem::IsSoftPressureRouteDiagnosticEnabled() const
+{
+  static const bool bEnabled = FParse::Param(
+    FCommandLine::Get(), TEXT("CrowdDemoSoftPressureRouteDiagnostic"));
+  return bEnabled && IsActive()
+    && GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure;
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRouteStep(
+  const TConstArrayView<FCrowdDemoSoftPressureRouteStepSample> Samples)
+{
+  if (!IsSoftPressureRouteDiagnosticEnabled()) return;
+  FCrowdDemoSoftPressureRouteDiagnosticKernel::RecordStep(
+    Samples, SoftPressureRouteDiagnosticRuntime);
+  SoftPressureRouteDiagnosticSummary = {};
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::FinalizeSoftPressureRouteDiagnostic(
+  const FCrowdDemoSoftPressureRouteCounterfactual& Counterfactual)
+{
+  if (!IsSoftPressureRouteDiagnosticEnabled()
+    || SoftPressureRouteDiagnosticSummary.bValid) return;
+  FCrowdDemoSoftPressureRouteDiagnosticKernel::BuildSummary(
+    SoftPressureRouteDiagnosticRuntime, Counterfactual,
+    SoftPressureRouteDiagnosticSummary);
+}
+
 void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundStart(TConstArrayView<FCrowdDemoRoundAgentState> States)
 {
   RoundInitialOverlapPairCount = CountOverlapPairs(States, OverlapRadiusCm);
@@ -3090,6 +3450,77 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
 {
   if (GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure)
   {
+    const FCrowdDemoTrafficMetrics LocalFlowMetrics = BuildTrafficMetrics(ClientStates);
+    const FCrowdDemoTrafficMetrics& ServerFlowMetrics = Packet.TrafficMetrics;
+    const bool bFlowConnectivityMatch =
+      LocalFlowMetrics.SharedFlowFieldBuildHash
+        == ServerFlowMetrics.SharedFlowFieldBuildHash
+      && LocalFlowMetrics.SharedFlowConnectivityContractVersion
+        == ServerFlowMetrics.SharedFlowConnectivityContractVersion
+      && LocalFlowMetrics.SharedFlowValidDirectedEdgeCount
+        == ServerFlowMetrics.SharedFlowValidDirectedEdgeCount
+      && FMath::IsNearlyEqual(
+        LocalFlowMetrics.NavigationHardClearanceCm,
+        ServerFlowMetrics.NavigationHardClearanceCm, 0.001f)
+      && LocalFlowMetrics.FlowRecoveredFromRasterMismatchCount
+        == ServerFlowMetrics.FlowRecoveredFromRasterMismatchCount
+      && LocalFlowMetrics.FlowDesiredSegmentHardObstacleViolationCount
+        == ServerFlowMetrics.FlowDesiredSegmentHardObstacleViolationCount
+      && LocalFlowMetrics.NavigationCenterAnchorCount
+        == ServerFlowMetrics.NavigationCenterAnchorCount
+      && LocalFlowMetrics.NavigationConnectionPointCount
+        == ServerFlowMetrics.NavigationConnectionPointCount
+      && LocalFlowMetrics.NavigationSafeIntervalCount
+        == ServerFlowMetrics.NavigationSafeIntervalCount
+      && LocalFlowMetrics.NavigationInternalEdgeCount
+        == ServerFlowMetrics.NavigationInternalEdgeCount
+      && LocalFlowMetrics.NavigationDirectedEdgeCount
+        == ServerFlowMetrics.NavigationDirectedEdgeCount
+      && LocalFlowMetrics.CenterInvalidButConnectedCellCount
+        == ServerFlowMetrics.CenterInvalidButConnectedCellCount
+      && LocalFlowMetrics.SourceAttachmentSuccessCount
+        == ServerFlowMetrics.SourceAttachmentSuccessCount
+      && LocalFlowMetrics.GoalAttachmentCount
+        == ServerFlowMetrics.GoalAttachmentCount
+      && LocalFlowMetrics.NavigationUnreachableSampleCount
+        == ServerFlowMetrics.NavigationUnreachableSampleCount
+      && LocalFlowMetrics.NavigationV2Hash
+        == ServerFlowMetrics.NavigationV2Hash;
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoFlowConnectivityHash role=client round_id=%d local_hash=%u server_hash=%u local_contract=%d server_contract=%d local_edges=%d server_edges=%d local_clearance_cm=%.3f server_clearance_cm=%.3f local_recovered=%d server_recovered=%d local_desired_segment_violations=%d server_desired_segment_violations=%d match=%d source=MassPipeline%s"),
+      Packet.RoundId, LocalFlowMetrics.SharedFlowFieldBuildHash,
+      ServerFlowMetrics.SharedFlowFieldBuildHash,
+      LocalFlowMetrics.SharedFlowConnectivityContractVersion,
+      ServerFlowMetrics.SharedFlowConnectivityContractVersion,
+      LocalFlowMetrics.SharedFlowValidDirectedEdgeCount,
+      ServerFlowMetrics.SharedFlowValidDirectedEdgeCount,
+      LocalFlowMetrics.NavigationHardClearanceCm,
+      ServerFlowMetrics.NavigationHardClearanceCm,
+      LocalFlowMetrics.FlowRecoveredFromRasterMismatchCount,
+      ServerFlowMetrics.FlowRecoveredFromRasterMismatchCount,
+      LocalFlowMetrics.FlowDesiredSegmentHardObstacleViolationCount,
+      ServerFlowMetrics.FlowDesiredSegmentHardObstacleViolationCount,
+      bFlowConnectivityMatch ? 1 : 0,
+      bFlowConnectivityMatch ? TEXT("") : TEXT(" VIOLATION"));
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoFlowV2Metrics role=client round_id=%d anchors=%d connections=%d safe_intervals=%d internal_edges=%d directed_edges=%d center_invalid_connected=%d source_attachment_success=%d goal_attachments=%d navigation_unreachable_samples=%d navigation_v2_hash=%u match=%d source=MassPipeline%s"),
+      Packet.RoundId, LocalFlowMetrics.NavigationCenterAnchorCount,
+      LocalFlowMetrics.NavigationConnectionPointCount,
+      LocalFlowMetrics.NavigationSafeIntervalCount,
+      LocalFlowMetrics.NavigationInternalEdgeCount,
+      LocalFlowMetrics.NavigationDirectedEdgeCount,
+      LocalFlowMetrics.CenterInvalidButConnectedCellCount,
+      LocalFlowMetrics.SourceAttachmentSuccessCount,
+      LocalFlowMetrics.GoalAttachmentCount,
+      LocalFlowMetrics.NavigationUnreachableSampleCount,
+      LocalFlowMetrics.NavigationV2Hash, bFlowConnectivityMatch ? 1 : 0,
+      bFlowConnectivityMatch ? TEXT("") : TEXT(" VIOLATION"));
+    if (!bFlowConnectivityMatch)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdDemoFlowConnectivityHash role=client round_id=%d match=0 VIOLATION"),
+        Packet.RoundId);
+    }
     LastCompareMetrics.ParticleMetrics = Packet.ParticleMetrics;
     LastCompareMetrics.ParticleMetrics.RollbackSnapshotHitCount =
       SoftPressureRollbackSnapshotHitCount;
@@ -3122,24 +3553,273 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
       == Packet.ParticleMetrics.ParticleCandidateHash;
     const bool bAppliedHashMatch = ParticleAppliedStateHash
       == Packet.ParticleMetrics.ParticleAppliedStateHash;
-    const bool bParticleHashMatch = bCandidateHashMatch && bAppliedHashMatch;
+    const bool bTargetFactHashMatch = TargetApproachSummary.TargetFactHash
+      == Packet.ParticleMetrics.TargetFactHash;
+    const bool bTargetApproachHashMatch = TargetApproachSummary.ApproachHash
+      == Packet.ParticleMetrics.TargetApproachHash;
+    const bool bTargetLayoutHashMatch = PreparedTargetSlotLayout.TopologyHash
+        == Packet.ParticleMetrics.TargetSlotLayoutTopologyHash
+      && PreparedTargetSlotLayout.WorldValidationHash
+        == Packet.ParticleMetrics.TargetSlotLayoutWorldHash
+      && PreparedTargetSlotLayout.FullInputHash
+        == Packet.ParticleMetrics.TargetSlotLayoutFullInputHash
+      && PreparedTargetSlotLayout.SlotLayoutRevision
+        == Packet.ParticleMetrics.TargetSlotLayoutRevision;
+    const bool bTargetScheduleHashMatch = TargetApproachSummary.ScheduleHash
+      == Packet.ParticleMetrics.TargetApproachScheduleHash;
+    const bool bTargetCommitHashMatch = TargetApproachSummary.CommitHash
+      == Packet.ParticleMetrics.TargetApproachCommitHash;
+    const bool bTargetTransportEnabled =
+      GetRules().TargetRegionTransportSettings.bEnabled != 0;
+    const bool bTargetInfluenceEnabled = GetRules().TargetInfluenceSettings.bEnabled != 0
+      && !bTargetTransportEnabled;
+    const bool bTargetInfluenceHashMatch = !bTargetInfluenceEnabled
+      || (TargetInfluenceSummary.bValid
+        && Packet.ParticleMetrics.bTargetInfluenceValid != 0
+        && TargetInfluenceRoundHash == Packet.ParticleMetrics.TargetInfluenceHash);
+    if (bTargetInfluenceEnabled)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetInfluenceCheckpoint role=client round_id=%d valid=%d/%d agents=%d/%d inside_band=%d/%d outside_max=%d/%d inside_min=%d/%d radial_p50=%.3f/%.3f radial_p95=%.3f/%.3f radial_max=%.3f/%.3f relative_speed_p95=%.3f/%.3f lag_p95=%.3f/%.3f angular_sectors=%d/%d angular_q15=%d/%d max_sector_population=%d/%d radial_bands=%d/%d hash=%u/%u match=%d source=MassPipeline"),
+        Packet.RoundId, TargetInfluenceSummary.bValid ? 1 : 0,
+        Packet.ParticleMetrics.bTargetInfluenceValid,
+        TargetInfluenceSummary.InfluenceAgentCount,
+        Packet.ParticleMetrics.TargetInfluenceAgentCount,
+        TargetInfluenceSummary.InsideEffectiveBandCount,
+        Packet.ParticleMetrics.TargetInsideEffectiveBandCount,
+        TargetInfluenceSummary.OutsideMaximumCount,
+        Packet.ParticleMetrics.TargetOutsideMaxCount,
+        TargetInfluenceSummary.InsideMinimumCount,
+        Packet.ParticleMetrics.TargetInsideMinCount,
+        TargetInfluenceSummary.RadialErrorCmP50,
+        Packet.ParticleMetrics.TargetRadialErrorCmP50,
+        TargetInfluenceSummary.RadialErrorCmP95,
+        Packet.ParticleMetrics.TargetRadialErrorCmP95,
+        TargetInfluenceSummary.RadialErrorCmMax,
+        Packet.ParticleMetrics.TargetRadialErrorCmMax,
+        TargetInfluenceSummary.RelativeSpeedCmpsP95,
+        Packet.ParticleMetrics.TargetRelativeSpeedCmpsP95,
+        TargetInfluenceSummary.FollowLagCmP95,
+        Packet.ParticleMetrics.TargetFollowLagCmP95,
+        TargetInfluenceSummary.OccupiedAngularSectorCount,
+        Packet.ParticleMetrics.OccupiedAngularSectorCount,
+        TargetInfluenceSummary.AngularCoverageQ15,
+        Packet.ParticleMetrics.AngularCoverageQ15,
+        TargetInfluenceSummary.MaxAngularSectorPopulation,
+        Packet.ParticleMetrics.MaxAngularSectorPopulation,
+        TargetInfluenceSummary.OccupiedRadialBandCount,
+        Packet.ParticleMetrics.OccupiedRadialBandCount,
+        TargetInfluenceRoundHash, Packet.ParticleMetrics.TargetInfluenceHash,
+        bTargetInfluenceHashMatch ? 1 : 0);
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetDensityCheckpoint role=client round_id=%d field_hash=%u/%u contributing=%d/%d occupied_cells=%d/%d max_cell_population=%d/%d guided=%d/%d clockwise=%d/%d counter_clockwise=%d/%d tangential_speed_cmps_p95=%.3f/%.3f tangential_speed_cmps_max=%.3f/%.3f largest_empty_sector_run=%d/%d match=%d source=MassPipeline"),
+        Packet.RoundId, TargetInfluenceSummary.Density.FieldHash,
+        Packet.ParticleMetrics.TargetDensityFieldHash,
+        TargetInfluenceSummary.Density.ContributingAgentCount,
+        Packet.ParticleMetrics.TargetDensityContributingAgentCount,
+        TargetInfluenceSummary.Density.OccupiedCellCount,
+        Packet.ParticleMetrics.TargetDensityOccupiedCellCount,
+        TargetInfluenceSummary.Density.MaximumCellPopulation,
+        Packet.ParticleMetrics.TargetDensityMaxCellPopulation,
+        TargetInfluenceSummary.Density.DensityGuidedAgentCount,
+        Packet.ParticleMetrics.TargetDensityGuidedAgentCount,
+        TargetInfluenceSummary.Density.ClockwiseAgentCount,
+        Packet.ParticleMetrics.TargetDensityClockwiseAgentCount,
+        TargetInfluenceSummary.Density.CounterClockwiseAgentCount,
+        Packet.ParticleMetrics.TargetDensityCounterClockwiseAgentCount,
+        TargetInfluenceSummary.Density.TangentialSpeedCmpsP95,
+        Packet.ParticleMetrics.TargetDensityTangentialSpeedCmpsP95,
+        TargetInfluenceSummary.Density.MaximumTangentialSpeedCmps,
+        Packet.ParticleMetrics.TargetDensityTangentialSpeedCmpsMax,
+        TargetInfluenceSummary.Density.LargestEmptySectorRun,
+        Packet.ParticleMetrics.TargetLargestEmptySectorRun,
+        TargetInfluenceSummary.Density.FieldHash
+          == Packet.ParticleMetrics.TargetDensityFieldHash ? 1 : 0);
+    }
+    const bool bTargetTransportHashMatch = !bTargetTransportEnabled
+      || (Packet.ParticleMetrics.bTargetRegionTransportValid != 0
+        && TargetRegionTopologyRoundHash
+          == Packet.ParticleMetrics.TargetTransportTopologyHash
+        && TargetRegionDemandRoundHash
+          == Packet.ParticleMetrics.TargetTransportDemandHash
+        && TargetRegionTransportRoundHash
+          == Packet.ParticleMetrics.TargetTransportPlanHash
+        && TargetRegionGuidanceRoundHash
+          == Packet.ParticleMetrics.TargetTransportGuidanceHash
+        && TargetRegionValidationRoundHash
+          == Packet.ParticleMetrics.TargetTransportValidationHash
+        && (bTargetRegionFailureFixtureValid ? 1 : 0)
+          == Packet.ParticleMetrics.bTargetTransportFailureFixtureValid
+        && TargetRegionFailureFixtureHash
+          == Packet.ParticleMetrics.TargetTransportFailureFixtureHash);
+    if (bTargetTransportEnabled)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetRegionTransportCheckpoint role=client round_id=%d valid=%d topology_hash=%u/%u demand_hash=%u/%u transport_hash=%u/%u guidance_hash=%u/%u validation_hash=%u/%u feasible_cells=%d feasible_regions=%d coverage=%d inside_band=%d max_region_population=%d plan_routed=%d plan_unrouted=%d guidance_unrouted_steps=%d guidance_unrouted_samples=%d guidance_unrouted_max=%d invalid_steps=%d validation_failures=%d epoch=%d rebuilds=%d solver_ms_p95=%.3f match=%d source=MassPipeline%s"),
+        Packet.RoundId, Packet.ParticleMetrics.bTargetRegionTransportValid,
+        TargetRegionTopologyRoundHash, Packet.ParticleMetrics.TargetTransportTopologyHash,
+        TargetRegionDemandRoundHash, Packet.ParticleMetrics.TargetTransportDemandHash,
+        TargetRegionTransportRoundHash, Packet.ParticleMetrics.TargetTransportPlanHash,
+        TargetRegionGuidanceRoundHash, Packet.ParticleMetrics.TargetTransportGuidanceHash,
+        TargetRegionValidationRoundHash, Packet.ParticleMetrics.TargetTransportValidationHash,
+        Packet.ParticleMetrics.TargetTransportFeasibleCellCount,
+        Packet.ParticleMetrics.TargetTransportFeasibleRegionCount,
+        Packet.ParticleMetrics.TargetTransportFeasibleRegionCoverageCount,
+        Packet.ParticleMetrics.TargetTransportInsideEffectiveBandCount,
+        Packet.ParticleMetrics.TargetTransportMaximumRegionPopulation,
+        Packet.ParticleMetrics.TargetTransportRoutedAgentCount,
+        Packet.ParticleMetrics.TargetTransportUnroutedAgentCount,
+        Packet.ParticleMetrics.TargetGuidanceUnroutedStepCount,
+        Packet.ParticleMetrics.TargetGuidanceUnroutedAgentSampleCount,
+        Packet.ParticleMetrics.TargetGuidanceUnroutedAgentMax,
+        Packet.ParticleMetrics.TargetTransportInvalidStepCount,
+        Packet.ParticleMetrics.TargetTransportValidationFailureCount,
+        Packet.ParticleMetrics.TargetTransportPlanEpoch,
+        Packet.ParticleMetrics.TargetTransportPlanRebuildCount,
+        Packet.ParticleMetrics.TargetTransportSolverMsP95,
+        bTargetTransportHashMatch ? 1 : 0,
+        bTargetTransportHashMatch ? TEXT("") : TEXT(" VIOLATION"));
+    }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoTargetApproachCheckpoint role=client round_id=%d local_valid=%d server_valid=%d local_hash=%u server_hash=%u agent_input_hash=%u/%u fine_kinematic_hash=%u/%u agent_config_hash=%u/%u temporal_hash=%u/%u settings_hash=%u/%u slot_input_hash=%u/%u full_input_hash=%u/%u owner_state_hash=%u/%u transition_hash=%u/%u guidance_hash=%u/%u guidance_location_hash=%u/%u guidance_velocity_hash=%u/%u ring_entered=%d/%d ring_waiting=%d/%d functional_occupied=%d/%d fill_occupied=%d/%d slot_ingress=%d/%d slot_occupied=%d/%d free_settle=%d/%d free_settled=%d/%d state_transitions=%d/%d source=MassPipeline"),
+      Packet.RoundId, TargetApproachSummary.bValid ? 1 : 0,
+      Packet.ParticleMetrics.bTargetApproachValid,
+      TargetApproachSummary.ApproachHash, Packet.ParticleMetrics.TargetApproachHash,
+      TargetApproachSummary.AgentInputHash, Packet.ParticleMetrics.TargetAgentInputHash,
+      TargetApproachSummary.AgentFineKinematicHash,
+      Packet.ParticleMetrics.TargetAgentFineKinematicHash,
+      TargetApproachSummary.AgentConfigHash, Packet.ParticleMetrics.TargetAgentConfigHash,
+      TargetApproachSummary.AgentTemporalHash, Packet.ParticleMetrics.TargetAgentTemporalHash,
+      TargetApproachSummary.SettingsHash, Packet.ParticleMetrics.TargetSettingsHash,
+      TargetApproachSummary.SlotInputHash, Packet.ParticleMetrics.TargetSlotInputHash,
+      TargetApproachSummary.FullInputHash, Packet.ParticleMetrics.TargetFullInputHash,
+      TargetApproachSummary.OwnerStateHash, Packet.ParticleMetrics.TargetOwnerStateHash,
+      TargetApproachSummary.TransitionHash, Packet.ParticleMetrics.TargetTransitionHash,
+      TargetApproachSummary.GuidanceHash, Packet.ParticleMetrics.TargetGuidanceHash,
+      TargetApproachSummary.GuidanceLocationHash,
+      Packet.ParticleMetrics.TargetGuidanceLocationHash,
+      TargetApproachSummary.GuidanceVelocityHash,
+      Packet.ParticleMetrics.TargetGuidanceVelocityHash,
+      TargetApproachSummary.RingEnteredCount, Packet.ParticleMetrics.RingEnteredCount,
+      TargetApproachSummary.RingWaitingCount, Packet.ParticleMetrics.RingWaitingCount,
+      TargetApproachSummary.FunctionalSlotOccupied,
+      Packet.ParticleMetrics.FunctionalSlotOccupied,
+      TargetApproachSummary.FillSlotOccupied, Packet.ParticleMetrics.FillSlotOccupied,
+      TargetApproachSummary.SlotIngressCount, Packet.ParticleMetrics.SlotIngressCount,
+      TargetApproachSummary.SlotOccupiedCount, Packet.ParticleMetrics.SlotOccupiedCount,
+      TargetApproachSummary.FreeSettleCount, Packet.ParticleMetrics.FreeSettleCount,
+      TargetApproachSummary.FreeSettledCount, Packet.ParticleMetrics.FreeSettledCount,
+      TargetApproachSummary.StateTransitionCount,
+      Packet.ParticleMetrics.TargetApproachStateTransitionCount);
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoTargetSlotLayout role=client round_id=%d revision=%d/%d topology_hash=%u/%u world_hash=%u/%u full_input_hash=%u/%u schedule_hash=%u/%u commit_hash=%u/%u layout_match=%d schedule_match=%d commit_match=%d source=MassPipeline"),
+      Packet.RoundId, PreparedTargetSlotLayout.SlotLayoutRevision,
+      Packet.ParticleMetrics.TargetSlotLayoutRevision,
+      PreparedTargetSlotLayout.TopologyHash,
+      Packet.ParticleMetrics.TargetSlotLayoutTopologyHash,
+      PreparedTargetSlotLayout.WorldValidationHash,
+      Packet.ParticleMetrics.TargetSlotLayoutWorldHash,
+      PreparedTargetSlotLayout.FullInputHash,
+      Packet.ParticleMetrics.TargetSlotLayoutFullInputHash,
+      TargetApproachSummary.ScheduleHash,
+      Packet.ParticleMetrics.TargetApproachScheduleHash,
+      TargetApproachSummary.CommitHash,
+      Packet.ParticleMetrics.TargetApproachCommitHash,
+      bTargetLayoutHashMatch ? 1 : 0, bTargetScheduleHashMatch ? 1 : 0,
+      bTargetCommitHashMatch ? 1 : 0);
+    const bool bParticleHashMatch = bCandidateHashMatch && bAppliedHashMatch
+      && bTargetFactHashMatch && bTargetApproachHashMatch
+      && bTargetLayoutHashMatch && bTargetScheduleHashMatch && bTargetCommitHashMatch
+      && bTargetInfluenceHashMatch && bTargetTransportHashMatch;
     LastCompareMetrics.ServerClientParticleHashMatch = bParticleHashMatch ? 1 : 0;
     if (bParticleHashMatch)
     {
       UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u applied_local=%u applied_server=%u match=1 source=MassPipeline"),
+        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u applied_local=%u applied_server=%u target_fact=%u target_approach=%u match=1 source=MassPipeline"),
         Packet.RoundId, ParticleCandidateStateHash,
         Packet.ParticleMetrics.ParticleCandidateHash, ParticleAppliedStateHash,
-        Packet.ParticleMetrics.ParticleAppliedStateHash);
+        Packet.ParticleMetrics.ParticleAppliedStateHash,
+        TargetApproachSummary.TargetFactHash, TargetApproachSummary.ApproachHash);
     }
     else
     {
       UE_LOG(LogTemp, Error,
-        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u candidate_match=%d applied_local=%u applied_server=%u applied_match=%d match=0 source=MassPipeline VIOLATION"),
+        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u candidate_match=%d applied_local=%u applied_server=%u applied_match=%d target_fact_local=%u target_fact_server=%u target_fact_match=%d target_approach_local=%u target_approach_server=%u target_approach_match=%d match=0 source=MassPipeline VIOLATION"),
         Packet.RoundId, ParticleCandidateStateHash,
         Packet.ParticleMetrics.ParticleCandidateHash, bCandidateHashMatch ? 1 : 0,
         ParticleAppliedStateHash, Packet.ParticleMetrics.ParticleAppliedStateHash,
-        bAppliedHashMatch ? 1 : 0);
+        bAppliedHashMatch ? 1 : 0,
+        TargetApproachSummary.TargetFactHash, Packet.ParticleMetrics.TargetFactHash,
+        bTargetFactHashMatch ? 1 : 0,
+        TargetApproachSummary.ApproachHash, Packet.ParticleMetrics.TargetApproachHash,
+        bTargetApproachHashMatch ? 1 : 0);
+    }
+    if (IsSoftPressureRouteDiagnosticEnabled())
+    {
+      const auto& ServerRoute = Packet.ParticleMetrics.RouteMetrics;
+      const bool bRouteHashMatch = SoftPressureRouteDiagnosticSummary.bValid
+        && ServerRoute.bValid
+        && SoftPressureRouteDiagnosticSummary.StableHash == ServerRoute.DiagnosticHash;
+      if (bRouteHashMatch)
+      {
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoSoftPressureRouteHash role=client round_id=%d local_valid=1 server_valid=1 local=%u server=%u match=1 branch_local=%d branch_server=%d source=MassPipeline"),
+          Packet.RoundId, SoftPressureRouteDiagnosticSummary.StableHash,
+          ServerRoute.DiagnosticHash,
+          static_cast<int32>(SoftPressureRouteDiagnosticSummary.SelectedBranch),
+          ServerRoute.SelectedBranch);
+      }
+      else
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdDemoSoftPressureRouteHash role=client round_id=%d local_valid=%d server_valid=%d local=%u server=%u match=0 branch_local=%d branch_server=%d source=MassPipeline VIOLATION"),
+          Packet.RoundId, SoftPressureRouteDiagnosticSummary.bValid ? 1 : 0,
+          ServerRoute.bValid, SoftPressureRouteDiagnosticSummary.StableHash,
+          ServerRoute.DiagnosticHash,
+          static_cast<int32>(SoftPressureRouteDiagnosticSummary.SelectedBranch),
+          ServerRoute.SelectedBranch);
+      }
+    }
+    if (IsTargetInfluenceExecutionDiagnosticEnabled())
+    {
+      const bool bExecutionHashMatch = TargetInfluenceExecutionSummary.bValid
+        && Packet.ParticleMetrics.bTargetInfluenceExecutionDiagnosticValid != 0
+        && TargetInfluenceExecutionSummary.DiagnosticHash
+          == Packet.ParticleMetrics.TargetInfluenceExecutionDiagnosticHash;
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=client round_id=%d valid=%d/%d requested_agents=%d/%d requested_p95=%.3f/%.3f predict_p95=%.3f/%.3f applied_p95=%.3f/%.3f lost_p95=%.3f/%.3f ratio_p50=%.3f/%.3f flips=%d/%d sector_transitions=%d/%d band_transitions=%d/%d environment_opposed=%d/%d particle_opposed=%d/%d hash=%u/%u match=%d source=MassPipeline%s"),
+        Packet.RoundId, TargetInfluenceExecutionSummary.bValid ? 1 : 0,
+        Packet.ParticleMetrics.bTargetInfluenceExecutionDiagnosticValid,
+        TargetInfluenceExecutionSummary.RequestedAgentCount,
+        Packet.ParticleMetrics.TargetInfluenceExecutionRequestedAgentCount,
+        TargetInfluenceExecutionSummary.RequestedTangentialCmpsP95,
+        Packet.ParticleMetrics.TargetDensityRequestedTangentialCmpsP95,
+        TargetInfluenceExecutionSummary.MovementPredictTangentialCmpsP95,
+        Packet.ParticleMetrics.TargetDensityPredictTangentialCmpsP95,
+        TargetInfluenceExecutionSummary.AppliedTangentialCmpsP95,
+        Packet.ParticleMetrics.TargetDensityAppliedTangentialCmpsP95,
+        TargetInfluenceExecutionSummary.LostTangentialCmpsP95,
+        Packet.ParticleMetrics.TargetDensityLostTangentialCmpsP95,
+        TargetInfluenceExecutionSummary.RequestedToAppliedRatioP50,
+        Packet.ParticleMetrics.TargetDensityRequestedToAppliedRatioP50,
+        TargetInfluenceExecutionSummary.DirectionFlipCount,
+        Packet.ParticleMetrics.TargetDensityDirectionFlipCount,
+        TargetInfluenceExecutionSummary.AngularSectorTransitionCount,
+        Packet.ParticleMetrics.TargetDensityAngularSectorTransitionCount,
+        TargetInfluenceExecutionSummary.RadialBandTransitionCount,
+        Packet.ParticleMetrics.TargetDensityRadialBandTransitionCount,
+        TargetInfluenceExecutionSummary.EnvironmentOpposedAgentCount,
+        Packet.ParticleMetrics.TargetDensityEnvironmentOpposedAgentCount,
+        TargetInfluenceExecutionSummary.ParticleOpposedAgentCount,
+        Packet.ParticleMetrics.TargetDensityParticleOpposedAgentCount,
+        TargetInfluenceExecutionSummary.DiagnosticHash,
+        Packet.ParticleMetrics.TargetInfluenceExecutionDiagnosticHash,
+        bExecutionHashMatch ? 1 : 0,
+        bExecutionHashMatch ? TEXT("") : TEXT(" VIOLATION"));
+      if (!bExecutionHashMatch)
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=client round_id=%d match=0 VIOLATION"),
+          Packet.RoundId);
     }
     const uint32 LocalFixtureHash = ParticleFailureFixture.FixtureHash;
     const uint32 ServerFixtureHash = Packet.ParticleMetrics.ParticleFailureFixtureHash;

@@ -106,6 +106,9 @@ void AMassAICrowdDemoGameMode::BeginPlay()
   ACrowdDemoTargetActor* Target = World->SpawnActor<ACrowdDemoTargetActor>(ACrowdDemoTargetActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
   MassSubsystem->SetTargetActor(Target);
   MassSubsystem->SetScenario(Scenario);
+  MassSubsystem->SetSoftPressureTestCase(Config
+    ? Config->SoftPressureTestCase
+    : ECrowdDemoSoftPressureTestCase::CorridorRoute);
 
   const int32 AgentCount = Config && Config->EntityCountOverride > 0 ? Config->EntityCountOverride : ResolveAgentCount();
   const FCrowdDemoMassSpawnResult SpawnResult = MassSubsystem->SpawnAgents(AgentCount);

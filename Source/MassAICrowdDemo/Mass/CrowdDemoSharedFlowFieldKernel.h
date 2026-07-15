@@ -11,6 +11,40 @@ enum class ECrowdDemoFlowLocationStatus : uint8
   UnreachableFreeCell
 };
 
+enum class ECrowdDemoNavigationNodeKind : uint8
+{
+  CenterAnchor,
+  VerticalEdgeConnection,
+  HorizontalEdgeConnection
+};
+
+struct FCrowdDemoNavigationSafeInterval
+{
+  ECrowdDemoNavigationNodeKind Kind = ECrowdDemoNavigationNodeKind::CenterAnchor;
+  int32 PrimaryCellKey = INDEX_NONE;
+  int32 SecondaryCellKey = INDEX_NONE;
+  int32 IntervalOrdinal = INDEX_NONE;
+  int32 QuantizedMinCm = 0;
+  int32 QuantizedMaxCm = 0;
+};
+
+struct FCrowdDemoNavigationNode
+{
+  uint64 StableNodeKey = 0;
+  ECrowdDemoNavigationNodeKind Kind = ECrowdDemoNavigationNodeKind::CenterAnchor;
+  int32 PrimaryCellKey = INDEX_NONE;
+  int32 SecondaryCellKey = INDEX_NONE;
+  int32 IntervalOrdinal = INDEX_NONE;
+  FIntPoint QuantizedLocationCm = FIntPoint::ZeroValue;
+};
+
+struct FCrowdDemoNavigationEdge
+{
+  uint64 MinNodeKey = 0;
+  uint64 MaxNodeKey = 0;
+  int32 QuantizedCost = MAX_int32;
+};
+
 struct FCrowdDemoSharedFlowSample
 {
   int32 CellIndex = INDEX_NONE;
@@ -18,9 +52,13 @@ struct FCrowdDemoSharedFlowSample
   ECrowdDemoFlowLocationStatus Status = ECrowdDemoFlowLocationStatus::OutOfBounds;
   FVector FlowDirection = FVector::ZeroVector;
   int32 IntegrationCost = MAX_int32;
+  uint64 NavigationNodeKey = 0;
+  uint64 NextNavigationNodeKey = 0;
+  float GuidanceDistanceCm = 0.0f;
   bool bBlocked = false;
   bool bUnreachable = true;
   bool bRecoveredFromRasterMismatch = false;
+  bool bSourceAttached = false;
 };
 
 struct FCrowdDemoReachableFlowCellSearchResult
@@ -79,10 +117,23 @@ struct FCrowdDemoSharedFlowField
   TArray<int32> NextCellIndex;
   TBitArray<> Blocked;
   TBitArray<> Unreachable;
+  TArray<FCrowdDemoNavigationSafeInterval> NavigationSafeIntervals;
+  TArray<FCrowdDemoNavigationNode> NavigationNodes;
+  TArray<FCrowdDemoNavigationEdge> NavigationEdges;
+  TArray<int32> NavigationIntegrationCost;
+  TArray<int32> NavigationNextNodeIndex;
+  TArray<int32> GoalAttachmentNodeIndices;
   int32 Width = 0;
   int32 Height = 0;
   int32 GoalCellIndex = INDEX_NONE;
   int32 BlockedCellCount = 0;
+  int32 ValidDirectedEdgeCount = 0;
+  int32 NavigationCenterAnchorCount = 0;
+  int32 NavigationConnectionPointCount = 0;
+  int32 NavigationSafeIntervalCount = 0;
+  int32 NavigationInternalEdgeCount = 0;
+  int32 CenterInvalidButConnectedCellCount = 0;
+  int32 GoalAttachmentCount = 0;
   uint32 BuildHash = 0;
 
   void Reset();
@@ -101,6 +152,14 @@ public:
     const FCrowdDemoSharedFlowField& Field,
     const FVector& Location,
     int32 MaximumRingDistance = 8);
+  static bool CanTraverseCellEdge(
+    const FCrowdDemoSharedFlowField& Field,
+    int32 FromCellIndex,
+    int32 ToCellIndex);
+  static bool CanTraverseWorldSegment(
+    const FCrowdDemoSharedFlowFieldConfig& Config,
+    const FVector& Start,
+    const FVector& End);
   static FCrowdDemoSharedFlowConstraintResult ConstrainMovement(
     const FCrowdDemoSharedFlowFieldConfig& Config,
     const FVector& Start,

@@ -28,13 +28,41 @@ namespace
   FString SerializeParticleFailureFixture(const FCrowdDemoParticleFailureFixture& Fixture)
   {
     FString Json = FString::Printf(
-      TEXT("{\n  \"fixture_hash\":%u,\n  \"valid\":%s,\n  \"fixed_step\":%d,\n  \"pair\":[%d,%d],\n  \"hard_violation\":%s,\n  \"swept_violation\":%s,\n  \"required_hard_distance_cm\":%.3f,\n  \"final_endpoint_distance_cm\":%.3f,\n  \"final_swept_distance_cm\":%.3f,\n  \"candidate_hash\":%u,\n  \"applied_state_hash\":%u,\n"),
+      TEXT("{\n  \"contract_version\":2,\n  \"fixture_hash\":%u,\n  \"valid\":%s,\n  \"fixed_step\":%d,\n  \"pair\":[%d,%d],\n  \"hard_violation\":%s,\n  \"swept_violation\":%s,\n  \"required_hard_distance_cm\":%.3f,\n  \"final_endpoint_distance_cm\":%.3f,\n  \"final_swept_distance_cm\":%.3f,\n  \"candidate_hash\":%u,\n  \"applied_state_hash\":%u,\n  \"first_failure_environment_id\":%d,\n  \"first_failure_constraint_kind\":%d,\n"),
       Fixture.FixtureHash, Fixture.bValid ? TEXT("true") : TEXT("false"),
       Fixture.FixedStepIndex, Fixture.MinAgentId, Fixture.MaxAgentId,
       Fixture.bHardViolation ? TEXT("true") : TEXT("false"),
       Fixture.bSweptViolation ? TEXT("true") : TEXT("false"),
       Fixture.RequiredHardDistanceCm, Fixture.FinalEndpointDistanceCm,
-      Fixture.FinalSweptDistanceCm, Fixture.CandidateHash, Fixture.AppliedStateHash);
+      Fixture.FinalSweptDistanceCm, Fixture.CandidateHash, Fixture.AppliedStateHash,
+      Fixture.FirstFailureEnvironmentId, Fixture.FirstFailureConstraintKind);
+    if (Fixture.bHasFirstFailureContact)
+    {
+      const auto& C = Fixture.FirstFailureContact;
+      Json += FString::Printf(
+        TEXT("  \"first_failure_contact\":{\"agent_id\":%d,\"environment_id\":%d,\"kind\":%d,\"face\":%d,\"closest_point\":[%.3f,%.3f],\"normal\":[%.6f,%.6f],\"hard_distance_cm\":%.3f,\"soft_distance_cm\":%.3f,\"soft_error_cm\":%.3f,\"hard_deficit_cm\":%.3f,\"swept_time\":%.6f},\n"),
+        C.AgentId, C.EnvironmentId, static_cast<int32>(C.ContactKind),
+        static_cast<int32>(C.Face), C.ClosestPoint.X, C.ClosestPoint.Y,
+        C.CorrectionNormal.X, C.CorrectionNormal.Y, C.HardDistanceCm,
+        C.SoftDistanceCm, C.SoftErrorCm, C.HardDeficitCm, C.SweptTime);
+    }
+    else
+    {
+      Json += TEXT("  \"first_failure_contact\":null,\n");
+    }
+    if (Fixture.bHasFirstFailureConstraint)
+    {
+      const auto& C = Fixture.FirstFailureConstraint;
+      Json += FString::Printf(
+        TEXT("  \"first_failure_constraint\":{\"kind\":%d,\"agents\":[%d,%d],\"environment_id\":%d,\"face\":%d,\"normal\":[%.6f,%.6f],\"coefficient_scale\":%.6f,\"threshold\":%.3f,\"initial_deficit_cm\":%.3f},\n"),
+        static_cast<int32>(C.Kind), C.MinAgentId, C.MaxAgentId,
+        C.EnvironmentId, static_cast<int32>(C.Face), C.Normal.X, C.Normal.Y,
+        C.CoefficientScale, C.Threshold, C.InitialDeficitCm);
+    }
+    else
+    {
+      Json += TEXT("  \"first_failure_constraint\":null,\n");
+    }
     Json += TEXT("  \"solve_agents\":[\n");
     for (int32 Index = 0; Index < Fixture.SolveAgents.Num(); ++Index)
     {
@@ -51,11 +79,13 @@ namespace
     {
       const auto& A = Fixture.Agents[Index];
       Json += FString::Printf(
-        TEXT("    {\"agent_id\":%d,\"physical_radius_cm\":%.3f,\"hard_gap_cm\":%.3f,\"soft_margin_cm\":%.3f,\"mobility\":%.3f,\"start\":[%d,%d],\"predict\":[%d,%d],\"soft\":[%d,%d],\"hard\":[%d,%d],\"swept\":[%d,%d],\"obstacle\":[%d,%d],\"quantized\":[%d,%d],\"final_safety\":[%d,%d],\"applied\":[%d,%d]}%s\n"),
+        TEXT("    {\"agent_id\":%d,\"physical_radius_cm\":%.3f,\"hard_gap_cm\":%.3f,\"soft_margin_cm\":%.3f,\"mobility\":%.3f,\"start\":[%d,%d],\"predict\":[%d,%d],\"pair_soft\":[%d,%d],\"environment_soft\":[%d,%d],\"unified_hard\":[%d,%d],\"hard\":[%d,%d],\"swept\":[%d,%d],\"obstacle\":[%d,%d],\"quantized\":[%d,%d],\"final_safety\":[%d,%d],\"applied\":[%d,%d]}%s\n"),
         A.AgentId, A.PhysicalRadiusCm, A.HardSafetyGapCm, A.SoftMarginCm, A.Mobility,
         FMath::RoundToInt(A.Start.X), FMath::RoundToInt(A.Start.Y),
         FMath::RoundToInt(A.Predict.X), FMath::RoundToInt(A.Predict.Y),
         FMath::RoundToInt(A.Soft.X), FMath::RoundToInt(A.Soft.Y),
+        FMath::RoundToInt(A.EnvironmentSoft.X), FMath::RoundToInt(A.EnvironmentSoft.Y),
+        FMath::RoundToInt(A.UnifiedHard.X), FMath::RoundToInt(A.UnifiedHard.Y),
         FMath::RoundToInt(A.Hard.X), FMath::RoundToInt(A.Hard.Y),
         FMath::RoundToInt(A.Swept.X), FMath::RoundToInt(A.Swept.Y),
         FMath::RoundToInt(A.Obstacle.X), FMath::RoundToInt(A.Obstacle.Y),
@@ -1091,21 +1121,265 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
     const FCrowdDemoRoundCompareMetrics& Metrics = Pipeline->GetLastCompletedRoundMetrics();
     const FCrowdDemoParticleMetrics& Particle = RoundResultPacket.ParticleMetrics;
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoParticleCheckpoint role=server round_id=%d agents=%d soft_pair_count=%d soft_violating_pair_count=%d soft_error_cm_p50=%.3f soft_error_cm_p95=%.3f soft_error_cm_max=%.3f hard_pair_violation_count=%d swept_pair_violation_count=%d pressure_influenced_agent_count=%d first_influenced_iteration_max=%d particle_corrected_agent_count=%d max_agent_correction_cm=%.3f settling_steps=%d obstacle_penetration_count=%d bounds_violation_count=%d invalid_step_count=%d global_fallback_step_count=%d particle_solver_ms_p95=%.3f particle_candidate_hash=%u particle_applied_state_hash=%u failure_fixture_step=%d failure_pair=%d,%d failure_fixture_hash=%u rollback_hit=%d rollback_miss=%d rollback_mismatch=%d rollback_replayed_steps=%d source=MassPipeline"),
+      TEXT("CrowdDemoParticleCheckpoint role=server round_id=%d agents=%d navigation_hard_clearance_cm=%.3f flow_connectivity_contract_version=%d flow_field_build_hash=%u flow_valid_directed_edges=%d flow_recovered_count=%d desired_segment_hard_obstacle_violation_count=%d soft_pair_count=%d soft_violating_pair_count=%d soft_error_cm_p50=%.3f soft_error_cm_p95=%.3f soft_error_cm_max=%.3f hard_pair_violation_count=%d swept_pair_violation_count=%d pressure_influenced_agent_count=%d first_influenced_iteration_max=%d particle_corrected_agent_count=%d max_agent_correction_cm=%.3f settling_steps=%d obstacle_penetration_count=%d bounds_violation_count=%d environment_soft_contact_count=%d environment_soft_applied_agent_count=%d environment_soft_error_cm_p50=%.3f environment_soft_error_cm_p95=%.3f environment_soft_error_cm_max=%.3f environment_soft_requested_correction_cm_max=%.3f environment_soft_realized_correction_cm_max=%.3f unified_hard_constraint_count=%d unified_hard_residual_cm_max=%.3f unified_hard_infeasible_count=%d invalid_step_count=%d global_fallback_step_count=%d particle_solver_ms_p95=%.3f particle_candidate_hash=%u particle_applied_state_hash=%u failure_fixture_step=%d failure_pair=%d,%d failure_fixture_hash=%u rollback_hit=%d rollback_miss=%d rollback_mismatch=%d rollback_replayed_steps=%d source=MassPipeline"),
       RoundResultPacket.RoundId, RoundResultPacket.Agents.Num(),
+      Pipeline->GetRules().ParticleProfile.GetNavigationHardClearanceCm(),
+      Pipeline->GetRules().FlowFieldConfig.ConnectivityContractVersion,
+      RoundResultPacket.TrafficMetrics.SharedFlowFieldBuildHash,
+      Pipeline->GetSharedFlowField().ValidDirectedEdgeCount,
+      RoundResultPacket.TrafficMetrics.FlowRecoveredFromRasterMismatchCount,
+      RoundResultPacket.TrafficMetrics.FlowDesiredSegmentHardObstacleViolationCount,
       Particle.SoftPairCount, Particle.SoftViolatingPairCount,
       Particle.SoftErrorCmP50, Particle.SoftErrorCmP95, Particle.SoftErrorCmMax,
       Particle.HardPairViolationCount, Particle.SweptPairViolationCount,
       Particle.PressureInfluencedAgentCount, Particle.FirstInfluencedIterationMax,
       Particle.ParticleCorrectedAgentCount, Particle.MaxAgentCorrectionCm,
       Particle.SettlingSteps, Particle.ObstaclePenetrationCount,
-      Particle.BoundsViolationCount, Particle.ParticleInvalidStepCount,
+      Particle.BoundsViolationCount, Particle.EnvironmentSoftContactCount,
+      Particle.EnvironmentSoftAppliedAgentCount, Particle.EnvironmentSoftErrorCmP50,
+      Particle.EnvironmentSoftErrorCmP95, Particle.EnvironmentSoftErrorCmMax,
+      Particle.EnvironmentSoftRequestedCorrectionCmMax,
+      Particle.EnvironmentSoftRealizedCorrectionCmMax,
+      Particle.UnifiedHardConstraintCount, Particle.UnifiedHardResidualCmMax,
+      Particle.UnifiedHardInfeasibleCount, Particle.ParticleInvalidStepCount,
       Particle.ParticleGlobalFallbackStepCount, Particle.ParticleSolverMsP95,
       Particle.ParticleCandidateHash, Particle.ParticleAppliedStateHash,
       Particle.ParticleFailureFixtureStep, Particle.ParticleFailureMinAgentId,
       Particle.ParticleFailureMaxAgentId, Particle.ParticleFailureFixtureHash,
       Particle.RollbackSnapshotHitCount, Particle.RollbackSnapshotMissCount,
       Particle.RollbackAgentMismatchCount, Particle.RollbackReplayedStepCount);
+    if (Pipeline->GetRules().TargetInfluenceSettings.bEnabled != 0
+      && Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetInfluenceCheckpoint role=server round_id=%d valid=%d agents=%d inside_band=%d outside_max=%d inside_min=%d radial_error_cm_p50=%.3f radial_error_cm_p95=%.3f radial_error_cm_max=%.3f relative_speed_cmps_p95=%.3f follow_lag_cm_p95=%.3f occupied_angular_sector_count=%d angular_coverage_q15=%d max_angular_sector_population=%d occupied_radial_band_count=%d target_influence_hash=%u source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.bTargetInfluenceValid,
+        Particle.TargetInfluenceAgentCount, Particle.TargetInsideEffectiveBandCount,
+        Particle.TargetOutsideMaxCount, Particle.TargetInsideMinCount,
+        Particle.TargetRadialErrorCmP50, Particle.TargetRadialErrorCmP95,
+        Particle.TargetRadialErrorCmMax, Particle.TargetRelativeSpeedCmpsP95,
+        Particle.TargetFollowLagCmP95, Particle.OccupiedAngularSectorCount,
+        Particle.AngularCoverageQ15, Particle.MaxAngularSectorPopulation,
+        Particle.OccupiedRadialBandCount, Particle.TargetInfluenceHash);
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetDensityCheckpoint role=server round_id=%d field_hash=%u contributing=%d occupied_cells=%d max_cell_population=%d guided=%d clockwise=%d counter_clockwise=%d tangential_speed_cmps_p95=%.3f tangential_speed_cmps_max=%.3f occupied_angular_sectors=%d max_angular_sector_population=%d largest_empty_sector_run=%d source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.TargetDensityFieldHash,
+        Particle.TargetDensityContributingAgentCount,
+        Particle.TargetDensityOccupiedCellCount,
+        Particle.TargetDensityMaxCellPopulation,
+        Particle.TargetDensityGuidedAgentCount,
+        Particle.TargetDensityClockwiseAgentCount,
+        Particle.TargetDensityCounterClockwiseAgentCount,
+        Particle.TargetDensityTangentialSpeedCmpsP95,
+        Particle.TargetDensityTangentialSpeedCmpsMax,
+        Particle.OccupiedAngularSectorCount,
+        Particle.MaxAngularSectorPopulation,
+        Particle.TargetLargestEmptySectorRun);
+      if (Pipeline->IsTargetInfluenceExecutionDiagnosticEnabled())
+      {
+        const auto& Diagnostic =
+          Pipeline->GetLastCompletedTargetInfluenceExecutionSummary();
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=server round_id=%d valid=%d samples=%d requested_agents=%d below_threshold=%d requested_p50=%.3f requested_p95=%.3f requested_max=%.3f predict_p50=%.3f predict_p95=%.3f predict_max=%.3f applied_p50=%.3f applied_p95=%.3f applied_max=%.3f ratio_p50=%.3f ratio_p95=%.3f lost_p50=%.3f lost_p95=%.3f lost_max=%.3f flip_agents=%d flips=%d sector_transitions=%d band_transitions=%d environment_opposed=%d particle_opposed=%d occupied_feasible=%d occupied_infeasible=%d feasible_unoccupied=%d largest_empty_feasible_run=%d flow_bounds_infeasible=%d obstacle_infeasible=%d hash=%u source=MassPipeline"),
+          RoundResultPacket.RoundId, Diagnostic.bValid ? 1 : 0,
+          Diagnostic.ValidSampleCount, Diagnostic.RequestedAgentCount,
+          Diagnostic.RequestedBelowThresholdSampleCount,
+          Diagnostic.RequestedTangentialCmpsP50,
+          Diagnostic.RequestedTangentialCmpsP95,
+          Diagnostic.RequestedTangentialCmpsMax,
+          Diagnostic.MovementPredictTangentialCmpsP50,
+          Diagnostic.MovementPredictTangentialCmpsP95,
+          Diagnostic.MovementPredictTangentialCmpsMax,
+          Diagnostic.AppliedTangentialCmpsP50,
+          Diagnostic.AppliedTangentialCmpsP95,
+          Diagnostic.AppliedTangentialCmpsMax,
+          Diagnostic.RequestedToAppliedRatioP50,
+          Diagnostic.RequestedToAppliedRatioP95,
+          Diagnostic.LostTangentialCmpsP50,
+          Diagnostic.LostTangentialCmpsP95,
+          Diagnostic.LostTangentialCmpsMax,
+          Diagnostic.DirectionFlipAgentCount, Diagnostic.DirectionFlipCount,
+          Diagnostic.AngularSectorTransitionCount,
+          Diagnostic.RadialBandTransitionCount,
+          Diagnostic.EnvironmentOpposedAgentCount,
+          Diagnostic.ParticleOpposedAgentCount,
+          Diagnostic.Environment.OccupiedFeasibleSectorCount,
+          Diagnostic.Environment.OccupiedInfeasiblePolarCellCount,
+          Diagnostic.Environment.FeasibleButUnoccupiedSectorCount,
+          Diagnostic.Environment.LargestEmptyFeasibleSectorRun,
+          Diagnostic.Environment.FlowBoundsInfeasibleCellCount,
+          Diagnostic.Environment.ObstacleInfeasibleCellCount,
+          Diagnostic.DiagnosticHash);
+        if (!Diagnostic.bValid || Diagnostic.ValidSampleCount <= 0
+          || Diagnostic.RequestedAgentCount <= 0)
+        {
+          UE_LOG(LogTemp, Error,
+            TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=server round_id=%d valid=%d samples=%d requested_agents=%d zero_sample_or_request=1 VIOLATION"),
+            RoundResultPacket.RoundId, Diagnostic.bValid ? 1 : 0,
+            Diagnostic.ValidSampleCount, Diagnostic.RequestedAgentCount);
+        }
+
+        FString OutputPath;
+        const bool bHasOutputPath = FParse::Value(FCommandLine::Get(),
+          TEXT("CrowdDemoTargetInfluenceExecutionDiagnosticOutput="), OutputPath);
+        bool bWritten = false;
+        if (bHasOutputPath && !OutputPath.IsEmpty())
+        {
+          FString Json = FString::Printf(
+            TEXT("{\n  \"contract_version\":1,\n  \"round_id\":%d,\n  \"valid\":%s,\n  \"diagnostic_hash\":%u,\n  \"requested_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"predict_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"applied_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"lost_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"requested_to_applied_ratio\":{\"p50\":%.6f,\"p95\":%.6f},\n  \"direction_flips\":%d,\n  \"sector_transitions\":%d,\n  \"radial_band_transitions\":%d,\n  \"environment_opposed_agents\":%d,\n  \"particle_opposed_agents\":%d,\n"),
+            RoundResultPacket.RoundId, Diagnostic.bValid ? TEXT("true") : TEXT("false"),
+            Diagnostic.DiagnosticHash,
+            Diagnostic.RequestedTangentialCmpsP50, Diagnostic.RequestedTangentialCmpsP95,
+            Diagnostic.RequestedTangentialCmpsMax,
+            Diagnostic.MovementPredictTangentialCmpsP50,
+            Diagnostic.MovementPredictTangentialCmpsP95,
+            Diagnostic.MovementPredictTangentialCmpsMax,
+            Diagnostic.AppliedTangentialCmpsP50, Diagnostic.AppliedTangentialCmpsP95,
+            Diagnostic.AppliedTangentialCmpsMax,
+            Diagnostic.LostTangentialCmpsP50, Diagnostic.LostTangentialCmpsP95,
+            Diagnostic.LostTangentialCmpsMax,
+            Diagnostic.RequestedToAppliedRatioP50,
+            Diagnostic.RequestedToAppliedRatioP95,
+            Diagnostic.DirectionFlipCount, Diagnostic.AngularSectorTransitionCount,
+            Diagnostic.RadialBandTransitionCount,
+            Diagnostic.EnvironmentOpposedAgentCount,
+            Diagnostic.ParticleOpposedAgentCount);
+          Json += TEXT("  \"feasible_sectors_by_radial_band\":[");
+          for (int32 Index = 0;
+            Index < Diagnostic.Environment.FeasibleSectorCountByRadialBand.Num(); ++Index)
+          {
+            Json += FString::FromInt(
+              Diagnostic.Environment.FeasibleSectorCountByRadialBand[Index]);
+            if (Index + 1 < Diagnostic.Environment.FeasibleSectorCountByRadialBand.Num())
+              Json += TEXT(",");
+          }
+          Json += TEXT("],\n  \"agents\":[\n");
+          const auto& Runtime =
+            Pipeline->GetLastCompletedTargetInfluenceExecutionRuntime();
+          for (int32 Index = 0; Index < Runtime.Agents.Num(); ++Index)
+          {
+            const auto& Agent = Runtime.Agents[Index];
+            const double Ratio = Agent.RequestedTangentialCmpsQ > 0
+              ? static_cast<double>(Agent.AppliedSameDirectionCmpsQ)
+                / static_cast<double>(Agent.RequestedTangentialCmpsQ) : 0.0;
+            Json += FString::Printf(
+              TEXT("    {\"agent_id\":%d,\"samples\":%d,\"requested_samples\":%d,\"requested_sum_q\":%lld,\"predict_sum_q\":%lld,\"applied_same_direction_sum_q\":%lld,\"lost_sum_q\":%lld,\"requested_to_applied_ratio\":%.6f,\"environment_opposed_sum_q\":%lld,\"particle_opposed_sum_q\":%lld,\"direction_flips\":%d,\"sector_transitions\":%d,\"band_transitions\":%d,\"last_band\":%d,\"last_sector\":%d,\"last_direction\":%d,\"last_weights\":[%d,%d,%d],\"last_cell_feasible\":%s}%s\n"),
+              Agent.AgentId, Agent.ValidSampleCount, Agent.RequestedSampleCount,
+              Agent.RequestedTangentialCmpsQ, Agent.PredictedTangentialCmpsQ,
+              Agent.AppliedSameDirectionCmpsQ, Agent.LostTangentialCmpsQ, Ratio,
+              Agent.EnvironmentOpposedCmpsQ, Agent.ParticleOpposedCmpsQ,
+              Agent.DirectionFlipCount, Agent.AngularSectorTransitionCount,
+              Agent.RadialBandTransitionCount, Agent.LastRadialBand,
+              Agent.LastAngularSector, Agent.LastDirectionSign,
+              Agent.LastLeftWeight, Agent.LastCurrentWeight, Agent.LastRightWeight,
+              Agent.bLastCellFeasible ? TEXT("true") : TEXT("false"),
+              Index + 1 < Runtime.Agents.Num() ? TEXT(",") : TEXT(""));
+          }
+          Json += TEXT("  ],\n  \"environment_cells\":[\n");
+          for (int32 Index = 0; Index < Diagnostic.Environment.Cells.Num(); ++Index)
+          {
+            const auto& Cell = Diagnostic.Environment.Cells[Index];
+            Json += FString::Printf(
+              TEXT("    {\"band\":%d,\"sector\":%d,\"feasible\":%s,\"occupied\":%s,\"flow_bounds_blocked\":%s,\"obstacle_blocked\":%s}%s\n"),
+              Cell.RadialBandIndex, Cell.AngularSectorIndex,
+              Cell.bFeasible ? TEXT("true") : TEXT("false"),
+              Cell.bOccupied ? TEXT("true") : TEXT("false"),
+              Cell.bFlowBoundsBlocked ? TEXT("true") : TEXT("false"),
+              Cell.bObstacleBlocked ? TEXT("true") : TEXT("false"),
+              Index + 1 < Diagnostic.Environment.Cells.Num() ? TEXT(",") : TEXT(""));
+          }
+          Json += TEXT("  ]\n}\n");
+          IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+          PlatformFile.CreateDirectoryTree(*FPaths::GetPath(OutputPath));
+          bWritten = FFileHelper::SaveStringToFile(Json, *OutputPath,
+            FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+        }
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoTargetInfluenceExecutionDiagnosticFile role=server round_id=%d output_path=%d written=%d hash=%u source=MassPipeline"),
+          RoundResultPacket.RoundId, bHasOutputPath ? 1 : 0, bWritten ? 1 : 0,
+          Diagnostic.DiagnosticHash);
+        if (!bHasOutputPath || !bWritten)
+          UE_LOG(LogTemp, Error,
+            TEXT("CrowdDemoTargetInfluenceExecutionDiagnosticFile role=server round_id=%d write_failed=1 VIOLATION"),
+            RoundResultPacket.RoundId);
+      }
+    }
+    if (Pipeline->GetRules().TargetRegionTransportSettings.bEnabled != 0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetRegionTransportCheckpoint role=server round_id=%d valid=%d feasible_cells=%d edges=%d feasible_regions=%d raw_coverage=%d feasible_coverage=%d inside_band=%d max_region_population=%d desired=%d plan_routed=%d plan_unrouted=%d guidance_unrouted_steps=%d guidance_unrouted_samples=%d guidance_unrouted_max=%d first_failure_step=%d first_failure_agent=%d invalid_steps=%d validation_failures=%d total_cost=%lld changed_quota=%lld epoch=%d rebuilds=%d lifetime=%d target=%d environment=%d membership=%d satisfied=%d path_invalid=%d solver_ms_p95=%.3f topology_hash=%u demand_hash=%u transport_hash=%u guidance_hash=%u validation_hash=%u source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.bTargetRegionTransportValid,
+        Particle.TargetTransportFeasibleCellCount, Particle.TargetTransportEdgeCount,
+        Particle.TargetTransportFeasibleRegionCount,
+        Particle.TargetTransportRawRegionCoverageCount,
+        Particle.TargetTransportFeasibleRegionCoverageCount,
+        Particle.TargetTransportInsideEffectiveBandCount,
+        Particle.TargetTransportMaximumRegionPopulation,
+        Particle.TargetTransportDesiredPopulation,
+        Particle.TargetTransportRoutedAgentCount,
+        Particle.TargetTransportUnroutedAgentCount,
+        Particle.TargetGuidanceUnroutedStepCount,
+        Particle.TargetGuidanceUnroutedAgentSampleCount,
+        Particle.TargetGuidanceUnroutedAgentMax,
+        Particle.TargetGuidanceFirstFailureStep,
+        Particle.TargetGuidanceFirstFailureAgentId,
+        Particle.TargetTransportInvalidStepCount,
+        Particle.TargetTransportValidationFailureCount,
+        Particle.TargetTransportTotalPhysicalCost,
+        Particle.TargetTransportChangedQuotaUnitCount,
+        Particle.TargetTransportPlanEpoch,
+        Particle.TargetTransportPlanRebuildCount,
+        Particle.TargetTransportLifetimeRebuildCount,
+        Particle.TargetTransportTargetRebuildCount,
+        Particle.TargetTransportEnvironmentRebuildCount,
+        Particle.TargetTransportMembershipRebuildCount,
+        Particle.TargetTransportDemandSatisfiedRebuildCount,
+        Particle.TargetTransportPathInvalidRebuildCount,
+        Particle.TargetTransportSolverMsP95,
+        Particle.TargetTransportTopologyHash,
+        Particle.TargetTransportDemandHash,
+        Particle.TargetTransportPlanHash,
+        Particle.TargetTransportGuidanceHash,
+        Particle.TargetTransportValidationHash);
+    }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoTargetApproachCheckpoint role=server round_id=%d valid=%d target_fact_hash=%u target_approach_hash=%u agent_input_hash=%u fine_kinematic_hash=%u agent_config_hash=%u temporal_hash=%u settings_hash=%u slot_input_hash=%u full_input_hash=%u owner_state_hash=%u transition_hash=%u guidance_hash=%u guidance_location_hash=%u guidance_velocity_hash=%u ring_entered=%d ring_waiting=%d functional_capacity=%d functional_occupied=%d fill_capacity=%d fill_occupied=%d slot_ingress=%d slot_occupied=%d free_settle=%d free_settled=%d duplicate_owner=%d invalid_owner=%d state_transitions=%d source=MassPipeline"),
+      RoundResultPacket.RoundId, Particle.bTargetApproachValid,
+      Particle.TargetFactHash, Particle.TargetApproachHash,
+      Particle.TargetAgentInputHash, Particle.TargetAgentFineKinematicHash,
+      Particle.TargetAgentConfigHash, Particle.TargetAgentTemporalHash,
+      Particle.TargetSettingsHash, Particle.TargetSlotInputHash,
+      Particle.TargetFullInputHash, Particle.TargetOwnerStateHash,
+      Particle.TargetTransitionHash, Particle.TargetGuidanceHash,
+      Particle.TargetGuidanceLocationHash, Particle.TargetGuidanceVelocityHash,
+      Particle.RingEnteredCount, Particle.RingWaitingCount,
+      Particle.FunctionalSlotCapacity, Particle.FunctionalSlotOccupied,
+      Particle.FillSlotCapacity, Particle.FillSlotOccupied,
+      Particle.SlotIngressCount, Particle.SlotOccupiedCount,
+      Particle.FreeSettleCount, Particle.FreeSettledCount,
+      Particle.DuplicateSlotOwnerCount, Particle.InvalidSlotOwnerCount,
+      Particle.TargetApproachStateTransitionCount);
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoTargetSlotLayout role=server round_id=%d revision=%d topology_hash=%u world_hash=%u full_input_hash=%u candidates=%d functional=%d fill=%d rejected_target=%d rejected_pair=%d rejected_obstacle=%d rejected_bounds=%d rejected_unreachable=%d rejected_ingress=%d schedule_hash=%u commit_hash=%u owner_release=%d owner_reused=%d owner_conflict=%d revision_mismatch=%d source=MassPipeline"),
+      RoundResultPacket.RoundId, Particle.TargetSlotLayoutRevision,
+      Particle.TargetSlotLayoutTopologyHash, Particle.TargetSlotLayoutWorldHash,
+      Particle.TargetSlotLayoutFullInputHash, Particle.SlotLayoutCandidateCount,
+      Particle.SlotLayoutFunctionalCount, Particle.SlotLayoutFillCount,
+      Particle.SlotRejectedTargetClearanceCount, Particle.SlotRejectedPairSpacingCount,
+      Particle.SlotRejectedObstacleCount, Particle.SlotRejectedBoundsCount,
+      Particle.SlotRejectedUnreachableCount, Particle.SlotRejectedIngressSegmentCount,
+      Particle.TargetApproachScheduleHash, Particle.TargetApproachCommitHash,
+      Particle.SlotOwnerReleaseCount, Particle.SlotOwnerReusedCount,
+      Particle.SlotOwnerConflictCount, Particle.SlotLayoutRevisionMismatchCount);
+    const FCrowdDemoTrafficMetrics& FlowV2 = RoundResultPacket.TrafficMetrics;
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoFlowV2Metrics role=server round_id=%d anchors=%d connections=%d safe_intervals=%d internal_edges=%d directed_edges=%d center_invalid_connected=%d source_attachment_success=%d goal_attachments=%d navigation_unreachable_samples=%d navigation_v2_hash=%u source=MassPipeline"),
+      RoundResultPacket.RoundId, FlowV2.NavigationCenterAnchorCount,
+      FlowV2.NavigationConnectionPointCount, FlowV2.NavigationSafeIntervalCount,
+      FlowV2.NavigationInternalEdgeCount, FlowV2.NavigationDirectedEdgeCount,
+      FlowV2.CenterInvalidButConnectedCellCount,
+      FlowV2.SourceAttachmentSuccessCount, FlowV2.GoalAttachmentCount,
+      FlowV2.NavigationUnreachableSampleCount, FlowV2.NavigationV2Hash);
     const FCrowdDemoParticleFailureFixture& FailureFixture =
       Pipeline->GetParticleFailureFixture();
     FString OutputPath;
@@ -1893,6 +2167,82 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
   CompactRules.ParticleHardMaxCorrectionCm = 24.0f;
   CompactRules.ParticlePositionQuantumCm = 1.0f;
   CompactRules.ParticleVelocityQuantumCmps = 1.0f;
+  if (bSf2)
+  {
+    CompactRules.SoftPressureTestCase = MassSubsystem.GetSoftPressureTestCase();
+    CompactRules.FlowFieldConfig.AgentInflateCm =
+      CompactRules.ParticleProfile.GetNavigationHardClearanceCm();
+    CompactRules.FlowFieldConfig.ConnectivityContractVersion = 2;
+    if (CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettle
+      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving)
+    {
+      CompactRules.TargetApproachSettings.bEnabled = 0;
+      CompactRules.TargetInfluenceSettings.bEnabled = 1;
+      CompactRules.TargetInfluenceSettings.DefaultMinimumCombatCenterDistanceCm = 100.0f;
+      CompactRules.TargetInfluenceSettings.DefaultMaximumCombatCenterDistanceCm = 850.0f;
+      CompactRules.TargetInfluenceSettings.InfluenceBlendWidthCm = 300.0f;
+      CompactRules.TargetInfluenceSettings.RadialGainPerSecond = 2.0f;
+      CompactRules.TargetInfluenceSettings.MaxRadialSpeedCmps = 300.0f;
+      CompactRules.TargetInfluenceSettings.TargetPhysicalRadiusCm =
+        CompactRules.TargetApproachSettings.TargetPhysicalRadiusCm;
+      CompactRules.TargetInfluenceSettings.TargetHardSafetyGapCm =
+        CompactRules.TargetApproachSettings.TargetHardSafetyGapCm;
+      CompactRules.TargetInfluenceSettings.TargetSoftMarginCm =
+        CompactRules.TargetApproachSettings.TargetSoftMarginCm;
+      CompactRules.TargetInfluenceSettings.PositionQuantumCm =
+        CompactRules.TargetApproachSettings.PositionQuantumCm;
+      CompactRules.TargetInfluenceSettings.VelocityQuantumCmps =
+        CompactRules.TargetApproachSettings.VelocityQuantumCmps;
+      CompactRules.TargetInfluenceSettings.AngularSectorCount = 16;
+      CompactRules.TargetInfluenceSettings.RadialBandWidthCm = 100.0f;
+      CompactRules.TargetInfluenceSettings.DensitySmoothingPassCount = 1;
+      CompactRules.TargetInfluenceSettings.DensityMinimumDifference = 1;
+      CompactRules.TargetInfluenceSettings.DensitySpeedPerExcessAgentCmps = 20.0f;
+      CompactRules.TargetInfluenceSettings.MaximumDensityTangentialSpeedCmps = 120.0f;
+      CompactRules.TargetRegionTransportSettings.bEnabled = 1;
+      CompactRules.TargetRegionTransportSettings.RadialBandWidthCm = 100.0f;
+      CompactRules.TargetRegionTransportSettings.TransportSpeedCmps = 300.0f;
+      CompactRules.TargetRegionTransportSettings.DemandRegionCount = 16;
+      CompactRules.TargetRegionTransportSettings.PlanLifetimeSteps = 15;
+      CompactRules.TargetMotion.TargetId = 1;
+      CompactRules.TargetMotion.TargetRevision = 1;
+      CompactRules.TargetMotion.InitialLocation = CompactRules.FlowFieldConfig.GoalLocation;
+      CompactRules.TargetMotion.LinearVelocity =
+        CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving
+        ? FVector(-80.0f, 0.0f, 0.0f)
+        : FVector::ZeroVector;
+      CompactRules.TargetMotion.InitialYawDegrees = 0.0f;
+      CompactRules.TargetMotion.YawRateDegreesPerSecond = 0.0f;
+      CompactRules.TargetSlotLayoutSettings.SourceRevision = 1;
+      CompactRules.TargetSlotLayoutSettings.TargetHardSafetyGapCm =
+        CompactRules.TargetApproachSettings.TargetHardSafetyGapCm;
+      CompactRules.TargetSlotLayoutSettings.PositionQuantumCm =
+        CompactRules.TargetApproachSettings.PositionQuantumCm;
+      CompactRules.TargetSlotLayoutSettings.AngleQuantumDegrees = 0.01f;
+      FCrowdDemoTargetSlotBandRule& Functional =
+        CompactRules.TargetSlotLayoutSettings.Bands.AddDefaulted_GetRef();
+      Functional.BandId = 1;
+      Functional.bFunctional = 1;
+      Functional.Capacity = 4;
+      Functional.PreferredSurfaceDistanceCm = 160.0f;
+      Functional.MinimumCenterDistanceCm = 260.0f;
+      Functional.MaximumCenterDistanceCm = 260.0f;
+      Functional.StartAngleDegrees = 0.0f;
+      Functional.RequiredCapabilityMask = 1u;
+      Functional.StablePriorityBase = 0;
+      FCrowdDemoTargetSlotBandRule& Fill =
+        CompactRules.TargetSlotLayoutSettings.Bands.AddDefaulted_GetRef();
+      Fill.BandId = 2;
+      Fill.bFunctional = 0;
+      Fill.Capacity = 4;
+      Fill.PreferredSurfaceDistanceCm = 280.0f;
+      Fill.MinimumCenterDistanceCm = 380.0f;
+      Fill.MaximumCenterDistanceCm = 380.0f;
+      Fill.StartAngleDegrees = 45.0f;
+      Fill.RequiredCapabilityMask = 0u;
+      Fill.StablePriorityBase = 100;
+    }
+  }
   CompactRules.ElasticCrowdSettings.FixedStepSeconds = CompactRules.FixedStepSeconds;
   CompactRules.ElasticCrowdSettings.HardSafetyGapCm = 10.0f;
   CompactRules.ElasticCrowdSettings.PreferredSpacingGapCm = 34.0f;

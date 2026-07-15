@@ -44,6 +44,10 @@ public:
   AActor* GetTargetActor() const;
   void SetScenario(ECrowdDemoScenario InScenario);
   ECrowdDemoScenario GetScenario() const { return CurrentScenario; }
+  void SetSoftPressureTestCase(ECrowdDemoSoftPressureTestCase InTestCase)
+  { SoftPressureTestCase = InTestCase; }
+  ECrowdDemoSoftPressureTestCase GetSoftPressureTestCase() const
+  { return SoftPressureTestCase; }
   FCrowdDemoMassSpawnResult SpawnAgents(int32 AgentCount);
   int32 GetTrackedAgentCount() const;
   int32 GetAliveAgentCount() const;
@@ -54,6 +58,8 @@ private:
   TArray<FMassEntityHandle> TrackedAgents;
   TWeakObjectPtr<AActor> TargetActor;
   ECrowdDemoScenario CurrentScenario = ECrowdDemoScenario::SimRoundObstacle;
+  ECrowdDemoSoftPressureTestCase SoftPressureTestCase =
+    ECrowdDemoSoftPressureTestCase::CorridorRoute;
 
   UPROPERTY(Transient)
   TObjectPtr<UCrowdDemoRoundSimFixedStepPipelineProcessor> RoundSimPipelineProcessor;

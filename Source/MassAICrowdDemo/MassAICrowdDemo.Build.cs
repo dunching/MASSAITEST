@@ -6,6 +6,11 @@ public class MassAICrowdDemo : ModuleRules
   {
     PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
     CppStandard = CppStandardVersion.Cpp20;
+    // This module contains many legacy translation-unit-local helpers with the
+    // same names. Unity amalgamation merges their anonymous namespaces and can
+    // produce false redefinition/overload errors on an otherwise valid clean
+    // build, so keep each source file as its intended translation unit.
+    bUseUnity = false;
 
     PublicIncludePaths.Add(ModuleDirectory);
 

@@ -34,6 +34,8 @@ namespace
     TemplateData.AddFragment<FCrowdDemoRoundSimStateFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFormationFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundMoveIntentFragment>();
+    TemplateData.AddFragment<FCrowdDemoTargetApproachFragment>();
+    TemplateData.AddFragment<FCrowdDemoTargetCapabilityFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFlowSampleFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundProposedMovementFragment>();
     TemplateData.AddFragment<FCrowdDemoParticlePropertiesFragment>();
@@ -472,15 +474,24 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
 
   FCrowdDemoRoundMoveIntentFragment& RoundMoveIntent = EntityManager.GetFragmentDataChecked<FCrowdDemoRoundMoveIntentFragment>(Entity);
   RoundMoveIntent = FCrowdDemoRoundMoveIntentFragment();
+  EntityManager.GetFragmentDataChecked<FCrowdDemoTargetApproachFragment>(Entity) =
+    FCrowdDemoTargetApproachFragment();
+  FCrowdDemoTargetCapabilityFragment& TargetCapability =
+    EntityManager.GetFragmentDataChecked<FCrowdDemoTargetCapabilityFragment>(Entity);
+  // Capability is stable configuration, not replicated runtime state. Keep the
+  // authority bootstrap identical to the Mass template default consumed by
+  // client prediction; AgentId remains the deterministic tie-breaker.
+  TargetCapability = FCrowdDemoTargetCapabilityFragment();
 
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundFlowSampleFragment>(Entity) = FCrowdDemoRoundFlowSampleFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundProposedMovementFragment>(Entity) = FCrowdDemoRoundProposedMovementFragment();
   FCrowdDemoParticlePropertiesFragment& ParticleProperties =
     EntityManager.GetFragmentDataChecked<FCrowdDemoParticlePropertiesFragment>(Entity);
-  ParticleProperties.PhysicalRadiusCm = Movement.ContactRadiusCm;
-  ParticleProperties.HardSafetyGapCm = 10.0f;
-  ParticleProperties.SoftMarginCm = 17.0f;
-  ParticleProperties.Mobility = 1.0f;
+  const FCrowdDemoParticleProfile DefaultParticleProfile;
+  ParticleProperties.PhysicalRadiusCm = DefaultParticleProfile.PhysicalRadiusCm;
+  ParticleProperties.HardSafetyGapCm = DefaultParticleProfile.HardSafetyGapCm;
+  ParticleProperties.SoftMarginCm = DefaultParticleProfile.SoftMarginCm;
+  ParticleProperties.Mobility = DefaultParticleProfile.Mobility;
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundParticleConstraintFragment>(Entity) =
     FCrowdDemoRoundParticleConstraintFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundObstacleConstraintFragment>(Entity) = FCrowdDemoRoundObstacleConstraintFragment();

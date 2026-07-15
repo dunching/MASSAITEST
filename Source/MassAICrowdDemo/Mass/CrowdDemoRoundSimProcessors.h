@@ -58,6 +58,99 @@ protected:
 };
 
 UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetPolarTopologyBuildProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public: UCrowdDemoRoundTargetPolarTopologyBuildProcessor();
+  virtual bool ShouldAllowQueryBasedPruning(bool bRuntimeMode = true) const override { return false; }
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetRegionPopulationBuildProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public: UCrowdDemoRoundTargetRegionPopulationBuildProcessor();
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private: FMassEntityQuery EntityQuery;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetRegionTransportSolveProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public: UCrowdDemoRoundTargetRegionTransportSolveProcessor();
+  virtual bool ShouldAllowQueryBasedPruning(bool bRuntimeMode = true) const override { return false; }
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetRegionGuidanceProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public: UCrowdDemoRoundTargetRegionGuidanceProcessor();
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private: FMassEntityQuery EntityQuery;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetSlotLayoutPrepareProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public: UCrowdDemoRoundTargetSlotLayoutPrepareProcessor();
+  virtual bool ShouldAllowQueryBasedPruning(bool bRuntimeMode = true) const override { return false; }
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetApproachScheduleProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public:
+  UCrowdDemoRoundTargetApproachScheduleProcessor();
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private:
+  FMassEntityQuery EntityQuery;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetApproachCommitProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public: UCrowdDemoRoundTargetApproachCommitProcessor();
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private:
+  FMassEntityQuery EntityQuery;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundTargetApproachGuidanceProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public:
+  UCrowdDemoRoundTargetApproachGuidanceProcessor();
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private:
+  FMassEntityQuery EntityQuery;
+};
+
+UCLASS()
 class MASSAICROWDDEMO_API UCrowdDemoRoundPositionCandidateBuildProcessor : public UMassProcessor
 {
   GENERATED_BODY()
@@ -449,6 +542,14 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPlanApplyProcessor> PlanApplyProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundSharedFlowFieldBuildProcessor> SharedFlowFieldBuildProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetFactApplyProcessor> TargetFactApplyProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetPolarTopologyBuildProcessor> TargetPolarTopologyBuildProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionPopulationBuildProcessor> TargetRegionPopulationBuildProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionTransportSolveProcessor> TargetRegionTransportSolveProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionGuidanceProcessor> TargetRegionGuidanceProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetSlotLayoutPrepareProcessor> TargetSlotLayoutPrepareProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetApproachScheduleProcessor> TargetApproachScheduleProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetApproachCommitProcessor> TargetApproachCommitProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetApproachGuidanceProcessor> TargetApproachGuidanceProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPositionCandidateBuildProcessor> PositionCandidateBuildProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPositionAssignmentProcessor> PositionAssignmentProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundHoldingCandidateBuildProcessor> HoldingCandidateBuildProcessor;

@@ -24,4 +24,8 @@ public:
 
   UPROPERTY(EditAnywhere, Category = "Crowd Demo")
   int32 InitialAliveCountOverride = -1;
+
+  UPROPERTY(EditAnywhere, Category = "Crowd Demo")
+  ECrowdDemoSoftPressureTestCase SoftPressureTestCase =
+    ECrowdDemoSoftPressureTestCase::CorridorRoute;
 };

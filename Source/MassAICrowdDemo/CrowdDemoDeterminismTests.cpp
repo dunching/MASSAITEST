@@ -2293,6 +2293,16 @@ bool FCrowdDemoRoundCheckpointTransportTest::RunTest(const FString& Parameters)
     FCrowdDemoRoundAgentState& State = Frame.AgentStates.AddDefaulted_GetRef();
     State.AgentId = 1000 + Index;
     State.Location = FVector(Index * 2.0f, -Index * 3.0f, 60.0f);
+    State.TargetApproach.bValid = 1;
+    State.TargetApproach.State = static_cast<uint8>(Index % 4);
+    State.TargetApproach.TargetId = 17;
+    State.TargetApproach.TargetRevision = 23;
+    State.TargetApproach.SlotLayoutRevision = 31;
+    State.TargetApproach.AssignedSlotId = Index % 3 == 0 ? 200 + Index : INDEX_NONE;
+    State.TargetApproach.RingEnterFixedStep = 300 + Index;
+    State.TargetApproach.StateEnterFixedStep = 400 + Index;
+    State.TargetApproach.StableSettleSteps = Index % 19;
+    State.TargetApproach.StateRevision = Index % 7;
   }
   Frame.AgentCount = Frame.AgentStates.Num();
 
@@ -2312,6 +2322,19 @@ bool FCrowdDemoRoundCheckpointTransportTest::RunTest(const FString& Parameters)
   for (int32 Index = 0; Index < Assembled.Num(); ++Index)
   {
     TestEqual(TEXT("stable assembled id"), Assembled[Index].AgentId, 1000 + Index);
+    TestEqual(TEXT("target approach valid survives chunk assembly"),
+      Assembled[Index].TargetApproach.bValid, static_cast<uint8>(1));
+    TestEqual(TEXT("target approach state survives chunk assembly"),
+      Assembled[Index].TargetApproach.State, static_cast<uint8>(Index % 4));
+    TestEqual(TEXT("target approach owner survives chunk assembly"),
+      Assembled[Index].TargetApproach.AssignedSlotId,
+      Index % 3 == 0 ? 200 + Index : INDEX_NONE);
+    TestEqual(TEXT("target approach layout revision survives chunk assembly"),
+      Assembled[Index].TargetApproach.SlotLayoutRevision, 31);
+    TestEqual(TEXT("target approach ring step survives chunk assembly"),
+      Assembled[Index].TargetApproach.RingEnterFixedStep, 300 + Index);
+    TestEqual(TEXT("target approach state step survives chunk assembly"),
+      Assembled[Index].TargetApproach.StateEnterFixedStep, 400 + Index);
   }
 
   TArray<FCrowdDemoCorrectionFrameChunk> MissingChunks = Chunks;

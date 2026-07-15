@@ -36,6 +36,14 @@ enum class ECrowdDemoScenario : uint8
   SimRoundPursuitPositioning = 3
 };
 
+UENUM(BlueprintType)
+enum class ECrowdDemoSoftPressureTestCase : uint8
+{
+  CorridorRoute = 0,
+  PursuitAndSettle = 1,
+  PursuitAndSettleMoving = 2
+};
+
 inline bool IsCrowdDemoRoundSimScenario(const ECrowdDemoScenario Scenario)
 {
   return Scenario == ECrowdDemoScenario::SimRoundObstacle
@@ -84,6 +92,42 @@ struct FCrowdDemoEntityState
 };
 
 USTRUCT(BlueprintType)
+struct FCrowdDemoTargetApproachNetState
+{
+  GENERATED_BODY()
+
+  UPROPERTY()
+  uint8 bValid = 0;
+
+  UPROPERTY()
+  uint8 State = 0;
+
+  UPROPERTY()
+  int32 TargetId = INDEX_NONE;
+
+  UPROPERTY()
+  int32 TargetRevision = INDEX_NONE;
+
+  UPROPERTY()
+  int32 SlotLayoutRevision = INDEX_NONE;
+
+  UPROPERTY()
+  int32 AssignedSlotId = INDEX_NONE;
+
+  UPROPERTY()
+  int32 RingEnterFixedStep = INDEX_NONE;
+
+  UPROPERTY()
+  int32 StateEnterFixedStep = 0;
+
+  UPROPERTY()
+  int32 StableSettleSteps = 0;
+
+  UPROPERTY()
+  int32 StateRevision = 0;
+};
+
+USTRUCT(BlueprintType)
 struct FCrowdDemoRoundAgentState
 {
   GENERATED_BODY()
@@ -105,6 +149,9 @@ struct FCrowdDemoRoundAgentState
 
   UPROPERTY()
   float RadiusCm = 42.0f;
+
+  UPROPERTY()
+  FCrowdDemoTargetApproachNetState TargetApproach;
 
 };
 
@@ -428,10 +475,34 @@ struct FCrowdDemoSharedFlowFieldConfig
   float AgentInflateCm = 48.0f;
 
   UPROPERTY()
+  int32 ConnectivityContractVersion = 0;
+
+  UPROPERTY()
   FVector_NetQuantize10 GoalLocation = FVector(2200.0f, 1600.0f, 60.0f);
 
   UPROPERTY()
   TArray<FCrowdDemoSharedFlowObstacleSpec> ObstacleSpecs;
+};
+
+USTRUCT(BlueprintType)
+struct FCrowdDemoParticleProfile
+{
+  GENERATED_BODY()
+
+  UPROPERTY() float PhysicalRadiusCm = 42.0f;
+  UPROPERTY() float HardSafetyGapCm = 10.0f;
+  UPROPERTY() float SoftMarginCm = 17.0f;
+  UPROPERTY() float Mobility = 1.0f;
+
+  float GetNavigationHardClearanceCm() const
+  {
+    return PhysicalRadiusCm + HardSafetyGapCm;
+  }
+
+  float GetWallSoftDistanceCm() const
+  {
+    return GetNavigationHardClearanceCm() + SoftMarginCm;
+  }
 };
 
 USTRUCT(BlueprintType)
@@ -650,6 +721,21 @@ struct FCrowdDemoTrafficMetrics
   UPROPERTY() int32 InvalidFlowFinalZeroVelocityCount = 0;
   UPROPERTY() int32 InvalidFlowDeadlockCount = 0;
   UPROPERTY() int32 FlowRecoveredFromRasterMismatchCount = 0;
+  UPROPERTY() int32 FlowDesiredSegmentHardObstacleViolationCount = 0;
+  UPROPERTY() uint32 SharedFlowFieldBuildHash = 0;
+  UPROPERTY() int32 SharedFlowConnectivityContractVersion = 0;
+  UPROPERTY() int32 SharedFlowValidDirectedEdgeCount = 0;
+  UPROPERTY() float NavigationHardClearanceCm = 0.0f;
+  UPROPERTY() int32 NavigationCenterAnchorCount = 0;
+  UPROPERTY() int32 NavigationConnectionPointCount = 0;
+  UPROPERTY() int32 NavigationSafeIntervalCount = 0;
+  UPROPERTY() int32 NavigationInternalEdgeCount = 0;
+  UPROPERTY() int32 NavigationDirectedEdgeCount = 0;
+  UPROPERTY() int32 CenterInvalidButConnectedCellCount = 0;
+  UPROPERTY() int32 SourceAttachmentSuccessCount = 0;
+  UPROPERTY() int32 GoalAttachmentCount = 0;
+  UPROPERTY() int32 NavigationUnreachableSampleCount = 0;
+  UPROPERTY() uint32 NavigationV2Hash = 0;
   UPROPERTY() float FlowNearestReachableDistanceCmMax = 0.0f;
   UPROPERTY() float NavigationDomainReprojectDeltaCmMax = 0.0f;
   UPROPERTY() int32 PositionCandidateCount = 0;
@@ -1110,6 +1196,119 @@ struct FCrowdDemoElasticCrowdSettings
 };
 
 USTRUCT(BlueprintType)
+struct FCrowdDemoTargetApproachRuleSettings
+{
+  GENERATED_BODY()
+
+  UPROPERTY() uint8 bEnabled = 0;
+  UPROPERTY() float TransitionRingRadiusCm = 600.0f;
+  UPROPERTY() float RingEnterToleranceCm = 10.0f;
+  UPROPERTY() float RingExitToleranceCm = 40.0f;
+  UPROPERTY() float ApproachSlowdownDistanceCm = 200.0f;
+  UPROPERTY() float SlotArrivalToleranceCm = 20.0f;
+  UPROPERTY() float SlotArrivalSpeedToleranceCmps = 20.0f;
+  UPROPERTY() float SlotExitToleranceCm = 40.0f;
+  UPROPERTY() float SlotArriveGainPerSecond = 2.0f;
+  UPROPERTY() float SlotOccupiedGainPerSecond = 0.5f;
+  UPROPERTY() float FreeSettleAttractionGainPerSecond = 1.0f;
+  UPROPERTY() float FreeSettleMaxSpeedCmps = 180.0f;
+  UPROPERTY() float TargetPhysicalRadiusCm = 100.0f;
+  UPROPERTY() float TargetHardSafetyGapCm = 10.0f;
+  UPROPERTY() float TargetSoftMarginCm = 17.0f;
+  UPROPERTY() float PositionQuantumCm = 1.0f;
+  UPROPERTY() float VelocityQuantumCmps = 1.0f;
+};
+
+USTRUCT(BlueprintType)
+struct FCrowdDemoTargetMotionRule
+{
+  GENERATED_BODY()
+
+  UPROPERTY() int32 TargetId = 1;
+  UPROPERTY() int32 TargetRevision = 1;
+  UPROPERTY() FVector_NetQuantize10 InitialLocation = FVector(0.0f, 2200.0f, 60.0f);
+  UPROPERTY() FVector_NetQuantize10 LinearVelocity = FVector::ZeroVector;
+  UPROPERTY() float InitialYawDegrees = 0.0f;
+  UPROPERTY() float YawRateDegreesPerSecond = 0.0f;
+};
+
+USTRUCT(BlueprintType)
+struct FCrowdDemoTargetInfluenceRuleSettings
+{
+  GENERATED_BODY()
+
+  UPROPERTY() uint8 bEnabled = 0;
+  UPROPERTY() float DefaultMinimumCombatCenterDistanceCm = 100.0f;
+  UPROPERTY() float DefaultMaximumCombatCenterDistanceCm = 850.0f;
+  UPROPERTY() float InfluenceBlendWidthCm = 300.0f;
+  UPROPERTY() float RadialGainPerSecond = 2.0f;
+  UPROPERTY() float MaxRadialSpeedCmps = 300.0f;
+  UPROPERTY() float TargetPhysicalRadiusCm = 100.0f;
+  UPROPERTY() float TargetHardSafetyGapCm = 10.0f;
+  UPROPERTY() float TargetSoftMarginCm = 17.0f;
+  UPROPERTY() float PositionQuantumCm = 1.0f;
+  UPROPERTY() float VelocityQuantumCmps = 1.0f;
+  UPROPERTY() int32 AngularSectorCount = 16;
+  UPROPERTY() float RadialBandWidthCm = 100.0f;
+  UPROPERTY() int32 DensitySmoothingPassCount = 1;
+  UPROPERTY() int32 DensityMinimumDifference = 1;
+  UPROPERTY() float DensitySpeedPerExcessAgentCmps = 20.0f;
+  UPROPERTY() float MaximumDensityTangentialSpeedCmps = 120.0f;
+};
+
+USTRUCT(BlueprintType)
+struct FCrowdDemoTargetRegionTransportRuleSettings
+{
+  GENERATED_BODY()
+
+  UPROPERTY() uint8 bEnabled = 0;
+  UPROPERTY() float RadialBandWidthCm = 100.0f;
+  UPROPERTY() float TransportSpeedCmps = 300.0f;
+  UPROPERTY() int32 DemandRegionCount = 16;
+  UPROPERTY() int32 PlanLifetimeSteps = 15;
+};
+
+USTRUCT(BlueprintType)
+struct FCrowdDemoTargetSlotRule
+{
+  GENERATED_BODY()
+
+  UPROPERTY() int32 SlotId = INDEX_NONE;
+  UPROPERTY() uint8 bFunctional = 0;
+  UPROPERTY() FVector_NetQuantize10 TargetRelativeOffset = FVector::ZeroVector;
+  UPROPERTY() uint32 RequiredCapabilityMask = 0;
+  UPROPERTY() int32 StablePriority = 0;
+};
+
+USTRUCT(BlueprintType)
+struct FCrowdDemoTargetSlotBandRule
+{
+  GENERATED_BODY()
+
+  UPROPERTY() int32 BandId = INDEX_NONE;
+  UPROPERTY() uint8 bFunctional = 0;
+  UPROPERTY() int32 Capacity = 0;
+  UPROPERTY() float PreferredSurfaceDistanceCm = 0.0f;
+  UPROPERTY() float MinimumCenterDistanceCm = 0.0f;
+  UPROPERTY() float MaximumCenterDistanceCm = 0.0f;
+  UPROPERTY() float StartAngleDegrees = 0.0f;
+  UPROPERTY() uint32 RequiredCapabilityMask = 0;
+  UPROPERTY() int32 StablePriorityBase = 0;
+};
+
+USTRUCT(BlueprintType)
+struct FCrowdDemoTargetSlotLayoutRuleSettings
+{
+  GENERATED_BODY()
+
+  UPROPERTY() int32 SourceRevision = 1;
+  UPROPERTY() TArray<FCrowdDemoTargetSlotBandRule> Bands;
+  UPROPERTY() float TargetHardSafetyGapCm = 10.0f;
+  UPROPERTY() float PositionQuantumCm = 1.0f;
+  UPROPERTY() float AngleQuantumDegrees = 0.01f;
+};
+
+USTRUCT(BlueprintType)
 struct FCrowdDemoRoundRules
 {
   GENERATED_BODY()
@@ -1193,6 +1392,9 @@ struct FCrowdDemoRoundRules
   FCrowdDemoSharedFlowFieldConfig FlowFieldConfig;
 
   UPROPERTY()
+  FCrowdDemoParticleProfile ParticleProfile;
+
+  UPROPERTY()
   FCrowdDemoTrafficSettings TrafficSettings;
 
   UPROPERTY()
@@ -1200,6 +1402,27 @@ struct FCrowdDemoRoundRules
 
   UPROPERTY()
   FCrowdDemoElasticCrowdSettings ElasticCrowdSettings;
+
+  UPROPERTY()
+  ECrowdDemoSoftPressureTestCase SoftPressureTestCase = ECrowdDemoSoftPressureTestCase::CorridorRoute;
+
+  UPROPERTY()
+  FCrowdDemoTargetApproachRuleSettings TargetApproachSettings;
+
+  UPROPERTY()
+  FCrowdDemoTargetMotionRule TargetMotion;
+
+  UPROPERTY()
+  FCrowdDemoTargetInfluenceRuleSettings TargetInfluenceSettings;
+
+  UPROPERTY()
+  FCrowdDemoTargetRegionTransportRuleSettings TargetRegionTransportSettings;
+
+  UPROPERTY()
+  FCrowdDemoTargetSlotLayoutRuleSettings TargetSlotLayoutSettings;
+
+  UPROPERTY()
+  TArray<FCrowdDemoTargetSlotRule> TargetSlots;
 
   UPROPERTY()
   TArray<FCrowdDemoTrafficCohortRule> TrafficCohorts;
@@ -1252,9 +1475,196 @@ struct FCrowdDemoRoundPlanPacket
 };
 
 USTRUCT(BlueprintType)
+struct FCrowdDemoSoftPressureRouteMetrics
+{
+  GENERATED_BODY()
+
+  UPROPERTY() uint8 bValid = 0;
+  UPROPERTY() uint32 DiagnosticHash = 0;
+  UPROPERTY() int32 SelectedBranch = 0;
+  UPROPERTY() int32 SelectedAgentCount = 0;
+  UPROPERTY() int32 NeverReachedAgentCount = 0;
+  UPROPERTY() int32 ReachedThenLeftAgentCount = 0;
+  UPROPERTY() int32 GoalBoundaryTransitionCount = 0;
+  UPROPERTY() int32 ZeroToMaxSpeedTransitionCount = 0;
+  UPROPERTY() int32 MaxToZeroSpeedTransitionCount = 0;
+  UPROPERTY() int32 CorridorEverStalledAgentCount = 0;
+  UPROPERTY() int32 CorridorFinalDeadlockAgentCount = 0;
+  UPROPERTY() int32 FlowContractViolationCount = 0;
+  UPROPERTY() int32 FailureOwnedFlowContractViolationCount = 0;
+  UPROPERTY() int32 CorridorFailureAgentCount = 0;
+  UPROPERTY() int32 GoalFailureAgentCount = 0;
+  UPROPERTY() float InsideGoalCountP50 = 0.0f;
+  UPROPERTY() float InsideGoalCountP95 = 0.0f;
+  UPROPERTY() float InsideGoalCountMax = 0.0f;
+  UPROPERTY() float NeverReachedDistanceCmP50 = 0.0f;
+  UPROPERTY() float NeverReachedDistanceCmP95 = 0.0f;
+  UPROPERTY() float NeverReachedDistanceCmMax = 0.0f;
+  UPROPERTY() float NeverReachedDesiredForwardCmpsP50 = 0.0f;
+  UPROPERTY() float NeverReachedDesiredForwardCmpsP95 = 0.0f;
+  UPROPERTY() float NeverReachedAppliedForwardCmpsP50 = 0.0f;
+  UPROPERTY() float NeverReachedAppliedForwardCmpsP95 = 0.0f;
+  UPROPERTY() float NeverReachedSoftOppositionCmpsP50 = 0.0f;
+  UPROPERTY() float NeverReachedSoftOppositionCmpsP95 = 0.0f;
+  UPROPERTY() float BaselineNeverReachedForwardCmps = 0.0f;
+  UPROPERTY() float StickyNeverReachedForwardCmps = 0.0f;
+  UPROPERTY() float SoftDisabledNeverReachedForwardCmps = 0.0f;
+  UPROPERTY() uint8 bStickyCounterfactualValid = 0;
+  UPROPERTY() uint8 bSoftDisabledCounterfactualValid = 0;
+};
+
+USTRUCT(BlueprintType)
 struct FCrowdDemoParticleMetrics
 {
   GENERATED_BODY()
+
+  UPROPERTY() uint8 bTargetApproachValid = 0;
+  UPROPERTY() uint32 TargetFactHash = 0;
+  UPROPERTY() uint32 TargetApproachHash = 0;
+  UPROPERTY() uint32 TargetAgentInputHash = 0;
+  UPROPERTY() uint32 TargetAgentFineKinematicHash = 0;
+  UPROPERTY() uint32 TargetAgentConfigHash = 0;
+  UPROPERTY() uint32 TargetAgentTemporalHash = 0;
+  UPROPERTY() uint32 TargetSettingsHash = 0;
+  UPROPERTY() uint32 TargetSlotInputHash = 0;
+  UPROPERTY() uint32 TargetFullInputHash = 0;
+  UPROPERTY() uint32 TargetOwnerStateHash = 0;
+  UPROPERTY() uint32 TargetTransitionHash = 0;
+  UPROPERTY() uint32 TargetGuidanceHash = 0;
+  UPROPERTY() uint32 TargetGuidanceLocationHash = 0;
+  UPROPERTY() uint32 TargetGuidanceVelocityHash = 0;
+  UPROPERTY() int32 TargetSlotLayoutRevision = INDEX_NONE;
+  UPROPERTY() uint32 TargetSlotLayoutTopologyHash = 0;
+  UPROPERTY() uint32 TargetSlotLayoutWorldHash = 0;
+  UPROPERTY() uint32 TargetSlotLayoutFullInputHash = 0;
+  UPROPERTY() int32 SlotLayoutCandidateCount = 0;
+  UPROPERTY() int32 SlotLayoutFunctionalCount = 0;
+  UPROPERTY() int32 SlotLayoutFillCount = 0;
+  UPROPERTY() int32 SlotRejectedTargetClearanceCount = 0;
+  UPROPERTY() int32 SlotRejectedPairSpacingCount = 0;
+  UPROPERTY() int32 SlotRejectedObstacleCount = 0;
+  UPROPERTY() int32 SlotRejectedBoundsCount = 0;
+  UPROPERTY() int32 SlotRejectedUnreachableCount = 0;
+  UPROPERTY() int32 SlotRejectedIngressSegmentCount = 0;
+  UPROPERTY() uint32 TargetApproachScheduleHash = 0;
+  UPROPERTY() uint32 TargetApproachCommitHash = 0;
+  UPROPERTY() int32 SlotOwnerReleaseCount = 0;
+  UPROPERTY() int32 SlotOwnerReusedCount = 0;
+  UPROPERTY() int32 SlotOwnerConflictCount = 0;
+  UPROPERTY() int32 SlotLayoutRevisionMismatchCount = 0;
+  UPROPERTY() int32 RingEnteredCount = 0;
+  UPROPERTY() int32 RingWaitingCount = 0;
+  UPROPERTY() int32 FunctionalSlotCapacity = 0;
+  UPROPERTY() int32 FunctionalSlotOccupied = 0;
+  UPROPERTY() int32 FillSlotCapacity = 0;
+  UPROPERTY() int32 FillSlotOccupied = 0;
+  UPROPERTY() int32 SlotIngressCount = 0;
+  UPROPERTY() int32 SlotOccupiedCount = 0;
+  UPROPERTY() int32 FreeSettleCount = 0;
+  UPROPERTY() int32 FreeSettledCount = 0;
+  UPROPERTY() int32 DuplicateSlotOwnerCount = 0;
+  UPROPERTY() int32 InvalidSlotOwnerCount = 0;
+  UPROPERTY() int32 TargetApproachStateTransitionCount = 0;
+  UPROPERTY() int32 TargetApproachPhaseOscillationCount = 0;
+
+  UPROPERTY() uint8 bTargetInfluenceValid = 0;
+  UPROPERTY() int32 TargetInfluenceAgentCount = 0;
+  UPROPERTY() int32 TargetInsideEffectiveBandCount = 0;
+  UPROPERTY() int32 TargetOutsideMaxCount = 0;
+  UPROPERTY() int32 TargetInsideMinCount = 0;
+  UPROPERTY() float TargetRadialErrorCmP50 = 0.0f;
+  UPROPERTY() float TargetRadialErrorCmP95 = 0.0f;
+  UPROPERTY() float TargetRadialErrorCmMax = 0.0f;
+  UPROPERTY() float TargetRelativeSpeedCmpsP95 = 0.0f;
+  UPROPERTY() float TargetFollowLagCmP95 = 0.0f;
+  UPROPERTY() int32 OccupiedAngularSectorCount = 0;
+  UPROPERTY() int32 AngularCoverageQ15 = 0;
+  UPROPERTY() int32 MaxAngularSectorPopulation = 0;
+  UPROPERTY() int32 OccupiedRadialBandCount = 0;
+  UPROPERTY() uint32 TargetDensityFieldHash = 0;
+  UPROPERTY() int32 TargetDensityContributingAgentCount = 0;
+  UPROPERTY() int32 TargetDensityOccupiedCellCount = 0;
+  UPROPERTY() int32 TargetDensityMaxCellPopulation = 0;
+  UPROPERTY() int32 TargetDensityGuidedAgentCount = 0;
+  UPROPERTY() int32 TargetDensityClockwiseAgentCount = 0;
+  UPROPERTY() int32 TargetDensityCounterClockwiseAgentCount = 0;
+  UPROPERTY() float TargetDensityTangentialSpeedCmpsP95 = 0.0f;
+  UPROPERTY() float TargetDensityTangentialSpeedCmpsMax = 0.0f;
+  UPROPERTY() int32 TargetLargestEmptySectorRun = 0;
+  UPROPERTY() uint32 TargetInfluenceHash = 0;
+  UPROPERTY() uint8 bTargetInfluenceExecutionDiagnosticValid = 0;
+  UPROPERTY() int32 TargetInfluenceExecutionValidSampleCount = 0;
+  UPROPERTY() int32 TargetInfluenceExecutionRequestedAgentCount = 0;
+  UPROPERTY() int32 TargetInfluenceExecutionBelowThresholdSampleCount = 0;
+  UPROPERTY() float TargetDensityRequestedTangentialCmpsP50 = 0.0f;
+  UPROPERTY() float TargetDensityRequestedTangentialCmpsP95 = 0.0f;
+  UPROPERTY() float TargetDensityRequestedTangentialCmpsMax = 0.0f;
+  UPROPERTY() float TargetDensityPredictTangentialCmpsP50 = 0.0f;
+  UPROPERTY() float TargetDensityPredictTangentialCmpsP95 = 0.0f;
+  UPROPERTY() float TargetDensityPredictTangentialCmpsMax = 0.0f;
+  UPROPERTY() float TargetDensityAppliedTangentialCmpsP50 = 0.0f;
+  UPROPERTY() float TargetDensityAppliedTangentialCmpsP95 = 0.0f;
+  UPROPERTY() float TargetDensityAppliedTangentialCmpsMax = 0.0f;
+  UPROPERTY() float TargetDensityRequestedToAppliedRatioP50 = 0.0f;
+  UPROPERTY() float TargetDensityRequestedToAppliedRatioP95 = 0.0f;
+  UPROPERTY() float TargetDensityLostTangentialCmpsP50 = 0.0f;
+  UPROPERTY() float TargetDensityLostTangentialCmpsP95 = 0.0f;
+  UPROPERTY() float TargetDensityLostTangentialCmpsMax = 0.0f;
+  UPROPERTY() int32 TargetDensityDirectionFlipAgentCount = 0;
+  UPROPERTY() int32 TargetDensityDirectionFlipCount = 0;
+  UPROPERTY() int32 TargetDensityAngularSectorTransitionCount = 0;
+  UPROPERTY() int32 TargetDensityRadialBandTransitionCount = 0;
+  UPROPERTY() int32 TargetDensityEnvironmentOpposedAgentCount = 0;
+  UPROPERTY() int32 TargetDensityParticleOpposedAgentCount = 0;
+  UPROPERTY() TArray<int32> TargetFeasibleSectorCountByRadialBand;
+  UPROPERTY() int32 TargetOccupiedFeasibleSectorCount = 0;
+  UPROPERTY() int32 TargetOccupiedInfeasiblePolarCellCount = 0;
+  UPROPERTY() int32 TargetFeasibleButUnoccupiedSectorCount = 0;
+  UPROPERTY() int32 TargetLargestEmptyFeasibleSectorRun = 0;
+  UPROPERTY() int32 TargetFlowBoundsInfeasibleCellCount = 0;
+  UPROPERTY() int32 TargetObstacleInfeasibleCellCount = 0;
+  UPROPERTY() uint32 TargetInfluenceExecutionDiagnosticHash = 0;
+
+  UPROPERTY() uint8 bTargetRegionTransportValid = 0;
+  UPROPERTY() int32 TargetTransportFeasibleCellCount = 0;
+  UPROPERTY() int32 TargetTransportEdgeCount = 0;
+  UPROPERTY() int32 TargetTransportFeasibleRegionCount = 0;
+  UPROPERTY() int32 TargetTransportRawRegionCoverageCount = 0;
+  UPROPERTY() int32 TargetTransportFeasibleRegionCoverageCount = 0;
+  UPROPERTY() int32 TargetTransportInsideEffectiveBandCount = 0;
+  UPROPERTY() int32 TargetTransportMaximumRegionPopulation = 0;
+  UPROPERTY() int32 TargetTransportDesiredPopulation = 0;
+  UPROPERTY() int32 TargetTransportRoutedAgentCount = 0;
+  UPROPERTY() int32 TargetTransportUnroutedAgentCount = 0;
+  UPROPERTY() int32 TargetGuidanceUnroutedStepCount = 0;
+  UPROPERTY() int32 TargetGuidanceUnroutedAgentSampleCount = 0;
+  UPROPERTY() int32 TargetGuidanceUnroutedAgentMax = 0;
+  UPROPERTY() int32 TargetGuidanceFirstFailureStep = INDEX_NONE;
+  UPROPERTY() int32 TargetGuidanceFirstFailureAgentId = INDEX_NONE;
+  UPROPERTY() int32 TargetTransportInvalidStepCount = 0;
+  UPROPERTY() int32 TargetTransportValidationFailureCount = 0;
+  UPROPERTY() uint32 TargetTransportValidationHash = 0;
+  UPROPERTY() uint8 bTargetTransportFailureFixtureValid = 0;
+  UPROPERTY() int32 TargetTransportFailureFixtureStep = INDEX_NONE;
+  UPROPERTY() int32 TargetTransportFailureFixtureKind = 0;
+  UPROPERTY() int32 TargetTransportFailureFixtureAgentId = INDEX_NONE;
+  UPROPERTY() int32 TargetTransportFailureFixtureCellKey = INDEX_NONE;
+  UPROPERTY() uint32 TargetTransportFailureFixtureHash = 0;
+  UPROPERTY() int64 TargetTransportTotalPhysicalCost = 0;
+  UPROPERTY() int64 TargetTransportChangedQuotaUnitCount = 0;
+  UPROPERTY() int32 TargetTransportPlanEpoch = 0;
+  UPROPERTY() int32 TargetTransportPlanRebuildCount = 0;
+  UPROPERTY() int32 TargetTransportLifetimeRebuildCount = 0;
+  UPROPERTY() int32 TargetTransportTargetRebuildCount = 0;
+  UPROPERTY() int32 TargetTransportEnvironmentRebuildCount = 0;
+  UPROPERTY() int32 TargetTransportMembershipRebuildCount = 0;
+  UPROPERTY() int32 TargetTransportDemandSatisfiedRebuildCount = 0;
+  UPROPERTY() int32 TargetTransportPathInvalidRebuildCount = 0;
+  UPROPERTY() float TargetTransportSolverMsP95 = -1.0f;
+  UPROPERTY() uint32 TargetTransportTopologyHash = 0;
+  UPROPERTY() uint32 TargetTransportDemandHash = 0;
+  UPROPERTY() uint32 TargetTransportPlanHash = 0;
+  UPROPERTY() uint32 TargetTransportGuidanceHash = 0;
 
   UPROPERTY() int32 SoftPairCount = 0;
   UPROPERTY() int32 SoftViolatingPairCount = 0;
@@ -1271,6 +1681,16 @@ struct FCrowdDemoParticleMetrics
   UPROPERTY() int32 ObstaclePenetrationCount = 0;
   UPROPERTY() float ParticleSolverMsP95 = -1.0f;
   UPROPERTY() int32 BoundsViolationCount = 0;
+  UPROPERTY() int32 EnvironmentSoftContactCount = 0;
+  UPROPERTY() int32 EnvironmentSoftAppliedAgentCount = 0;
+  UPROPERTY() float EnvironmentSoftErrorCmP50 = 0.0f;
+  UPROPERTY() float EnvironmentSoftErrorCmP95 = 0.0f;
+  UPROPERTY() float EnvironmentSoftErrorCmMax = 0.0f;
+  UPROPERTY() float EnvironmentSoftRequestedCorrectionCmMax = 0.0f;
+  UPROPERTY() float EnvironmentSoftRealizedCorrectionCmMax = 0.0f;
+  UPROPERTY() int32 UnifiedHardConstraintCount = 0;
+  UPROPERTY() float UnifiedHardResidualCmMax = 0.0f;
+  UPROPERTY() int32 UnifiedHardInfeasibleCount = 0;
   UPROPERTY() int32 ParticleInvalidStepCount = 0;
   UPROPERTY() int32 ParticleGlobalFallbackStepCount = 0;
   UPROPERTY() uint32 ParticleCandidateHash = 0;
@@ -1283,6 +1703,7 @@ struct FCrowdDemoParticleMetrics
   UPROPERTY() int32 RollbackSnapshotMissCount = 0;
   UPROPERTY() int32 RollbackAgentMismatchCount = 0;
   UPROPERTY() int32 RollbackReplayedStepCount = 0;
+  UPROPERTY() FCrowdDemoSoftPressureRouteMetrics RouteMetrics;
 };
 
 USTRUCT(BlueprintType)

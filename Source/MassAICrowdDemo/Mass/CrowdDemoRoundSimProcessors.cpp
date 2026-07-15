@@ -3,6 +3,7 @@
 #include "Mass/CrowdDemoMassFragments.h"
 #include "Mass/CrowdDemoHardSeparationPbdKernel.h"
 #include "Mass/CrowdDemoParticleConstraintKernel.h"
+#include "Mass/CrowdDemoTargetInfluenceKernel.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
@@ -16,6 +17,9 @@
 #include "MassExecutionContext.h"
 #include "MassMovementFragments.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "ThirdParty/Reference/RVO2/CrowdDemoRvo2ReferenceSolver.h"
@@ -24,6 +28,176 @@
 namespace
 {
   constexpr int32 MaxFixedStepsPerFrame = 256;
+  constexpr uint32 TargetFnvPrime = 16777619u;
+
+  uint32 FoldTargetHash(uint32 Hash, uint32 Value)
+  {
+    Hash ^= Value;
+    Hash *= TargetFnvPrime;
+    return Hash;
+  }
+
+  uint32 BuildAndOptionallyWriteTargetRegionFailureFixture(
+    UWorld& World,
+    UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
+    const FCrowdDemoTargetRegionPlanValidationResult& Validation,
+    const int32 FailureKind,
+    FString* OutWrittenPath = nullptr)
+  {
+    if (!FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoTargetRegionTransportDiagnostic")))
+      return 0;
+    TArray<FCrowdDemoTargetRegionTransportAgent> Agents = Pipeline.GetPreparedTargetRegionAgents();
+    Agents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+    const auto& Target = Pipeline.GetTargetApproachFact();
+    const auto& Topology = Pipeline.GetPreparedTargetRegionTopology();
+    const auto& Demand = Pipeline.GetPreparedTargetRegionDemand();
+    const auto& Plan = Pipeline.GetPreparedTargetRegionPlan();
+    const auto& Guidance = Pipeline.GetTargetRegionGuidanceSummary();
+    uint32 Hash = 2166136261u;
+    auto Fold = [&](const int64 Value)
+    {
+      Hash = FoldTargetHash(Hash, static_cast<uint32>(Value));
+      Hash = FoldTargetHash(Hash, static_cast<uint32>(Value >> 32));
+    };
+    Fold(Pipeline.GetCurrentFixedStepIndex()); Fold(FailureKind);
+    Fold(FMath::RoundToInt(Target.Location.X)); Fold(FMath::RoundToInt(Target.Location.Y));
+    Fold(FMath::RoundToInt(Target.Velocity.X)); Fold(FMath::RoundToInt(Target.Velocity.Y));
+    Fold(Target.TargetRevision); Fold(Topology.FeasibleGraphHash);
+    FString Json;
+    Json.Reserve(196608);
+    Json += FString::Printf(TEXT("{\n\"version\":1,\"fixed_step\":%d,\"failure_kind\":%d,"),
+      Pipeline.GetCurrentFixedStepIndex(), FailureKind);
+    Json += FString::Printf(TEXT("\"target\":{\"x\":%d,\"y\":%d,\"vx\":%d,\"vy\":%d,\"revision\":%d},"),
+      FMath::RoundToInt(Target.Location.X), FMath::RoundToInt(Target.Location.Y),
+      FMath::RoundToInt(Target.Velocity.X), FMath::RoundToInt(Target.Velocity.Y), Target.TargetRevision);
+    Json += FString::Printf(TEXT("\"feasible_graph_hash\":%u,\"topology_hash\":%u,\"demand_hash\":%u,\"plan_hash\":%u,\"guidance_hash\":%u,"),
+      Topology.FeasibleGraphHash, Topology.TopologyHash, Demand.DemandHash,
+      Plan.TransportHash, Guidance.GuidanceHash);
+    Json += TEXT("\"cells\":[");
+    for (int32 Index = 0; Index < Topology.Cells.Num(); ++Index)
+    {
+      const auto& Cell = Topology.Cells[Index];
+      if (Index) Json += TEXT(",");
+      Json += FString::Printf(TEXT("{\"key\":%d,\"band\":%d,\"sector\":%d,\"region\":%d,\"x\":%d,\"y\":%d,\"feasible\":%d,\"terminal\":%d}"),
+        Cell.StableCellKey, Cell.RadialBand, Cell.AngularSector, Cell.PrimaryDemandRegionKey,
+        FMath::RoundToInt(Cell.WorldAnchorCm.X), FMath::RoundToInt(Cell.WorldAnchorCm.Y),
+        Cell.bFeasible ? 1 : 0, Cell.bTerminal ? 1 : 0);
+      Fold(Cell.StableCellKey); Fold(Cell.PrimaryDemandRegionKey); Fold(Cell.bFeasible); Fold(Cell.bTerminal);
+    }
+    Json += TEXT("],\"edges\":[");
+    for (int32 Index = 0; Index < Topology.Edges.Num(); ++Index)
+    {
+      const auto& Edge = Topology.Edges[Index];
+      if (Index) Json += TEXT(",");
+      Json += FString::Printf(TEXT("{\"from\":%d,\"to\":%d,\"geometry\":%d,\"soft\":%d,\"radial\":%d,\"cross\":%d}"),
+        Edge.FromCellKey, Edge.ToCellKey, Edge.GeometryCostCm, Edge.SoftClearancePenaltyCm,
+        Edge.RadialDeviationPenaltyCm, Edge.bCrossBand ? 1 : 0);
+      Fold(Edge.FromCellKey); Fold(Edge.ToCellKey); Fold(Edge.GeometryCostCm);
+      Fold(Edge.SoftClearancePenaltyCm); Fold(Edge.RadialDeviationPenaltyCm); Fold(Edge.bCrossBand);
+    }
+    Json += TEXT("],\"agents\":[");
+    for (int32 Index = 0; Index < Agents.Num(); ++Index)
+    {
+      const auto& Agent = Agents[Index];
+      const FCrowdDemoTargetRegionAgentDemandState* State = nullptr;
+      for (const auto& Candidate : Demand.AgentStates)
+        if (Candidate.AgentId == Agent.AgentId) { State = &Candidate; break; }
+      if (Index) Json += TEXT(",");
+      Json += FString::Printf(TEXT("{\"id\":%d,\"x\":%d,\"y\":%d,\"cell\":%d,\"region\":%d,\"terminal\":%d,\"stay\":%d,\"supply\":%d,\"attached\":%d}"),
+        Agent.AgentId, FMath::RoundToInt(Agent.Location.X), FMath::RoundToInt(Agent.Location.Y),
+        State ? State->CurrentCellKey : INDEX_NONE, State ? State->CurrentRegionKey : INDEX_NONE,
+        State && State->bTerminal ? 1 : 0, State && State->bTerminalStay ? 1 : 0,
+        State && State->bSupply ? 1 : 0, State && State->bSourceAttached ? 1 : 0);
+      Fold(Agent.AgentId); Fold(FMath::RoundToInt(Agent.Location.X)); Fold(FMath::RoundToInt(Agent.Location.Y));
+      Fold(State ? State->CurrentCellKey : INDEX_NONE); Fold(State ? State->CurrentRegionKey : INDEX_NONE);
+      Fold(State && State->bTerminal); Fold(State && State->bTerminalStay); Fold(State && State->bSupply);
+    }
+    Json += TEXT("],\"regions\":[");
+    for (int32 Index = 0; Index < Demand.Regions.Num(); ++Index)
+    {
+      const auto& Region = Demand.Regions[Index];
+      if (Index) Json += TEXT(",");
+      Json += FString::Printf(TEXT("{\"key\":%d,\"current\":%d,\"desired\":%d,\"deficit\":%d,\"surplus\":%d}"),
+        Region.StableRegionKey, Region.CurrentPopulation, Region.DesiredPopulation,
+        Region.Deficit, Region.Surplus);
+      Fold(Region.StableRegionKey); Fold(Region.CurrentPopulation); Fold(Region.DesiredPopulation);
+      Fold(Region.Deficit); Fold(Region.Surplus);
+    }
+    Json += FString::Printf(TEXT("],\"plan\":{\"epoch\":%d,\"build_step\":%d,\"flows\":["),
+      Plan.PlanEpoch, Plan.BuildFixedStepIndex);
+    Fold(Plan.PlanEpoch); Fold(Plan.BuildFixedStepIndex);
+    for (int32 Index = 0; Index < Plan.EdgeFlows.Num(); ++Index)
+    {
+      const auto& Flow = Plan.EdgeFlows[Index];
+      if (Index) Json += TEXT(",");
+      Json += FString::Printf(TEXT("{\"from\":%d,\"to\":%d,\"quota\":%d,\"reused\":%d}"),
+        Flow.FromCellKey, Flow.ToCellKey, Flow.AgentQuota, Flow.ReusedQuota);
+      Fold(Flow.FromCellKey); Fold(Flow.ToCellKey); Fold(Flow.AgentQuota); Fold(Flow.ReusedQuota);
+    }
+    Json += FString::Printf(TEXT("]},\"validation\":{\"valid\":%d,\"missing_edge\":%d,\"infeasible_edge\":%d,\"invalid_cell\":%d,\"insufficient_quota\":%d,\"flow_conservation\":%d,\"unreachable_deficit\":%d,\"first_cell\":%d,\"first_agent\":%d,\"hash\":%u},"),
+      Validation.bValid ? 1 : 0, Validation.MissingEdgeCount, Validation.InfeasibleEdgeCount,
+      Validation.InvalidCellCount, Validation.InsufficientOutgoingQuotaCellCount,
+      Validation.FlowConservationFailureCount, Validation.UnreachableDeficitCount,
+      Validation.FirstFailureCellKey, Validation.FirstFailureAgentId, Validation.ValidationHash);
+    Fold(Validation.ValidationHash);
+    Json += FString::Printf(TEXT("\"guidance\":{\"unrouted\":%d,\"first_agent\":%d,\"first_cell\":%d,\"consumption\":["),
+      Guidance.UnroutedAgentCount, Guidance.FirstUnroutedAgentId, Guidance.FirstUnroutedCellKey);
+    Fold(Guidance.UnroutedAgentCount); Fold(Guidance.FirstUnroutedAgentId); Fold(Guidance.FirstUnroutedCellKey);
+    for (int32 Index = 0; Index < Guidance.Consumption.Num(); ++Index)
+    {
+      const auto& Consumption = Guidance.Consumption[Index];
+      if (Index) Json += TEXT(",");
+      Json += FString::Printf(TEXT("{\"from\":%d,\"to\":%d,\"quota\":%d,\"consumed\":%d}"),
+        Consumption.FromCellKey, Consumption.ToCellKey,
+        Consumption.AgentQuota, Consumption.ConsumedQuota);
+      Fold(Consumption.FromCellKey); Fold(Consumption.ToCellKey);
+      Fold(Consumption.AgentQuota); Fold(Consumption.ConsumedQuota);
+    }
+    Json += FString::Printf(TEXT("]},\"fixture_hash\":%u}\n"), Hash);
+    if (World.GetNetMode() != NM_Client)
+    {
+      FString OutputPath;
+      if (FParse::Value(FCommandLine::Get(),
+        TEXT("CrowdDemoTargetRegionTransportDiagnosticOutput="), OutputPath)
+        && !OutputPath.IsEmpty())
+      {
+        const bool bWritten = FFileHelper::SaveStringToFile(Json, *OutputPath,
+          FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+        if (bWritten && OutWrittenPath) *OutWrittenPath = OutputPath;
+        if (!bWritten)
+          UE_LOG(LogTemp, Error, TEXT("VIOLATION CrowdDemoTargetRegionFixtureWriteFailed path=%s"), *OutputPath);
+      }
+    }
+    return Hash;
+  }
+
+  FCrowdDemoTargetRegionTransportSettings MakeTargetRegionTransportSettings(
+    const FCrowdDemoRoundRules& Rules, const FCrowdDemoTargetFact& Target)
+  {
+    FCrowdDemoTargetRegionTransportSettings Settings;
+    Settings.TargetLocation = Target.Location;
+    Settings.TargetVelocity = Target.Velocity;
+    Settings.TargetPhysicalRadiusCm = Rules.TargetInfluenceSettings.TargetPhysicalRadiusCm;
+    Settings.TargetHardSafetyGapCm = Rules.TargetInfluenceSettings.TargetHardSafetyGapCm;
+    Settings.PhysicalRadiusCm = Rules.ParticleProfile.PhysicalRadiusCm;
+    Settings.HardSafetyGapCm = Rules.ParticleProfile.HardSafetyGapCm;
+    Settings.SoftMarginCm = Rules.ParticleProfile.SoftMarginCm;
+    Settings.MinimumCenterDistanceCm = FMath::Max(
+      Rules.TargetInfluenceSettings.DefaultMinimumCombatCenterDistanceCm,
+      Settings.TargetPhysicalRadiusCm + Settings.PhysicalRadiusCm
+        + FMath::Max(Settings.TargetHardSafetyGapCm, Settings.HardSafetyGapCm));
+    Settings.MaximumCenterDistanceCm =
+      Rules.TargetInfluenceSettings.DefaultMaximumCombatCenterDistanceCm;
+    Settings.InfluenceBlendWidthCm = Rules.TargetInfluenceSettings.InfluenceBlendWidthCm;
+    Settings.RadialBandWidthCm = Rules.TargetRegionTransportSettings.RadialBandWidthCm;
+    Settings.TransportSpeedCmps = Rules.TargetRegionTransportSettings.TransportSpeedCmps;
+    Settings.RadialGainPerSecond = Rules.TargetInfluenceSettings.RadialGainPerSecond;
+    Settings.DemandRegionCount = Rules.TargetRegionTransportSettings.DemandRegionCount;
+    Settings.PlanLifetimeSteps = Rules.TargetRegionTransportSettings.PlanLifetimeSteps;
+    Settings.PositionQuantumCm = Rules.TargetInfluenceSettings.PositionQuantumCm;
+    Settings.VelocityQuantumCmps = Rules.TargetInfluenceSettings.VelocityQuantumCmps;
+    return Settings;
+  }
 
   bool IsRoundFlowScenario(const ECrowdDemoScenario Scenario)
   {
@@ -78,7 +252,8 @@ namespace
   FCrowdDemoRoundAgentState MakeRoundAgentState(
     const FCrowdDemoMassIdentityFragment& Identity,
     const FCrowdDemoRoundFormationFragment& Formation,
-    const FCrowdDemoRoundSimStateFragment& State)
+    const FCrowdDemoRoundSimStateFragment& State,
+    const FCrowdDemoTargetApproachFragment* TargetApproach = nullptr)
   {
     FCrowdDemoRoundAgentState Result;
     Result.AgentId = Identity.Id;
@@ -87,7 +262,48 @@ namespace
     Result.YawDegrees = State.YawDegrees;
     Result.Velocity = FVector_NetQuantize10(State.Velocity);
     Result.RadiusCm = Formation.RadiusCm;
+    if (TargetApproach != nullptr)
+    {
+      Result.TargetApproach.bValid = 1;
+      Result.TargetApproach.State = static_cast<uint8>(TargetApproach->State);
+      Result.TargetApproach.TargetId = TargetApproach->TargetId;
+      Result.TargetApproach.TargetRevision = TargetApproach->TargetRevision;
+      Result.TargetApproach.SlotLayoutRevision = TargetApproach->SlotLayoutRevision;
+      Result.TargetApproach.AssignedSlotId = TargetApproach->AssignedSlotId;
+      Result.TargetApproach.RingEnterFixedStep = TargetApproach->RingEnterFixedStep;
+      Result.TargetApproach.StateEnterFixedStep = TargetApproach->StateEnterFixedStep;
+      Result.TargetApproach.StableSettleSteps = TargetApproach->StableSettleSteps;
+      Result.TargetApproach.StateRevision = TargetApproach->StateRevision;
+    }
     return Result;
+  }
+
+  bool IsValidTargetApproachNetState(const FCrowdDemoTargetApproachNetState& State)
+  {
+    return State.bValid != 0
+      && State.State <= static_cast<uint8>(ECrowdDemoTargetApproachState::FreeSettle)
+      && State.TargetId != INDEX_NONE
+      && State.TargetRevision != INDEX_NONE
+      && State.SlotLayoutRevision >= INDEX_NONE
+      && State.RingEnterFixedStep >= INDEX_NONE
+      && State.StateEnterFixedStep >= 0
+      && State.StableSettleSteps >= 0
+      && State.StateRevision >= 0;
+  }
+
+  void ApplyTargetApproachNetState(
+    const FCrowdDemoTargetApproachNetState& Source,
+    FCrowdDemoTargetApproachFragment& Target)
+  {
+    Target.State = static_cast<ECrowdDemoTargetApproachState>(Source.State);
+    Target.TargetId = Source.TargetId;
+    Target.TargetRevision = Source.TargetRevision;
+    Target.SlotLayoutRevision = Source.SlotLayoutRevision;
+    Target.AssignedSlotId = Source.AssignedSlotId;
+    Target.RingEnterFixedStep = Source.RingEnterFixedStep;
+    Target.StateEnterFixedStep = Source.StateEnterFixedStep;
+    Target.StableSettleSteps = Source.StableSettleSteps;
+    Target.StateRevision = Source.StateRevision;
   }
 
   FVector MakeCenteredFormationOffset(
@@ -222,10 +438,13 @@ void UCrowdDemoRoundPlanApplyProcessor::ConfigureQueries(const TSharedRef<FMassE
   EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoRoundFormationFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoRoundMoveIntentFragment>(EMassFragmentAccess::ReadWrite);
+  EntityQuery.AddRequirement<FCrowdDemoTargetApproachFragment>(EMassFragmentAccess::ReadWrite);
+  EntityQuery.AddRequirement<FCrowdDemoTargetCapabilityFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoRoundFlowSampleFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoRoundProposedMovementFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoRoundObstacleConstraintFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoRoundPbdCorrectionFragment>(EMassFragmentAccess::ReadWrite);
+  EntityQuery.AddRequirement<FCrowdDemoParticlePropertiesFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoRoundSeparationFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoPortalAdmissionFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoPassingBandFragment>(EMassFragmentAccess::ReadWrite);
@@ -322,10 +541,13 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
       const TArrayView<FCrowdDemoRoundSimStateFragment> States = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundSimStateFragment>();
       const TArrayView<FCrowdDemoRoundFormationFragment> Formations = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundFormationFragment>();
       const TArrayView<FCrowdDemoRoundMoveIntentFragment> Intents = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundMoveIntentFragment>();
+      const TArrayView<FCrowdDemoTargetApproachFragment> TargetApproaches = ChunkContext.GetMutableFragmentView<FCrowdDemoTargetApproachFragment>();
+      const TArrayView<FCrowdDemoTargetCapabilityFragment> TargetCapabilities = ChunkContext.GetMutableFragmentView<FCrowdDemoTargetCapabilityFragment>();
       const TArrayView<FCrowdDemoRoundFlowSampleFragment> FlowSamples = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundFlowSampleFragment>();
       const TArrayView<FCrowdDemoRoundProposedMovementFragment> ProposedMovements = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundProposedMovementFragment>();
       const TArrayView<FCrowdDemoRoundObstacleConstraintFragment> Constraints = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundObstacleConstraintFragment>();
       const TArrayView<FCrowdDemoRoundPbdCorrectionFragment> PbdCorrections = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundPbdCorrectionFragment>();
+      const TArrayView<FCrowdDemoParticlePropertiesFragment> ParticleProperties = ChunkContext.GetMutableFragmentView<FCrowdDemoParticlePropertiesFragment>();
       const TArrayView<FCrowdDemoRoundSeparationFragment> Separations = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundSeparationFragment>();
       const TArrayView<FCrowdDemoPortalAdmissionFragment> Admissions = ChunkContext.GetMutableFragmentView<FCrowdDemoPortalAdmissionFragment>();
       const TArrayView<FCrowdDemoPassingBandFragment> Bands = ChunkContext.GetMutableFragmentView<FCrowdDemoPassingBandFragment>();
@@ -373,10 +595,22 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
         State.PlanRevision = DuePlan.Revision;
         State.bInitialized = true;
         Intents[It] = FCrowdDemoRoundMoveIntentFragment();
+        TargetApproaches[It] = FCrowdDemoTargetApproachFragment();
+        if (DuePlan.Rules.TargetInfluenceSettings.bEnabled != 0)
+        {
+          TargetCapabilities[It].MinimumFunctionalDistanceCm =
+            DuePlan.Rules.TargetInfluenceSettings.DefaultMinimumCombatCenterDistanceCm;
+          TargetCapabilities[It].MaximumFunctionalDistanceCm =
+            DuePlan.Rules.TargetInfluenceSettings.DefaultMaximumCombatCenterDistanceCm;
+        }
         FlowSamples[It] = FCrowdDemoRoundFlowSampleFragment();
         ProposedMovements[It] = FCrowdDemoRoundProposedMovementFragment();
         Constraints[It] = FCrowdDemoRoundObstacleConstraintFragment();
         PbdCorrections[It] = FCrowdDemoRoundPbdCorrectionFragment();
+        ParticleProperties[It].PhysicalRadiusCm = DuePlan.Rules.ParticleProfile.PhysicalRadiusCm;
+        ParticleProperties[It].HardSafetyGapCm = DuePlan.Rules.ParticleProfile.HardSafetyGapCm;
+        ParticleProperties[It].SoftMarginCm = DuePlan.Rules.ParticleProfile.SoftMarginCm;
+        ParticleProperties[It].Mobility = DuePlan.Rules.ParticleProfile.Mobility;
         Separations[It] = FCrowdDemoRoundSeparationFragment();
         const int32 CohortId = Admissions[It].CohortId;
         Admissions[It] = FCrowdDemoPortalAdmissionFragment();
@@ -408,11 +642,13 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
       const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
       const TConstArrayView<FCrowdDemoRoundSimStateFragment> States = ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
       const TConstArrayView<FCrowdDemoRoundFormationFragment> Formations = ChunkContext.GetFragmentView<FCrowdDemoRoundFormationFragment>();
+      const TConstArrayView<FCrowdDemoTargetApproachFragment> TargetApproaches = ChunkContext.GetFragmentView<FCrowdDemoTargetApproachFragment>();
       for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
       {
         if (States[It].bInitialized)
         {
-          StatesOut.Add(MakeRoundAgentState(Identities[It], Formations[It], States[It]));
+          StatesOut.Add(MakeRoundAgentState(
+            Identities[It], Formations[It], States[It], &TargetApproaches[It]));
         }
       }
     });
@@ -438,6 +674,8 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
       : nullptr;
     const bool bSoftPressureScenario =
       Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure;
+    const bool bTargetApproachCorrection = bSoftPressureScenario
+      && Pipeline->GetRules().TargetApproachSettings.bEnabled != 0;
     const FCrowdDemoSoftPressureRollbackSnapshot* SoftPressureRollbackSnapshot =
       bSoftPressureScenario
       ? Pipeline->FindSoftPressureRollbackSnapshot(DiagnosticCorrectionFixedStep)
@@ -461,7 +699,9 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
         const FCrowdDemoSoftPressureRollbackAgentState* const* Local =
           SoftPressureRollbackById.Find(ServerAgent.AgentId);
         if (!Local || (*Local)->LifecycleSerial != ServerAgent.LifecycleSerial
-          || !FMath::IsNearlyEqual((*Local)->RadiusCm, ServerAgent.RadiusCm, 0.01f))
+          || !FMath::IsNearlyEqual((*Local)->RadiusCm, ServerAgent.RadiusCm, 0.01f)
+          || (bTargetApproachCorrection
+            && !IsValidTargetApproachNetState(ServerAgent.TargetApproach)))
         {
           bSoftPressureAgentMismatch = true;
           break;
@@ -517,8 +757,12 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
       BeforeCorrection = GatherStates();
     }
     Pipeline->RecordCorrectionComparisonAndApplied(BeforeCorrection, Correction, BoundaryTime);
-    bool bNeedsAuthoritativeState = RollbackSnapshot == nullptr
-      && !bValidSoftPressureRollback;
+    // Target guidance is quantized after evaluating the exact world-space
+    // position. Even a sub-tolerance local float delta can cross that guidance
+    // quantum, so a TargetApproach correction must establish one authoritative
+    // physical and business-state boundary before replay.
+    bool bNeedsAuthoritativeState = bTargetApproachCorrection
+      || (RollbackSnapshot == nullptr && !bValidSoftPressureRollback);
     if (!bNeedsAuthoritativeState)
     {
       TMap<int32, const FCrowdDemoRoundAgentState*> BeforeById;
@@ -551,6 +795,7 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
       const auto PositionAssignments = ChunkContext.GetMutableFragmentView<FCrowdDemoPositionAssignmentFragment>();
       const auto PursuitSteering = ChunkContext.GetMutableFragmentView<FCrowdDemoPursuitSteeringStateFragment>();
       const auto PursuitGuidance = ChunkContext.GetMutableFragmentView<FCrowdDemoPursuitGuidanceFragment>();
+      const auto TargetApproaches = ChunkContext.GetMutableFragmentView<FCrowdDemoTargetApproachFragment>();
       for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
       {
         if (const FCrowdDemoSf3RollbackAgentState* const* Rollback = RollbackById.Find(Identities[It].Id))
@@ -574,6 +819,8 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
           States[It].SimulatedServerTimeSeconds = (*Rollback)->SimulatedServerTimeSeconds;
           States[It].PlanRevision = (*Rollback)->PlanRevision;
           States[It].bInitialized = (*Rollback)->bInitialized;
+          FlowSamples[It] = (*Rollback)->FlowSample;
+          TargetApproaches[It] = (*Rollback)->TargetApproach;
         }
         if (bNeedsAuthoritativeState)
         {
@@ -582,6 +829,15 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
             States[It].Location = FVector((*Corrected)->Location);
             States[It].Velocity = FVector((*Corrected)->Velocity);
             States[It].YawDegrees = (*Corrected)->YawDegrees;
+          }
+        }
+        if (bTargetApproachCorrection)
+        {
+          if (const FCrowdDemoRoundAgentState* const* Corrected =
+            CorrectionById.Find(Identities[It].Id))
+          {
+            if (IsValidTargetApproachNetState((*Corrected)->TargetApproach))
+              ApplyTargetApproachNetState((*Corrected)->TargetApproach, TargetApproaches[It]);
           }
         }
         States[It].SimulatedServerTimeSeconds = Correction.ServerTimeSeconds;
@@ -604,6 +860,8 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
     {
       const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
       const TArrayView<FCrowdDemoRoundSimStateFragment> States = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundSimStateFragment>();
+      const TArrayView<FCrowdDemoTargetApproachFragment> TargetApproaches =
+        ChunkContext.GetMutableFragmentView<FCrowdDemoTargetApproachFragment>();
       for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
       {
         if (const FCrowdDemoRoundAgentState* const* Corrected = ResultById.Find(Identities[It].Id))
@@ -612,6 +870,12 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
           States[It].Velocity = FVector((*Corrected)->Velocity);
           States[It].YawDegrees = (*Corrected)->YawDegrees;
           States[It].SimulatedServerTimeSeconds = Result.EndServerTimeSeconds;
+          if (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+            && Pipeline->GetRules().TargetApproachSettings.bEnabled != 0
+            && IsValidTargetApproachNetState((*Corrected)->TargetApproach))
+          {
+            ApplyTargetApproachNetState((*Corrected)->TargetApproach, TargetApproaches[It]);
+          }
         }
       }
     });
@@ -729,6 +993,10 @@ void UCrowdDemoRoundFlowPreferredVelocityProcessor::Execute(
   }
   const FCrowdDemoRoundRules& Rules = Pipeline->GetRules();
   int32 AgentCount = 0;
+  int32 RecoveredAgentCount = 0;
+  int32 DesiredSegmentViolationCount = 0;
+  int32 SourceAttachmentSuccessCount = 0;
+  int32 NavigationUnreachableSampleCount = 0;
   TArray<FSf3AgentHashRecord> HashRecords;
   TArray<FCrowdDemoFlowReachabilityStageSample> ReachabilitySamples;
   EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
@@ -762,26 +1030,48 @@ void UCrowdDemoRoundFlowPreferredVelocityProcessor::Execute(
       FCrowdDemoRoundFlowSampleFragment& FlowSample = FlowSamples[It];
       FlowSample.CellIndex = Sample.CellIndex;
       FlowSample.StableCellKey = Sample.StableCellKey;
+      FlowSample.NavigationNodeKey = Sample.NavigationNodeKey;
+      FlowSample.NextNavigationNodeKey = Sample.NextNavigationNodeKey;
       FlowSample.Status = Sample.Status;
       FlowSample.FlowDirection = Sample.FlowDirection;
       FlowSample.IntegrationCost = Sample.IntegrationCost;
+      FlowSample.GuidanceDistanceCm = Sample.GuidanceDistanceCm;
       FlowSample.bBlocked = Sample.bBlocked;
       FlowSample.bUnreachable = Sample.bUnreachable;
       FlowSample.bRecoveredFromRasterMismatch = Sample.bRecoveredFromRasterMismatch;
+      FlowSample.bSourceAttached = Sample.bSourceAttached;
 
       FCrowdDemoRoundMoveIntentFragment& Intent = Intents[It];
-      const bool bReachedGoal = FVector::DistSquared2D(
+      const bool bTargetApproachEnabled = Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+        && Rules.TargetApproachSettings.bEnabled != 0;
+      const bool bReachedGoal = !bTargetApproachEnabled && FVector::DistSquared2D(
         States[It].Location,
         Goal) <= FMath::Square(140.0f);
       Intent.PreferredDirection = bReachedGoal ? FVector::ZeroVector : Sample.FlowDirection;
       Intent.DesiredLocation = Goal;
+      float DesiredSpeedCmps = Rules.MaxSpeedCmPerSecond;
+      if (Field->Config.ConnectivityContractVersion > 0
+        && Sample.GuidanceDistanceCm > 0.0f)
+        DesiredSpeedCmps = FMath::Min(
+          DesiredSpeedCmps,
+          Sample.GuidanceDistanceCm / FMath::Max(Rules.FixedStepSeconds, SMALL_NUMBER));
       Intent.DesiredVelocity = bReachedGoal || Sample.bUnreachable
         ? FVector::ZeroVector
-        : Sample.FlowDirection * Rules.MaxSpeedCmPerSecond;
+        : Sample.FlowDirection * DesiredSpeedCmps;
       Intent.DesiredYawDegrees = Intent.DesiredVelocity.IsNearlyZero()
         ? States[It].YawDegrees
         : Intent.DesiredVelocity.Rotation().Yaw;
       Intent.PlanRevision = Pipeline->GetCurrentPlanRevision();
+      RecoveredAgentCount += Sample.bRecoveredFromRasterMismatch ? 1 : 0;
+      SourceAttachmentSuccessCount += Sample.bSourceAttached ? 1 : 0;
+      NavigationUnreachableSampleCount += Sample.bUnreachable ? 1 : 0;
+      if (Field->Config.ConnectivityContractVersion > 0
+        && !Intent.DesiredVelocity.IsNearlyZero()
+        && !FCrowdDemoSharedFlowFieldKernel::CanTraverseWorldSegment(
+          Field->Config,
+          States[It].Location,
+          States[It].Location + Intent.DesiredVelocity * Rules.FixedStepSeconds))
+        ++DesiredSegmentViolationCount;
       if (Pipeline->IsSf3FlowReachabilityDiagnosticEnabled())
       {
         ReachabilitySamples.Add(MakeFlowReachabilityStageSample(
@@ -799,12 +1089,24 @@ void UCrowdDemoRoundFlowPreferredVelocityProcessor::Execute(
         Record.Values[1] = FlowSample.bBlocked ? 1 : 0;
         Record.Values[2] = FlowSample.bUnreachable ? 1 : 0;
         Record.Values[3] = Admissions[It].CohortId;
+        Record.Values[4] = FlowSample.bRecoveredFromRasterMismatch ? 1 : 0;
+        Record.Values[5] = Field->Config.ConnectivityContractVersion;
+        Record.Values[6] = FMath::RoundToInt(FlowSample.GuidanceDistanceCm);
+        const uint32 NavigationKeyFold =
+          static_cast<uint32>(FlowSample.NavigationNodeKey)
+          ^ static_cast<uint32>(FlowSample.NavigationNodeKey >> 32)
+          ^ static_cast<uint32>(FlowSample.NextNavigationNodeKey)
+          ^ static_cast<uint32>(FlowSample.NextNavigationNodeKey >> 32);
+        Record.Values[7] = static_cast<int32>(NavigationKeyFold);
       }
       ++AgentCount;
     }
   });
   Pipeline->RecordSf3FlowReachabilityStage(
     ECrowdDemoFlowReachabilityStage::StepStart, ReachabilitySamples);
+  Pipeline->RecordFlowConnectivityStep(
+    RecoveredAgentCount, DesiredSegmentViolationCount,
+    SourceAttachmentSuccessCount, NavigationUnreachableSampleCount);
   if (Pipeline->IsSf3DeterminismDiagnosticEnabled())
   {
     TArray<int32> Keys;
@@ -828,7 +1130,35 @@ void UCrowdDemoRoundTargetFactApplyProcessor::Execute(FMassEntityManager& Entity
 {
   UWorld* World = EntityManager.GetWorld();
   auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
-  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundPursuitPositioning) return;
+  if (!Pipeline) return;
+  const FCrowdDemoRoundRules& Rules = Pipeline->GetRules();
+  if (Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+    && (Rules.TargetApproachSettings.bEnabled != 0
+      || Rules.TargetInfluenceSettings.bEnabled != 0))
+  {
+    const int32 MotionStep = Pipeline->GetCurrentFixedStepIndex();
+    Pipeline->GetTargetApproachFact() = FCrowdDemoTargetApproachKernel::BuildLinearMotionFact(
+      Rules.TargetMotion.TargetId,
+      Rules.TargetMotion.TargetRevision,
+      MotionStep,
+      FVector2f(Rules.TargetMotion.InitialLocation.X, Rules.TargetMotion.InitialLocation.Y),
+      FVector2f(Rules.TargetMotion.LinearVelocity.X, Rules.TargetMotion.LinearVelocity.Y),
+      Rules.TargetMotion.InitialYawDegrees,
+      Rules.TargetMotion.YawRateDegreesPerSecond,
+      Rules.TargetInfluenceSettings.bEnabled != 0
+        ? Rules.TargetInfluenceSettings.TargetPhysicalRadiusCm
+        : Rules.TargetApproachSettings.TargetPhysicalRadiusCm,
+      Rules.FixedStepSeconds,
+      Rules.TargetInfluenceSettings.bEnabled != 0
+        ? Rules.TargetInfluenceSettings.PositionQuantumCm
+        : Rules.TargetApproachSettings.PositionQuantumCm,
+      Rules.TargetInfluenceSettings.bEnabled != 0
+        ? Rules.TargetInfluenceSettings.VelocityQuantumCmps
+        : Rules.TargetApproachSettings.VelocityQuantumCmps);
+    Pipeline->LogStageOnce(TEXT("02_target_fact_apply"), 1);
+    return;
+  }
+  if (Rules.Scenario != ECrowdDemoScenario::SimRoundPursuitPositioning) return;
   FCrowdDemoPursuitTargetFact& Target = Pipeline->GetPursuitTargetFact();
   if (Target.Revision == 0)
   {
@@ -840,6 +1170,628 @@ void UCrowdDemoRoundTargetFactApplyProcessor::Execute(FMassEntityManager& Entity
     Target.Revision = 1;
   }
   Pipeline->LogStageOnce(TEXT("02_target_fact_apply"), 1);
+}
+
+UCrowdDemoRoundTargetPolarTopologyBuildProcessor::
+UCrowdDemoRoundTargetPolarTopologyBuildProcessor()
+{
+  ROUND_DYNAMIC_FLAGS;
+  QueryBasedPruning = EMassQueryBasedPruning::Never;
+}
+
+void UCrowdDemoRoundTargetPolarTopologyBuildProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+}
+
+void UCrowdDemoRoundTargetPolarTopologyBuildProcessor::Execute(
+  FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0) return;
+  const auto Settings = MakeTargetRegionTransportSettings(
+    Pipeline->GetRules(), Pipeline->GetTargetApproachFact());
+  FCrowdDemoTargetRegionTransportKernel::BuildTopology(
+    Settings, Pipeline->GetRules().FlowFieldConfig,
+    Pipeline->GetPreparedTargetRegionTopology(), Pipeline->GetTargetRegionTopologySummary());
+  Pipeline->RecordTargetRegionTopologyStep();
+  if (!Pipeline->GetTargetRegionTopologySummary().bValid)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoTargetRegionTopologyInvalid step=%d cells=%d edges=%d hash=%u"),
+      Pipeline->GetCurrentFixedStepIndex(),
+      Pipeline->GetTargetRegionTopologySummary().CellCount,
+      Pipeline->GetTargetRegionTopologySummary().EdgeCount,
+      Pipeline->GetTargetRegionTopologySummary().TopologyHash);
+  }
+  Pipeline->LogStageOnce(TEXT("04_target_polar_topology_build"),
+    Pipeline->GetTargetRegionTopologySummary().FeasibleCellCount);
+}
+
+UCrowdDemoRoundTargetRegionPopulationBuildProcessor::
+UCrowdDemoRoundTargetRegionPopulationBuildProcessor() : EntityQuery(*this)
+{
+  ROUND_DYNAMIC_FLAGS;
+}
+
+void UCrowdDemoRoundTargetRegionPopulationBuildProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+  EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundMoveIntentFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
+}
+
+void UCrowdDemoRoundTargetRegionPopulationBuildProcessor::Execute(
+  FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0) return;
+  auto& Agents = Pipeline->GetPreparedTargetRegionAgents();
+  Agents.Reset();
+  EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+  {
+    const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
+    const auto States = ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
+    const auto Intents = ChunkContext.GetFragmentView<FCrowdDemoRoundMoveIntentFragment>();
+    for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
+    {
+      auto& Agent = Agents.AddDefaulted_GetRef();
+      Agent.AgentId = Identities[It].Id;
+      Agent.Location = FVector2f(States[It].Location.X, States[It].Location.Y);
+      Agent.Velocity = FVector2f(States[It].Velocity.X, States[It].Velocity.Y);
+      Agent.FarFlowPreferredVelocity = FVector2f(
+        Intents[It].DesiredVelocity.X, Intents[It].DesiredVelocity.Y);
+      Agent.MaxSpeedCmps = Pipeline->GetRules().MaxSpeedCmPerSecond;
+    }
+  });
+  Agents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+  const auto Settings = MakeTargetRegionTransportSettings(
+    Pipeline->GetRules(), Pipeline->GetTargetApproachFact());
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    Agents, Settings, Pipeline->GetRules().FlowFieldConfig,
+    &Pipeline->GetSharedFlowField(),
+    Pipeline->GetPreparedTargetRegionTopology(), Pipeline->GetPreparedTargetRegionDemand());
+  Pipeline->RecordTargetRegionDemandStep();
+  if (!Pipeline->GetPreparedTargetRegionDemand().bValid)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoTargetRegionDemandInvalid step=%d agents=%d feasible_regions=%d attachment_failures=%d hash=%u"),
+      Pipeline->GetCurrentFixedStepIndex(), Agents.Num(),
+      Pipeline->GetPreparedTargetRegionDemand().FeasibleRegionCount,
+      Pipeline->GetPreparedTargetRegionDemand().SourceAttachmentFailureCount,
+      Pipeline->GetPreparedTargetRegionDemand().DemandHash);
+  }
+  Pipeline->LogStageOnce(TEXT("05_target_region_population_build"), Agents.Num());
+}
+
+UCrowdDemoRoundTargetRegionTransportSolveProcessor::
+UCrowdDemoRoundTargetRegionTransportSolveProcessor()
+{
+  ROUND_DYNAMIC_FLAGS;
+  QueryBasedPruning = EMassQueryBasedPruning::Never;
+}
+
+void UCrowdDemoRoundTargetRegionTransportSolveProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+}
+
+void UCrowdDemoRoundTargetRegionTransportSolveProcessor::Execute(
+  FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0) return;
+  const auto& Topology = Pipeline->GetPreparedTargetRegionTopology();
+  const auto& Demand = Pipeline->GetPreparedTargetRegionDemand();
+  auto& Plan = Pipeline->GetPreparedTargetRegionPlan();
+  const int32 Step = Pipeline->GetCurrentFixedStepIndex();
+  const int32 TargetRevision = Pipeline->GetTargetApproachFact().TargetRevision;
+  FCrowdDemoTargetRegionPlanValidationResult Validation;
+  FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
+    Topology, Demand, Plan, TargetRevision, Validation);
+  int32 RebuildReason = 0;
+  if (!Plan.bValid) RebuildReason = 7;
+  else if (Plan.TargetRevision != TargetRevision) RebuildReason = 2;
+  else if (Plan.FeasibleGraphHash != Topology.FeasibleGraphHash) RebuildReason = 3;
+  else if (Plan.MembershipHash != Demand.MembershipHash) RebuildReason = 4;
+  else if (Step - Plan.BuildFixedStepIndex >=
+    Pipeline->GetRules().TargetRegionTransportSettings.PlanLifetimeSteps) RebuildReason = 1;
+  else if (Demand.TotalDeficit == 0 && Plan.RoutedAgentCount > 0) RebuildReason = 5;
+  else if (!Validation.bValid) RebuildReason = 6;
+  float SolverMs = 0.0f;
+  if (RebuildReason != 0)
+  {
+    const double Start = FPlatformTime::Seconds();
+    FCrowdDemoTargetRegionFlowPlan NewPlan;
+    FCrowdDemoTargetRegionTransportKernel::SolveTransport(
+      Topology, Demand, Plan.bValid ? &Plan : nullptr,
+      FMath::Max(1, Plan.PlanEpoch + 1), Step, TargetRevision, NewPlan);
+    SolverMs = static_cast<float>((FPlatformTime::Seconds() - Start) * 1000.0);
+    Plan = MoveTemp(NewPlan);
+    FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
+      Topology, Demand, Plan, TargetRevision, Validation);
+  }
+  Pipeline->GetTargetRegionPlanValidation() = Validation;
+  Pipeline->RecordTargetRegionValidationStep();
+  Pipeline->RecordTargetRegionTransportStep(SolverMs, RebuildReason);
+  if (!Plan.bValid || !Validation.bValid)
+  {
+    Plan.bValid = false;
+    FString WrittenPath;
+    const uint32 FixtureHash = Pipeline->HasTargetRegionFailureFixture() ? 0
+      : BuildAndOptionallyWriteTargetRegionFailureFixture(
+        *World, *Pipeline, Validation, 3, &WrittenPath);
+    Pipeline->PinTargetRegionFailureFixture(3, Validation.FirstFailureAgentId,
+      Validation.FirstFailureCellKey, FixtureHash);
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoTargetRegionTransportInvalid step=%d routed=%d unrouted=%d epoch=%d validation_hash=%u missing_edge=%d infeasible_edge=%d invalid_cell=%d insufficient_quota=%d conservation=%d unreachable=%d fixture_hash=%u hash=%u"),
+      Step, Plan.RoutedAgentCount, Plan.UnroutedAgentCount,
+      Plan.PlanEpoch, Validation.ValidationHash, Validation.MissingEdgeCount,
+      Validation.InfeasibleEdgeCount, Validation.InvalidCellCount,
+      Validation.InsufficientOutgoingQuotaCellCount,
+      Validation.FlowConservationFailureCount, Validation.UnreachableDeficitCount,
+      FixtureHash, Plan.TransportHash);
+  }
+  Pipeline->LogStageOnce(TEXT("06_target_region_transport_solve"), Plan.RoutedAgentCount);
+}
+
+UCrowdDemoRoundTargetRegionGuidanceProcessor::
+UCrowdDemoRoundTargetRegionGuidanceProcessor() : EntityQuery(*this)
+{
+  ROUND_DYNAMIC_FLAGS;
+}
+
+void UCrowdDemoRoundTargetRegionGuidanceProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+  EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundMoveIntentFragment>(EMassFragmentAccess::ReadWrite);
+  EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
+}
+
+void UCrowdDemoRoundTargetRegionGuidanceProcessor::Execute(
+  FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0) return;
+  const auto Settings = MakeTargetRegionTransportSettings(
+    Pipeline->GetRules(), Pipeline->GetTargetApproachFact());
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidance(
+    Pipeline->GetPreparedTargetRegionAgents(), Settings,
+    Pipeline->GetPreparedTargetRegionTopology(), Pipeline->GetPreparedTargetRegionDemand(),
+    Pipeline->GetPreparedTargetRegionPlan(), Pipeline->GetPreparedTargetRegionGuidance(),
+    Pipeline->GetTargetRegionGuidanceSummary());
+  TMap<int32, const FCrowdDemoTargetRegionGuidanceResult*> ById;
+  for (const auto& Result : Pipeline->GetPreparedTargetRegionGuidance())
+    ById.Add(Result.AgentId, &Result);
+  int32 Applied = 0;
+  EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+  {
+    const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
+    const auto States = ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
+    const auto Intents = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundMoveIntentFragment>();
+    for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
+      if (const auto* const* Result = ById.Find(Identities[It].Id))
+      {
+        Intents[It].DesiredLocation = FVector(
+          Pipeline->GetTargetApproachFact().Location.X,
+          Pipeline->GetTargetApproachFact().Location.Y, States[It].Location.Z);
+        Intents[It].DesiredVelocity = FVector(
+          (*Result)->DesiredVelocity.X, (*Result)->DesiredVelocity.Y, 0.0f);
+        Intents[It].PreferredDirection = Intents[It].DesiredVelocity.GetSafeNormal2D();
+        Intents[It].DesiredYawDegrees = Intents[It].DesiredVelocity.IsNearlyZero()
+          ? States[It].YawDegrees : Intents[It].DesiredVelocity.Rotation().Yaw;
+        ++Applied;
+      }
+  });
+  Pipeline->RecordTargetRegionGuidanceStep();
+  if (!Pipeline->GetTargetRegionGuidanceSummary().bValid)
+  {
+    FCrowdDemoTargetRegionPlanValidationResult Validation;
+    FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
+      Pipeline->GetPreparedTargetRegionTopology(),
+      Pipeline->GetPreparedTargetRegionDemand(),
+      Pipeline->GetPreparedTargetRegionPlan(),
+      Pipeline->GetTargetApproachFact().TargetRevision,
+      Validation);
+    uint32 FixtureHash = 0;
+    if (!Pipeline->HasTargetRegionFailureFixture())
+    {
+      FString WrittenPath;
+      FixtureHash = BuildAndOptionallyWriteTargetRegionFailureFixture(
+        *World, *Pipeline, Validation, 4, &WrittenPath);
+      if (FixtureHash != 0)
+      {
+        Pipeline->PinTargetRegionFailureFixture(4,
+          Pipeline->GetTargetRegionGuidanceSummary().FirstUnroutedAgentId,
+          Pipeline->GetTargetRegionGuidanceSummary().FirstUnroutedCellKey,
+          FixtureHash);
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoTargetRegionFailureFixture role=%s step=%d kind=guidance agent=%d cell=%d validation_valid=%d validation_hash=%u fixture_hash=%u written=%d path=%s"),
+          World->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
+          Pipeline->GetCurrentFixedStepIndex(),
+          Pipeline->GetTargetRegionGuidanceSummary().FirstUnroutedAgentId,
+          Pipeline->GetTargetRegionGuidanceSummary().FirstUnroutedCellKey,
+          Validation.bValid ? 1 : 0, Validation.ValidationHash, FixtureHash,
+          WrittenPath.IsEmpty() ? 0 : 1, *WrittenPath);
+      }
+    }
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoTargetRegionGuidanceInvalid step=%d applied=%d unrouted=%d first_agent=%d first_cell=%d validation_valid=%d validation_hash=%u fixture_hash=%u hash=%u"),
+      Pipeline->GetCurrentFixedStepIndex(), Applied,
+      Pipeline->GetTargetRegionGuidanceSummary().UnroutedAgentCount,
+      Pipeline->GetTargetRegionGuidanceSummary().FirstUnroutedAgentId,
+      Pipeline->GetTargetRegionGuidanceSummary().FirstUnroutedCellKey,
+      Validation.bValid ? 1 : 0, Validation.ValidationHash, FixtureHash,
+      Pipeline->GetTargetRegionGuidanceSummary().GuidanceHash);
+  }
+  Pipeline->LogStageOnce(TEXT("07_target_region_guidance"), Applied);
+}
+
+UCrowdDemoRoundTargetSlotLayoutPrepareProcessor::UCrowdDemoRoundTargetSlotLayoutPrepareProcessor()
+{
+  ROUND_DYNAMIC_FLAGS;
+}
+
+void UCrowdDemoRoundTargetSlotLayoutPrepareProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+}
+
+void UCrowdDemoRoundTargetSlotLayoutPrepareProcessor::Execute(
+  FMassEntityManager& EntityManager,
+  FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetApproachSettings.bEnabled == 0)
+    return;
+  const FCrowdDemoRoundRules& Rules = Pipeline->GetRules();
+  FCrowdDemoTargetSlotLayoutInput Input;
+  Input.Target = Pipeline->GetTargetApproachFact();
+  Input.ParticleProfile = Rules.ParticleProfile;
+  Input.Settings = Rules.TargetSlotLayoutSettings;
+  Input.FlowConfig = Rules.FlowFieldConfig;
+  Input.FlowField = &Pipeline->GetSharedFlowField();
+  Input.TransitionRingRadiusCm = Rules.TargetApproachSettings.TransitionRingRadiusCm;
+  const FCrowdDemoTargetSlotLayout Previous = Pipeline->GetPreparedTargetSlotLayout();
+  FCrowdDemoTargetSlotLayout Layout;
+  FCrowdDemoTargetSlotLayoutSummary Summary;
+  FCrowdDemoTargetSlotLayoutKernel::Build(Input,
+    Previous.bValid ? &Previous : nullptr, Layout, Summary);
+  Pipeline->GetPreparedTargetSlotLayout() = MoveTemp(Layout);
+  Pipeline->GetTargetSlotLayoutSummary() = Summary;
+  if (!Summary.bValid)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoTargetSlotLayoutInvalid step=%d candidates=%d topology=%u world=%u input=%u"),
+      Pipeline->GetCurrentFixedStepIndex(), Summary.GeneratedCandidateCount,
+      Summary.TopologyHash, Summary.WorldValidationHash, Summary.FullInputHash);
+    return;
+  }
+  Pipeline->LogStageOnce(TEXT("03_target_slot_layout_prepare"),
+    Pipeline->GetPreparedTargetSlotLayout().Slots.Num());
+}
+
+UCrowdDemoRoundTargetApproachScheduleProcessor::UCrowdDemoRoundTargetApproachScheduleProcessor()
+  : EntityQuery(*this)
+{
+  ROUND_DYNAMIC_FLAGS;
+}
+
+void UCrowdDemoRoundTargetApproachScheduleProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+  EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoMassMovementFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetCapabilityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetApproachFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
+}
+
+void UCrowdDemoRoundTargetApproachScheduleProcessor::Execute(
+  FMassEntityManager& EntityManager,
+  FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetApproachSettings.bEnabled == 0)
+    return;
+
+  const FCrowdDemoRoundRules& Rules = Pipeline->GetRules();
+  TArray<FCrowdDemoTargetApproachAgent> Agents;
+  EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+  {
+    const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
+    const auto States = ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
+    const auto Movements = ChunkContext.GetFragmentView<FCrowdDemoMassMovementFragment>();
+    const auto Capabilities = ChunkContext.GetFragmentView<FCrowdDemoTargetCapabilityFragment>();
+    const auto Approaches = ChunkContext.GetFragmentView<FCrowdDemoTargetApproachFragment>();
+    for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
+    {
+      FCrowdDemoTargetApproachAgent& Agent = Agents.AddDefaulted_GetRef();
+      Agent.AgentId = Identities[It].Id;
+      Agent.Location = FVector2f(States[It].Location.X, States[It].Location.Y);
+      Agent.Velocity = FVector2f(States[It].Velocity.X, States[It].Velocity.Y);
+      Agent.PhysicalRadiusCm = Movements[It].ContactRadiusCm;
+      Agent.MaxSpeedCmps = Rules.MaxSpeedCmPerSecond;
+      Agent.CapabilityMask = Capabilities[It].CapabilityMask;
+      Agent.MinimumFunctionalDistanceCm = Capabilities[It].MinimumFunctionalDistanceCm;
+      Agent.MaximumFunctionalDistanceCm = Capabilities[It].MaximumFunctionalDistanceCm;
+      Agent.StableBusinessPriority = Capabilities[It].StableBusinessPriority;
+      Agent.ExistingState = Approaches[It].State;
+      Agent.ExistingSlotId = Approaches[It].AssignedSlotId;
+      Agent.ExistingTargetRevision = Approaches[It].TargetRevision;
+      Agent.ExistingSlotLayoutRevision = Approaches[It].SlotLayoutRevision;
+      Agent.RingEnterFixedStep = Approaches[It].RingEnterFixedStep;
+      Agent.StateEnterFixedStep = Approaches[It].StateEnterFixedStep;
+    }
+  });
+
+  FCrowdDemoTargetApproachSettings Settings;
+  Settings.bEnabled = Rules.TargetApproachSettings.bEnabled != 0;
+  Settings.TransitionRingRadiusCm = Rules.TargetApproachSettings.TransitionRingRadiusCm;
+  Settings.RingEnterToleranceCm = Rules.TargetApproachSettings.RingEnterToleranceCm;
+  Settings.RingExitToleranceCm = Rules.TargetApproachSettings.RingExitToleranceCm;
+  Settings.ApproachSlowdownDistanceCm = Rules.TargetApproachSettings.ApproachSlowdownDistanceCm;
+  Settings.SlotArrivalToleranceCm = Rules.TargetApproachSettings.SlotArrivalToleranceCm;
+  Settings.SlotArrivalSpeedToleranceCmps = Rules.TargetApproachSettings.SlotArrivalSpeedToleranceCmps;
+  Settings.SlotExitToleranceCm = Rules.TargetApproachSettings.SlotExitToleranceCm;
+  Settings.SlotArriveGainPerSecond = Rules.TargetApproachSettings.SlotArriveGainPerSecond;
+  Settings.SlotOccupiedGainPerSecond = Rules.TargetApproachSettings.SlotOccupiedGainPerSecond;
+  Settings.FreeSettleAttractionGainPerSecond = Rules.TargetApproachSettings.FreeSettleAttractionGainPerSecond;
+  Settings.FreeSettleMaxSpeedCmps = Rules.TargetApproachSettings.FreeSettleMaxSpeedCmps;
+  Settings.TargetPhysicalRadiusCm = Rules.TargetApproachSettings.TargetPhysicalRadiusCm;
+  Settings.TargetHardSafetyGapCm = Rules.TargetApproachSettings.TargetHardSafetyGapCm;
+  Settings.TargetSoftMarginCm = Rules.TargetApproachSettings.TargetSoftMarginCm;
+  Settings.PositionQuantumCm = Rules.TargetApproachSettings.PositionQuantumCm;
+  Settings.VelocityQuantumCmps = Rules.TargetApproachSettings.VelocityQuantumCmps;
+
+  TArray<FCrowdDemoTargetApproachResult>& Results =
+    Pipeline->GetPreparedTargetApproachResults();
+  FCrowdDemoTargetApproachSummary Summary;
+  const FCrowdDemoTargetSlotLayout& Layout = Pipeline->GetPreparedTargetSlotLayout();
+  FCrowdDemoTargetApproachKernel::Solve(
+    Pipeline->GetTargetApproachFact(), Settings, Layout.Slots, Agents,
+    Pipeline->GetCurrentFixedStepIndex(), Results, Summary, Layout.SlotLayoutRevision);
+  Summary.ScheduleHash = FoldTargetHash(Summary.ApproachHash, Layout.FullInputHash);
+  for (const FCrowdDemoTargetApproachAgent& Agent : Agents)
+  {
+    const FCrowdDemoTargetApproachResult* Result = Results.FindByPredicate(
+      [&Agent](const auto& Item) { return Item.AgentId == Agent.AgentId; });
+    if (Agent.ExistingSlotId != INDEX_NONE && Result != nullptr
+      && Result->AssignedSlotId == Agent.ExistingSlotId)
+      ++Summary.SlotOwnerReusedCount;
+    else if (Agent.ExistingSlotId != INDEX_NONE)
+      ++Summary.SlotOwnerReleaseCount;
+  }
+  Pipeline->SetTargetApproachSummary(Summary);
+  if (!Layout.bValid || !Summary.bValid || Results.Num() != Agents.Num())
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoTargetApproachInvalid step=%d valid=%d agents=%d results=%d duplicate_owner=%d"),
+      Pipeline->GetCurrentFixedStepIndex(), Summary.bValid ? 1 : 0,
+      Agents.Num(), Results.Num(), Summary.DuplicateSlotOwnerCount);
+    return;
+  }
+  Pipeline->LogStageOnce(TEXT("04_target_approach_schedule"), Results.Num());
+}
+
+UCrowdDemoRoundTargetApproachCommitProcessor::UCrowdDemoRoundTargetApproachCommitProcessor()
+  : EntityQuery(*this)
+{
+  ROUND_DYNAMIC_FLAGS;
+}
+
+void UCrowdDemoRoundTargetApproachCommitProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+  EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetCapabilityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetApproachFragment>(EMassFragmentAccess::ReadWrite);
+  EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
+}
+
+void UCrowdDemoRoundTargetApproachCommitProcessor::Execute(
+  FMassEntityManager& EntityManager,
+  FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetApproachSettings.bEnabled == 0)
+    return;
+  const FCrowdDemoTargetSlotLayout& Layout = Pipeline->GetPreparedTargetSlotLayout();
+  TArray<FCrowdDemoTargetApproachResult> Results = Pipeline->GetPreparedTargetApproachResults();
+  Results.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+  struct FAgentFact
+  {
+    int32 AgentId = INDEX_NONE;
+    FCrowdDemoTargetCapabilityFragment Capability;
+    FCrowdDemoTargetApproachFragment Existing;
+  };
+  TArray<FAgentFact> Facts;
+  EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+  {
+    const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
+    const auto Capabilities = ChunkContext.GetFragmentView<FCrowdDemoTargetCapabilityFragment>();
+    const auto Approaches = ChunkContext.GetFragmentView<FCrowdDemoTargetApproachFragment>();
+    for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
+    {
+      FAgentFact& Fact = Facts.AddDefaulted_GetRef();
+      Fact.AgentId = Identities[It].Id;
+      Fact.Capability = Capabilities[It];
+      Fact.Existing = Approaches[It];
+    }
+  });
+  Facts.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+  TArray<FCrowdDemoTargetApproachCommitAgent> CommitAgents;
+  for (const FAgentFact& Fact : Facts)
+  {
+    FCrowdDemoTargetApproachCommitAgent& Agent = CommitAgents.AddDefaulted_GetRef();
+    Agent.AgentId = Fact.AgentId;
+    Agent.CapabilityMask = Fact.Capability.CapabilityMask;
+    Agent.MinimumFunctionalDistanceCm = Fact.Capability.MinimumFunctionalDistanceCm;
+    Agent.MaximumFunctionalDistanceCm = Fact.Capability.MaximumFunctionalDistanceCm;
+  }
+  FCrowdDemoTargetApproachCommitValidation CommitValidation;
+  FCrowdDemoTargetApproachKernel::ValidateAtomicCommit(
+    Layout.SlotLayoutRevision, Layout.Slots, CommitAgents, Results, CommitValidation);
+  bool bValid = Layout.bValid && Pipeline->GetTargetApproachSummary().bValid
+    && Results.Num() == Facts.Num() && CommitValidation.bValid;
+  TSet<int32> Owners;
+  const uint32 CommitHash = CommitValidation.CommitHash;
+  for (int32 Index = 0; Index < Results.Num() && Index < Facts.Num(); ++Index)
+  {
+    const FCrowdDemoTargetApproachResult& Result = Results[Index];
+    const FAgentFact& Fact = Facts[Index];
+    if (Result.AgentId != Fact.AgentId
+      || Result.SlotLayoutRevision != Layout.SlotLayoutRevision)
+      bValid = false;
+    const FCrowdDemoTargetSlotSpec* Slot = Result.AssignedSlotId == INDEX_NONE ? nullptr
+      : Layout.Slots.FindByPredicate([&Result](const auto& Candidate)
+        { return Candidate.SlotId == Result.AssignedSlotId; });
+    if (Result.AssignedSlotId != INDEX_NONE)
+    {
+      if (Slot == nullptr || Owners.Contains(Result.AssignedSlotId))
+        bValid = false;
+      else if (Slot->Kind == ECrowdDemoTargetSlotKind::Functional
+        && ((Slot->RequiredCapabilityMask != 0
+          && (Fact.Capability.CapabilityMask & Slot->RequiredCapabilityMask)
+            != Slot->RequiredCapabilityMask)
+          || Slot->CenterDistanceCm < Fact.Capability.MinimumFunctionalDistanceCm
+          || Slot->CenterDistanceCm > Fact.Capability.MaximumFunctionalDistanceCm))
+        bValid = false;
+      Owners.Add(Result.AssignedSlotId);
+    }
+    const bool bSlotState = Result.State == ECrowdDemoTargetApproachState::SlotIngress
+      || Result.State == ECrowdDemoTargetApproachState::SlotOccupied;
+    if (bSlotState != (Result.AssignedSlotId != INDEX_NONE))
+      bValid = false;
+  }
+  FCrowdDemoTargetApproachSummary Summary = Pipeline->GetTargetApproachSummary();
+  if (!bValid)
+  {
+    Summary.SlotOwnerConflictCount += CommitValidation.OwnerConflictCount;
+    Summary.SlotLayoutRevisionMismatchCount += CommitValidation.RevisionMismatchCount;
+    Pipeline->SetTargetApproachSummary(Summary);
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoTargetApproachCommitInvalid step=%d layout_valid=%d schedule_valid=%d agents=%d results=%d layout_revision=%d"),
+      Pipeline->GetCurrentFixedStepIndex(), Layout.bValid ? 1 : 0,
+      Summary.bValid ? 1 : 0, Facts.Num(), Results.Num(), Layout.SlotLayoutRevision);
+    return;
+  }
+  TMap<int32, const FCrowdDemoTargetApproachResult*> ByAgentId;
+  for (const auto& Result : Results)
+    ByAgentId.Add(Result.AgentId, &Result);
+  EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+  {
+    const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
+    const auto Approaches = ChunkContext.GetMutableFragmentView<FCrowdDemoTargetApproachFragment>();
+    for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
+    {
+      const FCrowdDemoTargetApproachResult* const* Result = ByAgentId.Find(Identities[It].Id);
+      check(Result != nullptr);
+      FCrowdDemoTargetApproachFragment& Fragment = Approaches[It];
+      const bool bChanged = Fragment.State != (*Result)->State
+        || Fragment.AssignedSlotId != (*Result)->AssignedSlotId
+        || Fragment.SlotLayoutRevision != Layout.SlotLayoutRevision;
+      Fragment.State = (*Result)->State;
+      Fragment.TargetId = Pipeline->GetTargetApproachFact().TargetId;
+      Fragment.TargetRevision = Pipeline->GetTargetApproachFact().TargetRevision;
+      Fragment.SlotLayoutRevision = Layout.SlotLayoutRevision;
+      Fragment.AssignedSlotId = (*Result)->AssignedSlotId;
+      Fragment.RingEnterFixedStep = (*Result)->RingEnterFixedStep;
+      Fragment.StateEnterFixedStep = (*Result)->StateEnterFixedStep;
+      Fragment.StableSettleSteps = (*Result)->bSettled ? Fragment.StableSettleSteps + 1 : 0;
+      Fragment.StateRevision += bChanged ? 1 : 0;
+    }
+  });
+  Summary.CommitHash = CommitHash;
+  Pipeline->SetTargetApproachSummary(Summary);
+  Pipeline->SetTargetApproachCommitHash(CommitHash);
+  Pipeline->GetPreparedTargetApproachGuidance() = MoveTemp(Results);
+  Pipeline->LogStageOnce(TEXT("05_target_approach_commit"), Facts.Num());
+}
+
+UCrowdDemoRoundTargetApproachGuidanceProcessor::UCrowdDemoRoundTargetApproachGuidanceProcessor()
+  : EntityQuery(*this)
+{
+  ROUND_DYNAMIC_FLAGS;
+}
+
+void UCrowdDemoRoundTargetApproachGuidanceProcessor::ConfigureQueries(
+  const TSharedRef<FMassEntityManager>& EntityManager)
+{
+  EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetApproachFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundMoveIntentFragment>(EMassFragmentAccess::ReadWrite);
+  EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
+}
+
+void UCrowdDemoRoundTargetApproachGuidanceProcessor::Execute(
+  FMassEntityManager& EntityManager,
+  FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+    || Pipeline->GetRules().TargetApproachSettings.bEnabled == 0)
+    return;
+  TMap<int32, const FCrowdDemoTargetApproachResult*> ResultByAgentId;
+  for (const FCrowdDemoTargetApproachResult& Result : Pipeline->GetPreparedTargetApproachGuidance())
+    ResultByAgentId.Add(Result.AgentId, &Result);
+  int32 AppliedCount = 0;
+  EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+  {
+    const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
+    const auto States = ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
+    const auto Approaches = ChunkContext.GetFragmentView<FCrowdDemoTargetApproachFragment>();
+    const auto Intents = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundMoveIntentFragment>();
+    for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
+    {
+      const FCrowdDemoTargetApproachResult* const* Result = ResultByAgentId.Find(Identities[It].Id);
+      if (Result == nullptr)
+        continue;
+      if (Approaches[It].SlotLayoutRevision
+        != Pipeline->GetPreparedTargetSlotLayout().SlotLayoutRevision
+        || Approaches[It].State != (*Result)->State
+        || Approaches[It].AssignedSlotId != (*Result)->AssignedSlotId)
+        continue;
+      if (Approaches[It].State == ECrowdDemoTargetApproachState::Approach
+        && !FCrowdDemoSharedFlowFieldKernel::CanTraverseWorldSegment(
+          Pipeline->GetRules().FlowFieldConfig,
+          States[It].Location,
+          FVector((*Result)->DesiredLocation.X, (*Result)->DesiredLocation.Y,
+            States[It].Location.Z)))
+        continue;
+      FCrowdDemoRoundMoveIntentFragment& Intent = Intents[It];
+      Intent.DesiredLocation = FVector((*Result)->DesiredLocation.X,
+        (*Result)->DesiredLocation.Y, States[It].Location.Z);
+      Intent.DesiredVelocity = FVector((*Result)->DesiredVelocity.X,
+        (*Result)->DesiredVelocity.Y, 0.0f);
+      Intent.PreferredDirection = Intent.DesiredVelocity.GetSafeNormal();
+      Intent.DesiredYawDegrees = Intent.DesiredVelocity.IsNearlyZero()
+        ? States[It].YawDegrees : Intent.DesiredVelocity.Rotation().Yaw;
+      ++AppliedCount;
+    }
+  });
+  Pipeline->LogStageOnce(TEXT("06_target_approach_guidance"), AppliedCount);
 }
 
 UCrowdDemoRoundPositionCandidateBuildProcessor::UCrowdDemoRoundPositionCandidateBuildProcessor()
@@ -2161,6 +3113,7 @@ void UCrowdDemoRoundMovementIntentComposeProcessor::ConfigureQueries(const TShar
 {
   EntityQuery.AddRequirement<FCrowdDemoRoundMoveIntentFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddRequirement<FCrowdDemoPursuitGuidanceFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetApproachFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
 }
 
@@ -3395,6 +4348,8 @@ void UCrowdDemoRoundParticleConstraintProcessor::ConfigureQueries(
 {
   EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoRoundProposedMovementFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundMoveIntentFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRoundFlowSampleFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoParticlePropertiesFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoRoundParticleConstraintFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
@@ -3430,6 +4385,27 @@ void UCrowdDemoRoundParticleConstraintProcessor::Execute(
       Agent.Mobility = Properties[It].Mobility;
     }
   });
+  constexpr int32 TargetParticleId = -1000000001;
+  const bool bHasTargetParticle = Pipeline->GetRules().TargetApproachSettings.bEnabled != 0
+    || Pipeline->GetRules().TargetInfluenceSettings.bEnabled != 0;
+  if (bHasTargetParticle)
+  {
+    const FCrowdDemoTargetFact& Target = Pipeline->GetTargetApproachFact();
+    FCrowdDemoParticleConstraintAgent& TargetAgent = Agents.AddDefaulted_GetRef();
+    TargetAgent.AgentId = TargetParticleId;
+    const FVector CurrentTarget(Target.Location.X, Target.Location.Y, 60.0f);
+    const FVector TargetVelocity(Target.Velocity.X, Target.Velocity.Y, 0.0f);
+    TargetAgent.StartPosition = CurrentTarget - TargetVelocity * Pipeline->GetCurrentFixedStepSeconds();
+    TargetAgent.PredictedPosition = CurrentTarget;
+    TargetAgent.PhysicalRadiusCm = Target.PhysicalRadiusCm;
+    TargetAgent.HardSafetyGapCm = Pipeline->GetRules().TargetInfluenceSettings.bEnabled != 0
+      ? Pipeline->GetRules().TargetInfluenceSettings.TargetHardSafetyGapCm
+      : Pipeline->GetRules().TargetApproachSettings.TargetHardSafetyGapCm;
+    TargetAgent.SoftMarginCm = Pipeline->GetRules().TargetInfluenceSettings.bEnabled != 0
+      ? Pipeline->GetRules().TargetInfluenceSettings.TargetSoftMarginCm
+      : Pipeline->GetRules().TargetApproachSettings.TargetSoftMarginCm;
+    TargetAgent.Mobility = 0.0f;
+  }
 
   FCrowdDemoParticleConstraintEnvironment Environment;
   Environment.FlowConfig = Pipeline->GetRules().FlowFieldConfig;
@@ -3443,6 +4419,9 @@ void UCrowdDemoRoundParticleConstraintProcessor::Execute(
   Settings.HardMaxPairCorrectionPerIterationCm = Pipeline->GetRules().ParticleHardMaxCorrectionCm;
   Settings.PositionQuantumCm = Pipeline->GetRules().ParticlePositionQuantumCm;
   Settings.VelocityQuantumCmps = Pipeline->GetRules().ParticleVelocityQuantumCmps;
+  const bool bRouteDiagnostic = Pipeline->IsSoftPressureRouteDiagnosticEnabled();
+  const bool bExecutionDiagnostic = Pipeline->IsTargetInfluenceExecutionDiagnosticEnabled();
+  Settings.bCaptureRouteDiagnostic = bRouteDiagnostic || bExecutionDiagnostic;
   TArray<FCrowdDemoParticleConstraintPair> Pairs;
   TArray<FCrowdDemoParticleConstraintResult> Results;
   FCrowdDemoParticleConstraintSummary Summary;
@@ -3455,12 +4434,26 @@ void UCrowdDemoRoundParticleConstraintProcessor::Execute(
 
   TMap<int32, const FCrowdDemoParticleConstraintResult*> ResultsByAgentId;
   for (const auto& Result : Results) ResultsByAgentId.Add(Result.AgentId, &Result);
+  TMap<int32, int32> TraceIndexByAgentId;
+  if (Settings.bCaptureRouteDiagnostic)
+    for (int32 TraceIndex = 0; TraceIndex < Trace.AgentIds.Num(); ++TraceIndex)
+      TraceIndexByAgentId.Add(Trace.AgentIds[TraceIndex], TraceIndex);
   TArray<FCrowdDemoParticleAppliedState> AppliedStates;
+  TArray<FCrowdDemoSoftPressureRouteStepSample> RouteSamples;
+  TArray<FCrowdDemoTargetInfluenceExecutionSample> ExecutionSamples;
+  TMap<int32, const FCrowdDemoTargetInfluenceResult*> InfluenceByAgentId;
+  if (bExecutionDiagnostic)
+    for (const auto& Influence : Pipeline->GetPreparedTargetInfluenceResults())
+      InfluenceByAgentId.Add(Influence.AgentId, &Influence);
+  TMap<int32, FVector> FlowDirectionByAgentId;
   AppliedStates.Reserve(Agents.Num());
   EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
   {
     const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
     const auto Proposed = ChunkContext.GetFragmentView<FCrowdDemoRoundProposedMovementFragment>();
+    const auto Intents = ChunkContext.GetFragmentView<FCrowdDemoRoundMoveIntentFragment>();
+    const auto FlowSamples = ChunkContext.GetFragmentView<FCrowdDemoRoundFlowSampleFragment>();
+    const auto Properties = ChunkContext.GetFragmentView<FCrowdDemoParticlePropertiesFragment>();
     const auto Outputs = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundParticleConstraintFragment>();
     for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
     {
@@ -3488,12 +4481,195 @@ void UCrowdDemoRoundParticleConstraintProcessor::Execute(
       Applied.AgentId = Identities[It].Id;
       Applied.Position = Output.CorrectedLocation;
       Applied.Velocity = Output.CorrectedVelocity;
+      if (bRouteDiagnostic)
+      {
+        FCrowdDemoSoftPressureRouteStepSample& Route = RouteSamples.AddDefaulted_GetRef();
+        Route.AgentId = Identities[It].Id;
+        Route.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
+        Route.PredictStartLocation = Proposed[It].StartLocation;
+        Route.Location = Output.CorrectedLocation;
+        Route.Goal = FVector(Pipeline->GetRules().FlowFieldConfig.GoalLocation);
+        Route.FlowCellIndex = FlowSamples[It].CellIndex;
+        Route.FlowStableCellKey = FlowSamples[It].StableCellKey;
+        Route.FlowStatus = FlowSamples[It].Status;
+        Route.IntegrationCost = FlowSamples[It].IntegrationCost;
+        Route.FlowDirection = FlowSamples[It].FlowDirection;
+        Route.DesiredVelocity = Intents[It].DesiredVelocity;
+        Route.PredictedVelocity = Proposed[It].ProposedVelocity;
+        Route.AppliedVelocity = Output.CorrectedVelocity;
+        Route.TotalParticleCorrection = Output.RealizedCorrection;
+        Route.FixedStepSeconds = Settings.FixedStepSeconds;
+        Route.MaxSpeedCmps = Pipeline->GetRules().MaxSpeedCmPerSecond;
+        if (const int32* TraceIndex = TraceIndexByAgentId.Find(Route.AgentId))
+        {
+          if (Trace.PairSoftRequestedCorrections.IsValidIndex(*TraceIndex))
+            Route.PairSoftRequestedCorrection = Trace.PairSoftRequestedCorrections[*TraceIndex];
+          if (Trace.PairSoftRealizedCorrections.IsValidIndex(*TraceIndex))
+            Route.PairSoftRealizedCorrection = Trace.PairSoftRealizedCorrections[*TraceIndex];
+          if (Trace.EnvironmentSoftRequestedCorrections.IsValidIndex(*TraceIndex))
+            Route.EnvironmentSoftRequestedCorrection =
+              Trace.EnvironmentSoftRequestedCorrections[*TraceIndex];
+          if (Trace.EnvironmentSoftRealizedCorrections.IsValidIndex(*TraceIndex))
+            Route.EnvironmentSoftRealizedCorrection =
+              Trace.EnvironmentSoftRealizedCorrections[*TraceIndex];
+          if (Trace.UnifiedHardCorrections.IsValidIndex(*TraceIndex))
+            Route.UnifiedHardCorrection = Trace.UnifiedHardCorrections[*TraceIndex];
+          if (Trace.ActiveNeighborAgentIds.IsValidIndex(*TraceIndex))
+            Route.ActiveNeighborAgentIds = Trace.ActiveNeighborAgentIds[*TraceIndex];
+        }
+        FlowDirectionByAgentId.Add(Route.AgentId, Route.FlowDirection);
+      }
+      if (bExecutionDiagnostic)
+      {
+        FCrowdDemoTargetInfluenceExecutionSample& Sample = ExecutionSamples.AddDefaulted_GetRef();
+        Sample.AgentId = Identities[It].Id;
+        Sample.TargetRevision = Pipeline->GetTargetApproachFact().TargetRevision;
+        Sample.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
+        Sample.Location = FVector2f(Output.CorrectedLocation.X, Output.CorrectedLocation.Y);
+        Sample.TargetLocation = Pipeline->GetTargetApproachFact().Location;
+        Sample.MovementPredictVelocity = FVector2f(
+          Proposed[It].ProposedVelocity.X, Proposed[It].ProposedVelocity.Y);
+        Sample.AppliedVelocity = FVector2f(
+          Output.CorrectedVelocity.X, Output.CorrectedVelocity.Y);
+        Sample.FixedStepSeconds = Settings.FixedStepSeconds;
+        Sample.PhysicalRadiusCm = Properties[It].PhysicalRadiusCm;
+        Sample.HardSafetyGapCm = Properties[It].HardSafetyGapCm;
+        if (const FCrowdDemoTargetInfluenceResult* const* Influence =
+          InfluenceByAgentId.Find(Sample.AgentId))
+        {
+          Sample.DensityRequestedVelocity = (*Influence)->DensityVelocity
+            * (static_cast<float>((*Influence)->InfluenceWeightQ15) / 32767.0f);
+          Sample.InfluenceDesiredVelocity = (*Influence)->DesiredVelocity;
+          Sample.DensityDirectionSign = (*Influence)->DensityDirectionSign;
+          Sample.DensityLeftWeight = (*Influence)->DensityLeftWeight;
+          Sample.DensityCurrentWeight = (*Influence)->DensityCurrentWeight;
+          Sample.DensityRightWeight = (*Influence)->DensityRightWeight;
+        }
+        const FVector2f Offset = Sample.Location - Sample.TargetLocation;
+        const int32 SectorCount = FMath::Max(1,
+          Pipeline->GetRules().TargetInfluenceSettings.AngularSectorCount);
+        const float Angle = FMath::Atan2(Offset.Y, Offset.X);
+        const float PositiveAngle = Angle < 0.0f ? Angle + 2.0f * PI : Angle;
+        Sample.AngularSectorIndex = FMath::Clamp(FMath::FloorToInt(
+          PositiveAngle / (2.0f * PI) * static_cast<float>(SectorCount)), 0, SectorCount - 1);
+        Sample.RadialBandIndex = FMath::Max(0, FMath::FloorToInt(
+          Offset.Size() / FMath::Max(1.0f,
+            Pipeline->GetRules().TargetInfluenceSettings.RadialBandWidthCm)));
+        if (const int32* TraceIndex = TraceIndexByAgentId.Find(Sample.AgentId))
+        {
+          auto To2D = [](const FVector& Value) { return FVector2f(Value.X, Value.Y); };
+          if (Trace.PairSoftRealizedCorrections.IsValidIndex(*TraceIndex))
+            Sample.PairSoftCorrection = To2D(Trace.PairSoftRealizedCorrections[*TraceIndex]);
+          if (Trace.EnvironmentSoftRealizedCorrections.IsValidIndex(*TraceIndex))
+            Sample.EnvironmentSoftCorrection =
+              To2D(Trace.EnvironmentSoftRealizedCorrections[*TraceIndex]);
+          if (Trace.UnifiedHardCorrections.IsValidIndex(*TraceIndex))
+            Sample.UnifiedHardCorrection = To2D(Trace.UnifiedHardCorrections[*TraceIndex]);
+        }
+        const FVector Accounted(
+          Sample.PairSoftCorrection.X + Sample.EnvironmentSoftCorrection.X
+            + Sample.UnifiedHardCorrection.X,
+          Sample.PairSoftCorrection.Y + Sample.EnvironmentSoftCorrection.Y
+            + Sample.UnifiedHardCorrection.Y, 0.0f);
+        const FVector Residual = Output.RealizedCorrection - Accounted;
+        Sample.FinalSafetyCorrection = FVector2f(Residual.X, Residual.Y);
+      }
     }
   });
+  if (bHasTargetParticle)
+  {
+    FCrowdDemoParticleAppliedState& Applied = AppliedStates.AddDefaulted_GetRef();
+    Applied.AgentId = TargetParticleId;
+    if (Summary.bValid)
+    {
+      if (const FCrowdDemoParticleConstraintResult* const* TargetResult =
+        ResultsByAgentId.Find(TargetParticleId))
+      {
+        Applied.Position = (*TargetResult)->CorrectedPosition;
+        Applied.Velocity = (*TargetResult)->CorrectedVelocity;
+      }
+      else
+      {
+        Applied.Position = Agents.Last().StartPosition;
+        Applied.Velocity = FVector::ZeroVector;
+      }
+    }
+    else
+    {
+      Applied.Position = Agents.Last().StartPosition;
+      Applied.Velocity = FVector::ZeroVector;
+    }
+  }
   FCrowdDemoParticleConstraintSummary AppliedSummary;
   uint32 AppliedStateHash = 2166136261u;
   FCrowdDemoParticleConstraintKernel::EvaluateAppliedState(
     Agents, AppliedStates, Environment, AppliedSummary, AppliedStateHash);
+  if (bExecutionDiagnostic)
+  {
+    TArray<int32> OccupiedCellKeys;
+    const int32 SectorCount = FMath::Max(1,
+      Pipeline->GetRules().TargetInfluenceSettings.AngularSectorCount);
+    for (const auto& Sample : ExecutionSamples)
+      OccupiedCellKeys.Add(Sample.RadialBandIndex * SectorCount + Sample.AngularSectorIndex);
+    const float Width = FMath::Max(1.0f,
+      Pipeline->GetRules().TargetInfluenceSettings.RadialBandWidthCm);
+    const int32 BandCount = FMath::Max(1, FMath::CeilToInt(
+      (Pipeline->GetRules().TargetInfluenceSettings.DefaultMaximumCombatCenterDistanceCm
+        + Pipeline->GetRules().TargetInfluenceSettings.InfluenceBlendWidthCm) / Width));
+    FCrowdDemoTargetPolarEnvironmentSummary EnvironmentSummary;
+    FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::BuildEnvironmentFeasibility(
+      Pipeline->GetTargetApproachFact().Location, SectorCount, BandCount, Width,
+      Pipeline->GetRules().ParticleProfile.GetNavigationHardClearanceCm(),
+      Pipeline->GetRules().FlowFieldConfig, OccupiedCellKeys, EnvironmentSummary);
+    Pipeline->RecordTargetInfluenceExecutionStep(ExecutionSamples, EnvironmentSummary);
+  }
+  if (bRouteDiagnostic)
+  {
+    Pipeline->RecordSoftPressureRouteStep(RouteSamples);
+    if (Pipeline->ShouldBuildRoundResult())
+    {
+      FCrowdDemoSoftPressureRouteCounterfactual Counterfactual;
+      TSet<int32> EverReached;
+      for (const auto& Agent : Pipeline->GetSoftPressureRouteDiagnosticRuntime().Agents)
+        if (Agent.bEverReachedGoal) EverReached.Add(Agent.AgentId);
+      auto SumNeverReachedForward = [&](const TConstArrayView<FCrowdDemoParticleConstraintResult> Values)
+      {
+        float Sum = 0.0f;
+        for (const auto& Value : Values)
+          if (!EverReached.Contains(Value.AgentId))
+          {
+            const FVector Direction = FlowDirectionByAgentId.FindRef(Value.AgentId).GetSafeNormal2D();
+            Sum += FVector::DotProduct(Value.CorrectedVelocity, Direction);
+          }
+        return Sum;
+      };
+      Counterfactual.BaselineNeverReachedForwardCmps = SumNeverReachedForward(Results);
+
+      TArray<FCrowdDemoParticleConstraintAgent> StickyAgents = Agents;
+      for (auto& Agent : StickyAgents)
+        if (EverReached.Contains(Agent.AgentId)) Agent.PredictedPosition = Agent.StartPosition;
+      TArray<FCrowdDemoParticleConstraintPair> StickyPairs;
+      TArray<FCrowdDemoParticleConstraintResult> StickyResults;
+      FCrowdDemoParticleConstraintSummary StickySummary;
+      FCrowdDemoParticleConstraintSettings CounterfactualSettings = Settings;
+      CounterfactualSettings.bCaptureRouteDiagnostic = false;
+      FCrowdDemoParticleConstraintKernel::Solve(StickyAgents, Environment,
+        CounterfactualSettings, StickyPairs, StickyResults, StickySummary);
+      Counterfactual.bStickyValid = StickySummary.bValid;
+      Counterfactual.StickyNeverReachedForwardCmps = SumNeverReachedForward(StickyResults);
+
+      TArray<FCrowdDemoParticleConstraintPair> SoftDisabledPairs;
+      TArray<FCrowdDemoParticleConstraintResult> SoftDisabledResults;
+      FCrowdDemoParticleConstraintSummary SoftDisabledSummary;
+      CounterfactualSettings.SoftResponsePerSecond = 0.0f;
+      FCrowdDemoParticleConstraintKernel::Solve(Agents, Environment,
+        CounterfactualSettings, SoftDisabledPairs, SoftDisabledResults, SoftDisabledSummary);
+      Counterfactual.bSoftDisabledValid = SoftDisabledSummary.bValid;
+      Counterfactual.SoftDisabledNeverReachedForwardCmps =
+        SumNeverReachedForward(SoftDisabledResults);
+      Pipeline->FinalizeSoftPressureRouteDiagnostic(Counterfactual);
+    }
+  }
   if (Summary.bValid)
   {
     AppliedSummary.PressureInfluencedAgentCount = Summary.PressureInfluencedAgentCount;
@@ -3895,6 +5071,7 @@ void UCrowdDemoRoundMovementFinalizeProcessor::ConfigureQueries(
   EntityQuery.AddRequirement<FCrowdDemoPositionAssignmentFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoPursuitSteeringStateFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoPursuitGuidanceFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetApproachFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
 }
 
@@ -3932,6 +5109,7 @@ void UCrowdDemoRoundMovementFinalizeProcessor::Execute(
     const auto PositionAssignments = ChunkContext.GetFragmentView<FCrowdDemoPositionAssignmentFragment>();
     const auto PursuitSteering = ChunkContext.GetFragmentView<FCrowdDemoPursuitSteeringStateFragment>();
     const auto PursuitGuidance = ChunkContext.GetFragmentView<FCrowdDemoPursuitGuidanceFragment>();
+    const auto TargetApproaches = ChunkContext.GetFragmentView<FCrowdDemoTargetApproachFragment>();
     for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
     {
       FCrowdDemoRoundSimStateFragment& State = States[It];
@@ -4014,6 +5192,8 @@ void UCrowdDemoRoundMovementFinalizeProcessor::Execute(
         Rollback.SimulatedServerTimeSeconds = State.SimulatedServerTimeSeconds;
         Rollback.PlanRevision = State.PlanRevision;
         Rollback.bInitialized = State.bInitialized;
+        Rollback.FlowSample = FlowSamples[It];
+        Rollback.TargetApproach = TargetApproaches[It];
         FCrowdDemoParticleAppliedRoundSimState& Applied =
           ParticleAppliedStates.AddDefaulted_GetRef();
         Applied.AgentId = Identities[It].Id;
@@ -5198,6 +6378,7 @@ void UCrowdDemoRoundCheckpointPublisherProcessor::ConfigureQueries(const TShared
   EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoRoundFormationFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoTargetApproachFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
 }
 
@@ -5219,11 +6400,14 @@ void UCrowdDemoRoundCheckpointPublisherProcessor::Execute(FMassEntityManager& En
     const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
     const TConstArrayView<FCrowdDemoRoundSimStateFragment> SimStates = ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
     const TConstArrayView<FCrowdDemoRoundFormationFragment> Formations = ChunkContext.GetFragmentView<FCrowdDemoRoundFormationFragment>();
+    const TConstArrayView<FCrowdDemoTargetApproachFragment> TargetApproaches =
+      ChunkContext.GetFragmentView<FCrowdDemoTargetApproachFragment>();
     for (FMassExecutionContext::FEntityIterator It = ChunkContext.CreateEntityIterator(); It; ++It)
     {
       if (SimStates[It].bInitialized)
       {
-        States.Add(MakeRoundAgentState(Identities[It], Formations[It], SimStates[It]));
+        States.Add(MakeRoundAgentState(
+          Identities[It], Formations[It], SimStates[It], &TargetApproaches[It]));
       }
     }
   });
@@ -5247,6 +6431,7 @@ void UCrowdDemoRoundCheckpointPublisherProcessor::Execute(FMassEntityManager& En
   int32 StateFrameRevision = 0;
   if (bBuildRoundResult)
   {
+    Pipeline->PinTargetInfluenceExecutionDiagnosticForRoundResult();
     FCrowdDemoRoundResultPacket Result;
     // bValid denotes a transportable packet, not an algorithm pass/fail.
     // Particle capability failure is carried by ParticleInvalidStepCount and
@@ -5288,12 +6473,243 @@ void UCrowdDemoRoundCheckpointPublisherProcessor::Execute(FMassEntityManager& En
       Result.ParticleMetrics.MaxAgentCorrectionCm = Particle.MaxAgentCorrectionCm;
       Result.ParticleMetrics.ObstaclePenetrationCount = Particle.ObstaclePenetrationCount;
       Result.ParticleMetrics.BoundsViolationCount = Particle.BoundsViolationCount;
+      Result.ParticleMetrics.EnvironmentSoftContactCount = Particle.EnvironmentSoftContactCount;
+      Result.ParticleMetrics.EnvironmentSoftAppliedAgentCount =
+        Particle.EnvironmentSoftAppliedAgentCount;
+      Result.ParticleMetrics.EnvironmentSoftErrorCmP50 = Particle.EnvironmentSoftErrorCmP50;
+      Result.ParticleMetrics.EnvironmentSoftErrorCmP95 = Particle.EnvironmentSoftErrorCmP95;
+      Result.ParticleMetrics.EnvironmentSoftErrorCmMax = Particle.EnvironmentSoftErrorCmMax;
+      Result.ParticleMetrics.EnvironmentSoftRequestedCorrectionCmMax =
+        Particle.EnvironmentSoftRequestedCorrectionCmMax;
+      Result.ParticleMetrics.EnvironmentSoftRealizedCorrectionCmMax =
+        Particle.EnvironmentSoftRealizedCorrectionCmMax;
+      Result.ParticleMetrics.UnifiedHardConstraintCount = Particle.UnifiedHardConstraintCount;
+      Result.ParticleMetrics.UnifiedHardResidualCmMax = Particle.UnifiedHardResidualCmMax;
+      Result.ParticleMetrics.UnifiedHardInfeasibleCount = Particle.UnifiedHardInfeasibleCount;
       Result.ParticleMetrics.ParticleInvalidStepCount = Pipeline->GetParticleInvalidStepCount();
       Result.ParticleMetrics.ParticleGlobalFallbackStepCount = Pipeline->GetParticleGlobalFallbackStepCount();
       Result.ParticleMetrics.SettlingSteps = Pipeline->GetParticleSettlingSteps();
       Result.ParticleMetrics.ParticleSolverMsP95 = Pipeline->GetParticleSolverMsP95();
       Result.ParticleMetrics.ParticleCandidateHash = Pipeline->GetParticleCandidateStateHash();
       Result.ParticleMetrics.ParticleAppliedStateHash = Pipeline->GetParticleAppliedStateHash();
+      if (Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0)
+      {
+      const FCrowdDemoTargetInfluenceSummary& TargetInfluence =
+        Pipeline->GetTargetInfluenceSummary();
+      Result.ParticleMetrics.bTargetInfluenceValid = TargetInfluence.bValid ? 1 : 0;
+      Result.ParticleMetrics.TargetInfluenceAgentCount = TargetInfluence.InfluenceAgentCount;
+      Result.ParticleMetrics.TargetInsideEffectiveBandCount =
+        TargetInfluence.InsideEffectiveBandCount;
+      Result.ParticleMetrics.TargetOutsideMaxCount = TargetInfluence.OutsideMaximumCount;
+      Result.ParticleMetrics.TargetInsideMinCount = TargetInfluence.InsideMinimumCount;
+      Result.ParticleMetrics.TargetRadialErrorCmP50 = TargetInfluence.RadialErrorCmP50;
+      Result.ParticleMetrics.TargetRadialErrorCmP95 = TargetInfluence.RadialErrorCmP95;
+      Result.ParticleMetrics.TargetRadialErrorCmMax = TargetInfluence.RadialErrorCmMax;
+      Result.ParticleMetrics.TargetRelativeSpeedCmpsP95 = TargetInfluence.RelativeSpeedCmpsP95;
+      Result.ParticleMetrics.TargetFollowLagCmP95 = TargetInfluence.FollowLagCmP95;
+      Result.ParticleMetrics.OccupiedAngularSectorCount =
+        TargetInfluence.OccupiedAngularSectorCount;
+      Result.ParticleMetrics.AngularCoverageQ15 = TargetInfluence.AngularCoverageQ15;
+      Result.ParticleMetrics.MaxAngularSectorPopulation =
+        TargetInfluence.MaxAngularSectorPopulation;
+      Result.ParticleMetrics.OccupiedRadialBandCount =
+        TargetInfluence.OccupiedRadialBandCount;
+      Result.ParticleMetrics.TargetDensityFieldHash = TargetInfluence.Density.FieldHash;
+      Result.ParticleMetrics.TargetDensityContributingAgentCount =
+        TargetInfluence.Density.ContributingAgentCount;
+      Result.ParticleMetrics.TargetDensityOccupiedCellCount =
+        TargetInfluence.Density.OccupiedCellCount;
+      Result.ParticleMetrics.TargetDensityMaxCellPopulation =
+        TargetInfluence.Density.MaximumCellPopulation;
+      Result.ParticleMetrics.TargetDensityGuidedAgentCount =
+        TargetInfluence.Density.DensityGuidedAgentCount;
+      Result.ParticleMetrics.TargetDensityClockwiseAgentCount =
+        TargetInfluence.Density.ClockwiseAgentCount;
+      Result.ParticleMetrics.TargetDensityCounterClockwiseAgentCount =
+        TargetInfluence.Density.CounterClockwiseAgentCount;
+      Result.ParticleMetrics.TargetDensityTangentialSpeedCmpsP95 =
+        TargetInfluence.Density.TangentialSpeedCmpsP95;
+      Result.ParticleMetrics.TargetDensityTangentialSpeedCmpsMax =
+        TargetInfluence.Density.MaximumTangentialSpeedCmps;
+      Result.ParticleMetrics.TargetLargestEmptySectorRun =
+        TargetInfluence.Density.LargestEmptySectorRun;
+      Result.ParticleMetrics.TargetInfluenceHash = Pipeline->GetTargetInfluenceRoundHash();
+      if (Pipeline->IsTargetInfluenceExecutionDiagnosticEnabled())
+      {
+        const auto& Diagnostic = Pipeline->GetTargetInfluenceExecutionSummary();
+        auto& Metrics = Result.ParticleMetrics;
+        Metrics.bTargetInfluenceExecutionDiagnosticValid = Diagnostic.bValid ? 1 : 0;
+        Metrics.TargetInfluenceExecutionValidSampleCount = Diagnostic.ValidSampleCount;
+        Metrics.TargetInfluenceExecutionRequestedAgentCount = Diagnostic.RequestedAgentCount;
+        Metrics.TargetInfluenceExecutionBelowThresholdSampleCount =
+          Diagnostic.RequestedBelowThresholdSampleCount;
+        Metrics.TargetDensityRequestedTangentialCmpsP50 = Diagnostic.RequestedTangentialCmpsP50;
+        Metrics.TargetDensityRequestedTangentialCmpsP95 = Diagnostic.RequestedTangentialCmpsP95;
+        Metrics.TargetDensityRequestedTangentialCmpsMax = Diagnostic.RequestedTangentialCmpsMax;
+        Metrics.TargetDensityPredictTangentialCmpsP50 = Diagnostic.MovementPredictTangentialCmpsP50;
+        Metrics.TargetDensityPredictTangentialCmpsP95 = Diagnostic.MovementPredictTangentialCmpsP95;
+        Metrics.TargetDensityPredictTangentialCmpsMax = Diagnostic.MovementPredictTangentialCmpsMax;
+        Metrics.TargetDensityAppliedTangentialCmpsP50 = Diagnostic.AppliedTangentialCmpsP50;
+        Metrics.TargetDensityAppliedTangentialCmpsP95 = Diagnostic.AppliedTangentialCmpsP95;
+        Metrics.TargetDensityAppliedTangentialCmpsMax = Diagnostic.AppliedTangentialCmpsMax;
+        Metrics.TargetDensityRequestedToAppliedRatioP50 = Diagnostic.RequestedToAppliedRatioP50;
+        Metrics.TargetDensityRequestedToAppliedRatioP95 = Diagnostic.RequestedToAppliedRatioP95;
+        Metrics.TargetDensityLostTangentialCmpsP50 = Diagnostic.LostTangentialCmpsP50;
+        Metrics.TargetDensityLostTangentialCmpsP95 = Diagnostic.LostTangentialCmpsP95;
+        Metrics.TargetDensityLostTangentialCmpsMax = Diagnostic.LostTangentialCmpsMax;
+        Metrics.TargetDensityDirectionFlipAgentCount = Diagnostic.DirectionFlipAgentCount;
+        Metrics.TargetDensityDirectionFlipCount = Diagnostic.DirectionFlipCount;
+        Metrics.TargetDensityAngularSectorTransitionCount = Diagnostic.AngularSectorTransitionCount;
+        Metrics.TargetDensityRadialBandTransitionCount = Diagnostic.RadialBandTransitionCount;
+        Metrics.TargetDensityEnvironmentOpposedAgentCount = Diagnostic.EnvironmentOpposedAgentCount;
+        Metrics.TargetDensityParticleOpposedAgentCount = Diagnostic.ParticleOpposedAgentCount;
+        Metrics.TargetFeasibleSectorCountByRadialBand =
+          Diagnostic.Environment.FeasibleSectorCountByRadialBand;
+        Metrics.TargetOccupiedFeasibleSectorCount = Diagnostic.Environment.OccupiedFeasibleSectorCount;
+        Metrics.TargetOccupiedInfeasiblePolarCellCount =
+          Diagnostic.Environment.OccupiedInfeasiblePolarCellCount;
+        Metrics.TargetFeasibleButUnoccupiedSectorCount =
+          Diagnostic.Environment.FeasibleButUnoccupiedSectorCount;
+        Metrics.TargetLargestEmptyFeasibleSectorRun =
+          Diagnostic.Environment.LargestEmptyFeasibleSectorRun;
+        Metrics.TargetFlowBoundsInfeasibleCellCount =
+          Diagnostic.Environment.FlowBoundsInfeasibleCellCount;
+        Metrics.TargetObstacleInfeasibleCellCount =
+          Diagnostic.Environment.ObstacleInfeasibleCellCount;
+        Metrics.TargetInfluenceExecutionDiagnosticHash = Diagnostic.DiagnosticHash;
+      }
+      }
+      if (Pipeline->GetRules().TargetRegionTransportSettings.bEnabled != 0)
+      {
+        auto& Metrics = Result.ParticleMetrics;
+        const auto& Topology = Pipeline->GetTargetRegionTopologySummary();
+        const auto& Demand = Pipeline->GetPreparedTargetRegionDemand();
+        const auto& Plan = Pipeline->GetPreparedTargetRegionPlan();
+        const auto& Guidance = Pipeline->GetTargetRegionGuidanceSummary();
+        Metrics.bTargetRegionTransportValid = Pipeline->IsTargetRegionRoundValid()
+          && Topology.bValid && Demand.bValid && Plan.bValid && Guidance.bValid ? 1 : 0;
+        Metrics.TargetTransportFeasibleCellCount = Topology.FeasibleCellCount;
+        Metrics.TargetTransportEdgeCount = Topology.EdgeCount;
+        Metrics.TargetTransportFeasibleRegionCount = Demand.FeasibleRegionCount;
+        Metrics.TargetTransportInsideEffectiveBandCount = Demand.CurrentTerminalPopulation;
+        Metrics.TargetTransportDesiredPopulation = Demand.DesiredPopulationTotal;
+        Metrics.TargetTransportRoutedAgentCount = Plan.RoutedAgentCount;
+        Metrics.TargetTransportUnroutedAgentCount = Plan.UnroutedAgentCount;
+        Metrics.TargetGuidanceUnroutedStepCount = Pipeline->GetTargetRegionGuidanceUnroutedStepCount();
+        Metrics.TargetGuidanceUnroutedAgentSampleCount = Pipeline->GetTargetRegionGuidanceUnroutedAgentSampleCount();
+        Metrics.TargetGuidanceUnroutedAgentMax = Pipeline->GetTargetRegionGuidanceUnroutedAgentMax();
+        Metrics.TargetGuidanceFirstFailureStep = Pipeline->GetTargetRegionGuidanceFirstFailureStep();
+        Metrics.TargetGuidanceFirstFailureAgentId = Pipeline->GetTargetRegionGuidanceFirstFailureAgentId();
+        Metrics.TargetTransportInvalidStepCount = Pipeline->GetTargetRegionInvalidStepCount();
+        Metrics.TargetTransportValidationFailureCount = Pipeline->GetTargetRegionValidationFailureCount();
+        Metrics.TargetTransportValidationHash = Pipeline->GetTargetRegionValidationRoundHash();
+        Metrics.bTargetTransportFailureFixtureValid = Pipeline->HasTargetRegionFailureFixture() ? 1 : 0;
+        Metrics.TargetTransportFailureFixtureStep = Pipeline->GetTargetRegionFailureFixtureStep();
+        Metrics.TargetTransportFailureFixtureKind = Pipeline->GetTargetRegionFailureFixtureKind();
+        Metrics.TargetTransportFailureFixtureAgentId = Pipeline->GetTargetRegionFailureFixtureAgentId();
+        Metrics.TargetTransportFailureFixtureCellKey = Pipeline->GetTargetRegionFailureFixtureCellKey();
+        Metrics.TargetTransportFailureFixtureHash = Pipeline->GetTargetRegionFailureFixtureHash();
+        Metrics.TargetTransportTotalPhysicalCost = Plan.TotalPhysicalCost;
+        Metrics.TargetTransportChangedQuotaUnitCount = Plan.ChangedQuotaUnitCount;
+        Metrics.TargetTransportPlanEpoch = Plan.PlanEpoch;
+        TSet<int32> RawRegions;
+        int32 FeasibleCoverage = 0;
+        int32 MaximumPopulation = 0;
+        const auto Settings = MakeTargetRegionTransportSettings(
+          Pipeline->GetRules(), Pipeline->GetTargetApproachFact());
+        for (const auto& Agent : Pipeline->GetPreparedTargetRegionAgents())
+        {
+          const FVector2f Offset = Agent.Location - Settings.TargetLocation;
+          const float Distance = Offset.Size();
+          if (Distance + 0.01f < Settings.MinimumCenterDistanceCm
+            || Distance > Settings.MaximumCenterDistanceCm + 0.01f) continue;
+          float Angle = FMath::Atan2(Offset.Y, Offset.X);
+          if (Angle < 0.0f) Angle += 2.0f * PI;
+          RawRegions.Add(FMath::Clamp(FMath::FloorToInt(Angle / (2.0f * PI)
+            * Settings.DemandRegionCount), 0, Settings.DemandRegionCount - 1));
+        }
+        for (const auto& Region : Demand.Regions)
+        {
+          FeasibleCoverage += Region.bFeasible && Region.CurrentPopulation > 0 ? 1 : 0;
+          MaximumPopulation = FMath::Max(MaximumPopulation, Region.CurrentPopulation);
+        }
+        Metrics.TargetTransportRawRegionCoverageCount = RawRegions.Num();
+        Metrics.TargetTransportFeasibleRegionCoverageCount = FeasibleCoverage;
+        Metrics.TargetTransportMaximumRegionPopulation = MaximumPopulation;
+        Metrics.TargetTransportPlanRebuildCount = Pipeline->GetTargetRegionPlanRebuildCount();
+        Metrics.TargetTransportLifetimeRebuildCount = Pipeline->GetTargetRegionLifetimeRebuildCount();
+        Metrics.TargetTransportTargetRebuildCount = Pipeline->GetTargetRegionTargetRebuildCount();
+        Metrics.TargetTransportEnvironmentRebuildCount = Pipeline->GetTargetRegionEnvironmentRebuildCount();
+        Metrics.TargetTransportMembershipRebuildCount = Pipeline->GetTargetRegionMembershipRebuildCount();
+        Metrics.TargetTransportDemandSatisfiedRebuildCount = Pipeline->GetTargetRegionDemandSatisfiedRebuildCount();
+        Metrics.TargetTransportPathInvalidRebuildCount = Pipeline->GetTargetRegionPathInvalidRebuildCount();
+        Metrics.TargetTransportSolverMsP95 = Pipeline->GetTargetRegionSolverMsP95();
+        Metrics.TargetTransportTopologyHash = Pipeline->GetTargetRegionTopologyRoundHash();
+        Metrics.TargetTransportDemandHash = Pipeline->GetTargetRegionDemandRoundHash();
+        Metrics.TargetTransportPlanHash = Pipeline->GetTargetRegionTransportRoundHash();
+        Metrics.TargetTransportGuidanceHash = Pipeline->GetTargetRegionGuidanceRoundHash();
+      }
+      const FCrowdDemoTargetApproachSummary& TargetApproach =
+        Pipeline->GetTargetApproachSummary();
+      Result.ParticleMetrics.bTargetApproachValid = TargetApproach.bValid ? 1 : 0;
+      Result.ParticleMetrics.TargetFactHash = TargetApproach.TargetFactHash;
+      Result.ParticleMetrics.TargetApproachHash = TargetApproach.ApproachHash;
+      Result.ParticleMetrics.TargetAgentInputHash = TargetApproach.AgentInputHash;
+      Result.ParticleMetrics.TargetAgentFineKinematicHash = TargetApproach.AgentFineKinematicHash;
+      Result.ParticleMetrics.TargetAgentConfigHash = TargetApproach.AgentConfigHash;
+      Result.ParticleMetrics.TargetAgentTemporalHash = TargetApproach.AgentTemporalHash;
+      Result.ParticleMetrics.TargetSettingsHash = TargetApproach.SettingsHash;
+      Result.ParticleMetrics.TargetSlotInputHash = TargetApproach.SlotInputHash;
+      Result.ParticleMetrics.TargetFullInputHash = TargetApproach.FullInputHash;
+      Result.ParticleMetrics.TargetOwnerStateHash = TargetApproach.OwnerStateHash;
+      Result.ParticleMetrics.TargetTransitionHash = TargetApproach.TransitionHash;
+      Result.ParticleMetrics.TargetGuidanceHash = TargetApproach.GuidanceHash;
+      Result.ParticleMetrics.TargetGuidanceLocationHash = TargetApproach.GuidanceLocationHash;
+      Result.ParticleMetrics.TargetGuidanceVelocityHash = TargetApproach.GuidanceVelocityHash;
+      const FCrowdDemoTargetSlotLayout& TargetSlotLayout =
+        Pipeline->GetPreparedTargetSlotLayout();
+      const FCrowdDemoTargetSlotLayoutSummary& TargetSlotLayoutSummary =
+        Pipeline->GetTargetSlotLayoutSummary();
+      Result.ParticleMetrics.TargetSlotLayoutRevision = TargetSlotLayout.SlotLayoutRevision;
+      Result.ParticleMetrics.TargetSlotLayoutTopologyHash = TargetSlotLayout.TopologyHash;
+      Result.ParticleMetrics.TargetSlotLayoutWorldHash = TargetSlotLayout.WorldValidationHash;
+      Result.ParticleMetrics.TargetSlotLayoutFullInputHash = TargetSlotLayout.FullInputHash;
+      Result.ParticleMetrics.SlotLayoutCandidateCount = TargetSlotLayoutSummary.GeneratedCandidateCount;
+      Result.ParticleMetrics.SlotLayoutFunctionalCount = TargetSlotLayoutSummary.AcceptedFunctionalCount;
+      Result.ParticleMetrics.SlotLayoutFillCount = TargetSlotLayoutSummary.AcceptedFillCount;
+      Result.ParticleMetrics.SlotRejectedTargetClearanceCount =
+        TargetSlotLayoutSummary.RejectedTargetClearanceCount;
+      Result.ParticleMetrics.SlotRejectedPairSpacingCount =
+        TargetSlotLayoutSummary.RejectedPairSpacingCount;
+      Result.ParticleMetrics.SlotRejectedObstacleCount =
+        TargetSlotLayoutSummary.RejectedObstacleCount;
+      Result.ParticleMetrics.SlotRejectedBoundsCount =
+        TargetSlotLayoutSummary.RejectedBoundsCount;
+      Result.ParticleMetrics.SlotRejectedUnreachableCount =
+        TargetSlotLayoutSummary.RejectedUnreachableCount;
+      Result.ParticleMetrics.SlotRejectedIngressSegmentCount =
+        TargetSlotLayoutSummary.RejectedIngressSegmentCount;
+      Result.ParticleMetrics.TargetApproachScheduleHash = TargetApproach.ScheduleHash;
+      Result.ParticleMetrics.TargetApproachCommitHash = TargetApproach.CommitHash;
+      Result.ParticleMetrics.SlotOwnerReleaseCount = TargetApproach.SlotOwnerReleaseCount;
+      Result.ParticleMetrics.SlotOwnerReusedCount = TargetApproach.SlotOwnerReusedCount;
+      Result.ParticleMetrics.SlotOwnerConflictCount = TargetApproach.SlotOwnerConflictCount;
+      Result.ParticleMetrics.SlotLayoutRevisionMismatchCount =
+        TargetApproach.SlotLayoutRevisionMismatchCount;
+      Result.ParticleMetrics.RingEnteredCount = TargetApproach.RingEnteredCount;
+      Result.ParticleMetrics.RingWaitingCount = TargetApproach.RingWaitingCount;
+      Result.ParticleMetrics.FunctionalSlotCapacity = TargetApproach.FunctionalSlotCapacity;
+      Result.ParticleMetrics.FunctionalSlotOccupied = TargetApproach.FunctionalSlotOccupied;
+      Result.ParticleMetrics.FillSlotCapacity = TargetApproach.FillSlotCapacity;
+      Result.ParticleMetrics.FillSlotOccupied = TargetApproach.FillSlotOccupied;
+      Result.ParticleMetrics.SlotIngressCount = TargetApproach.SlotIngressCount;
+      Result.ParticleMetrics.SlotOccupiedCount = TargetApproach.SlotOccupiedCount;
+      Result.ParticleMetrics.FreeSettleCount = TargetApproach.FreeSettleCount;
+      Result.ParticleMetrics.FreeSettledCount = TargetApproach.FreeSettledCount;
+      Result.ParticleMetrics.DuplicateSlotOwnerCount = TargetApproach.DuplicateSlotOwnerCount;
+      Result.ParticleMetrics.InvalidSlotOwnerCount = TargetApproach.InvalidSlotOwnerCount;
+      Result.ParticleMetrics.TargetApproachStateTransitionCount =
+        TargetApproach.StateTransitionCount;
       const FCrowdDemoParticleFailureFixture& Fixture = Pipeline->GetParticleFailureFixture();
       Result.ParticleMetrics.ParticleFailureFixtureStep = Fixture.FixedStepIndex;
       Result.ParticleMetrics.ParticleFailureMinAgentId = Fixture.MinAgentId;
@@ -5307,11 +6723,111 @@ void UCrowdDemoRoundCheckpointPublisherProcessor::Execute(FMassEntityManager& En
         Pipeline->GetSoftPressureRollbackAgentMismatchCount();
       Result.ParticleMetrics.RollbackReplayedStepCount =
         Pipeline->GetSoftPressureRollbackReplayedStepCount();
+      if (Pipeline->IsSoftPressureRouteDiagnosticEnabled())
+      {
+        const auto& Route = Pipeline->GetSoftPressureRouteDiagnosticSummary();
+        auto& Metrics = Result.ParticleMetrics.RouteMetrics;
+        Metrics.bValid = Route.bValid ? 1 : 0;
+        Metrics.DiagnosticHash = Route.StableHash;
+        Metrics.SelectedBranch = static_cast<int32>(Route.SelectedBranch);
+        Metrics.SelectedAgentCount = Route.SelectedAgentCount;
+        Metrics.NeverReachedAgentCount = Route.NeverReachedAgentCount;
+        Metrics.ReachedThenLeftAgentCount = Route.ReachedThenLeftAgentCount;
+        Metrics.GoalBoundaryTransitionCount = Route.GoalBoundaryTransitionCount;
+        Metrics.ZeroToMaxSpeedTransitionCount = Route.ZeroToMaxSpeedTransitionCount;
+        Metrics.MaxToZeroSpeedTransitionCount = Route.MaxToZeroSpeedTransitionCount;
+        Metrics.CorridorEverStalledAgentCount = Route.CorridorEverStalledAgentCount;
+        Metrics.CorridorFinalDeadlockAgentCount = Route.CorridorFinalDeadlockAgentCount;
+        Metrics.FlowContractViolationCount = Route.FlowContractViolationCount;
+        Metrics.FailureOwnedFlowContractViolationCount =
+          Route.FailureOwnedFlowContractViolationCount;
+        Metrics.CorridorFailureAgentCount = Route.CorridorFailureAgentCount;
+        Metrics.GoalFailureAgentCount = Route.GoalFailureAgentCount;
+        Metrics.InsideGoalCountP50 = Route.InsideGoalCountP50;
+        Metrics.InsideGoalCountP95 = Route.InsideGoalCountP95;
+        Metrics.InsideGoalCountMax = Route.InsideGoalCountMax;
+        Metrics.NeverReachedDistanceCmP50 = Route.NeverReachedDistanceCmP50;
+        Metrics.NeverReachedDistanceCmP95 = Route.NeverReachedDistanceCmP95;
+        Metrics.NeverReachedDistanceCmMax = Route.NeverReachedDistanceCmMax;
+        Metrics.NeverReachedDesiredForwardCmpsP50 = Route.NeverReachedDesiredForwardCmpsP50;
+        Metrics.NeverReachedDesiredForwardCmpsP95 = Route.NeverReachedDesiredForwardCmpsP95;
+        Metrics.NeverReachedAppliedForwardCmpsP50 = Route.NeverReachedAppliedForwardCmpsP50;
+        Metrics.NeverReachedAppliedForwardCmpsP95 = Route.NeverReachedAppliedForwardCmpsP95;
+        Metrics.NeverReachedSoftOppositionCmpsP50 = Route.NeverReachedSoftOppositionCmpsP50;
+        Metrics.NeverReachedSoftOppositionCmpsP95 = Route.NeverReachedSoftOppositionCmpsP95;
+        Metrics.BaselineNeverReachedForwardCmps =
+          Route.Counterfactual.BaselineNeverReachedForwardCmps;
+        Metrics.StickyNeverReachedForwardCmps =
+          Route.Counterfactual.StickyNeverReachedForwardCmps;
+        Metrics.SoftDisabledNeverReachedForwardCmps =
+          Route.Counterfactual.SoftDisabledNeverReachedForwardCmps;
+        Metrics.bStickyCounterfactualValid = Route.Counterfactual.bStickyValid ? 1 : 0;
+        Metrics.bSoftDisabledCounterfactualValid =
+          Route.Counterfactual.bSoftDisabledValid ? 1 : 0;
+        for (const auto& AgentResult : Route.Agents)
+        {
+          const auto& Agent = AgentResult.Agent;
+          UE_LOG(LogTemp, Display,
+            TEXT("CrowdDemoSoftPressureRouteAgent role=%s round_id=%d agent=%d final=(%.3f,%.3f) goal_final=%.3f goal_min=%.3f inside=%d ever_reached=%d reached_then_left=%d transitions=%d zero_to_max=%d max_to_zero=%d wall_step=%d corridor_step=%d turn_step=%d flow_cell=%d flow_key=%d flow_status=%d integration=%d desired=(%.3f,%.3f) predicted=(%.3f,%.3f) applied=(%.3f,%.3f) desired_forward=%.3f applied_forward=%.3f pair_soft_requested=(%.3f,%.3f) pair_soft_realized=(%.3f,%.3f) environment_soft_requested=(%.3f,%.3f) environment_soft_realized=(%.3f,%.3f) unified_hard=(%.3f,%.3f) total_correction=(%.3f,%.3f) component=%d reached_neighbors=%d non_reached_neighbors=%d low_speed_current=%d low_speed_max=%d ever_stalled=%d final_deadlock=%d flow_contract_violations=%d flow_violation_first_step=%d flow_violation_mask=%d flow_violation_predict_distance_cm=%.3f source=MassPipeline"),
+            World->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
+            Result.RoundId, Agent.AgentId, Agent.FinalLocation.X, Agent.FinalLocation.Y,
+            Agent.FinalGoalDistanceCm, Agent.MinimumGoalDistanceCm,
+            Agent.bCurrentInsideGoal ? 1 : 0, Agent.bEverReachedGoal ? 1 : 0,
+            Agent.ReachedThenLeftCount, Agent.GoalBoundaryTransitionCount,
+            Agent.ZeroToMaxSpeedTransitionCount, Agent.MaxToZeroSpeedTransitionCount,
+            Agent.FirstWallStep, Agent.FirstCorridorStep, Agent.FirstTurnStep,
+            Agent.FinalFlowCellIndex, Agent.FinalFlowStableCellKey,
+            static_cast<int32>(Agent.FinalFlowStatus), Agent.FinalIntegrationCost,
+            Agent.FinalDesiredVelocity.X, Agent.FinalDesiredVelocity.Y,
+            Agent.FinalPredictedVelocity.X, Agent.FinalPredictedVelocity.Y,
+            Agent.FinalAppliedVelocity.X, Agent.FinalAppliedVelocity.Y,
+            Agent.FinalDesiredForwardCmps, Agent.FinalAppliedForwardCmps,
+            Agent.FinalPairSoftRequestedCorrection.X, Agent.FinalPairSoftRequestedCorrection.Y,
+            Agent.FinalPairSoftRealizedCorrection.X, Agent.FinalPairSoftRealizedCorrection.Y,
+            Agent.FinalEnvironmentSoftRequestedCorrection.X,
+            Agent.FinalEnvironmentSoftRequestedCorrection.Y,
+            Agent.FinalEnvironmentSoftRealizedCorrection.X,
+            Agent.FinalEnvironmentSoftRealizedCorrection.Y,
+            Agent.FinalUnifiedHardCorrection.X, Agent.FinalUnifiedHardCorrection.Y,
+            Agent.FinalTotalParticleCorrection.X, Agent.FinalTotalParticleCorrection.Y,
+            AgentResult.ConstraintComponentSize, AgentResult.ReachedNeighborCount,
+            AgentResult.NonReachedNeighborCount, Agent.CurrentLowSpeedSteps,
+            Agent.MaxLowSpeedSteps, Agent.bEverCorridorStalled ? 1 : 0,
+            Agent.bFinalCorridorDeadlock ? 1 : 0, Agent.FlowContractViolationCount,
+            Agent.FirstFlowContractViolationStep, Agent.FirstFlowContractViolationMask,
+            Agent.FirstFlowContractViolationPredictDistanceCm);
+        }
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoSoftPressureRouteSummary role=%s round_id=%d valid=%d hash=%u branch=%d selected=%d never_reached=%d reached_then_left=%d transitions=%d zero_to_max=%d max_to_zero=%d inside_goal_p50=%.3f inside_goal_p95=%.3f inside_goal_max=%.3f never_distance_p50=%.3f never_distance_p95=%.3f never_distance_max=%.3f never_desired_forward_p50=%.3f never_desired_forward_p95=%.3f never_applied_forward_p50=%.3f never_applied_forward_p95=%.3f never_soft_opposition_p50=%.3f never_soft_opposition_p95=%.3f ever_stalled=%d final_deadlock=%d flow_contract_violations=%d failure_owned_flow_violations=%d corridor_failures=%d goal_failures=%d baseline_forward=%.3f sticky_forward=%.3f sticky_valid=%d soft_disabled_forward=%.3f soft_disabled_valid=%d source=MassPipeline"),
+          World->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
+          Result.RoundId, Metrics.bValid, Metrics.DiagnosticHash, Metrics.SelectedBranch,
+          Metrics.SelectedAgentCount, Metrics.NeverReachedAgentCount,
+          Metrics.ReachedThenLeftAgentCount, Metrics.GoalBoundaryTransitionCount,
+          Metrics.ZeroToMaxSpeedTransitionCount, Metrics.MaxToZeroSpeedTransitionCount,
+          Metrics.InsideGoalCountP50, Metrics.InsideGoalCountP95, Metrics.InsideGoalCountMax,
+          Metrics.NeverReachedDistanceCmP50, Metrics.NeverReachedDistanceCmP95,
+          Metrics.NeverReachedDistanceCmMax, Metrics.NeverReachedDesiredForwardCmpsP50,
+          Metrics.NeverReachedDesiredForwardCmpsP95,
+          Metrics.NeverReachedAppliedForwardCmpsP50,
+          Metrics.NeverReachedAppliedForwardCmpsP95,
+          Metrics.NeverReachedSoftOppositionCmpsP50,
+          Metrics.NeverReachedSoftOppositionCmpsP95,
+          Metrics.CorridorEverStalledAgentCount,
+          Metrics.CorridorFinalDeadlockAgentCount, Metrics.FlowContractViolationCount,
+          Metrics.FailureOwnedFlowContractViolationCount,
+          Metrics.CorridorFailureAgentCount, Metrics.GoalFailureAgentCount,
+          Metrics.BaselineNeverReachedForwardCmps,
+          Metrics.StickyNeverReachedForwardCmps, Metrics.bStickyCounterfactualValid,
+          Metrics.SoftDisabledNeverReachedForwardCmps,
+          Metrics.bSoftDisabledCounterfactualValid);
+      }
     }
-    if (IsTrafficScenario(Pipeline->GetRules().Scenario))
+    if (IsTrafficScenario(Pipeline->GetRules().Scenario)
+      || Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure)
     {
       Result.TrafficMetrics = Pipeline->BuildTrafficMetrics(States);
-      Pipeline->RecordSf3CompletedRoundHash(Result.TrafficMetrics.AgentStateHash);
+      if (IsTrafficScenario(Pipeline->GetRules().Scenario))
+        Pipeline->RecordSf3CompletedRoundHash(Result.TrafficMetrics.AgentStateHash);
     }
     CheckpointRevision = Result.CheckpointRevision;
     StateFrameRevision = Result.StateFrameRevision;
@@ -5378,6 +6894,14 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::InitializeInternal(
   Super::InitializeInternal(Owner, EntityManager);
   PlanApplyProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundPlanApplyProcessor>(*this, Owner, EntityManager);
   TargetFactApplyProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetFactApplyProcessor>(*this, Owner, EntityManager);
+  TargetPolarTopologyBuildProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetPolarTopologyBuildProcessor>(*this, Owner, EntityManager);
+  TargetRegionPopulationBuildProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetRegionPopulationBuildProcessor>(*this, Owner, EntityManager);
+  TargetRegionTransportSolveProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetRegionTransportSolveProcessor>(*this, Owner, EntityManager);
+  TargetRegionGuidanceProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetRegionGuidanceProcessor>(*this, Owner, EntityManager);
+  TargetSlotLayoutPrepareProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetSlotLayoutPrepareProcessor>(*this, Owner, EntityManager);
+  TargetApproachScheduleProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetApproachScheduleProcessor>(*this, Owner, EntityManager);
+  TargetApproachCommitProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetApproachCommitProcessor>(*this, Owner, EntityManager);
+  TargetApproachGuidanceProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundTargetApproachGuidanceProcessor>(*this, Owner, EntityManager);
   SharedFlowFieldBuildProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundSharedFlowFieldBuildProcessor>(*this, Owner, EntityManager);
   CrowdTrafficFieldBuildProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundCrowdTrafficFieldBuildProcessor>(*this, Owner, EntityManager);
   PortalScheduleProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundPortalScheduleProcessor>(*this, Owner, EntityManager);
@@ -5440,11 +6964,17 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
     {
       break;
     }
-    if (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning)
+    if (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning
+      || (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+        && (Pipeline->GetRules().TargetApproachSettings.bEnabled != 0
+          || Pipeline->GetRules().TargetInfluenceSettings.bEnabled != 0)))
     {
       TargetFactApplyProcessor->CallExecute(EntityManager, Context);
     }
     SharedFlowFieldBuildProcessor->CallExecute(EntityManager, Context);
+    if (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && Pipeline->GetRules().TargetApproachSettings.bEnabled != 0)
+      TargetSlotLayoutPrepareProcessor->CallExecute(EntityManager, Context);
     if (IsTrafficScenario(Pipeline->GetRules().Scenario))
     {
       CrowdTrafficFieldBuildProcessor->CallExecute(EntityManager, Context);
@@ -5462,6 +6992,21 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
       }
     }
     FlowPreferredVelocityProcessor->CallExecute(EntityManager, Context);
+    if (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && Pipeline->GetRules().TargetRegionTransportSettings.bEnabled != 0)
+    {
+      TargetPolarTopologyBuildProcessor->CallExecute(EntityManager, Context);
+      TargetRegionPopulationBuildProcessor->CallExecute(EntityManager, Context);
+      TargetRegionTransportSolveProcessor->CallExecute(EntityManager, Context);
+      TargetRegionGuidanceProcessor->CallExecute(EntityManager, Context);
+    }
+    if (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && Pipeline->GetRules().TargetApproachSettings.bEnabled != 0)
+    {
+      TargetApproachScheduleProcessor->CallExecute(EntityManager, Context);
+      TargetApproachCommitProcessor->CallExecute(EntityManager, Context);
+      TargetApproachGuidanceProcessor->CallExecute(EntityManager, Context);
+    }
     if (IsTrafficScenario(Pipeline->GetRules().Scenario))
     {
       PassingBandGuidanceProcessor->CallExecute(EntityManager, Context);

@@ -23,6 +23,9 @@ param(
   [switch]$TransitCapacityShadow,
   [switch]$ElasticCrowdShadow,
   [switch]$ParticleConstraintDiagnostic,
+  [switch]$SoftPressureRouteDiagnostic,
+  [switch]$TargetInfluenceExecutionDiagnostic,
+  [switch]$TargetRegionTransportDiagnostic,
   [switch]$RequireParticleCorrectionReplay,
   [switch]$NoClient
 )
@@ -82,6 +85,15 @@ if ($RequireClientReady -and !$NoClient) {
 if ($RequireParticleCorrectionReplay) {
   $CommonArgs = "$CommonArgs -CrowdDemoRequireParticleCorrectionReplay"
 }
+if ($SoftPressureRouteDiagnostic) {
+  $CommonArgs = "$CommonArgs -CrowdDemoSoftPressureRouteDiagnostic"
+}
+if ($TargetInfluenceExecutionDiagnostic) {
+  $CommonArgs = "$CommonArgs -CrowdDemoTargetInfluenceExecutionDiagnostic"
+}
+if ($TargetRegionTransportDiagnostic) {
+  $CommonArgs = "$CommonArgs -CrowdDemoTargetRegionTransportDiagnostic"
+}
 if ($InitialAliveCount -ge 0) {
   $CommonArgs = "$CommonArgs -CrowdDemoInitialAliveCount=$InitialAliveCount"
 }
@@ -109,6 +121,14 @@ if ($ElasticCrowdShadow) {
 if ($ParticleConstraintDiagnostic) {
   $ParticleFixturePath = Join-Path $LogDir "particle_constraint_failure_fixture.json"
   $ServerDiagnosticArgs = "$ServerDiagnosticArgs -CrowdDemoParticleFixtureOutput=`"$ParticleFixturePath`""
+}
+if ($TargetInfluenceExecutionDiagnostic) {
+  $TargetExecutionDiagnosticPath = Join-Path $LogDir "target_influence_execution_diagnostic.json"
+  $ServerDiagnosticArgs = "$ServerDiagnosticArgs -CrowdDemoTargetInfluenceExecutionDiagnosticOutput=`"$TargetExecutionDiagnosticPath`""
+}
+if ($TargetRegionTransportDiagnostic) {
+  $TargetRegionTransportDiagnosticPath = Join-Path $LogDir "target_region_transport_failure_fixture.json"
+  $ServerDiagnosticArgs = "$ServerDiagnosticArgs -CrowdDemoTargetRegionTransportDiagnosticOutput=`"$TargetRegionTransportDiagnosticPath`""
 }
 $ServerArgs = "`"$ProjectPath`" $Map -server -port=$Port -NullRHI -log -AbsLog=`"$ServerLog`" $CommonArgs$ServerDiagnosticArgs"
 Write-Host "[CrowdDemo] Starting server: $ServerArgs"

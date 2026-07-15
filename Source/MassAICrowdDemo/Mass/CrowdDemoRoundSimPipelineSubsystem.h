@@ -5,6 +5,7 @@
 #include "Mass/CrowdDemoHardSeparationPbdKernel.h"
 #include "Mass/CrowdDemoSeparationKernel.h"
 #include "Mass/CrowdDemoParticleConstraintKernel.h"
+#include "Mass/CrowdDemoSoftPressureRouteDiagnosticKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
 #include "Mass/CrowdDemoTrafficSchedulingKernel.h"
 #include "Mass/CrowdDemoDeterministicOrcaKernel.h"
@@ -12,6 +13,11 @@
 #include "Mass/CrowdDemoElasticShadowKernel.h"
 #include "Mass/CrowdDemoJointVelocityKernel.h"
 #include "Mass/CrowdDemoPursuitPositioningKernel.h"
+#include "Mass/CrowdDemoTargetApproachKernel.h"
+#include "Mass/CrowdDemoTargetInfluenceKernel.h"
+#include "Mass/CrowdDemoTargetInfluenceExecutionDiagnosticKernel.h"
+#include "Mass/CrowdDemoTargetRegionTransportKernel.h"
+#include "Mass/CrowdDemoTargetSlotLayoutKernel.h"
 #include "Mass/CrowdDemoSf3DeterminismHash.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CrowdDemoRoundSimPipelineSubsystem.generated.h"
@@ -104,6 +110,8 @@ struct FCrowdDemoSoftPressureRollbackAgentState
   float SimulatedServerTimeSeconds = 0.0f;
   int32 PlanRevision = 0;
   bool bInitialized = false;
+  FCrowdDemoRoundFlowSampleFragment FlowSample;
+  FCrowdDemoTargetApproachFragment TargetApproach;
 };
 
 struct FCrowdDemoSoftPressureRollbackSnapshot
@@ -123,6 +131,54 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   float ParticlePreviousSoftErrorP95 = -1.0f;
   bool bParticleConstraintRunFailure = false;
   FCrowdDemoParticleFailureFixture ParticleFailureFixture;
+  FCrowdDemoSoftPressureRouteDiagnosticCheckpoint RouteDiagnosticCheckpoint;
+  FCrowdDemoTargetInfluenceExecutionCheckpoint TargetInfluenceExecutionCheckpoint;
+  FCrowdDemoTargetFact TargetFact;
+  FCrowdDemoTargetSlotLayout TargetSlotLayout;
+  FCrowdDemoTargetSlotLayoutSummary TargetSlotLayoutSummary;
+  TArray<FCrowdDemoTargetApproachResult> TargetApproachDecisions;
+  TArray<FCrowdDemoTargetApproachResult> TargetApproachGuidance;
+  FCrowdDemoTargetApproachSummary TargetApproachSummary;
+  uint32 TargetApproachCommitHash = 2166136261u;
+  TArray<FCrowdDemoTargetInfluenceResult> TargetInfluenceResults;
+  FCrowdDemoTargetInfluenceSummary TargetInfluenceSummary;
+  uint32 TargetInfluenceRoundHash = 2166136261u;
+  FCrowdDemoTargetPolarTopology TargetRegionTopology;
+  FCrowdDemoTargetPolarTopologySummary TargetRegionTopologySummary;
+  TArray<FCrowdDemoTargetRegionTransportAgent> TargetRegionAgents;
+  FCrowdDemoTargetRegionDemandResult TargetRegionDemand;
+  FCrowdDemoTargetRegionFlowPlan TargetRegionPlan;
+  FCrowdDemoTargetRegionPlanValidationResult TargetRegionPlanValidation;
+  TArray<FCrowdDemoTargetRegionGuidanceResult> TargetRegionGuidance;
+  FCrowdDemoTargetRegionGuidanceSummary TargetRegionGuidanceSummary;
+  uint32 TargetRegionTopologyRoundHash = 2166136261u;
+  uint32 TargetRegionDemandRoundHash = 2166136261u;
+  uint32 TargetRegionTransportRoundHash = 2166136261u;
+  uint32 TargetRegionGuidanceRoundHash = 2166136261u;
+  int32 TargetRegionPlanRebuildCount = 0;
+  int32 TargetRegionLifetimeRebuildCount = 0;
+  int32 TargetRegionTargetRebuildCount = 0;
+  int32 TargetRegionEnvironmentRebuildCount = 0;
+  int32 TargetRegionMembershipRebuildCount = 0;
+  int32 TargetRegionDemandSatisfiedRebuildCount = 0;
+  int32 TargetRegionPathInvalidRebuildCount = 0;
+  int32 TargetRegionSolverMsSampleCount = 0;
+  bool bTargetRegionRoundValid = true;
+  int32 TargetRegionInvalidStepCount = 0;
+  int32 TargetRegionLastInvalidStep = INDEX_NONE;
+  int32 TargetRegionValidationFailureCount = 0;
+  uint32 TargetRegionValidationRoundHash = 2166136261u;
+  int32 TargetRegionGuidanceUnroutedStepCount = 0;
+  int32 TargetRegionGuidanceUnroutedAgentSampleCount = 0;
+  int32 TargetRegionGuidanceUnroutedAgentMax = 0;
+  int32 TargetRegionGuidanceFirstFailureStep = INDEX_NONE;
+  int32 TargetRegionGuidanceFirstFailureAgentId = INDEX_NONE;
+  bool bTargetRegionFailureFixtureValid = false;
+  int32 TargetRegionFailureFixtureStep = INDEX_NONE;
+  int32 TargetRegionFailureFixtureKind = 0;
+  int32 TargetRegionFailureFixtureAgentId = INDEX_NONE;
+  int32 TargetRegionFailureFixtureCellKey = INDEX_NONE;
+  uint32 TargetRegionFailureFixtureHash = 0;
   TSet<int32> FlowGoalReachedAgentIds;
   TSet<int32> FlowWallPassAgentIds;
   TSet<int32> FlowCorridorExitAgentIds;
@@ -415,6 +471,120 @@ public:
   bool HasParticleConstraintRunFailure() const { return bParticleConstraintRunFailure; }
   void StopAfterParticleConstraintFailure();
   float GetParticleSolverMsP95() const;
+  bool IsSoftPressureRouteDiagnosticEnabled() const;
+  void RecordSoftPressureRouteStep(
+    TConstArrayView<FCrowdDemoSoftPressureRouteStepSample> Samples);
+  void FinalizeSoftPressureRouteDiagnostic(
+    const FCrowdDemoSoftPressureRouteCounterfactual& Counterfactual);
+  const FCrowdDemoSoftPressureRouteDiagnosticRuntime& GetSoftPressureRouteDiagnosticRuntime() const
+  { return SoftPressureRouteDiagnosticRuntime; }
+  const FCrowdDemoSoftPressureRouteDiagnosticSummary& GetSoftPressureRouteDiagnosticSummary() const
+  { return SoftPressureRouteDiagnosticSummary; }
+  bool HasFlowGoalReached(int32 AgentId) const
+  { return FlowGoalReachedAgentIds.Contains(AgentId); }
+  FCrowdDemoTargetFact& GetTargetApproachFact() { return TargetApproachFact; }
+  const FCrowdDemoTargetFact& GetTargetApproachFact() const { return TargetApproachFact; }
+  FCrowdDemoTargetSlotLayout& GetPreparedTargetSlotLayout() { return PreparedTargetSlotLayout; }
+  const FCrowdDemoTargetSlotLayout& GetPreparedTargetSlotLayout() const
+  { return PreparedTargetSlotLayout; }
+  FCrowdDemoTargetSlotLayoutSummary& GetTargetSlotLayoutSummary()
+  { return TargetSlotLayoutSummary; }
+  const FCrowdDemoTargetSlotLayoutSummary& GetTargetSlotLayoutSummary() const
+  { return TargetSlotLayoutSummary; }
+  TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachResults()
+  { return PreparedTargetApproachDecisions; }
+  const TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachResults() const
+  { return PreparedTargetApproachDecisions; }
+  TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachGuidance()
+  { return PreparedTargetApproachGuidance; }
+  const TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachGuidance() const
+  { return PreparedTargetApproachGuidance; }
+  const FCrowdDemoTargetApproachSummary& GetTargetApproachSummary() const
+  { return TargetApproachSummary; }
+  void SetTargetApproachSummary(const FCrowdDemoTargetApproachSummary& Summary)
+  { TargetApproachSummary = Summary; }
+  uint32 GetTargetApproachCommitHash() const { return TargetApproachCommitHash; }
+  void SetTargetApproachCommitHash(uint32 Hash) { TargetApproachCommitHash = Hash; }
+  TArray<FCrowdDemoTargetInfluenceResult>& GetPreparedTargetInfluenceResults()
+  { return PreparedTargetInfluenceResults; }
+  const TArray<FCrowdDemoTargetInfluenceResult>& GetPreparedTargetInfluenceResults() const
+  { return PreparedTargetInfluenceResults; }
+  const FCrowdDemoTargetInfluenceSummary& GetTargetInfluenceSummary() const
+  { return TargetInfluenceSummary; }
+  uint32 GetTargetInfluenceRoundHash() const { return TargetInfluenceRoundHash; }
+  void RecordTargetInfluenceStep(
+    TArray<FCrowdDemoTargetInfluenceResult>&& Results,
+    const FCrowdDemoTargetInfluenceSummary& Summary);
+  bool IsTargetInfluenceExecutionDiagnosticEnabled() const;
+  void RecordTargetInfluenceExecutionStep(
+    TConstArrayView<FCrowdDemoTargetInfluenceExecutionSample> Samples,
+    const FCrowdDemoTargetPolarEnvironmentSummary& Environment);
+  const FCrowdDemoTargetInfluenceExecutionRuntime& GetTargetInfluenceExecutionRuntime() const
+  { return TargetInfluenceExecutionRuntime; }
+  const FCrowdDemoTargetInfluenceExecutionSummary& GetTargetInfluenceExecutionSummary() const
+  { return TargetInfluenceExecutionSummary; }
+  void PinTargetInfluenceExecutionDiagnosticForRoundResult();
+  const FCrowdDemoTargetInfluenceExecutionRuntime& GetLastCompletedTargetInfluenceExecutionRuntime() const
+  { return LastCompletedTargetInfluenceExecutionRuntime; }
+  const FCrowdDemoTargetInfluenceExecutionSummary& GetLastCompletedTargetInfluenceExecutionSummary() const
+  { return LastCompletedTargetInfluenceExecutionSummary; }
+  FCrowdDemoTargetPolarTopology& GetPreparedTargetRegionTopology()
+  { return PreparedTargetRegionTopology; }
+  const FCrowdDemoTargetPolarTopology& GetPreparedTargetRegionTopology() const
+  { return PreparedTargetRegionTopology; }
+  FCrowdDemoTargetPolarTopologySummary& GetTargetRegionTopologySummary()
+  { return TargetRegionTopologySummary; }
+  TArray<FCrowdDemoTargetRegionTransportAgent>& GetPreparedTargetRegionAgents()
+  { return PreparedTargetRegionAgents; }
+  FCrowdDemoTargetRegionDemandResult& GetPreparedTargetRegionDemand()
+  { return PreparedTargetRegionDemand; }
+  const FCrowdDemoTargetRegionDemandResult& GetPreparedTargetRegionDemand() const
+  { return PreparedTargetRegionDemand; }
+  FCrowdDemoTargetRegionFlowPlan& GetPreparedTargetRegionPlan()
+  { return PreparedTargetRegionPlan; }
+  const FCrowdDemoTargetRegionFlowPlan& GetPreparedTargetRegionPlan() const
+  { return PreparedTargetRegionPlan; }
+  FCrowdDemoTargetRegionPlanValidationResult& GetTargetRegionPlanValidation()
+  { return TargetRegionPlanValidation; }
+  const FCrowdDemoTargetRegionPlanValidationResult& GetTargetRegionPlanValidation() const
+  { return TargetRegionPlanValidation; }
+  TArray<FCrowdDemoTargetRegionGuidanceResult>& GetPreparedTargetRegionGuidance()
+  { return PreparedTargetRegionGuidance; }
+  FCrowdDemoTargetRegionGuidanceSummary& GetTargetRegionGuidanceSummary()
+  { return TargetRegionGuidanceSummary; }
+  void RecordTargetRegionTopologyStep();
+  void RecordTargetRegionDemandStep();
+  void RecordTargetRegionTransportStep(float SolverMilliseconds, int32 RebuildReason);
+  void RecordTargetRegionGuidanceStep();
+  void RecordTargetRegionValidationStep();
+  uint32 GetTargetRegionTopologyRoundHash() const { return TargetRegionTopologyRoundHash; }
+  uint32 GetTargetRegionDemandRoundHash() const { return TargetRegionDemandRoundHash; }
+  uint32 GetTargetRegionTransportRoundHash() const { return TargetRegionTransportRoundHash; }
+  uint32 GetTargetRegionGuidanceRoundHash() const { return TargetRegionGuidanceRoundHash; }
+  int32 GetTargetRegionPlanRebuildCount() const { return TargetRegionPlanRebuildCount; }
+  int32 GetTargetRegionLifetimeRebuildCount() const { return TargetRegionLifetimeRebuildCount; }
+  int32 GetTargetRegionTargetRebuildCount() const { return TargetRegionTargetRebuildCount; }
+  int32 GetTargetRegionEnvironmentRebuildCount() const { return TargetRegionEnvironmentRebuildCount; }
+  int32 GetTargetRegionMembershipRebuildCount() const { return TargetRegionMembershipRebuildCount; }
+  int32 GetTargetRegionDemandSatisfiedRebuildCount() const { return TargetRegionDemandSatisfiedRebuildCount; }
+  int32 GetTargetRegionPathInvalidRebuildCount() const { return TargetRegionPathInvalidRebuildCount; }
+  float GetTargetRegionSolverMsP95() const;
+  bool IsTargetRegionRoundValid() const { return bTargetRegionRoundValid; }
+  int32 GetTargetRegionInvalidStepCount() const { return TargetRegionInvalidStepCount; }
+  int32 GetTargetRegionValidationFailureCount() const { return TargetRegionValidationFailureCount; }
+  uint32 GetTargetRegionValidationRoundHash() const { return TargetRegionValidationRoundHash; }
+  int32 GetTargetRegionGuidanceUnroutedStepCount() const { return TargetRegionGuidanceUnroutedStepCount; }
+  int32 GetTargetRegionGuidanceUnroutedAgentSampleCount() const { return TargetRegionGuidanceUnroutedAgentSampleCount; }
+  int32 GetTargetRegionGuidanceUnroutedAgentMax() const { return TargetRegionGuidanceUnroutedAgentMax; }
+  int32 GetTargetRegionGuidanceFirstFailureStep() const { return TargetRegionGuidanceFirstFailureStep; }
+  int32 GetTargetRegionGuidanceFirstFailureAgentId() const { return TargetRegionGuidanceFirstFailureAgentId; }
+  void PinTargetRegionFailureFixture(int32 Kind, int32 AgentId, int32 CellKey, uint32 FixtureHash);
+  bool HasTargetRegionFailureFixture() const { return bTargetRegionFailureFixtureValid; }
+  int32 GetTargetRegionFailureFixtureStep() const { return TargetRegionFailureFixtureStep; }
+  int32 GetTargetRegionFailureFixtureKind() const { return TargetRegionFailureFixtureKind; }
+  int32 GetTargetRegionFailureFixtureAgentId() const { return TargetRegionFailureFixtureAgentId; }
+  int32 GetTargetRegionFailureFixtureCellKey() const { return TargetRegionFailureFixtureCellKey; }
+  uint32 GetTargetRegionFailureFixtureHash() const { return TargetRegionFailureFixtureHash; }
   void RecordNavigationDomainReprojectDelta(float DeltaCm);
   bool EnsureSharedFlowField(const FCrowdDemoSharedFlowFieldConfig& Config);
   const FCrowdDemoSharedFlowField& GetSharedFlowField() const { return SharedFlowField; }
@@ -531,6 +701,11 @@ public:
     const FCrowdDemoElasticShadowFailureFixture& Fixture);
   void RecordTrafficStep(const FCrowdDemoTrafficStepSummary& TrafficSummary, const FCrowdDemoOrcaSummary& OrcaSummary, float OrcaSolverMs);
   void RecordSf3OverlapSample(int32 OverlapPairs, int32 SevereOverlapPairs, int32 ResidualPbdPairs, int32 ObstaclePenetrations);
+  void RecordFlowConnectivityStep(
+    int32 RecoveredCount,
+    int32 DesiredSegmentViolationCount,
+    int32 SourceAttachmentSuccessCount,
+    int32 UnreachableSampleCount);
   FCrowdDemoTrafficMetrics BuildTrafficMetrics(TConstArrayView<FCrowdDemoRoundAgentState> States) const;
   bool IsSf3DeterminismDiagnosticEnabled() const;
   bool IsSf3GoalCongestionDiagnosticEnabled() const;
@@ -669,6 +844,57 @@ private:
   TArray<FCrowdDemoOrcaAgent> PreparedOrcaAgents;
   TArray<FCrowdDemoOrcaResult> PreparedOrcaResults;
   FCrowdDemoPursuitTargetFact PursuitTargetFact;
+  FCrowdDemoTargetFact TargetApproachFact;
+  FCrowdDemoTargetSlotLayout PreparedTargetSlotLayout;
+  FCrowdDemoTargetSlotLayoutSummary TargetSlotLayoutSummary;
+  TArray<FCrowdDemoTargetApproachResult> PreparedTargetApproachDecisions;
+  TArray<FCrowdDemoTargetApproachResult> PreparedTargetApproachGuidance;
+  FCrowdDemoTargetApproachSummary TargetApproachSummary;
+  uint32 TargetApproachCommitHash = 2166136261u;
+  TArray<FCrowdDemoTargetInfluenceResult> PreparedTargetInfluenceResults;
+  FCrowdDemoTargetInfluenceSummary TargetInfluenceSummary;
+  uint32 TargetInfluenceRoundHash = 2166136261u;
+  FCrowdDemoTargetInfluenceExecutionRuntime TargetInfluenceExecutionRuntime;
+  FCrowdDemoTargetInfluenceExecutionSummary TargetInfluenceExecutionSummary;
+  FCrowdDemoTargetInfluenceExecutionRuntime LastCompletedTargetInfluenceExecutionRuntime;
+  FCrowdDemoTargetInfluenceExecutionSummary LastCompletedTargetInfluenceExecutionSummary;
+  bool bTargetInfluenceExecutionDiagnosticPlanEnabled = false;
+  FCrowdDemoTargetPolarTopology PreparedTargetRegionTopology;
+  FCrowdDemoTargetPolarTopologySummary TargetRegionTopologySummary;
+  TArray<FCrowdDemoTargetRegionTransportAgent> PreparedTargetRegionAgents;
+  FCrowdDemoTargetRegionDemandResult PreparedTargetRegionDemand;
+  FCrowdDemoTargetRegionFlowPlan PreparedTargetRegionPlan;
+  FCrowdDemoTargetRegionPlanValidationResult TargetRegionPlanValidation;
+  TArray<FCrowdDemoTargetRegionGuidanceResult> PreparedTargetRegionGuidance;
+  FCrowdDemoTargetRegionGuidanceSummary TargetRegionGuidanceSummary;
+  uint32 TargetRegionTopologyRoundHash = 2166136261u;
+  uint32 TargetRegionDemandRoundHash = 2166136261u;
+  uint32 TargetRegionTransportRoundHash = 2166136261u;
+  uint32 TargetRegionGuidanceRoundHash = 2166136261u;
+  int32 TargetRegionPlanRebuildCount = 0;
+  int32 TargetRegionLifetimeRebuildCount = 0;
+  int32 TargetRegionTargetRebuildCount = 0;
+  int32 TargetRegionEnvironmentRebuildCount = 0;
+  int32 TargetRegionMembershipRebuildCount = 0;
+  int32 TargetRegionDemandSatisfiedRebuildCount = 0;
+  int32 TargetRegionPathInvalidRebuildCount = 0;
+  TArray<float> TargetRegionSolverMillisecondsSamples;
+  bool bTargetRegionRoundValid = true;
+  int32 TargetRegionInvalidStepCount = 0;
+  int32 TargetRegionLastInvalidStep = INDEX_NONE;
+  int32 TargetRegionValidationFailureCount = 0;
+  uint32 TargetRegionValidationRoundHash = 2166136261u;
+  int32 TargetRegionGuidanceUnroutedStepCount = 0;
+  int32 TargetRegionGuidanceUnroutedAgentSampleCount = 0;
+  int32 TargetRegionGuidanceUnroutedAgentMax = 0;
+  int32 TargetRegionGuidanceFirstFailureStep = INDEX_NONE;
+  int32 TargetRegionGuidanceFirstFailureAgentId = INDEX_NONE;
+  bool bTargetRegionFailureFixtureValid = false;
+  int32 TargetRegionFailureFixtureStep = INDEX_NONE;
+  int32 TargetRegionFailureFixtureKind = 0;
+  int32 TargetRegionFailureFixtureAgentId = INDEX_NONE;
+  int32 TargetRegionFailureFixtureCellKey = INDEX_NONE;
+  uint32 TargetRegionFailureFixtureHash = 0;
   FCrowdDemoPursuitPositioningSettings PursuitPositioningSettings;
   TArray<FCrowdDemoPositionCandidate> PreparedPositionCandidates;
   TArray<FCrowdDemoPositionAssignment> PreparedPositionAssignments;
@@ -787,6 +1013,8 @@ private:
   float ParticlePreviousSoftErrorP95 = -1.0f;
   bool bParticleConstraintRunFailure = false;
   FCrowdDemoParticleFailureFixture ParticleFailureFixture;
+  FCrowdDemoSoftPressureRouteDiagnosticRuntime SoftPressureRouteDiagnosticRuntime;
+  FCrowdDemoSoftPressureRouteDiagnosticSummary SoftPressureRouteDiagnosticSummary;
   TArray<float> CorrectionIntervalPositionP95Samples;
   TArray<float> CorrectionIntervalPositionMaxSamples;
   FCrowdDemoRoundErrorSeries CrossRoundPositionErrorSeries;
