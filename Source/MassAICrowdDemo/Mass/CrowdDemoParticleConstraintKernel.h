@@ -10,6 +10,9 @@ struct FCrowdDemoParticleConstraintAgent
   FVector PredictedPosition = FVector::ZeroVector;
   float PhysicalRadiusCm = 42.0f;
   float HardSafetyGapCm = 10.0f;
+  // Optional shared navigation-domain clearance for obstacle/bounds contacts.
+  // Zero preserves the physical radius + hard gap contract.
+  float EnvironmentHardClearanceCm = 0.0f;
   float SoftMarginCm = 17.0f;
   float Mobility = 1.0f;
 };
@@ -187,6 +190,7 @@ struct FCrowdDemoParticleAppliedRoundSimState
   float YawDegrees = 0.0f;
   float RadiusCm = 42.0f;
   bool bInitialized = false;
+  FCrowdDemoCombatNetState Combat;
 };
 
 enum class ECrowdDemoParticleSafetyStage : uint8
@@ -208,6 +212,16 @@ struct FCrowdDemoParticleSafetyStageTrace
   float MinimumSweptMarginCm = TNumericLimits<float>::Max();
   float MaximumEnvironmentDeficitCm = 0.0f;
   uint32 PositionHash = 2166136261u;
+};
+
+struct FCrowdDemoParticleSoftPairInfluence
+{
+  int32 MinAgentId = INDEX_NONE;
+  int32 MaxAgentId = INDEX_NONE;
+  FVector RequestedCorrectionA = FVector::ZeroVector;
+  FVector RequestedCorrectionB = FVector::ZeroVector;
+  FVector RealizedCorrectionA = FVector::ZeroVector;
+  FVector RealizedCorrectionB = FVector::ZeroVector;
 };
 
 struct FCrowdDemoParticleConstraintTrace
@@ -236,6 +250,7 @@ struct FCrowdDemoParticleConstraintTrace
   TArray<FVector> EnvironmentSoftRealizedCorrections;
   TArray<FVector> UnifiedHardCorrections;
   TArray<TArray<int32>> ActiveNeighborAgentIds;
+  TArray<FCrowdDemoParticleSoftPairInfluence> SoftPairInfluences;
 };
 
 struct FCrowdDemoParticleFailureFixtureAgent

@@ -211,12 +211,26 @@ TargetFactApply
 
 [COMPUTED][HIGH] 当前Source已实现Distance Band + Target Region Transport纯kernel、四阶段production processors、RoundRules、rollback、RoundResult指标和五类双端hash；旧Polar Density guidance processor已删除。
 
-[COMPUTED][HIGH] 自动化为Target Influence/Density `3/3`、Particle `23/23`、完整SF `42/42`。8412 Static的Hard/Swept/Obstacle/Bounds、invalid/fallback、双端hash和rollback均通过。
+[COMPUTED][HIGH] 当前最终自动化证据为Target Region Transport `5/5`、Particle `23/23`、完整SF `43/43`。
 
-[COMPUTED][HIGH] 8412终态只有16/20进入有效带，4个仍在Maximum外；Angular Sector覆盖3/16、最大单Sector人口11、largest empty run13。当前一阶相邻sector、无记忆局部规则没有形成验收要求的自然包围。
+[COMPUTED][HIGH] 8412终态只有16/20进入有效带、Angular Sector覆盖3/16；该结果保留为旧Polar Density历史失败证据，不再描述当前生产能力。
 
-[COMPUTED][HIGH] 8417 Static与8418 Moving Small已通过；旧Slot残余尚未全部物理删除，DebugGame、录像和100/500未运行。
+[COMPUTED][HIGH] 当前Source已实现Polar Region Topology、Demand、Aggregate Transport、PlanEpoch、Guidance、Validation、rollback和五类双端hash；旧Polar Density guidance processor已删除。
 
-[COMPUTED][HIGH] 当前Source已有Target Influence执行衰减与Polar环境可行性诊断代码，但尚无8412之后的完整运行证据。Polar Region Topology、Demand、Aggregate Transport和PlanEpoch仍全部未实现。
+[COMPUTED][HIGH] 8417 Static与8418 Moving Small已通过；DebugGame、录像、100/500和异构Capability cohort尚未运行或实现。
+
+[INFERRED][HIGH] 后续异构虫群必须按量化CapabilityProfileKey共享cohort级区域场；尺寸/质量由Particle属性决定，攻击距离只决定terminal band，不能把Melee/Ranged身份转换成Particle碰撞优先级。
+
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
+
+## 2026-07-15 异构距离带状态
+
+[COMPUTED][HIGH] Melee/MidRange/Ranged 现已作为 Capability profile 的 Target Region terminal band 输入；它们不改变 Particle priority、Mobility 或碰撞责任。
+
+[INFERRED][HIGH] 真实远程攻击必须在Distance Band之外由独立AttackPhase和Projectile链实现；Distance Band只回答“实体是否处于允许攻击的宏观距离”，不回答目标有效性、windup、发射、命中、击退、击飞或命中改色。业务与VAT合同见`RangedCombatVatAndHitResponseDesign.md`。
+
+[COMPUTED][HIGH] 当前Distance Band运行证据不包含攻击事件或真实VAT表现，不能据此标记Ranged combat通过。
+
+[COMPUTED][HIGH] T6S/T6M 尚未运行，因此内/中/外距离层的真实覆盖、Moving Target 跟随与停止后重入均保持未验收状态。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

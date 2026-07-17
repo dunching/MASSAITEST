@@ -5,6 +5,13 @@
 #include "Mass/CrowdDemoHardSeparationPbdKernel.h"
 #include "Mass/CrowdDemoSeparationKernel.h"
 #include "Mass/CrowdDemoParticleConstraintKernel.h"
+#include "Mass/CrowdDemoLocalPredictiveInteractionKernel.h"
+#include "Mass/CrowdDemoOpenSpawnRelaxationKernel.h"
+#include "Mass/CrowdDemoOpenCohortMovementKernel.h"
+#include "Mass/CrowdDemoBidirectionalSwapKernel.h"
+#include "Mass/CrowdDemoValidCorridorTransitKernel.h"
+#include "Mass/CrowdDemoProjectileKernel.h"
+#include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoSoftPressureRouteDiagnosticKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
 #include "Mass/CrowdDemoTrafficSchedulingKernel.h"
@@ -17,6 +24,7 @@
 #include "Mass/CrowdDemoTargetInfluenceKernel.h"
 #include "Mass/CrowdDemoTargetInfluenceExecutionDiagnosticKernel.h"
 #include "Mass/CrowdDemoTargetRegionTransportKernel.h"
+#include "Mass/CrowdDemoTargetStabilityDiagnosticKernel.h"
 #include "Mass/CrowdDemoTargetSlotLayoutKernel.h"
 #include "Mass/CrowdDemoSf3DeterminismHash.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -112,12 +120,52 @@ struct FCrowdDemoSoftPressureRollbackAgentState
   bool bInitialized = false;
   FCrowdDemoRoundFlowSampleFragment FlowSample;
   FCrowdDemoTargetApproachFragment TargetApproach;
+  FCrowdDemoOpenSpawnRelaxationFragment OpenSpawnRelaxation;
+  FCrowdDemoCombatNetState Combat;
+};
+
+struct FCrowdDemoSoftPressureRollbackCombatState
+{
+  int32 AgentId = INDEX_NONE;
+  FCrowdDemoCombatNetState Combat;
+};
+
+struct FCrowdDemoTargetRegionCapabilityCohortRuntime
+{
+  FCrowdDemoCapabilityCohort Cohort;
+  int32 DemandRegionPhaseOffset = 0;
+  FCrowdDemoTargetPolarTopology Topology;
+  FCrowdDemoTargetPolarTopologySummary TopologySummary;
+  TArray<FCrowdDemoTargetRegionTransportAgent> Agents;
+  FCrowdDemoTargetRegionDemandResult Demand;
+  FCrowdDemoTargetRegionFlowPlan Plan;
+  FCrowdDemoTargetRegionPlanValidationResult Validation;
+  TArray<FCrowdDemoTargetRegionGuidanceResult> Guidance;
+  FCrowdDemoTargetRegionGuidanceSummary GuidanceSummary;
+  uint32 TopologyRoundHash = 2166136261u;
+  uint32 DemandRoundHash = 2166136261u;
+  uint32 TransportRoundHash = 2166136261u;
+  uint32 GuidanceRoundHash = 2166136261u;
+  uint32 ValidationRoundHash = 2166136261u;
+  int32 PlanRebuildCount = 0;
+  int32 InvalidStepCount = 0;
+  int32 ValidationFailureCount = 0;
+  int32 GuidanceUnroutedStepCount = 0;
+  int32 LastInvalidStep = INDEX_NONE;
+  TArray<float> SolverMillisecondsSamples;
+  bool bRoundValid = true;
 };
 
 struct FCrowdDemoSoftPressureRollbackSnapshot
 {
   int32 FixedStepIndex = INDEX_NONE;
   TArray<FCrowdDemoSoftPressureRollbackAgentState> Agents;
+  TArray<FCrowdDemoLocalPredictiveResult> LocalPredictiveResults;
+  TArray<FCrowdDemoLocalPredictiveGrantState> LocalPredictiveGrantStates;
+  FCrowdDemoLocalPredictiveSummary LocalPredictiveSummary;
+  uint32 LocalPredictiveRoundHash = 2166136261u;
+  int32 LocalPredictiveSampleCount = 0;
+  int32 LocalPredictiveInvalidStepCount = 0;
   FCrowdDemoParticleConstraintSummary ParticleCandidateSummary;
   FCrowdDemoParticleConstraintSummary ParticleAppliedSummary;
   int32 ParticleSolverMsSampleCount = 0;
@@ -126,14 +174,28 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   int32 ParticleInvalidStepCount = 0;
   int32 ParticleGlobalFallbackStepCount = 0;
   int32 ParticleStepCount = 0;
+  int32 CrossProfileHardViolationCount = 0;
+  int32 CrossProfileSweptViolationCount = 0;
   int32 ParticleSettlingWindowCount = 0;
   int32 ParticleSettlingSteps = INDEX_NONE;
   float ParticlePreviousSoftErrorP95 = -1.0f;
   bool bParticleConstraintRunFailure = false;
   FCrowdDemoParticleFailureFixture ParticleFailureFixture;
+  FCrowdDemoOpenSpawnRelaxationLayout OpenSpawnRelaxationLayout;
+  FCrowdDemoOpenSpawnRelaxationRuntime OpenSpawnRelaxationRuntime;
+  FCrowdDemoOpenCohortMovementLayout OpenCohortMovementLayout;
+  FCrowdDemoOpenCohortMovementProgress OpenCohortMovementProgress;
+  FCrowdDemoBidirectionalSwapLayout BidirectionalSwapLayout;
+  FCrowdDemoBidirectionalSwapProgress BidirectionalSwapProgress;
+  FCrowdDemoValidCorridorTransitLayout ValidCorridorTransitLayout;
+  FCrowdDemoValidCorridorTransitProgress ValidCorridorTransitProgress;
   FCrowdDemoSoftPressureRouteDiagnosticCheckpoint RouteDiagnosticCheckpoint;
   FCrowdDemoTargetInfluenceExecutionCheckpoint TargetInfluenceExecutionCheckpoint;
+  FCrowdDemoTargetStabilityCheckpoint TargetStabilityCheckpoint;
   FCrowdDemoTargetFact TargetFact;
+  int32 DynamicFlowAnchorCellKey = INDEX_NONE;
+  int32 DynamicFlowIntegrationRebuildCount = 0;
+  uint32 DynamicFlowRoundHash = 2166136261u;
   FCrowdDemoTargetSlotLayout TargetSlotLayout;
   FCrowdDemoTargetSlotLayoutSummary TargetSlotLayoutSummary;
   TArray<FCrowdDemoTargetApproachResult> TargetApproachDecisions;
@@ -179,6 +241,9 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   int32 TargetRegionFailureFixtureAgentId = INDEX_NONE;
   int32 TargetRegionFailureFixtureCellKey = INDEX_NONE;
   uint32 TargetRegionFailureFixtureHash = 0;
+  TArray<FCrowdDemoTargetRegionCapabilityCohortRuntime> TargetRegionCapabilityCohorts;
+  FCrowdDemoCapabilityProfileSummary CapabilityProfileSummary;
+  int32 CapabilityCohortRebuildCount = 0;
   TSet<int32> FlowGoalReachedAgentIds;
   TSet<int32> FlowWallPassAgentIds;
   TSet<int32> FlowCorridorExitAgentIds;
@@ -186,6 +251,8 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   TMap<int32, float> FlowLowSpeedSecondsByAgentId;
   TSet<int32> FlowCorridorDeadlockAgentIds;
   FCrowdDemoRoundCompareMetrics CompareMetrics;
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  FCrowdDemoProjectileMetrics ProjectileMetrics;
 };
 
 struct FCrowdDemoPreparedSteeringGuidance
@@ -427,6 +494,29 @@ public:
   int32 GetCurrentPlanRevision() const { return ActivePlan.Revision; }
   const FCrowdDemoRoundPlanPacket& GetActivePlan() const { return ActivePlan; }
   const FCrowdDemoRoundRules& GetRules() const { return ActivePlan.Rules; }
+  bool IsRangedProjectileCombat() const
+  {
+    return IsActive()
+      && ActivePlan.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
+      && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
+  }
+
+  TArray<FCrowdDemoProjectileState>& GetPreparedProjectiles()
+  { return PreparedProjectiles; }
+  const TArray<FCrowdDemoProjectileState>& GetPreparedProjectiles() const
+  { return PreparedProjectiles; }
+  void SetPendingProjectileHitFacts(TArray<FCrowdDemoHitFact>&& HitFacts)
+  { PendingProjectileHitFacts = MoveTemp(HitFacts); }
+  TArray<FCrowdDemoHitFact> ConsumePendingProjectileHitFacts()
+  { return MoveTemp(PendingProjectileHitFacts); }
+  void RecordProjectileStep(
+    const FCrowdDemoProjectileStepSummary& Summary,
+    TConstArrayView<FCrowdDemoProjectileVisualEvent> Events);
+  void RecordProjectileHitResponse(const FCrowdDemoHitResponseSummary& Summary);
+  FCrowdDemoProjectileMetrics BuildProjectileMetrics() const;
+  bool DequeueProjectileVisualEvents(TArray<FCrowdDemoProjectileVisualEvent>& OutEvents);
 
   TArray<FCrowdDemoSeparationKernelAgent>& GetPreparedSeparationAgents() { return PreparedSeparationAgents; }
   TArray<FCrowdDemoSeparationKernelResult>& GetPreparedSeparationResults() { return PreparedSeparationResults; }
@@ -444,6 +534,41 @@ public:
     uint32 AppliedStateHash,
     bool bGlobalFallback,
     float SolverMilliseconds);
+  const TArray<FCrowdDemoLocalPredictiveResult>& GetPreparedLocalPredictiveResults() const
+  { return PreparedLocalPredictiveResults; }
+  const TArray<FCrowdDemoLocalPredictiveGrantState>& GetLocalPredictiveGrantStates() const
+  { return LocalPredictiveGrantStates; }
+  const FCrowdDemoLocalPredictiveSummary& GetLastLocalPredictiveSummary() const
+  { return LastLocalPredictiveSummary; }
+  uint32 GetLocalPredictiveRoundHash() const { return LocalPredictiveRoundHash; }
+  int32 GetLocalPredictiveSampleCount() const { return LocalPredictiveSampleCount; }
+  int32 GetLocalPredictiveInvalidStepCount() const
+  { return LocalPredictiveInvalidStepCount; }
+  void RecordLocalPredictiveStep(
+    TArray<FCrowdDemoLocalPredictiveResult>&& Results,
+    TArray<FCrowdDemoLocalPredictiveGrantState>&& GrantStates,
+    const FCrowdDemoLocalPredictiveSummary& Summary);
+  void RecordLocalPredictiveDiagnosticFrame(
+    FCrowdDemoLocalPredictiveDiagnosticFrame&& Frame);
+  const FCrowdDemoLocalPredictiveDiagnosticFrame& GetLocalPredictiveDiagnosticFrame() const
+  { return LocalPredictiveDiagnosticFrame; }
+  void SetLocalPredictiveComponentFixture(
+    FCrowdDemoLocalPredictiveComponentFixture&& Fixture)
+  { LocalPredictiveComponentFixture = MoveTemp(Fixture); }
+  const FCrowdDemoLocalPredictiveComponentFixture& GetLocalPredictiveComponentFixture() const
+  { return LocalPredictiveComponentFixture; }
+  bool BuildCurrentLocalPredictiveComponentFixture(
+    TConstArrayView<int32> WitnessAgentIds,
+    FCrowdDemoLocalPredictiveComponentFixture& OutFixture) const;
+  void RecordCrossProfileParticleViolations(int32 HardCount, int32 SweptCount)
+  {
+    CrossProfileHardViolationCount += FMath::Max(0, HardCount);
+    CrossProfileSweptViolationCount += FMath::Max(0, SweptCount);
+  }
+  int32 GetCrossProfileHardViolationCount() const
+  { return CrossProfileHardViolationCount; }
+  int32 GetCrossProfileSweptViolationCount() const
+  { return CrossProfileSweptViolationCount; }
   void RecordParticleFailureFixture(const FCrowdDemoParticleFailureFixture& Fixture);
   void RecordParticleAppliedStateHash(uint32 AppliedStateHash)
   { ParticleAppliedStateHash = AppliedStateHash; }
@@ -528,6 +653,11 @@ public:
   { return LastCompletedTargetInfluenceExecutionRuntime; }
   const FCrowdDemoTargetInfluenceExecutionSummary& GetLastCompletedTargetInfluenceExecutionSummary() const
   { return LastCompletedTargetInfluenceExecutionSummary; }
+  bool IsTargetStabilityDiagnosticEnabled() const;
+  void RecordTargetStabilityStep(const FCrowdDemoTargetStabilityStepSample& Step);
+  void FinalizeTargetStabilityDiagnostic();
+  const FCrowdDemoTargetStabilitySummary& GetTargetStabilitySummary() const
+  { return TargetStabilitySummary; }
   FCrowdDemoTargetPolarTopology& GetPreparedTargetRegionTopology()
   { return PreparedTargetRegionTopology; }
   const FCrowdDemoTargetPolarTopology& GetPreparedTargetRegionTopology() const
@@ -585,9 +715,26 @@ public:
   int32 GetTargetRegionFailureFixtureAgentId() const { return TargetRegionFailureFixtureAgentId; }
   int32 GetTargetRegionFailureFixtureCellKey() const { return TargetRegionFailureFixtureCellKey; }
   uint32 GetTargetRegionFailureFixtureHash() const { return TargetRegionFailureFixtureHash; }
+  void SetCapabilityCohorts(
+    TArray<FCrowdDemoCapabilityCohort>&& Cohorts,
+    const FCrowdDemoCapabilityProfileSummary& Summary);
+  TArray<FCrowdDemoTargetRegionCapabilityCohortRuntime>& GetCapabilityCohorts()
+  { return TargetRegionCapabilityCohorts; }
+  const TArray<FCrowdDemoTargetRegionCapabilityCohortRuntime>& GetCapabilityCohorts() const
+  { return TargetRegionCapabilityCohorts; }
+  const FCrowdDemoCapabilityProfileSummary& GetCapabilityProfileSummary() const
+  { return CapabilityProfileSummary; }
+  int32 GetCapabilityCohortRebuildCount() const { return CapabilityCohortRebuildCount; }
   void RecordNavigationDomainReprojectDelta(float DeltaCm);
   bool EnsureSharedFlowField(const FCrowdDemoSharedFlowFieldConfig& Config);
+  bool EnsureDynamicSharedFlowField(
+    const FCrowdDemoSharedFlowFieldConfig& Config,
+    const FVector& TargetLocation);
   const FCrowdDemoSharedFlowField& GetSharedFlowField() const { return SharedFlowField; }
+  int32 GetDynamicFlowAnchorCellKey() const { return DynamicFlowAnchorCellKey; }
+  int32 GetDynamicFlowIntegrationRebuildCount() const
+  { return DynamicFlowIntegrationRebuildCount; }
+  uint32 GetDynamicFlowRoundHash() const { return DynamicFlowRoundHash; }
   bool EnsureTrafficFlowFields();
   const FCrowdDemoSharedFlowField* FindTrafficFlowField(int32 CohortId) const;
   TArray<FCrowdDemoTrafficAgent>& GetPreparedTrafficAgents() { return PreparedTrafficAgents; }
@@ -753,14 +900,121 @@ public:
   void RestoreSf3PortalRuntime(const FCrowdDemoSf3RollbackSnapshot& Snapshot);
   void RecordSoftPressureRollbackSnapshot(
     int32 FixedStepIndex, TArray<FCrowdDemoSoftPressureRollbackAgentState>&& Agents);
+  bool CompleteSoftPressureRollbackCombatState(
+    int32 FixedStepIndex,
+    TConstArrayView<FCrowdDemoSoftPressureRollbackCombatState> CombatStates);
   const FCrowdDemoSoftPressureRollbackSnapshot* FindSoftPressureRollbackSnapshot(
     int32 FixedStepIndex) const;
   void RestoreSoftPressureRuntime(const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot);
   void RecordSoftPressureRollbackOutcome(bool bHit, bool bAgentMismatch, int32 ReplayedSteps);
+  bool IsOpenSpawnRelaxation() const
+  {
+    return IsActive()
+      && ActivePlan.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && ActivePlan.Rules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::OpenSpawnRelaxation;
+  }
+  bool IsOpenCohortMovement() const
+  {
+    return IsActive()
+      && ActivePlan.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && ActivePlan.Rules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::OpenCohortMovement;
+  }
+  void InitializeOpenCohortMovement(
+    const FCrowdDemoOpenCohortMovementLayout& Layout)
+  { OpenCohortMovementLayout = Layout; }
+  const FCrowdDemoOpenCohortMovementLayout& GetOpenCohortMovementLayout() const
+  { return OpenCohortMovementLayout; }
+  void RecordOpenCohortMovementGuidance(
+    TConstArrayView<FCrowdDemoTargetRegionGuidanceResult> Guidance)
+  {
+    if (!IsOpenCohortMovement()) return;
+    FCrowdDemoOpenCohortMovementKernel::UpdateProgress(
+      Guidance, OpenCohortMovementLayout.Agents.Num(), GetCurrentFixedStepIndex(),
+      OpenCohortMovementProgress);
+  }
+  const FCrowdDemoOpenCohortMovementProgress& GetOpenCohortMovementProgress() const
+  { return OpenCohortMovementProgress; }
+  bool IsBidirectionalSwap() const
+  {
+    return IsActive()
+      && ActivePlan.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::BidirectionalSwap;
+  }
+  void InitializeBidirectionalSwap(const FCrowdDemoBidirectionalSwapLayout& Layout)
+  {
+    BidirectionalSwapLayout = Layout;
+    BidirectionalSwapProgress = {};
+  }
+  bool EnsureBidirectionalSwapFlowFields();
+  const FCrowdDemoSharedFlowField* FindBidirectionalSwapFlowField(
+    int32 FormationIndex) const;
+  void RecordBidirectionalSwapStep(
+    TConstArrayView<FCrowdDemoBidirectionalSwapStepAgent> Agents)
+  {
+    if (!IsBidirectionalSwap()) return;
+    FCrowdDemoBidirectionalSwapKernel::UpdateProgress(
+      Agents, GetCurrentFixedStepIndex(), BidirectionalSwapProgress);
+  }
+  const FCrowdDemoBidirectionalSwapLayout& GetBidirectionalSwapLayout() const
+  { return BidirectionalSwapLayout; }
+  const FCrowdDemoBidirectionalSwapProgress& GetBidirectionalSwapProgress() const
+  { return BidirectionalSwapProgress; }
+  bool IsValidCorridorTransit() const
+  {
+    return IsActive()
+      && ActivePlan.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::ValidCorridorTransit;
+  }
+  bool IsHeterogeneousTransit() const
+  {
+    return IsActive()
+      && ActivePlan.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::HeterogeneousTransit;
+  }
+  bool IsCorridorTransitProgressScenario() const
+  { return IsValidCorridorTransit() || IsHeterogeneousTransit(); }
+  void InitializeValidCorridorTransit(
+    const FCrowdDemoValidCorridorTransitLayout& Layout)
+  {
+    ValidCorridorTransitLayout = Layout;
+    ValidCorridorTransitProgress = {};
+  }
+  void RecordValidCorridorTransitStep(
+    TConstArrayView<FCrowdDemoValidCorridorTransitStepAgent> Agents)
+  {
+    if (!IsCorridorTransitProgressScenario()) return;
+    FCrowdDemoValidCorridorTransitKernel::UpdateProgress(
+      Agents, GetCurrentFixedStepIndex(), ValidCorridorTransitProgress);
+  }
+  const FCrowdDemoValidCorridorTransitLayout& GetValidCorridorTransitLayout() const
+  { return ValidCorridorTransitLayout; }
+  const FCrowdDemoValidCorridorTransitProgress& GetValidCorridorTransitProgress() const
+  { return ValidCorridorTransitProgress; }
+  void InitializeOpenSpawnRelaxation(const FCrowdDemoOpenSpawnRelaxationLayout& Layout);
+  void PrepareOpenSpawnRelaxationBoundary();
+  void RecordOpenSpawnRelaxationParticleStep(
+    TConstArrayView<FCrowdDemoParticleSoftPairInfluence> Influences,
+    float MaxActualCorrectionCm,
+    float SoftErrorCmP95);
+  const FCrowdDemoOpenSpawnRelaxationLayout& GetOpenSpawnRelaxationLayout() const
+  { return OpenSpawnRelaxationLayout; }
+  FCrowdDemoOpenSpawnRelaxationRuntime& GetOpenSpawnRelaxationRuntime()
+  { return OpenSpawnRelaxationRuntime; }
+  const FCrowdDemoOpenSpawnRelaxationRuntime& GetOpenSpawnRelaxationRuntime() const
+  { return OpenSpawnRelaxationRuntime; }
   bool RecordSf3CompletedRoundHash(uint32 AgentStateHash);
   void RecordFlowAgentSamples(TConstArrayView<FCrowdDemoRoundFlowAgentSample> Samples, bool bClient);
 
   void RecordRoundStart(TConstArrayView<FCrowdDemoRoundAgentState> States);
+  void RecordRoundInitialState(uint32 InputHash, uint32 InitialStateHash);
+  uint32 GetRoundInputHash() const { return RoundInputHash; }
+  uint32 GetRoundInitialStateHash() const { return RoundInitialStateHash; }
+  int32 GetRoundResetCount() const { return RoundResetCount; }
+  int32 GetRoundTransitionOrderViolationCount() const
+  { return RoundTransitionOrderViolationCount; }
   void RecordCorrectionComparisonAndApplied(
     TConstArrayView<FCrowdDemoRoundAgentState> ClientStates,
     const FCrowdDemoCorrectionFrame& Frame,
@@ -825,6 +1079,10 @@ private:
   FCrowdDemoJointPositioningResult LastCompletedJointPositioningResult;
   FCrowdDemoJointCommitResidualResult LastCompletedJointCommitResidualResult;
   FCrowdDemoCorrectionFrameMetrics LastCorrectionMetrics;
+  TArray<FCrowdDemoProjectileState> PreparedProjectiles;
+  TArray<FCrowdDemoHitFact> PendingProjectileHitFacts;
+  TArray<FCrowdDemoProjectileVisualEvent> OutgoingProjectileVisualEvents;
+  FCrowdDemoProjectileMetrics ProjectileMetrics;
   TArray<FCrowdDemoSeparationKernelAgent> PreparedSeparationAgents;
   TArray<FCrowdDemoSeparationKernelResult> PreparedSeparationResults;
   TMap<int32, int32> PreparedResultIndexByAgentId;
@@ -834,6 +1092,10 @@ private:
   TMap<int32, int32> PreparedPbdResultIndexByAgentId;
   TMap<int32, int32> FormationIndexByAgentId;
   FCrowdDemoSharedFlowField SharedFlowField;
+  int32 DynamicFlowAnchorCellKey = INDEX_NONE;
+  int32 DynamicFlowIntegrationRebuildCount = 0;
+  uint32 DynamicFlowRoundHash = 2166136261u;
+  bool bDynamicFlowIntegrationCacheInvalidated = false;
   TMap<int32, FCrowdDemoSharedFlowField> TrafficFlowFields;
   TArray<FCrowdDemoTrafficAgent> PreparedTrafficAgents;
   TArray<FCrowdDemoTrafficCell> PreparedTrafficCells;
@@ -859,6 +1121,9 @@ private:
   FCrowdDemoTargetInfluenceExecutionRuntime LastCompletedTargetInfluenceExecutionRuntime;
   FCrowdDemoTargetInfluenceExecutionSummary LastCompletedTargetInfluenceExecutionSummary;
   bool bTargetInfluenceExecutionDiagnosticPlanEnabled = false;
+  bool bTargetStabilityDiagnosticPlanEnabled = false;
+  FCrowdDemoTargetStabilityRuntime TargetStabilityRuntime;
+  FCrowdDemoTargetStabilitySummary TargetStabilitySummary;
   FCrowdDemoTargetPolarTopology PreparedTargetRegionTopology;
   FCrowdDemoTargetPolarTopologySummary TargetRegionTopologySummary;
   TArray<FCrowdDemoTargetRegionTransportAgent> PreparedTargetRegionAgents;
@@ -895,6 +1160,9 @@ private:
   int32 TargetRegionFailureFixtureAgentId = INDEX_NONE;
   int32 TargetRegionFailureFixtureCellKey = INDEX_NONE;
   uint32 TargetRegionFailureFixtureHash = 0;
+  TArray<FCrowdDemoTargetRegionCapabilityCohortRuntime> TargetRegionCapabilityCohorts;
+  FCrowdDemoCapabilityProfileSummary CapabilityProfileSummary;
+  int32 CapabilityCohortRebuildCount = 0;
   FCrowdDemoPursuitPositioningSettings PursuitPositioningSettings;
   TArray<FCrowdDemoPositionCandidate> PreparedPositionCandidates;
   TArray<FCrowdDemoPositionAssignment> PreparedPositionAssignments;
@@ -1002,12 +1270,31 @@ private:
   TArray<float> PbdSolverMillisecondsSamples;
   FCrowdDemoParticleConstraintSummary LastParticleCandidateSummary;
   FCrowdDemoParticleConstraintSummary LastParticleAppliedSummary;
+  TArray<FCrowdDemoLocalPredictiveResult> PreparedLocalPredictiveResults;
+  TArray<FCrowdDemoLocalPredictiveGrantState> LocalPredictiveGrantStates;
+  FCrowdDemoLocalPredictiveSummary LastLocalPredictiveSummary;
+  FCrowdDemoLocalPredictiveDiagnosticFrame LocalPredictiveDiagnosticFrame;
+  FCrowdDemoLocalPredictiveComponentFixture LocalPredictiveComponentFixture;
+  uint32 LocalPredictiveRoundHash = 2166136261u;
+  int32 LocalPredictiveSampleCount = 0;
+  int32 LocalPredictiveInvalidStepCount = 0;
   TArray<float> ParticleSolverMillisecondsSamples;
   uint32 ParticleCandidateStateHash = 2166136261u;
   uint32 ParticleAppliedStateHash = 2166136261u;
   int32 ParticleInvalidStepCount = 0;
   int32 ParticleGlobalFallbackStepCount = 0;
   int32 ParticleStepCount = 0;
+  FCrowdDemoOpenSpawnRelaxationLayout OpenSpawnRelaxationLayout;
+  FCrowdDemoOpenSpawnRelaxationRuntime OpenSpawnRelaxationRuntime;
+  FCrowdDemoOpenCohortMovementLayout OpenCohortMovementLayout;
+  FCrowdDemoOpenCohortMovementProgress OpenCohortMovementProgress;
+  FCrowdDemoBidirectionalSwapLayout BidirectionalSwapLayout;
+  FCrowdDemoBidirectionalSwapProgress BidirectionalSwapProgress;
+  TStaticArray<FCrowdDemoSharedFlowField, 2> BidirectionalSwapFlowFields;
+  FCrowdDemoValidCorridorTransitLayout ValidCorridorTransitLayout;
+  FCrowdDemoValidCorridorTransitProgress ValidCorridorTransitProgress;
+  int32 CrossProfileHardViolationCount = 0;
+  int32 CrossProfileSweptViolationCount = 0;
   int32 ParticleSettlingWindowCount = 0;
   int32 ParticleSettlingSteps = INDEX_NONE;
   float ParticlePreviousSoftErrorP95 = -1.0f;
@@ -1030,6 +1317,10 @@ private:
   int32 LastAppliedCorrectionRevision = 0;
   int32 RoundInitialOverlapPairCount = 0;
   int32 RoundInitialSevereOverlapPairCount = 0;
+  uint32 RoundInputHash = 0;
+  uint32 RoundInitialStateHash = 0;
+  int32 RoundResetCount = 0;
+  int32 RoundTransitionOrderViolationCount = 0;
   int32 LastSeparationGridCellCount = 0;
   int32 LastSeparationAppliedAgentCount = 0;
   int32 LastSeparationOverlapPairCount = 0;

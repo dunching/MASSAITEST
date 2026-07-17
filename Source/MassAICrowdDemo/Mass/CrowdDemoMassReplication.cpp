@@ -56,6 +56,11 @@ namespace
     TConstArrayView<FMassNetworkIDFragment> NetworkIDs,
     TConstArrayView<FReplicationTemplateIDFragment> TemplateIDs,
     TConstArrayView<FCrowdDemoMassIdentityFragment> Identities,
+    TConstArrayView<FCrowdDemoMassStatsFragment> Stats,
+    TConstArrayView<FCrowdDemoBusinessStateFragment> Businesses,
+    TConstArrayView<FCrowdDemoRangedAttackFragment> Attacks,
+    TConstArrayView<FCrowdDemoReactiveMotionFragment> Reactives,
+    TConstArrayView<FCrowdDemoHitFlashFragment> HitFlashes,
     TConstArrayView<FCrowdDemoMassMovementFragment> Movements,
     TConstArrayView<FCrowdDemoMassVisualFragment> Visuals,
     TConstArrayView<FTransformFragment> Transforms,
@@ -66,6 +71,11 @@ namespace
     OutAgent.NetworkIdValue = NetworkIDs[EntityIndex].NetID.GetValue();
 
     const FCrowdDemoMassIdentityFragment& Identity = Identities[EntityIndex];
+    const FCrowdDemoMassStatsFragment& StatsFragment = Stats[EntityIndex];
+    const FCrowdDemoBusinessStateFragment& Business = Businesses[EntityIndex];
+    const FCrowdDemoRangedAttackFragment& Attack = Attacks[EntityIndex];
+    const FCrowdDemoReactiveMotionFragment& Reactive = Reactives[EntityIndex];
+    const FCrowdDemoHitFlashFragment& HitFlash = HitFlashes[EntityIndex];
     const FCrowdDemoMassMovementFragment& Movement = Movements[EntityIndex];
     const FCrowdDemoMassVisualFragment& Visual = Visuals[EntityIndex];
     const FTransformFragment& Transform = Transforms[EntityIndex];
@@ -82,7 +92,82 @@ namespace
     OutAgent.VatClipIndex = Visual.VatClipIndex;
     OutAgent.VatPhaseByte = Visual.VatPhaseByte;
     OutAgent.VatPlayRateByte = Visual.VatPlayRateByte;
+    FCrowdDemoCombatNetState& Combat = OutAgent.Combat;
+    Combat.Health = StatsFragment.Health;
+    Combat.MaxHealth = StatsFragment.MaxHealth;
+    Combat.LifecycleState = StatsFragment.LifecycleState;
+    Combat.bAlive = StatsFragment.bAlive ? 1 : 0;
+    Combat.BusinessState = Business.State;
+    Combat.BusinessStateRevision = Business.StateRevision;
+    Combat.BusinessStateEnterFixedStep = Business.StateEnterFixedStep;
+    Combat.TargetAgentId = Business.TargetAgentId;
+    Combat.TargetLifecycleSerial = Business.TargetLifecycleSerial;
+    Combat.AttackPhase = Attack.Phase;
+    Combat.AttackPhaseEnterFixedStep = Attack.PhaseEnterFixedStep;
+    Combat.CooldownEndFixedStep = Attack.CooldownEndFixedStep;
+    Combat.LockedTargetAgentId = Attack.LockedTargetAgentId;
+    Combat.LockedTargetLifecycleSerial = Attack.LockedTargetLifecycleSerial;
+    Combat.LockedTargetLocation = Attack.LockedTargetLocation;
+    Combat.FireSequence = Attack.FireSequence;
+    Combat.bFireRequestIssued = Attack.bFireRequestIssued ? 1 : 0;
+    Combat.ReactiveMode = Reactive.Mode;
+    Combat.HorizontalReactiveVelocity = Reactive.HorizontalVelocity;
+    Combat.VerticalReactiveVelocityCmps = Reactive.VerticalVelocityCmps;
+    Combat.ReactiveStartFixedStep = Reactive.StartFixedStep;
+    Combat.ReactiveEndFixedStep = Reactive.EndFixedStep;
+    Combat.ReactiveRevision = Reactive.ReactiveRevision;
+    Combat.RestoreBusinessState = Reactive.RestoreBusinessState;
+    Combat.ApexCount = Reactive.ApexCount;
+    Combat.LandingCount = Reactive.LandingCount;
+    Combat.HitFlashRevision = HitFlash.FlashRevision;
+    Combat.HitFlashStartServerTimeSeconds = HitFlash.StartServerTimeSeconds;
+    Combat.HitFlashDurationSeconds = HitFlash.DurationSeconds;
+    Combat.HitFlashProfileKey = HitFlash.ProfileKey;
+    Combat.HitFlashPeakIntensity = HitFlash.PeakIntensity;
+    Combat.LastConsumedHitEventId = Business.LastConsumedHitEventId;
+    Combat.VisualState = Visual.VisualState;
+    Combat.VisualRevision = Visual.VisualRevision;
+    Combat.VisualStateStartServerTimeSeconds = Visual.StateStartServerTimeSeconds;
+    Combat.VisualPhaseSeed = Visual.PhaseSeed;
     OutAgent.ServerSampleTimeSeconds = ServerSampleTimeSeconds;
+  }
+
+  bool SameCombatState(const FCrowdDemoCombatNetState& A, const FCrowdDemoCombatNetState& B)
+  {
+    return FMath::IsNearlyEqual(A.Health, B.Health, 0.01f)
+      && FMath::IsNearlyEqual(A.MaxHealth, B.MaxHealth, 0.01f)
+      && A.LifecycleState == B.LifecycleState && A.bAlive == B.bAlive
+      && A.BusinessState == B.BusinessState
+      && A.BusinessStateRevision == B.BusinessStateRevision
+      && A.BusinessStateEnterFixedStep == B.BusinessStateEnterFixedStep
+      && A.TargetAgentId == B.TargetAgentId
+      && A.TargetLifecycleSerial == B.TargetLifecycleSerial
+      && A.AttackPhase == B.AttackPhase
+      && A.AttackPhaseEnterFixedStep == B.AttackPhaseEnterFixedStep
+      && A.CooldownEndFixedStep == B.CooldownEndFixedStep
+      && A.LockedTargetAgentId == B.LockedTargetAgentId
+      && A.LockedTargetLifecycleSerial == B.LockedTargetLifecycleSerial
+      && FVector(A.LockedTargetLocation).Equals(FVector(B.LockedTargetLocation), 1.0f)
+      && A.FireSequence == B.FireSequence
+      && A.bFireRequestIssued == B.bFireRequestIssued
+      && A.ReactiveMode == B.ReactiveMode
+      && FVector(A.HorizontalReactiveVelocity).Equals(FVector(B.HorizontalReactiveVelocity), 1.0f)
+      && FMath::IsNearlyEqual(A.VerticalReactiveVelocityCmps, B.VerticalReactiveVelocityCmps, 1.0f)
+      && A.ReactiveStartFixedStep == B.ReactiveStartFixedStep
+      && A.ReactiveEndFixedStep == B.ReactiveEndFixedStep
+      && A.ReactiveRevision == B.ReactiveRevision
+      && A.RestoreBusinessState == B.RestoreBusinessState
+      && A.ApexCount == B.ApexCount && A.LandingCount == B.LandingCount
+      && A.HitFlashRevision == B.HitFlashRevision
+      && FMath::IsNearlyEqual(A.HitFlashStartServerTimeSeconds, B.HitFlashStartServerTimeSeconds, 0.001f)
+      && FMath::IsNearlyEqual(A.HitFlashDurationSeconds, B.HitFlashDurationSeconds, 0.001f)
+      && A.HitFlashProfileKey == B.HitFlashProfileKey
+      && FMath::IsNearlyEqual(A.HitFlashPeakIntensity, B.HitFlashPeakIntensity, 0.001f)
+      && A.LastConsumedHitEventId == B.LastConsumedHitEventId
+      && A.VisualState == B.VisualState
+      && A.VisualRevision == B.VisualRevision
+      && FMath::IsNearlyEqual(A.VisualStateStartServerTimeSeconds, B.VisualStateStartServerTimeSeconds, 0.001f)
+      && A.VisualPhaseSeed == B.VisualPhaseSeed;
   }
 
   bool HasReplicatedAgentChanged(const FReplicatedCrowdDemoAgent& Existing, const FReplicatedCrowdDemoAgent& Next)
@@ -111,7 +196,8 @@ namespace
       || Existing.AnimState != Next.AnimState
       || Existing.VatClipIndex != Next.VatClipIndex
       || Existing.VatPhaseByte != Next.VatPhaseByte
-      || Existing.VatPlayRateByte != Next.VatPlayRateByte;
+      || Existing.VatPlayRateByte != Next.VatPlayRateByte
+      || !SameCombatState(Existing.Combat, Next.Combat);
   }
 }
 
@@ -147,7 +233,8 @@ bool FCrowdDemoMassClientBubbleHandler::UpdateAgentMinimal(
     || Existing.LifecycleSerial != Agent.LifecycleSerial
     || Existing.AnimState != Agent.AnimState
     || Existing.VatClipIndex != Agent.VatClipIndex
-    || Existing.VatPlayRateByte != Agent.VatPlayRateByte;
+    || Existing.VatPlayRateByte != Agent.VatPlayRateByte
+    || !SameCombatState(Existing.Combat, Agent.Combat);
   if (!bChanged)
   {
     return false;
@@ -158,6 +245,7 @@ bool FCrowdDemoMassClientBubbleHandler::UpdateAgentMinimal(
   Existing.AnimState = Agent.AnimState;
   Existing.VatClipIndex = Agent.VatClipIndex;
   Existing.VatPlayRateByte = Agent.VatPlayRateByte;
+  Existing.Combat = Agent.Combat;
   Serializer->MarkItemDirty(Item);
   return true;
 #else
@@ -180,19 +268,8 @@ void FCrowdDemoMassClientBubbleHandler::PostReplicatedAdd(const TArrayView<int32
     Query.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadWrite);
     Query.AddRequirement<FMassVelocityFragment>(EMassFragmentAccess::ReadWrite);
     Query.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoMassStatsFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoMassMovementFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoMassVisualFragment>(EMassFragmentAccess::ReadWrite);
     Query.AddRequirement<FCrowdDemoClientAuthorityFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoClientVisualOffsetFragment>(EMassFragmentAccess::ReadWrite);
     Query.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoRoundFormationFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoRoundMoveIntentFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoRoundFlowSampleFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoRoundProposedMovementFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoRoundObstacleConstraintFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoRoundPbdCorrectionFragment>(EMassFragmentAccess::ReadWrite);
-    Query.AddRequirement<FCrowdDemoRoundSeparationFragment>(EMassFragmentAccess::ReadWrite);
   };
 
   auto CacheFragmentViewsForSpawnQuery = [](FMassExecutionContext&)
@@ -233,11 +310,7 @@ void FCrowdDemoMassClientBubbleHandler::SetReplicatedEntityData(const FMassEntit
   FTransformFragment& Transform = EntityView.GetFragmentData<FTransformFragment>();
   FMassVelocityFragment& Velocity = EntityView.GetFragmentData<FMassVelocityFragment>();
   FCrowdDemoMassIdentityFragment& Identity = EntityView.GetFragmentData<FCrowdDemoMassIdentityFragment>();
-  FCrowdDemoMassStatsFragment& Stats = EntityView.GetFragmentData<FCrowdDemoMassStatsFragment>();
-  FCrowdDemoMassMovementFragment& Movement = EntityView.GetFragmentData<FCrowdDemoMassMovementFragment>();
-  FCrowdDemoMassVisualFragment& Visual = EntityView.GetFragmentData<FCrowdDemoMassVisualFragment>();
   FCrowdDemoClientAuthorityFragment& Authority = EntityView.GetFragmentData<FCrowdDemoClientAuthorityFragment>();
-  FCrowdDemoClientVisualOffsetFragment& VisualOffset = EntityView.GetFragmentData<FCrowdDemoClientVisualOffsetFragment>();
   FCrowdDemoRoundSimStateFragment& RoundSimState = EntityView.GetFragmentData<FCrowdDemoRoundSimStateFragment>();
   const UWorld* World = Serializer ? Serializer->GetEntityManagerChecked().GetWorld() : nullptr;
 
@@ -248,15 +321,11 @@ void FCrowdDemoMassClientBubbleHandler::SetReplicatedEntityData(const FMassEntit
   Identity.Id = Agent.VisualId;
   Identity.VisualId = Agent.VisualId;
   Identity.LifecycleSerial = Agent.LifecycleSerial;
-  Stats.bAlive = true;
-  Stats.LifecycleState = ECrowdDemoLifecycleState::Alive;
-  Movement.CurrentVelocity = NewVelocity;
-  Movement.DesiredVelocity = NewVelocity;
-  Movement.YawDegrees = NewYawDegrees;
-  Visual.AnimState = static_cast<ECrowdDemoAnimState>(Agent.AnimState);
-  Visual.VatClipIndex = Agent.VatClipIndex;
-  Visual.VatPhaseByte = Agent.VatPhaseByte;
-  Visual.VatPlayRateByte = Agent.VatPlayRateByte;
+
+  // Replication is an authority sample and visual input, not a second writer
+  // for deterministic client gameplay state. RoundPlan/correction boundaries
+  // initialize or restore the local combat and movement fragments; overwriting
+  // them here between fixed steps makes reactive motion depend on packet timing.
 
   Authority.VisualId = Agent.VisualId;
   Authority.LifecycleSerial = Agent.LifecycleSerial;
@@ -271,6 +340,7 @@ void FCrowdDemoMassClientBubbleHandler::SetReplicatedEntityData(const FMassEntit
   Authority.VatClipIndex = Agent.VatClipIndex;
   Authority.VatPhaseByte = Agent.VatPhaseByte;
   Authority.VatPlayRateByte = Agent.VatPlayRateByte;
+  Authority.Combat = Agent.Combat;
   Authority.bInitialized = true;
 
   if (!RoundSimState.bInitialized)
@@ -304,6 +374,11 @@ void ACrowdDemoMassClientBubbleInfo::GetLifetimeReplicatedProps(TArray<FLifetime
 void UCrowdDemoMassReplicator::AddRequirements(FMassEntityQuery& EntityQuery)
 {
   EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoMassStatsFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoBusinessStateFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoRangedAttackFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoReactiveMotionFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoHitFlashFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoMassMovementFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoMassVisualFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
@@ -315,6 +390,11 @@ void UCrowdDemoMassReplicator::ProcessClientReplication(FMassExecutionContext& C
 {
 #if UE_REPLICATION_COMPILE_SERVER_CODE
   TConstArrayView<FCrowdDemoMassIdentityFragment> Identities;
+  TConstArrayView<FCrowdDemoMassStatsFragment> Stats;
+  TConstArrayView<FCrowdDemoBusinessStateFragment> Businesses;
+  TConstArrayView<FCrowdDemoRangedAttackFragment> Attacks;
+  TConstArrayView<FCrowdDemoReactiveMotionFragment> Reactives;
+  TConstArrayView<FCrowdDemoHitFlashFragment> HitFlashes;
   TConstArrayView<FCrowdDemoMassMovementFragment> Movements;
   TConstArrayView<FCrowdDemoMassVisualFragment> Visuals;
   TConstArrayView<FTransformFragment> Transforms;
@@ -331,6 +411,11 @@ void UCrowdDemoMassReplicator::ProcessClientReplication(FMassExecutionContext& C
     NetworkIDs = InContext.GetFragmentView<FMassNetworkIDFragment>();
     TemplateIDs = InContext.GetFragmentView<FReplicationTemplateIDFragment>();
     Identities = InContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
+    Stats = InContext.GetFragmentView<FCrowdDemoMassStatsFragment>();
+    Businesses = InContext.GetFragmentView<FCrowdDemoBusinessStateFragment>();
+    Attacks = InContext.GetFragmentView<FCrowdDemoRangedAttackFragment>();
+    Reactives = InContext.GetFragmentView<FCrowdDemoReactiveMotionFragment>();
+    HitFlashes = InContext.GetFragmentView<FCrowdDemoHitFlashFragment>();
     Movements = InContext.GetFragmentView<FCrowdDemoMassMovementFragment>();
     Visuals = InContext.GetFragmentView<FCrowdDemoMassVisualFragment>();
     Transforms = InContext.GetFragmentView<FTransformFragment>();
@@ -352,6 +437,11 @@ void UCrowdDemoMassReplicator::ProcessClientReplication(FMassExecutionContext& C
       NetworkIDs,
       TemplateIDs,
       Identities,
+      Stats,
+      Businesses,
+      Attacks,
+      Reactives,
+      HitFlashes,
       Movements,
       Visuals,
       Transforms,
@@ -379,6 +469,11 @@ void UCrowdDemoMassReplicator::ProcessClientReplication(FMassExecutionContext& C
       NetworkIDs,
       TemplateIDs,
       Identities,
+      Stats,
+      Businesses,
+      Attacks,
+      Reactives,
+      HitFlashes,
       Movements,
       Visuals,
       Transforms,

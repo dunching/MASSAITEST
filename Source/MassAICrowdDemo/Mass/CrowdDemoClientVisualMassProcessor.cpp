@@ -3,6 +3,7 @@
 #include "CrowdDemoReplicator.h"
 #include "Mass/CrowdDemoMassFragments.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
+#include "Mass/CrowdDemoVatPlaybackKernel.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
@@ -17,7 +18,10 @@ namespace
     const FVector& DisplayLocation,
     const float DisplayYawDegrees)
   {
-    const FVector Scale(1.55f, 0.48f, 0.32f);
+    // UE imports the generated source at roughly 2.4 cm across. Scaling by
+    // 34 produces an approximately 82 cm visual footprint, matching the
+    // 42 cm particle radius without changing gameplay collision facts.
+    const FVector Scale(34.0f);
     return FTransform(FRotator(0.0f, DisplayYawDegrees, 0.0f), DisplayLocation, Scale);
   }
 
@@ -123,13 +127,20 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   UInstancedStaticMeshComponent* Instances = Replicator
     ? Replicator->GetCrowdInstancesForClientVisuals()
     : nullptr;
-  if (!Replicator || !Instances)
+  UInstancedStaticMeshComponent* HitFlashInstances = Replicator
+    ? Replicator->GetCrowdHitFlashInstancesForClientVisuals()
+    : nullptr;
+  if (!Replicator || !Instances || !HitFlashInstances)
   {
     return;
   }
-  if (Instances->NumCustomDataFloats < 3)
+  if (Instances->NumCustomDataFloats != 3)
   {
     Instances->NumCustomDataFloats = 3;
+  }
+  if (HitFlashInstances->NumCustomDataFloats != 3)
+  {
+    HitFlashInstances->NumCustomDataFloats = 3;
   }
   const bool bRebuildInstances = bRebuildInstancesNextFrame || bOwnerChanged;
   if (bRebuildInstances)
@@ -146,6 +157,9 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
     : World->GetTimeSeconds();
   const int32 AppliedCorrectionRevision = Pipeline->GetLastAppliedCorrectionRevision();
   int32 SubmittedCount = 0;
+  int32 VatPlaybackCount = 0;
+  int32 ActiveHitFlashCount = 0;
+  int32 VisualStateCounts[FCrowdDemoVatPlaybackKernel::ClipCount] = {};
 
   EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
   {
@@ -222,9 +236,56 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
           false,
           true);
       }
-      Instances->SetCustomDataValue(Offset.InstanceIndex, 0, Authority.VatClipIndex, false);
-      Instances->SetCustomDataValue(Offset.InstanceIndex, 1, Authority.VatPhaseByte / 255.0f, false);
-      Instances->SetCustomDataValue(Offset.InstanceIndex, 2, Authority.VatPlayRateByte / 128.0f, false);
+      FCrowdDemoVatPlaybackInput PlaybackInput;
+      PlaybackInput.VisualState = Authority.Combat.VisualState;
+      PlaybackInput.ServerTimeSeconds = ClientServerSeconds;
+      PlaybackInput.StateStartServerTimeSeconds = Authority.Combat.VisualStateStartServerTimeSeconds;
+      PlaybackInput.PlayRate = Authority.VatPlayRateByte / 128.0f;
+      PlaybackInput.PhaseSeed = Authority.Combat.VisualPhaseSeed;
+      PlaybackInput.HitFlashRevision = Authority.Combat.HitFlashRevision;
+      PlaybackInput.HitFlashStartServerTimeSeconds = Authority.Combat.HitFlashStartServerTimeSeconds;
+      PlaybackInput.HitFlashDurationSeconds = Authority.Combat.HitFlashDurationSeconds;
+      PlaybackInput.HitFlashPeakIntensity = Authority.Combat.HitFlashPeakIntensity;
+      const FCrowdDemoVatPlaybackResult Playback = FCrowdDemoVatPlaybackKernel::Evaluate(PlaybackInput);
+      const bool bHitFlashActive = Playback.bValid
+        && Playback.HitFlashIntensity > KINDA_SMALL_NUMBER;
+      if (Playback.bValid)
+      {
+        Instances->SetCustomDataValue(Offset.InstanceIndex, 0, Playback.Frame, false);
+        Instances->SetCustomDataValue(Offset.InstanceIndex, 1, Playback.PreviousFrame, false);
+        Instances->SetCustomDataValue(Offset.InstanceIndex, 2, Playback.HitFlashIntensity, false);
+        ++VatPlaybackCount;
+        ActiveHitFlashCount += bHitFlashActive ? 1 : 0;
+        ++VisualStateCounts[Playback.ClipIndex];
+      }
+
+      FTransform HitFlashTransform = InstanceTransform;
+      HitFlashTransform.SetScale3D(bHitFlashActive
+        ? InstanceTransform.GetScale3D() * (1.02f + 0.03f * Playback.HitFlashIntensity)
+        : FVector::ZeroVector);
+      if (bRebuildInstances || Offset.InstanceIndex >= HitFlashInstances->GetInstanceCount())
+      {
+        const int32 HitFlashIndex = HitFlashInstances->AddInstance(HitFlashTransform, true);
+        if (HitFlashIndex != Offset.InstanceIndex)
+        {
+          bRebuildInstancesNextFrame = true;
+        }
+      }
+      else
+      {
+        HitFlashInstances->UpdateInstanceTransform(
+          Offset.InstanceIndex,
+          HitFlashTransform,
+          true,
+          false,
+          true);
+      }
+      if (Playback.bValid && Offset.InstanceIndex < HitFlashInstances->GetInstanceCount())
+      {
+        HitFlashInstances->SetCustomDataValue(Offset.InstanceIndex, 0, Playback.Frame, false);
+        HitFlashInstances->SetCustomDataValue(Offset.InstanceIndex, 1, Playback.PreviousFrame, false);
+        HitFlashInstances->SetCustomDataValue(Offset.InstanceIndex, 2, Playback.HitFlashIntensity, false);
+      }
 
       const float SampleAgeMs = Authority.ServerSampleTimeSeconds > 0.0f
         ? FMath::Max(0.0f, ClientServerSeconds - Authority.ServerSampleTimeSeconds) * 1000.0f
@@ -259,15 +320,33 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
     bRebuildInstancesNextFrame = true;
   }
   Instances->MarkRenderStateDirty();
+  HitFlashInstances->MarkRenderStateDirty();
   const double NowSeconds = World->GetTimeSeconds();
-  if (NowSeconds - LastVisualLogSeconds >= 2.0)
+  uint32 VisualStateMask = 0;
+  for (int32 ClipIndex = 0; ClipIndex < FCrowdDemoVatPlaybackKernel::ClipCount; ++ClipIndex)
+  {
+    VisualStateMask |= VisualStateCounts[ClipIndex] > 0 ? (1u << ClipIndex) : 0u;
+  }
+  const bool bVisualStateChanged = VisualStateMask != LastVisualStateMask;
+  const bool bHitFlashChanged = ActiveHitFlashCount != LastHitFlashActiveCount;
+  if (NowSeconds - LastVisualLogSeconds >= 2.0 || bVisualStateChanged || bHitFlashChanged)
   {
     LastVisualLogSeconds = NowSeconds;
+    LastVisualStateMask = VisualStateMask;
+    LastHitFlashActiveCount = ActiveHitFlashCount;
     UE_LOG(
       LogTemp,
       Display,
-      TEXT("CrowdDemoVisual: submitted=%d instances=%d visual_mode=RoundSim round_visual_smoothing=1 source=MassClientVisualProcessor"),
+      TEXT("CrowdDemoVisual: submitted=%d instances=%d vat_playback=%d states=[idle:%d move:%d attack:%d hit:%d death:%d] state_mask=%u hit_flash_active=%d visual_mode=RoundSimVAT round_visual_smoothing=1 source=MassClientVisualProcessor"),
       SubmittedCount,
-      Instances->GetInstanceCount());
+      Instances->GetInstanceCount(),
+      VatPlaybackCount,
+      VisualStateCounts[0],
+      VisualStateCounts[1],
+      VisualStateCounts[2],
+      VisualStateCounts[3],
+      VisualStateCounts[4],
+      VisualStateMask,
+      ActiveHitFlashCount);
   }
 }

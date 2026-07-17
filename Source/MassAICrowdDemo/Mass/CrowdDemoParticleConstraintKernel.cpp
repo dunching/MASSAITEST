@@ -55,6 +55,14 @@ namespace
       + FMath::Max(0.0f, B.SoftMarginCm);
   }
 
+  float AgentEnvironmentHardDistance(
+    const FCrowdDemoParticleConstraintAgent& Agent)
+  {
+    return FMath::Max(
+      FMath::Max(0.0f, Agent.PhysicalRadiusCm + Agent.HardSafetyGapCm),
+      FMath::Max(0.0f, Agent.EnvironmentHardClearanceCm));
+  }
+
   FVector ContactFaceNormal(const ECrowdDemoParticleEnvironmentFace Face)
   {
     switch (Face)
@@ -379,7 +387,7 @@ namespace
     const float FixedStepSeconds)
   {
     FCrowdDemoSharedFlowFieldConfig Config = Environment.FlowConfig;
-    Config.AgentInflateCm = FMath::Max(0.0f, Agent.PhysicalRadiusCm + Agent.HardSafetyGapCm);
+    Config.AgentInflateCm = AgentEnvironmentHardDistance(Agent);
     FVector DomainProposed = Proposed;
     if (Environment.bConstrainToFlowBounds)
     {
@@ -401,7 +409,7 @@ namespace
     const FVector& Position)
   {
     if (!Environment.bConstrainToFlowBounds) return false;
-    const float Clearance = FMath::Max(0.0f, Agent.PhysicalRadiusCm + Agent.HardSafetyGapCm);
+    const float Clearance = AgentEnvironmentHardDistance(Agent);
     return Position.X < Environment.FlowConfig.BoundsMin.X + Clearance - ConstraintEpsilonCm
       || Position.X > Environment.FlowConfig.BoundsMax.X - Clearance + ConstraintEpsilonCm
       || Position.Y < Environment.FlowConfig.BoundsMin.Y + Clearance - ConstraintEpsilonCm
@@ -579,8 +587,7 @@ bool FCrowdDemoParticleConstraintKernel::BuildEnvironmentContacts(
     Contact.ContactKind = ECrowdDemoParticleEnvironmentContactKind::FlowBounds;
     Contact.Face = Face;
     Contact.CorrectionNormal = Normal;
-    Contact.HardDistanceCm = Agents[AgentIndex].PhysicalRadiusCm
-      + Agents[AgentIndex].HardSafetyGapCm;
+    Contact.HardDistanceCm = AgentEnvironmentHardDistance(Agents[AgentIndex]);
     Contact.SoftDistanceCm = Contact.HardDistanceCm + Agents[AgentIndex].SoftMarginCm;
     Contact.SoftErrorCm = FMath::Max(0.0f, SoftError);
     Contact.HardDeficitCm = FMath::Max(0.0f, HardDeficit);
@@ -593,8 +600,7 @@ bool FCrowdDemoParticleConstraintKernel::BuildEnvironmentContacts(
   {
     const auto& Agent = Agents[AgentIndex];
     const FVector Position = Positions[AgentIndex];
-    const float HardDistance = FMath::Max(0.0f,
-      Agent.PhysicalRadiusCm + Agent.HardSafetyGapCm);
+    const float HardDistance = AgentEnvironmentHardDistance(Agent);
     const float SoftDistance = HardDistance + FMath::Max(0.0f, Agent.SoftMarginCm);
 
     if (Environment.bConstrainToFlowBounds)
@@ -1304,6 +1310,8 @@ void FCrowdDemoParticleConstraintKernel::Solve(
   {
     const auto& Agent = SortedAgents[Index];
     if (Agent.AgentId == INDEX_NONE || Agent.PhysicalRadiusCm <= 0.0f || Agent.HardSafetyGapCm < 0.0f
+      || Agent.EnvironmentHardClearanceCm < 0.0f
+      || !FMath::IsFinite(Agent.EnvironmentHardClearanceCm)
       || Agent.SoftMarginCm < 0.0f || Agent.Mobility < 0.0f
       || (Index > 0 && SortedAgents[Index - 1].AgentId == Agent.AgentId))
       return;
@@ -1332,6 +1340,7 @@ void FCrowdDemoParticleConstraintKernel::Solve(
   EnvironmentSoftRequestedCorrections.Init(FVector::ZeroVector, SortedAgents.Num());
   EnvironmentSoftRealizedCorrections.Init(FVector::ZeroVector, SortedAgents.Num());
   UnifiedHardCorrections.Init(FVector::ZeroVector, SortedAgents.Num());
+  TArray<FCrowdDemoParticleSoftPairInfluence> SoftPairInfluences;
   for (const auto& Agent : SortedAgents) Positions.Add(Agent.PredictedPosition);
   if (OutTrace)
   {
@@ -1379,6 +1388,20 @@ void FCrowdDemoParticleConstraintKernel::Solve(
         PairSoftRequestedCorrections[Pair.MaxAgentIndex] += MaxDelta;
         PairSoftRealizedCorrections[Pair.MinAgentIndex] += MinDelta;
         PairSoftRealizedCorrections[Pair.MaxAgentIndex] += MaxDelta;
+        auto* Influence = SoftPairInfluences.FindByPredicate([&](const auto& Candidate)
+        {
+          return Candidate.MinAgentId == Pair.MinAgentId
+            && Candidate.MaxAgentId == Pair.MaxAgentId;
+        });
+        if (!Influence)
+        {
+          FCrowdDemoParticleSoftPairInfluence& Added = SoftPairInfluences.AddDefaulted_GetRef();
+          Added.MinAgentId = Pair.MinAgentId;
+          Added.MaxAgentId = Pair.MaxAgentId;
+          Influence = &Added;
+        }
+        Influence->RequestedCorrectionA += MinDelta;
+        Influence->RequestedCorrectionB += MaxDelta;
       }
     }
     if (OutTrace && Iteration + 1 == IterationCount) OutTrace->SoftPositions = Positions;
@@ -1943,6 +1966,30 @@ void FCrowdDemoParticleConstraintKernel::Solve(
     OutTrace->EnvironmentSoftRequestedCorrections = MoveTemp(EnvironmentSoftRequestedCorrections);
     OutTrace->EnvironmentSoftRealizedCorrections = MoveTemp(EnvironmentSoftRealizedCorrections);
     OutTrace->UnifiedHardCorrections = MoveTemp(UnifiedHardCorrections);
+    SoftPairInfluences.Sort([](const auto& A, const auto& B)
+    {
+      if (A.MinAgentId != B.MinAgentId) return A.MinAgentId < B.MinAgentId;
+      return A.MaxAgentId < B.MaxAgentId;
+    });
+    for (auto& Influence : SoftPairInfluences)
+    {
+      const int32 MinIndex = SortedAgents.IndexOfByPredicate([&](const auto& Agent)
+        { return Agent.AgentId == Influence.MinAgentId; });
+      const int32 MaxIndex = SortedAgents.IndexOfByPredicate([&](const auto& Agent)
+        { return Agent.AgentId == Influence.MaxAgentId; });
+      auto Retained = [&](const int32 AgentIndex, const FVector& Requested)
+      {
+        const float RequestedLength = Requested.Size2D();
+        if (AgentIndex == INDEX_NONE || RequestedLength <= KINDA_SMALL_NUMBER)
+          return FVector::ZeroVector;
+        const FVector Direction = Requested / RequestedLength;
+        const FVector Net = Positions[AgentIndex] - SortedAgents[AgentIndex].PredictedPosition;
+        return Direction * FMath::Clamp(FVector::DotProduct(Net, Direction), 0.0f, RequestedLength);
+      };
+      Influence.RealizedCorrectionA = Retained(MinIndex, Influence.RequestedCorrectionA);
+      Influence.RealizedCorrectionB = Retained(MaxIndex, Influence.RequestedCorrectionB);
+    }
+    OutTrace->SoftPairInfluences = MoveTemp(SoftPairInfluences);
     OutTrace->ActiveNeighborAgentIds.SetNum(SortedAgents.Num());
     for (const auto& Pair : OutPairs)
     {
@@ -1976,8 +2023,9 @@ void FCrowdDemoParticleConstraintKernel::Solve(
       Agent, Environment, Positions[AgentIndex], Settings.FixedStepSeconds);
     if (EnvironmentConstraint.bPenetrating || EnvironmentConstraint.bHitObstacle
       || FCrowdDemoSharedFlowFieldKernel::IsInsideInflatedObstacle(
-        [&]() { auto C = Environment.FlowConfig; C.AgentInflateCm = Agent.PhysicalRadiusCm
-          + Agent.HardSafetyGapCm; return C; }(), Positions[AgentIndex]))
+        [&]() { auto C = Environment.FlowConfig;
+          C.AgentInflateCm = AgentEnvironmentHardDistance(Agent); return C; }(),
+        Positions[AgentIndex]))
       ++OutSummary.ObstaclePenetrationCount;
     if (IsOutsideParticleBounds(Agent, Environment, Positions[AgentIndex]))
       ++OutSummary.BoundsViolationCount;
@@ -2002,7 +2050,7 @@ void FCrowdDemoParticleConstraintKernel::Solve(
     OutSummary.MaxAgentCorrectionCm = FMath::Max(OutSummary.MaxAgentCorrectionCm, CorrectionCm);
   }
 
-  uint32 Hash = FoldHash(2166136261u, 3); // Particle candidate contract v3.
+  uint32 Hash = FoldHash(2166136261u, 4); // Particle candidate contract v4.
   const auto FoldFloat = [&Hash](const float Value, const float Scale)
   {
     Hash = FoldHash(Hash, FMath::RoundToInt(Value * Scale));
@@ -2055,6 +2103,7 @@ void FCrowdDemoParticleConstraintKernel::Solve(
     FoldVector(Agent.PredictedPosition);
     FoldFloat(Agent.PhysicalRadiusCm, 1000.0f);
     FoldFloat(Agent.HardSafetyGapCm, 1000.0f);
+    FoldFloat(Agent.EnvironmentHardClearanceCm, 1000.0f);
     FoldFloat(Agent.SoftMarginCm, 1000.0f);
     FoldFloat(Agent.Mobility, 32767.0f);
   }
@@ -2135,7 +2184,7 @@ uint32 FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(
 {
   TArray<FCrowdDemoParticleAppliedRoundSimState> SortedStates(States);
   SortedStates.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
-  uint32 Hash = FoldHash(2166136261u, 2); // Applied RoundSim contract v2.
+  uint32 Hash = FoldHash(2166136261u, 3); // Applied RoundSim + combat contract v3.
   Hash = FoldHash(Hash, RoundId);
   Hash = FoldHash(Hash, PlanRevision);
   Hash = FoldHash(Hash, FixedStepIndex);
@@ -2158,6 +2207,37 @@ uint32 FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(
     Hash = FoldHash(Hash, FMath::RoundToInt(State.YawDegrees * 1000.0f));
     Hash = FoldHash(Hash, FMath::RoundToInt(State.RadiusCm * 1000.0f));
     Hash = FoldHash(Hash, State.bInitialized ? 1 : 0);
+    Hash = FoldHash(Hash, FMath::RoundToInt(State.Combat.Health * 100.0f));
+    Hash = FoldHash(Hash, FMath::RoundToInt(State.Combat.MaxHealth * 100.0f));
+    Hash = FoldHash(Hash, static_cast<uint8>(State.Combat.LifecycleState));
+    Hash = FoldHash(Hash, State.Combat.bAlive);
+    Hash = FoldHash(Hash, static_cast<uint8>(State.Combat.BusinessState));
+    Hash = FoldHash(Hash, State.Combat.BusinessStateRevision);
+    Hash = FoldHash(Hash, State.Combat.BusinessStateEnterFixedStep);
+    Hash = FoldHash(Hash, State.Combat.TargetAgentId);
+    Hash = FoldHash(Hash, State.Combat.TargetLifecycleSerial);
+    Hash = FoldHash(Hash, static_cast<uint8>(State.Combat.AttackPhase));
+    Hash = FoldHash(Hash, State.Combat.AttackPhaseEnterFixedStep);
+    Hash = FoldHash(Hash, State.Combat.CooldownEndFixedStep);
+    Hash = FoldHash(Hash, State.Combat.LockedTargetAgentId);
+    Hash = FoldHash(Hash, State.Combat.LockedTargetLifecycleSerial);
+    Hash = FoldHash(Hash, State.Combat.FireSequence);
+    Hash = FoldHash(Hash, State.Combat.bFireRequestIssued);
+    Hash = FoldHash(Hash, static_cast<uint8>(State.Combat.ReactiveMode));
+    Hash = FoldHash(Hash, FMath::RoundToInt(State.Combat.HorizontalReactiveVelocity.X * 10.0f));
+    Hash = FoldHash(Hash, FMath::RoundToInt(State.Combat.HorizontalReactiveVelocity.Y * 10.0f));
+    Hash = FoldHash(Hash, FMath::RoundToInt(State.Combat.VerticalReactiveVelocityCmps * 10.0f));
+    Hash = FoldHash(Hash, State.Combat.ReactiveStartFixedStep);
+    Hash = FoldHash(Hash, State.Combat.ReactiveEndFixedStep);
+    Hash = FoldHash(Hash, State.Combat.ReactiveRevision);
+    Hash = FoldHash(Hash, State.Combat.ApexCount);
+    Hash = FoldHash(Hash, State.Combat.LandingCount);
+    Hash = FoldHash(Hash, State.Combat.HitFlashRevision);
+    Hash = FoldHash(Hash, State.Combat.HitFlashProfileKey);
+    Hash = FoldHash(Hash, State.Combat.LastConsumedHitEventId);
+    Hash = FoldHash(Hash, static_cast<uint8>(State.Combat.VisualState));
+    Hash = FoldHash(Hash, State.Combat.VisualRevision);
+    Hash = FoldHash(Hash, State.Combat.VisualPhaseSeed);
   }
   return Hash;
 }
@@ -2452,8 +2532,9 @@ void FCrowdDemoParticleConstraintKernel::EvaluateAppliedState(
     if (CorrectionCm > ConstraintEpsilonCm) ++OutSummary.CorrectedAgentCount;
     OutSummary.MaxAgentCorrectionCm = FMath::Max(OutSummary.MaxAgentCorrectionCm, CorrectionCm);
     if (FCrowdDemoSharedFlowFieldKernel::IsInsideInflatedObstacle(
-      [&]() { auto C = Environment.FlowConfig; C.AgentInflateCm = SortedAgents[Index].PhysicalRadiusCm
-        + SortedAgents[Index].HardSafetyGapCm; return C; }(), SortedStates[Index].Position))
+      [&]() { auto C = Environment.FlowConfig;
+        C.AgentInflateCm = AgentEnvironmentHardDistance(SortedAgents[Index]); return C; }(),
+      SortedStates[Index].Position))
       ++OutSummary.ObstaclePenetrationCount;
     if (IsOutsideParticleBounds(SortedAgents[Index], Environment, SortedStates[Index].Position))
       ++OutSummary.BoundsViolationCount;

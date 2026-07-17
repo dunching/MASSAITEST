@@ -220,6 +220,8 @@ void FCrowdDemoSharedFlowField::Reset()
   NavigationInternalEdgeCount = 0;
   CenterInvalidButConnectedCellCount = 0;
   GoalAttachmentCount = 0;
+  TopologyHash = 0;
+  IntegrationHash = 0;
   BuildHash = 0;
 }
 
@@ -803,6 +805,36 @@ namespace
     Field.BuildHash = Hash;
     return Field.IsValid();
   }
+
+  uint32 HashV2Topology(const FCrowdDemoSharedFlowField& Field)
+  {
+    uint32 Hash = 2166136261u;
+    Hash = HashInt(Hash, Field.Config.ConnectivityContractVersion);
+    Hash = HashInt(Hash, Quantize10(Field.Config.AgentInflateCm));
+    Hash = HashInt(Hash, Quantize10(FVector(Field.Config.BoundsMin).X));
+    Hash = HashInt(Hash, Quantize10(FVector(Field.Config.BoundsMin).Y));
+    Hash = HashInt(Hash, Quantize10(FVector(Field.Config.BoundsMax).X));
+    Hash = HashInt(Hash, Quantize10(FVector(Field.Config.BoundsMax).Y));
+    Hash = HashInt(Hash, Quantize10(Field.Config.CellSizeCm));
+    Hash = HashInt(Hash, Field.NavigationNodes.Num());
+    for (const auto& Node : Field.NavigationNodes)
+    {
+      Hash = HashInt(Hash, static_cast<int32>(Node.StableNodeKey & 0xffffffffull));
+      Hash = HashInt(Hash, static_cast<int32>(Node.StableNodeKey >> 32));
+      Hash = HashInt(Hash, Node.QuantizedLocationCm.X);
+      Hash = HashInt(Hash, Node.QuantizedLocationCm.Y);
+    }
+    Hash = HashInt(Hash, Field.NavigationEdges.Num());
+    for (const auto& Edge : Field.NavigationEdges)
+    {
+      Hash = HashInt(Hash, static_cast<int32>(Edge.MinNodeKey & 0xffffffffull));
+      Hash = HashInt(Hash, static_cast<int32>(Edge.MinNodeKey >> 32));
+      Hash = HashInt(Hash, static_cast<int32>(Edge.MaxNodeKey & 0xffffffffull));
+      Hash = HashInt(Hash, static_cast<int32>(Edge.MaxNodeKey >> 32));
+      Hash = HashInt(Hash, Edge.QuantizedCost);
+    }
+    return Hash;
+  }
 }
 
 bool FCrowdDemoSharedFlowField::IsValid() const
@@ -886,6 +918,10 @@ bool FCrowdDemoSharedFlowFieldKernel::Build(
   const FCrowdDemoSharedFlowFieldConfig& Config,
   FCrowdDemoSharedFlowField& OutField)
 {
+  if (Config.ConnectivityContractVersion >= 2)
+  {
+    return BuildTopology(Config, OutField);
+  }
   OutField.Reset();
   OutField.Config = Config;
   const FVector Min = FVector(Config.BoundsMin);
@@ -911,11 +947,6 @@ bool FCrowdDemoSharedFlowFieldKernel::Build(
       || !IsInsideContractBounds(Config, Center);
     OutField.Blocked[CellIndex] = bBlocked;
     OutField.BlockedCellCount += bBlocked ? 1 : 0;
-  }
-
-  if (Config.ConnectivityContractVersion >= 2)
-  {
-    return BuildV2NavigationGraph(OutField);
   }
 
   float BestGoalDistanceSq = MAX_flt;
@@ -1091,6 +1122,213 @@ bool FCrowdDemoSharedFlowFieldKernel::Build(
   }
   OutField.BuildHash = Hash;
   return true;
+}
+
+bool FCrowdDemoSharedFlowFieldKernel::BuildTopology(
+  const FCrowdDemoSharedFlowFieldConfig& Config,
+  FCrowdDemoSharedFlowField& OutField)
+{
+  OutField.Reset();
+  OutField.Config = Config;
+  const FVector Min = FVector(Config.BoundsMin);
+  const FVector Max = FVector(Config.BoundsMax);
+  if (Config.ConnectivityContractVersion < 2 || Config.CellSizeCm <= 1.0f
+    || Max.X <= Min.X || Max.Y <= Min.Y)
+  {
+    return false;
+  }
+  OutField.Width = FMath::Max(1, FMath::CeilToInt((Max.X - Min.X) / Config.CellSizeCm));
+  OutField.Height = FMath::Max(1, FMath::CeilToInt((Max.Y - Min.Y) / Config.CellSizeCm));
+  const int32 CellCount = OutField.Width * OutField.Height;
+  OutField.IntegrationCost.Init(InfiniteCost, CellCount);
+  OutField.FlowDirection.Init(FVector::ZeroVector, CellCount);
+  OutField.NextCellIndex.Init(INDEX_NONE, CellCount);
+  OutField.Blocked.Init(false, CellCount);
+  OutField.Unreachable.Init(true, CellCount);
+  for (int32 CellIndex = 0; CellIndex < CellCount; ++CellIndex)
+  {
+    const FVector Center = OutField.CellCenter(CellIndex);
+    const bool bBlocked = IsInsideInflatedObstacle(Config, Center)
+      || !IsInsideContractBounds(Config, Center);
+    OutField.Blocked[CellIndex] = bBlocked;
+    OutField.BlockedCellCount += bBlocked ? 1 : 0;
+  }
+  if (!BuildV2NavigationGraph(OutField)) return false;
+  OutField.TopologyHash = HashV2Topology(OutField);
+  OutField.IntegrationHash = OutField.BuildHash;
+  return true;
+}
+
+bool FCrowdDemoSharedFlowFieldKernel::ResolveGoalAnchor(
+  const FCrowdDemoSharedFlowField& Field,
+  const FVector& TargetLocation,
+  int32& OutAnchorCellKey,
+  FVector& OutAnchorLocation)
+{
+  OutAnchorCellKey = INDEX_NONE;
+  OutAnchorLocation = FVector::ZeroVector;
+  if (Field.Config.ConnectivityContractVersion < 2
+    || Field.Width <= 0 || Field.Height <= 0
+    || Field.Blocked.Num() != Field.Width * Field.Height)
+  {
+    return false;
+  }
+
+  const int32 DirectCell = Field.LocationToCellIndex(TargetLocation);
+  if (Field.Blocked.IsValidIndex(DirectCell) && !Field.Blocked[DirectCell])
+  {
+    OutAnchorCellKey = DirectCell;
+    OutAnchorLocation = Field.CellCenter(DirectCell);
+    return true;
+  }
+
+  float BestDistanceSq = MAX_flt;
+  for (int32 Cell = 0; Cell < Field.Width * Field.Height; ++Cell)
+  {
+    if (Field.Blocked[Cell]) continue;
+    const float DistanceSq = FVector::DistSquared2D(Field.CellCenter(Cell), TargetLocation);
+    if (DistanceSq < BestDistanceSq
+      || (FMath::IsNearlyEqual(DistanceSq, BestDistanceSq) && Cell < OutAnchorCellKey))
+    {
+      BestDistanceSq = DistanceSq;
+      OutAnchorCellKey = Cell;
+    }
+  }
+  if (OutAnchorCellKey == INDEX_NONE) return false;
+  OutAnchorLocation = Field.CellCenter(OutAnchorCellKey);
+  return true;
+}
+
+bool FCrowdDemoSharedFlowFieldKernel::BuildIntegrationForAnchor(
+  const int32 AnchorCellKey,
+  const FVector& AnchorLocation,
+  FCrowdDemoSharedFlowField& Field)
+{
+  if (Field.Config.ConnectivityContractVersion < 2
+    || Field.NavigationNodes.IsEmpty() || Field.NavigationEdges.IsEmpty()
+    || !Field.Blocked.IsValidIndex(AnchorCellKey) || Field.Blocked[AnchorCellKey])
+  {
+    return false;
+  }
+
+  Field.Config.GoalLocation = AnchorLocation;
+  Field.GoalCellIndex = AnchorCellKey;
+  Field.GoalAttachmentNodeIndices.Reset();
+  const TArray<FNavigationAttachmentCandidate> Attachments =
+    FindNavigationAttachments(Field, AnchorLocation, false);
+  if (Attachments.IsEmpty()) return false;
+  for (const auto& Attachment : Attachments)
+    Field.GoalAttachmentNodeIndices.Add(Attachment.NodeIndex);
+  Field.GoalAttachmentCount = Field.GoalAttachmentNodeIndices.Num();
+
+  TMap<uint64, int32> NodeIndexByKey;
+  for (int32 NodeIndex = 0; NodeIndex < Field.NavigationNodes.Num(); ++NodeIndex)
+    NodeIndexByKey.Add(Field.NavigationNodes[NodeIndex].StableNodeKey, NodeIndex);
+  TArray<TArray<TPair<int32, int32>>> Adjacency;
+  Adjacency.SetNum(Field.NavigationNodes.Num());
+  for (const FCrowdDemoNavigationEdge& Edge : Field.NavigationEdges)
+  {
+    const int32* A = NodeIndexByKey.Find(Edge.MinNodeKey);
+    const int32* B = NodeIndexByKey.Find(Edge.MaxNodeKey);
+    if (!A || !B) return false;
+    Adjacency[*A].Emplace(*B, Edge.QuantizedCost);
+    Adjacency[*B].Emplace(*A, Edge.QuantizedCost);
+  }
+  for (auto& Neighbors : Adjacency)
+    Neighbors.Sort([&](const auto& A, const auto& B)
+    {
+      const uint64 KeyA = Field.NavigationNodes[A.Key].StableNodeKey;
+      const uint64 KeyB = Field.NavigationNodes[B.Key].StableNodeKey;
+      return KeyA != KeyB ? KeyA < KeyB : A.Value < B.Value;
+    });
+
+  Field.NavigationIntegrationCost.Init(InfiniteCost, Field.NavigationNodes.Num());
+  Field.NavigationNextNodeIndex.Init(INDEX_NONE, Field.NavigationNodes.Num());
+  TArray<FQueueNode> Heap;
+  for (const int32 NodeIndex : Field.GoalAttachmentNodeIndices)
+  {
+    const int32 GoalCost = FMath::RoundToInt(FVector::Dist2D(
+      NavigationNodeLocation(Field, Field.NavigationNodes[NodeIndex]), AnchorLocation) * 10.0f);
+    if (GoalCost < Field.NavigationIntegrationCost[NodeIndex])
+    {
+      Field.NavigationIntegrationCost[NodeIndex] = GoalCost;
+      HeapPush(Heap, {GoalCost, NodeIndex});
+    }
+  }
+  while (!Heap.IsEmpty())
+  {
+    const FQueueNode Current = HeapPop(Heap);
+    if (Current.Cost != Field.NavigationIntegrationCost[Current.CellIndex]) continue;
+    for (const auto& Neighbor : Adjacency[Current.CellIndex])
+    {
+      if (Current.Cost > InfiniteCost - Neighbor.Value) continue;
+      const int32 NewCost = Current.Cost + Neighbor.Value;
+      const int32 ExistingNext = Field.NavigationNextNodeIndex[Neighbor.Key];
+      const bool bStableTie = NewCost == Field.NavigationIntegrationCost[Neighbor.Key]
+        && (ExistingNext == INDEX_NONE
+          || Field.NavigationNodes[Current.CellIndex].StableNodeKey
+            < Field.NavigationNodes[ExistingNext].StableNodeKey);
+      if (NewCost < Field.NavigationIntegrationCost[Neighbor.Key] || bStableTie)
+      {
+        Field.NavigationIntegrationCost[Neighbor.Key] = NewCost;
+        Field.NavigationNextNodeIndex[Neighbor.Key] = Current.CellIndex;
+        HeapPush(Heap, {NewCost, Neighbor.Key});
+      }
+    }
+  }
+
+  const int32 CellCount = Field.Width * Field.Height;
+  Field.IntegrationCost.Init(InfiniteCost, CellCount);
+  Field.Unreachable.Init(true, CellCount);
+  Field.FlowDirection.Init(FVector::ZeroVector, CellCount);
+  Field.NextCellIndex.Init(INDEX_NONE, CellCount);
+  for (int32 NodeIndex = 0; NodeIndex < Field.NavigationNodes.Num(); ++NodeIndex)
+  {
+    if (Field.NavigationIntegrationCost[NodeIndex] == InfiniteCost) continue;
+    const FCrowdDemoNavigationNode& Node = Field.NavigationNodes[NodeIndex];
+    const int32 Cells[2] = {Node.PrimaryCellKey, Node.SecondaryCellKey};
+    for (const int32 Cell : Cells)
+    {
+      if (!Field.IntegrationCost.IsValidIndex(Cell)) continue;
+      Field.Unreachable[Cell] = false;
+      if (Field.NavigationIntegrationCost[NodeIndex] < Field.IntegrationCost[Cell])
+      {
+        Field.IntegrationCost[Cell] = Field.NavigationIntegrationCost[NodeIndex];
+        const int32 NextNode = Field.NavigationNextNodeIndex[NodeIndex];
+        if (NextNode != INDEX_NONE)
+        {
+          Field.NextCellIndex[Cell] = Field.NavigationNodes[NextNode].PrimaryCellKey;
+          Field.FlowDirection[Cell] = (
+            NavigationNodeLocation(Field, Field.NavigationNodes[NextNode])
+              - Field.CellCenter(Cell)).GetSafeNormal2D();
+        }
+      }
+    }
+  }
+
+  uint32 Hash = 2166136261u;
+  Hash = HashInt(Hash, AnchorCellKey);
+  Hash = HashInt(Hash, Quantize10(AnchorLocation.X));
+  Hash = HashInt(Hash, Quantize10(AnchorLocation.Y));
+  for (int32 NodeIndex = 0; NodeIndex < Field.NavigationNodes.Num(); ++NodeIndex)
+  {
+    Hash = HashInt(Hash, Field.NavigationIntegrationCost[NodeIndex]);
+    const int32 Next = Field.NavigationNextNodeIndex[NodeIndex];
+    Hash = HashInt(Hash, Next == INDEX_NONE ? 0
+      : static_cast<int32>(Field.NavigationNodes[Next].StableNodeKey & 0xffffffffull));
+    Hash = HashInt(Hash, Next == INDEX_NONE ? 0
+      : static_cast<int32>(Field.NavigationNodes[Next].StableNodeKey >> 32));
+  }
+  for (const int32 NodeIndex : Field.GoalAttachmentNodeIndices)
+  {
+    Hash = HashInt(Hash,
+      static_cast<int32>(Field.NavigationNodes[NodeIndex].StableNodeKey & 0xffffffffull));
+    Hash = HashInt(Hash,
+      static_cast<int32>(Field.NavigationNodes[NodeIndex].StableNodeKey >> 32));
+  }
+  Field.IntegrationHash = Hash;
+  Field.BuildHash = HashInt(Field.TopologyHash, Field.IntegrationHash);
+  return Field.IsValid();
 }
 
 FCrowdDemoSharedFlowSample FCrowdDemoSharedFlowFieldKernel::Sample(

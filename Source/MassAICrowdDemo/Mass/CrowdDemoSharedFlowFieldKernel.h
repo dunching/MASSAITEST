@@ -134,6 +134,8 @@ struct FCrowdDemoSharedFlowField
   int32 NavigationInternalEdgeCount = 0;
   int32 CenterInvalidButConnectedCellCount = 0;
   int32 GoalAttachmentCount = 0;
+  uint32 TopologyHash = 0;
+  uint32 IntegrationHash = 0;
   uint32 BuildHash = 0;
 
   void Reset();
@@ -146,7 +148,19 @@ class MASSAICROWDDEMO_API FCrowdDemoSharedFlowFieldKernel
 {
 public:
   static FCrowdDemoSharedFlowFieldConfig MakeSf1Config(int32 Revision = 1);
+  static bool BuildTopology(
+    const FCrowdDemoSharedFlowFieldConfig& Config,
+    FCrowdDemoSharedFlowField& OutField);
   static bool Build(const FCrowdDemoSharedFlowFieldConfig& Config, FCrowdDemoSharedFlowField& OutField);
+  static bool ResolveGoalAnchor(
+    const FCrowdDemoSharedFlowField& Field,
+    const FVector& TargetLocation,
+    int32& OutAnchorCellKey,
+    FVector& OutAnchorLocation);
+  static bool BuildIntegrationForAnchor(
+    int32 AnchorCellKey,
+    const FVector& AnchorLocation,
+    FCrowdDemoSharedFlowField& InOutField);
   static FCrowdDemoSharedFlowSample Sample(const FCrowdDemoSharedFlowField& Field, const FVector& Location);
   static FCrowdDemoReachableFlowCellSearchResult FindNearestReachableCell(
     const FCrowdDemoSharedFlowField& Field,

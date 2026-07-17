@@ -97,6 +97,15 @@ using System.Runtime.InteropServices;
 
 public static class CrowdDemoWin32WindowTools
 {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT
+  {
+    public int Left;
+    public int Top;
+    public int Right;
+    public int Bottom;
+  }
+
   [DllImport("user32.dll")]
   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
@@ -105,6 +114,9 @@ public static class CrowdDemoWin32WindowTools
 
   [DllImport("user32.dll")]
   public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, UInt32 uFlags);
+
+  [DllImport("user32.dll")]
+  public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 }
 "@
 }
@@ -263,7 +275,7 @@ try {
   Write-Host "[CrowdDemoCapture] Starting visible client: $ClientArgs"
   $ClientProcess = Start-Process -FilePath $EditorPath -ArgumentList $ClientArgs -PassThru
 
-  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost ([bool]$KeepClientTopMost)
+  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost $true
   if ($ClientWindowHandle -eq [IntPtr]::Zero) {
     throw "Client window handle is unavailable; refusing desktop fallback capture."
   }
@@ -274,9 +286,18 @@ try {
   }
   # Network travel can recreate the native client window. Reacquire the handle
   # after readiness so gdigrab never receives a stale pre-travel HWND.
-  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost ([bool]$KeepClientTopMost)
+  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost $true
   if ($ClientWindowHandle -eq [IntPtr]::Zero) {
     throw "Post-travel client window handle is unavailable."
+  }
+  $CaptureRect = New-Object CrowdDemoWin32WindowTools+RECT
+  if (![CrowdDemoWin32WindowTools]::GetWindowRect($ClientWindowHandle, [ref]$CaptureRect)) {
+    throw "Failed to query the post-travel client window rectangle."
+  }
+  $CaptureWidth = $CaptureRect.Right - $CaptureRect.Left
+  $CaptureHeight = $CaptureRect.Bottom - $CaptureRect.Top
+  if ($CaptureWidth -le 0 -or $CaptureHeight -le 0) {
+    throw "Invalid post-travel client window rectangle."
   }
   $FfmpegArgs = @(
     "-y",
@@ -286,9 +307,9 @@ try {
     "-f", "gdigrab",
     "-draw_mouse", "0",
     "-framerate", "$FrameRate",
-    "-offset_x", "$WindowX",
-    "-offset_y", "$WindowY",
-    "-video_size", "${ResX}x${ResY}",
+    "-offset_x", "$($CaptureRect.Left)",
+    "-offset_y", "$($CaptureRect.Top)",
+    "-video_size", "${CaptureWidth}x${CaptureHeight}",
     "-i", "desktop",
     "-vf", "scale=${ResX}:${ResY}:force_original_aspect_ratio=decrease,pad=${ResX}:${ResY}:(ow-iw)/2:(oh-ih)/2"
   ) + $EncoderArgs + @(

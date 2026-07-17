@@ -29,6 +29,7 @@ struct FCrowdDemoTargetRegionTransportSettings
   float TransportSpeedCmps = 300.0f;
   float RadialGainPerSecond = 2.0f;
   int32 DemandRegionCount = 16;
+  int32 DemandRegionPhaseOffset = 0;
   int32 PlanLifetimeSteps = 15;
   float PositionQuantumCm = 1.0f;
   float VelocityQuantumCmps = 1.0f;
@@ -41,6 +42,9 @@ struct FCrowdDemoTargetRegionTransportAgent
   FVector2f Velocity = FVector2f::ZeroVector;
   FVector2f FarFlowPreferredVelocity = FVector2f::ZeroVector;
   float MaxSpeedCmps = 0.0f;
+  float PhysicalRadiusCm = 42.0f;
+  float HardSafetyGapCm = 10.0f;
+  float SoftMarginCm = 17.0f;
 };
 
 struct FCrowdDemoTargetPolarCell
@@ -133,6 +137,8 @@ struct FCrowdDemoTargetRegionDemandResult
 {
   TArray<FCrowdDemoTargetDemandRegion> Regions;
   TArray<FCrowdDemoTargetRegionAgentDemandState> AgentStates;
+  TArray<int32> ExternalPopulationByCell;
+  TArray<int32> ExternalCongestionCostByCellCm;
   int32 FeasibleRegionCount = 0;
   int32 DesiredPopulationTotal = 0;
   int32 CurrentTerminalPopulation = 0;
@@ -140,6 +146,9 @@ struct FCrowdDemoTargetRegionDemandResult
   int32 TotalSurplus = 0;
   int32 SupplyAgentCount = 0;
   int32 SourceAttachmentFailureCount = 0;
+  int32 ExternalPopulationAgentCount = 0;
+  int32 ExternalOccupiedCellCount = 0;
+  uint32 ExternalPopulationHash = 2166136261u;
   uint32 MembershipHash = 2166136261u;
   uint32 DemandHash = 2166136261u;
   bool bValid = false;
@@ -161,6 +170,7 @@ struct FCrowdDemoTargetRegionFlowPlan
   uint32 FeasibleGraphHash = 0;
   uint32 EnvironmentHash = 0;
   uint32 MembershipHash = 0;
+  uint32 ExternalPopulationHash = 0;
   TArray<FCrowdDemoTargetPolarEdgeFlow> EdgeFlows;
   int32 RoutedAgentCount = 0;
   int32 UnroutedAgentCount = 0;
@@ -220,6 +230,11 @@ class FCrowdDemoTargetRegionTransportKernel
 public:
   static int32 SectorCountForRadius(float RadiusCm);
 
+  static FVector2f ComposeTargetAdvectedFarFlowVelocity(
+    const FVector2f& SharedFlowPreferredVelocity,
+    const FVector2f& TargetVelocity,
+    float MaxSpeedCmps);
+
   static int32 ComputeEdgeSoftClearancePenaltyCm(
     const FVector2f& Start,
     const FVector2f& End,
@@ -241,7 +256,8 @@ public:
     const FCrowdDemoSharedFlowFieldConfig& FlowConfig,
     const FCrowdDemoSharedFlowField* SharedFlowField,
     const FCrowdDemoTargetPolarTopology& Topology,
-    FCrowdDemoTargetRegionDemandResult& OutDemand);
+    FCrowdDemoTargetRegionDemandResult& OutDemand,
+    TConstArrayView<FCrowdDemoTargetRegionTransportAgent> ExternalAgents = {});
 
   static void SolveTransport(
     const FCrowdDemoTargetPolarTopology& Topology,

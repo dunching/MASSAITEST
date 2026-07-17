@@ -104,6 +104,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FCrowdDemoTargetRegionTransportDemandTest::RunTest(const FString& Parameters)
 {
   using namespace CrowdDemoTargetRegionTransportTests;
+  TestEqual(TEXT("moving target advection is added to far Shared Flow"),
+    FCrowdDemoTargetRegionTransportKernel::ComposeTargetAdvectedFarFlowVelocity(
+      FVector2f(300.0f, 0.0f), FVector2f(-80.0f, 0.0f), 800.0f),
+    FVector2f(220.0f, 0.0f));
+  const FVector2f ClampedAdvection =
+    FCrowdDemoTargetRegionTransportKernel::ComposeTargetAdvectedFarFlowVelocity(
+      FVector2f(800.0f, 0.0f), FVector2f(0.0f, 80.0f), 800.0f);
+  TestTrue(TEXT("moving target advection respects max speed"),
+    FMath::IsNearlyEqual(ClampedAdvection.Size(), 800.0f, 0.01f));
   const auto Flow = MakeFlowConfig();
   const auto Settings = MakeSettings();
   FCrowdDemoTargetPolarTopology Topology;
@@ -134,6 +143,59 @@ bool FCrowdDemoTargetRegionTransportDemandTest::RunTest(const FString& Parameter
   FCrowdDemoTargetRegionTransportKernel::BuildDemand(
     Agents, Settings, Flow, nullptr, Topology, Demand);
   TestEqual(TEXT("agent input reversal preserves demand hash"), Demand.DemandHash, Hash);
+
+  TArray<FCrowdDemoTargetRegionTransportAgent> PhaseAgents;
+  for (int32 Index = 0; Index < 3; ++Index)
+    PhaseAgents.Add(MakeAgent(Index + 101, 0, 1000.0f));
+  auto PhaseZeroSettings = Settings;
+  PhaseZeroSettings.DemandRegionPhaseOffset = 0;
+  FCrowdDemoTargetRegionDemandResult PhaseZeroDemand;
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    PhaseAgents, PhaseZeroSettings, Flow, nullptr, Topology, PhaseZeroDemand);
+  TestTrue(TEXT("phase-zero demand valid"), PhaseZeroDemand.bValid);
+  TestEqual(TEXT("phase-zero region zero"), PhaseZeroDemand.Regions[0].DesiredPopulation, 1);
+  TestEqual(TEXT("phase-zero region one"), PhaseZeroDemand.Regions[1].DesiredPopulation, 1);
+  TestEqual(TEXT("phase-zero region two"), PhaseZeroDemand.Regions[2].DesiredPopulation, 1);
+  auto PhaseFiveSettings = Settings;
+  PhaseFiveSettings.DemandRegionPhaseOffset = 5;
+  FCrowdDemoTargetRegionDemandResult PhaseFiveDemand;
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    PhaseAgents, PhaseFiveSettings, Flow, nullptr, Topology, PhaseFiveDemand);
+  TestTrue(TEXT("phase-five demand valid"), PhaseFiveDemand.bValid);
+  TestEqual(TEXT("phase-five region five"), PhaseFiveDemand.Regions[5].DesiredPopulation, 1);
+  TestEqual(TEXT("phase-five region six"), PhaseFiveDemand.Regions[6].DesiredPopulation, 1);
+  TestEqual(TEXT("phase-five region seven"), PhaseFiveDemand.Regions[7].DesiredPopulation, 1);
+  TestNotEqual(TEXT("phase participates in demand hash"),
+    PhaseFiveDemand.DemandHash, PhaseZeroDemand.DemandHash);
+  const uint32 PhaseFiveHash = PhaseFiveDemand.DemandHash;
+  Algo::Reverse(PhaseAgents);
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    PhaseAgents, PhaseFiveSettings, Flow, nullptr, Topology, PhaseFiveDemand);
+  TestEqual(TEXT("phase demand remains input-order independent"),
+    PhaseFiveDemand.DemandHash, PhaseFiveHash);
+
+  auto BoundaryTopology = Topology;
+  for (FCrowdDemoTargetPolarCellRegionLink& Link : BoundaryTopology.RegionLinks)
+  {
+    Link.bTerminal = Link.RegionKey == 0 || Link.RegionKey >= 11;
+  }
+  auto BoundaryPhaseSettings = Settings;
+  BoundaryPhaseSettings.DemandRegionPhaseOffset = 10;
+  FCrowdDemoTargetRegionDemandResult BoundaryPhaseDemand;
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    PhaseAgents, BoundaryPhaseSettings, Flow, nullptr,
+    BoundaryTopology, BoundaryPhaseDemand);
+  TestTrue(TEXT("boundary-filtered phase demand valid"), BoundaryPhaseDemand.bValid);
+  TestEqual(TEXT("boundary-filtered feasible region count"),
+    BoundaryPhaseDemand.FeasibleRegionCount, 6);
+  TestEqual(TEXT("normalized phase selects feasible ordinal thirteen"),
+    BoundaryPhaseDemand.Regions[13].DesiredPopulation, 1);
+  TestEqual(TEXT("normalized phase selects feasible ordinal fourteen"),
+    BoundaryPhaseDemand.Regions[14].DesiredPopulation, 1);
+  TestEqual(TEXT("normalized phase selects feasible ordinal fifteen"),
+    BoundaryPhaseDemand.Regions[15].DesiredPopulation, 1);
+  TestEqual(TEXT("raw-key eleven is no longer the collapsed phase start"),
+    BoundaryPhaseDemand.Regions[11].DesiredPopulation, 0);
 
   auto RouteFlow = FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(1);
   RouteFlow.AgentInflateCm = 52.0f;
@@ -216,6 +278,58 @@ bool FCrowdDemoTargetRegionTransportSolveTest::RunTest(const FString& Parameters
   TestEqual(TEXT("reversal preserves demand"), Demand.DemandHash, DemandHash);
   TestEqual(TEXT("reversal preserves transport"), Plan.TransportHash, TransportHash);
   TestEqual(TEXT("reversal preserves guidance"), GuidanceSummary.GuidanceHash, GuidanceHash);
+
+  TestTrue(TEXT("baseline transport exposes a route edge"), !Plan.EdgeFlows.IsEmpty());
+  if (!Plan.EdgeFlows.IsEmpty())
+  {
+    const int32 OccupiedCell = Plan.EdgeFlows[0].ToCellKey;
+    FCrowdDemoTargetRegionTransportAgent External = MakeAgent(1001, 0, 1000.0f);
+    External.Location = Topology.Cells[OccupiedCell].WorldAnchorCm;
+    TArray<FCrowdDemoTargetRegionTransportAgent> ExternalOne = {External};
+    FCrowdDemoTargetRegionDemandResult SharedPopulationDemand;
+    FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+      Agents, Settings, Flow, nullptr, Topology, SharedPopulationDemand, ExternalOne);
+    TestTrue(TEXT("shared population demand remains valid"), SharedPopulationDemand.bValid);
+    TestEqual(TEXT("one external agent contributes population"),
+      SharedPopulationDemand.ExternalPopulationAgentCount, 1);
+    TestEqual(TEXT("external route cell is occupied"),
+      SharedPopulationDemand.ExternalPopulationByCell[OccupiedCell], 1);
+    TestEqual(TEXT("external congestion uses the pair soft distance"),
+      SharedPopulationDemand.ExternalCongestionCostByCellCm[OccupiedCell], 128);
+    TestNotEqual(TEXT("external population participates in demand hash"),
+      SharedPopulationDemand.DemandHash, DemandHash);
+    FCrowdDemoTargetRegionFlowPlan SharedPopulationPlan;
+    FCrowdDemoTargetRegionTransportKernel::SolveTransport(
+      Topology, SharedPopulationDemand, nullptr, 1, 0, 7, SharedPopulationPlan);
+    TestTrue(TEXT("shared population plan remains valid"), SharedPopulationPlan.bValid);
+    TestNotEqual(TEXT("shared population changes transport cost or route"),
+      SharedPopulationPlan.TransportHash, TransportHash);
+
+    FCrowdDemoTargetRegionTransportAgent LargeExternal = External;
+    LargeExternal.PhysicalRadiusCm = 60.0f;
+    TArray<FCrowdDemoTargetRegionTransportAgent> LargeExternalAgents = {LargeExternal};
+    FCrowdDemoTargetRegionDemandResult LargeExternalDemand;
+    FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+      Agents, Settings, Flow, nullptr, Topology, LargeExternalDemand, LargeExternalAgents);
+    TestEqual(TEXT("heterogeneous external congestion uses compatible soft distance"),
+      LargeExternalDemand.ExternalCongestionCostByCellCm[OccupiedCell], 146);
+    TestNotEqual(TEXT("heterogeneous geometry participates in demand hash"),
+      LargeExternalDemand.DemandHash, SharedPopulationDemand.DemandHash);
+
+    FCrowdDemoTargetRegionTransportAgent ExternalTwo = External;
+    ExternalTwo.AgentId = 1002;
+    ExternalTwo.Location = Topology.Cells[Plan.EdgeFlows.Last().ToCellKey].WorldAnchorCm;
+    TArray<FCrowdDemoTargetRegionTransportAgent> ExternalAgents = {External, ExternalTwo};
+    FCrowdDemoTargetRegionDemandResult ForwardExternalDemand;
+    FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+      Agents, Settings, Flow, nullptr, Topology, ForwardExternalDemand, ExternalAgents);
+    Algo::Reverse(ExternalAgents);
+    FCrowdDemoTargetRegionDemandResult ReverseExternalDemand;
+    FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+      Agents, Settings, Flow, nullptr, Topology, ReverseExternalDemand, ExternalAgents);
+    TestEqual(TEXT("external population input reversal preserves demand hash"),
+      ReverseExternalDemand.DemandHash, ForwardExternalDemand.DemandHash);
+  }
   return true;
 }
 

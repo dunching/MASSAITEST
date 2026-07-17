@@ -6,6 +6,7 @@
 #include "CrowdDemoRoundSimCoordinator.generated.h"
 
 class UCrowdDemoMassSubsystem;
+class ACrowdDemoReplicator;
 
 UCLASS()
 class MASSAICROWDDEMO_API ACrowdDemoRoundSimCoordinator : public AActor
@@ -39,6 +40,9 @@ protected:
 
   UFUNCTION(NetMulticast, Reliable)
   void MulticastRoundPlan(const FCrowdDemoRoundPlanPacket& Plan);
+
+  UFUNCTION(NetMulticast, Reliable)
+  void MulticastProjectileVisualEvents(const TArray<FCrowdDemoProjectileVisualEvent>& Events);
 
 private:
   UPROPERTY(ReplicatedUsing = OnRep_RoundBootstrapPacket, Transient)
@@ -140,9 +144,13 @@ private:
   double ValidationReadyServerTimeSeconds = -1.0;
   float ValidationReadyLeadSeconds = 3.0f;
   float ValidationReadyTimeoutSeconds = 60.0f;
+  bool bPendingProjectileVisualValidation = false;
+  int32 PendingProjectileVisualRoundId = INDEX_NONE;
+  double PendingProjectileVisualValidationStartSeconds = 0.0;
 
   void TickServer();
   void TickClient();
+  void TryValidateProjectileVisualEvents();
   void StartServerRound(UCrowdDemoMassSubsystem& MassSubsystem, float StartServerTimeSeconds);
   void ActivateServerRoundPlan(UCrowdDemoMassSubsystem& MassSubsystem, const FCrowdDemoRoundPlanPacket& Plan);
   void PublishServerRoundPlan(const FCrowdDemoRoundPlanPacket& Plan);

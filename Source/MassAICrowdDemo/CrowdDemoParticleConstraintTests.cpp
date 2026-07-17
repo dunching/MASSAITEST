@@ -1385,6 +1385,11 @@ bool FCrowdDemoParticleHashContractTest::RunTest(const FString& Parameters)
   TestEqual(TEXT("applied hash ignores input order"),
     FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(1, 2, 3, 4.0f, States),
     AppliedBase);
+  States[0].Combat.Health -= 1.0f;
+  TestNotEqual(TEXT("combat state alters applied hash"),
+    FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(1, 2, 3, 4.0f, States),
+    AppliedBase);
+  States[0].Combat.Health += 1.0f;
   States[0].Velocity.Z += 1.0f;
   TestNotEqual(TEXT("full XYZ velocity alters applied hash"),
     FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(1, 2, 3, 4.0f, States),

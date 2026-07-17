@@ -15,6 +15,30 @@ struct FCrowdDemoMassAgentTag : public FMassTag
 };
 
 USTRUCT()
+struct FCrowdDemoMassProjectileTag : public FMassTag
+{
+  GENERATED_BODY()
+};
+
+USTRUCT()
+struct FCrowdDemoMassProjectileFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) uint64 ProjectileId = 0;
+  UPROPERTY(Transient) int32 SourceAgentId = INDEX_NONE;
+  UPROPERTY(Transient) int32 TargetAgentId = INDEX_NONE;
+  UPROPERTY(Transient) int32 SpawnFixedStep = INDEX_NONE;
+  UPROPERTY(Transient) FVector PreviousPosition = FVector::ZeroVector;
+  UPROPERTY(Transient) FVector Position = FVector::ZeroVector;
+  UPROPERTY(Transient) FVector Velocity = FVector::ZeroVector;
+  UPROPERTY(Transient) float RadiusCm = 12.0f;
+  UPROPERTY(Transient) bool bActive = false;
+  UPROPERTY(Transient) bool bImpacted = false;
+  UPROPERTY(Transient) bool bExpired = false;
+};
+
+USTRUCT()
 struct FCrowdDemoMassIdentityFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -45,6 +69,72 @@ struct FCrowdDemoMassStatsFragment : public FMassFragment
 
   UPROPERTY(Transient)
   bool bAlive = true;
+};
+
+USTRUCT()
+struct FCrowdDemoBusinessStateFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) ECrowdDemoBusinessState State = ECrowdDemoBusinessState::Idle;
+  UPROPERTY(Transient) int32 StateRevision = 0;
+  UPROPERTY(Transient) int32 StateEnterFixedStep = 0;
+  UPROPERTY(Transient) int32 TargetAgentId = INDEX_NONE;
+  UPROPERTY(Transient) int32 TargetLifecycleSerial = 0;
+  UPROPERTY(Transient) uint64 LastConsumedHitEventId = 0;
+};
+
+USTRUCT()
+struct FCrowdDemoRangedAttackFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) ECrowdDemoAttackPhase Phase = ECrowdDemoAttackPhase::None;
+  UPROPERTY(Transient) int32 PhaseEnterFixedStep = 0;
+  UPROPERTY(Transient) int32 CooldownEndFixedStep = 0;
+  UPROPERTY(Transient) int32 LockedTargetAgentId = INDEX_NONE;
+  UPROPERTY(Transient) int32 LockedTargetLifecycleSerial = 0;
+  UPROPERTY(Transient) FVector LockedTargetLocation = FVector::ZeroVector;
+  UPROPERTY(Transient) int32 FireSequence = 0;
+  UPROPERTY(Transient) bool bFireRequestIssued = false;
+};
+
+USTRUCT()
+struct FCrowdDemoReactiveMotionFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) ECrowdDemoReactiveMotionMode Mode = ECrowdDemoReactiveMotionMode::None;
+  UPROPERTY(Transient) FVector HorizontalVelocity = FVector::ZeroVector;
+  UPROPERTY(Transient) float VerticalVelocityCmps = 0.0f;
+  UPROPERTY(Transient) int32 StartFixedStep = INDEX_NONE;
+  UPROPERTY(Transient) int32 EndFixedStep = INDEX_NONE;
+  UPROPERTY(Transient) int32 ReactiveRevision = 0;
+  UPROPERTY(Transient) ECrowdDemoBusinessState RestoreBusinessState = ECrowdDemoBusinessState::Idle;
+  UPROPERTY(Transient) int32 ApexCount = 0;
+  UPROPERTY(Transient) int32 LandingCount = 0;
+};
+
+USTRUCT()
+struct FCrowdDemoReactiveMotionStepFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) bool bActive = false;
+  UPROPERTY(Transient) float ProposedZ = 0.0f;
+  UPROPERTY(Transient) float VerticalVelocityCmps = 0.0f;
+};
+
+USTRUCT()
+struct FCrowdDemoHitFlashFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) int32 FlashRevision = 0;
+  UPROPERTY(Transient) float StartServerTimeSeconds = 0.0f;
+  UPROPERTY(Transient) float DurationSeconds = 0.0f;
+  UPROPERTY(Transient) uint32 ProfileKey = 0;
+  UPROPERTY(Transient) float PeakIntensity = 0.0f;
 };
 
 USTRUCT()
@@ -198,6 +288,24 @@ struct FCrowdDemoRoundFlowSampleFragment : public FMassFragment
 };
 
 USTRUCT()
+struct FCrowdDemoRoundLocalVelocityFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) FVector Velocity = FVector::ZeroVector;
+  UPROPERTY(Transient) int32 NeighborCount = 0;
+  UPROPERTY(Transient) int32 ConstraintCount = 0;
+  UPROPERTY(Transient) int32 BlockedAgeSteps = 0;
+  UPROPERTY(Transient) uint32 ComponentKey = 0;
+  UPROPERTY(Transient) int32 GrantEpoch = 0;
+  UPROPERTY(Transient) int32 PlanRevision = 0;
+  UPROPERTY(Transient) bool bAdjusted = false;
+  UPROPERTY(Transient) bool bGranted = false;
+  UPROPERTY(Transient) bool bYielding = false;
+  UPROPERTY(Transient) bool bValid = false;
+};
+
+USTRUCT()
 struct FCrowdDemoRoundProposedMovementFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -218,6 +326,12 @@ struct FCrowdDemoParticlePropertiesFragment : public FMassFragment
   GENERATED_BODY()
 
   UPROPERTY(Transient)
+  int32 ProfileId = INDEX_NONE;
+
+  UPROPERTY(Transient)
+  uint32 CapabilityProfileKey = 0;
+
+  UPROPERTY(Transient)
   float PhysicalRadiusCm = 42.0f;
 
   UPROPERTY(Transient)
@@ -228,6 +342,27 @@ struct FCrowdDemoParticlePropertiesFragment : public FMassFragment
 
   UPROPERTY(Transient)
   float Mobility = 1.0f;
+};
+
+// Test-only participation state for T1 OpenSpawnRelaxation. This is not an
+// entity lifecycle or gameplay spawn contract: all Mass entities remain alive
+// and visible while inactive particles stay in the staging area.
+USTRUCT()
+struct FCrowdDemoOpenSpawnRelaxationFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient)
+  int32 FormationIndex = INDEX_NONE;
+
+  UPROPERTY(Transient)
+  bool bParticleActive = false;
+
+  UPROPERTY(Transient)
+  bool bPendingBoundaryReset = false;
+
+  UPROPERTY(Transient)
+  FVector BoundaryResetLocation = FVector::ZeroVector;
 };
 
 USTRUCT()
@@ -464,6 +599,18 @@ struct FCrowdDemoMassVisualFragment : public FMassFragment
   UPROPERTY(Transient)
   uint8 VatPlayRateByte = 128;
 
+  UPROPERTY(Transient)
+  ECrowdDemoVisualState VisualState = ECrowdDemoVisualState::Idle;
+
+  UPROPERTY(Transient)
+  int32 VisualRevision = 0;
+
+  UPROPERTY(Transient)
+  float StateStartServerTimeSeconds = 0.0f;
+
+  UPROPERTY(Transient)
+  uint32 PhaseSeed = 0;
+
 };
 
 USTRUCT()
@@ -503,6 +650,9 @@ struct FCrowdDemoClientAuthorityFragment : public FMassFragment
 
   UPROPERTY(Transient)
   uint8 VatPlayRateByte = 128;
+
+  UPROPERTY(Transient)
+  FCrowdDemoCombatNetState Combat;
 
   UPROPERTY(Transient)
   bool bInitialized = false;

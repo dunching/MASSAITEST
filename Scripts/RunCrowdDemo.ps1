@@ -25,6 +25,7 @@ param(
   [switch]$ParticleConstraintDiagnostic,
   [switch]$SoftPressureRouteDiagnostic,
   [switch]$TargetInfluenceExecutionDiagnostic,
+  [switch]$TargetStabilityDiagnostic,
   [switch]$TargetRegionTransportDiagnostic,
   [switch]$RequireParticleCorrectionReplay,
   [switch]$NoClient
@@ -91,6 +92,9 @@ if ($SoftPressureRouteDiagnostic) {
 if ($TargetInfluenceExecutionDiagnostic) {
   $CommonArgs = "$CommonArgs -CrowdDemoTargetInfluenceExecutionDiagnostic"
 }
+if ($TargetStabilityDiagnostic) {
+  $CommonArgs = "$CommonArgs -CrowdDemoTargetStabilityDiagnostic"
+}
 if ($TargetRegionTransportDiagnostic) {
   $CommonArgs = "$CommonArgs -CrowdDemoTargetRegionTransportDiagnostic"
 }
@@ -125,6 +129,10 @@ if ($ParticleConstraintDiagnostic) {
 if ($TargetInfluenceExecutionDiagnostic) {
   $TargetExecutionDiagnosticPath = Join-Path $LogDir "target_influence_execution_diagnostic.json"
   $ServerDiagnosticArgs = "$ServerDiagnosticArgs -CrowdDemoTargetInfluenceExecutionDiagnosticOutput=`"$TargetExecutionDiagnosticPath`""
+}
+if ($TargetStabilityDiagnostic) {
+  $LocalPredictiveFixturePath = Join-Path $LogDir "local_predictive_component_fixture.json"
+  $ServerDiagnosticArgs = "$ServerDiagnosticArgs -CrowdDemoLocalPredictiveFixtureOutput=`"$LocalPredictiveFixturePath`""
 }
 if ($TargetRegionTransportDiagnostic) {
   $TargetRegionTransportDiagnosticPath = Join-Path $LogDir "target_region_transport_failure_fixture.json"

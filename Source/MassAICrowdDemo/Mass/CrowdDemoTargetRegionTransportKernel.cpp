@@ -299,6 +299,27 @@ int32 FCrowdDemoTargetRegionTransportKernel::SectorCountForRadius(const float Ra
   return 64;
 }
 
+FVector2f FCrowdDemoTargetRegionTransportKernel::ComposeTargetAdvectedFarFlowVelocity(
+  const FVector2f& SharedFlowPreferredVelocity,
+  const FVector2f& TargetVelocity,
+  const float MaxSpeedCmps)
+{
+  if (!FMath::IsFinite(SharedFlowPreferredVelocity.X)
+    || !FMath::IsFinite(SharedFlowPreferredVelocity.Y)
+    || !FMath::IsFinite(TargetVelocity.X)
+    || !FMath::IsFinite(TargetVelocity.Y)
+    || !FMath::IsFinite(MaxSpeedCmps)
+    || MaxSpeedCmps <= 0.0f)
+  {
+    return FVector2f::ZeroVector;
+  }
+  const FVector2f Combined = SharedFlowPreferredVelocity + TargetVelocity;
+  const float SpeedSquared = Combined.SizeSquared();
+  return SpeedSquared > FMath::Square(MaxSpeedCmps)
+    ? Combined.GetSafeNormal() * MaxSpeedCmps
+    : Combined;
+}
+
 int32 FCrowdDemoTargetRegionTransportKernel::ComputeEdgeSoftClearancePenaltyCm(
   const FVector2f& Start, const FVector2f& End,
   const FCrowdDemoTargetRegionTransportSettings& Settings,
@@ -527,12 +548,68 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
   const FCrowdDemoSharedFlowFieldConfig& FlowConfig,
   const FCrowdDemoSharedFlowField* SharedFlowField,
   const FCrowdDemoTargetPolarTopology& Topology,
-  FCrowdDemoTargetRegionDemandResult& OutDemand)
+  FCrowdDemoTargetRegionDemandResult& OutDemand,
+  const TConstArrayView<FCrowdDemoTargetRegionTransportAgent> InputExternalAgents)
 {
   OutDemand = {};
   if (!Topology.bValid || Settings.DemandRegionCount <= 0) return;
   TArray<FCrowdDemoTargetRegionTransportAgent> Agents(InputAgents);
   Agents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+  TArray<FCrowdDemoTargetRegionTransportAgent> ExternalAgents(InputExternalAgents);
+  ExternalAgents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+  TSet<int32> OwnAgentIds;
+  for (const auto& Agent : Agents)
+  {
+    if (OwnAgentIds.Contains(Agent.AgentId)) return;
+    OwnAgentIds.Add(Agent.AgentId);
+  }
+  int32 PreviousExternalId = INDEX_NONE;
+  OutDemand.ExternalPopulationByCell.Init(0, Topology.Cells.Num());
+  OutDemand.ExternalCongestionCostByCellCm.Init(0, Topology.Cells.Num());
+  uint32 ExternalPopulationHash = Fold(FnvOffset, 2);
+  for (const auto& ExternalAgent : ExternalAgents)
+  {
+    if (ExternalAgent.AgentId <= PreviousExternalId
+      || OwnAgentIds.Contains(ExternalAgent.AgentId)
+      || !FMath::IsFinite(ExternalAgent.PhysicalRadiusCm)
+      || !FMath::IsFinite(ExternalAgent.HardSafetyGapCm)
+      || !FMath::IsFinite(ExternalAgent.SoftMarginCm)
+      || ExternalAgent.PhysicalRadiusCm <= 0.0f
+      || ExternalAgent.HardSafetyGapCm < 0.0f
+      || ExternalAgent.SoftMarginCm < 0.0f) return;
+    PreviousExternalId = ExternalAgent.AgentId;
+    const int32 DirectCell = DirectCellForLocation(
+      ExternalAgent.Location, Settings, Topology);
+    const FCrowdDemoTargetPolarCell* Cell = FindCell(Topology, DirectCell);
+    const int32 OccupiedCell = Cell && Cell->bFeasible ? DirectCell : INDEX_NONE;
+    if (OutDemand.ExternalPopulationByCell.IsValidIndex(OccupiedCell))
+    {
+      ++OutDemand.ExternalPopulationByCell[OccupiedCell];
+      const int32 PairSoftDistanceCm = FMath::RoundToInt(
+        Settings.PhysicalRadiusCm + ExternalAgent.PhysicalRadiusCm
+        + FMath::Max(Settings.HardSafetyGapCm, ExternalAgent.HardSafetyGapCm)
+        + Settings.SoftMarginCm + ExternalAgent.SoftMarginCm);
+      if (PairSoftDistanceCm <= 0
+        || OutDemand.ExternalCongestionCostByCellCm[OccupiedCell]
+          > MAX_int32 - PairSoftDistanceCm)
+      {
+        return;
+      }
+      OutDemand.ExternalCongestionCostByCellCm[OccupiedCell] += PairSoftDistanceCm;
+      ++OutDemand.ExternalPopulationAgentCount;
+    }
+    ExternalPopulationHash = Fold(ExternalPopulationHash, ExternalAgent.AgentId);
+    ExternalPopulationHash = Fold(ExternalPopulationHash, OccupiedCell);
+    ExternalPopulationHash = Fold(ExternalPopulationHash,
+      FMath::RoundToInt(ExternalAgent.PhysicalRadiusCm));
+    ExternalPopulationHash = Fold(ExternalPopulationHash,
+      FMath::RoundToInt(ExternalAgent.HardSafetyGapCm));
+    ExternalPopulationHash = Fold(ExternalPopulationHash,
+      FMath::RoundToInt(ExternalAgent.SoftMarginCm));
+  }
+  for (const int32 Population : OutDemand.ExternalPopulationByCell)
+    OutDemand.ExternalOccupiedCellCount += Population > 0 ? 1 : 0;
+  OutDemand.ExternalPopulationHash = ExternalPopulationHash;
   int32 PreviousId = INDEX_NONE;
   OutDemand.Regions.SetNum(Settings.DemandRegionCount);
   for (int32 Region = 0; Region < Settings.DemandRegionCount; ++Region)
@@ -546,18 +623,34 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
     OutDemand.FeasibleRegionCount += Region.bFeasible ? 1 : 0;
   }
   if (OutDemand.FeasibleRegionCount <= 0) return;
+  const int32 NormalizedPhase =
+    ((Settings.DemandRegionPhaseOffset % Settings.DemandRegionCount)
+      + Settings.DemandRegionCount) % Settings.DemandRegionCount;
+  TArray<int32> FeasibleRegionIndices;
+  FeasibleRegionIndices.Reserve(OutDemand.FeasibleRegionCount);
+  for (int32 RegionIndex = 0; RegionIndex < OutDemand.Regions.Num(); ++RegionIndex)
+    if (OutDemand.Regions[RegionIndex].bFeasible)
+      FeasibleRegionIndices.Add(RegionIndex);
+  const int32 FeasiblePhaseOffset = FeasibleRegionIndices.IsEmpty() ? 0
+    : NormalizedPhase * FeasibleRegionIndices.Num() / Settings.DemandRegionCount;
   int32 Remaining = Agents.Num();
   while (Remaining > 0)
   {
     bool bProgress = false;
-    for (auto& Region : OutDemand.Regions)
-      if (Region.bFeasible && Region.DesiredPopulation < Region.AvailableCapacity
+    for (int32 RegionOrder = 0;
+      RegionOrder < FeasibleRegionIndices.Num() && Remaining > 0; ++RegionOrder)
+    {
+      const int32 RegionIndex = FeasibleRegionIndices[
+        (FeasiblePhaseOffset + RegionOrder) % FeasibleRegionIndices.Num()];
+      auto& Region = OutDemand.Regions[RegionIndex];
+      if (Region.DesiredPopulation < Region.AvailableCapacity
         && Remaining > 0)
       {
         ++Region.DesiredPopulation;
         --Remaining;
         bProgress = true;
       }
+    }
     if (!bProgress) break;
   }
   OutDemand.DesiredPopulationTotal = Agents.Num() - Remaining;
@@ -604,9 +697,20 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
   for (const auto& State : OutDemand.AgentStates)
     OutDemand.SupplyAgentCount += State.bSupply ? 1 : 0;
 
-  uint32 Hash = Fold(FnvOffset, 1);
+  uint32 Hash = Fold(FnvOffset, 2);
   Hash = Fold(Hash, Topology.TopologyHash);
+  Hash = Fold(Hash, NormalizedPhase);
   Hash = Fold(Hash, MembershipHash);
+  Hash = Fold(Hash, OutDemand.ExternalPopulationHash);
+  Hash = Fold(Hash, OutDemand.ExternalPopulationAgentCount);
+  Hash = Fold(Hash, OutDemand.ExternalOccupiedCellCount);
+  for (int32 CellKey = 0; CellKey < OutDemand.ExternalPopulationByCell.Num(); ++CellKey)
+    if (OutDemand.ExternalPopulationByCell[CellKey] > 0)
+    {
+      Hash = Fold(Hash, CellKey);
+      Hash = Fold(Hash, OutDemand.ExternalPopulationByCell[CellKey]);
+      Hash = Fold(Hash, OutDemand.ExternalCongestionCostByCellCm[CellKey]);
+    }
   for (const auto& Region : OutDemand.Regions)
   {
     Hash = Fold(Hash, Region.StableRegionKey);
@@ -646,6 +750,7 @@ void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
   OutPlan.FeasibleGraphHash = Topology.FeasibleGraphHash;
   OutPlan.EnvironmentHash = Topology.EnvironmentHash;
   OutPlan.MembershipHash = Demand.MembershipHash;
+  OutPlan.ExternalPopulationHash = Demand.ExternalPopulationHash;
   if (!Topology.bValid || !Demand.bValid) return;
   const int32 CellCount = Topology.Cells.Num();
   const int32 RegionCount = Demand.Regions.Num();
@@ -687,7 +792,9 @@ void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
     {
       if (Edge.FromCellKey != Cell) continue;
       const int32 Physical = Edge.GeometryCostCm + Edge.SoftClearancePenaltyCm
-        + Edge.RadialDeviationPenaltyCm + PopulationByCell[Edge.ToCellKey] * 94;
+        + Edge.RadialDeviationPenaltyCm + PopulationByCell[Edge.ToCellKey] * 94
+        + (Demand.ExternalCongestionCostByCellCm.IsValidIndex(Edge.ToCellKey)
+          ? Demand.ExternalCongestionCostByCellCm[Edge.ToCellKey] : 0);
       const int32 Reuse = FMath::Min(SupplyByCell[Cell],
         PreviousQuota(Edge.FromCellKey, Edge.ToCellKey));
       if (Reuse > 0)
@@ -700,7 +807,9 @@ void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
   for (const auto& Edge : Topology.Edges)
   {
     const int32 Physical = Edge.GeometryCostCm + Edge.SoftClearancePenaltyCm
-      + Edge.RadialDeviationPenaltyCm + PopulationByCell[Edge.ToCellKey] * 94;
+      + Edge.RadialDeviationPenaltyCm + PopulationByCell[Edge.ToCellKey] * 94
+      + (Demand.ExternalCongestionCostByCellCm.IsValidIndex(Edge.ToCellKey)
+        ? Demand.ExternalCongestionCostByCellCm[Edge.ToCellKey] : 0);
     const int32 Reuse = FMath::Min(Demand.SupplyAgentCount,
       PreviousQuota(Edge.FromCellKey, Edge.ToCellKey));
     if (Reuse > 0)
@@ -808,6 +917,7 @@ void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
   Hash = Fold(Hash, TargetRevision);
   Hash = Fold(Hash, Topology.FeasibleGraphHash);
   Hash = Fold(Hash, Demand.MembershipHash);
+  Hash = Fold(Hash, Demand.ExternalPopulationHash);
   Hash = Fold(Hash, Flow);
   Hash = Fold(Hash, OutPlan.UnroutedAgentCount);
   Hash = Fold(Hash, TotalPhysical);
@@ -854,7 +964,8 @@ void FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
   if (!Topology.bValid || !Demand.bValid || !Plan.bValid
     || Plan.TargetRevision != TargetRevision
     || Plan.FeasibleGraphHash != Topology.FeasibleGraphHash
-    || Plan.MembershipHash != Demand.MembershipHash)
+    || Plan.MembershipHash != Demand.MembershipHash
+    || Plan.ExternalPopulationHash != Demand.ExternalPopulationHash)
   {
     ++OutValidation.InvalidCellCount;
     PinCell(INDEX_NONE);
@@ -1002,8 +1113,15 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidance(
   Agents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
   TMap<int32, const FCrowdDemoTargetRegionAgentDemandState*> StateByAgent;
   for (const auto& State : Demand.AgentStates) StateByAgent.Add(State.AgentId, &State);
+  TArray<FCrowdDemoTargetPolarEdgeFlow> StableFlows(Plan.EdgeFlows);
+  StableFlows.Sort([](const FCrowdDemoTargetPolarEdgeFlow& A,
+    const FCrowdDemoTargetPolarEdgeFlow& B)
+  {
+    return A.FromCellKey != B.FromCellKey ? A.FromCellKey < B.FromCellKey
+      : A.ToCellKey < B.ToCellKey;
+  });
   TMap<int32, TArray<const FCrowdDemoTargetPolarEdgeFlow*>> Outgoing;
-  for (const auto& Flow : Plan.EdgeFlows)
+  for (const auto& Flow : StableFlows)
     Outgoing.FindOrAdd(Flow.FromCellKey).Add(&Flow);
   for (auto& Pair : Outgoing)
     Pair.Value.Sort([](const FCrowdDemoTargetPolarEdgeFlow& A,
@@ -1093,6 +1211,30 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidance(
     if (Speed > Agent.MaxSpeedCmps && Agent.MaxSpeedCmps > 0.0f)
       Result.DesiredVelocity = Result.DesiredVelocity.GetSafeNormal() * Agent.MaxSpeedCmps;
     Result.DesiredVelocity = Quantize(Result.DesiredVelocity, Settings.VelocityQuantumCmps);
+  }
+  OutSummary.FarFlowAgentCount = 0;
+  OutSummary.TransportAgentCount = 0;
+  OutSummary.TerminalSettleAgentCount = 0;
+  OutSummary.UnroutedAgentCount = 0;
+  OutSummary.FirstUnroutedAgentId = INDEX_NONE;
+  OutSummary.FirstUnroutedCellKey = INDEX_NONE;
+  for (const FCrowdDemoTargetRegionGuidanceResult& Result : OutResults)
+  {
+    switch (Result.Mode)
+    {
+    case ECrowdDemoTargetRegionGuidanceMode::FarFlow: ++OutSummary.FarFlowAgentCount; break;
+    case ECrowdDemoTargetRegionGuidanceMode::Transport: ++OutSummary.TransportAgentCount; break;
+    case ECrowdDemoTargetRegionGuidanceMode::TerminalSettle:
+      ++OutSummary.TerminalSettleAgentCount; break;
+    default:
+      ++OutSummary.UnroutedAgentCount;
+      if (OutSummary.FirstUnroutedAgentId == INDEX_NONE)
+      {
+        OutSummary.FirstUnroutedAgentId = Result.AgentId;
+        OutSummary.FirstUnroutedCellKey = Result.CurrentCellKey;
+      }
+      break;
+    }
     Hash = Fold(Hash, Result.AgentId);
     Hash = Fold(Hash, Result.CurrentCellKey);
     Hash = Fold(Hash, Result.NextCellKey);
@@ -1101,7 +1243,7 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidance(
     Hash = Fold(Hash, Q(Result.DesiredVelocity.X, Settings.VelocityQuantumCmps));
     Hash = Fold(Hash, Q(Result.DesiredVelocity.Y, Settings.VelocityQuantumCmps));
   }
-  for (const auto& Flow : Plan.EdgeFlows)
+  for (const auto& Flow : StableFlows)
   {
     FCrowdDemoTargetRegionGuidanceConsumption Consumption;
     Consumption.FromCellKey = Flow.FromCellKey;

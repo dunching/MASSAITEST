@@ -9,6 +9,37 @@ class UInstancedStaticMeshComponent;
 class UStaticMeshComponent;
 class UCrowdDemoMassSubsystem;
 
+struct FCrowdDemoProjectileVisualEventKey
+{
+  uint64 ProjectileId = 0;
+  uint8 Kind = 0;
+
+  bool operator==(const FCrowdDemoProjectileVisualEventKey& Other) const
+  {
+    return ProjectileId == Other.ProjectileId && Kind == Other.Kind;
+  }
+
+  friend uint32 GetTypeHash(const FCrowdDemoProjectileVisualEventKey& Key)
+  {
+    return HashCombineFast(GetTypeHash(Key.ProjectileId), GetTypeHash(Key.Kind));
+  }
+};
+
+struct FCrowdDemoProjectileVisualRuntime
+{
+  FVector Position = FVector::ZeroVector;
+  FVector Velocity = FVector::ZeroVector;
+  float ServerTimeSeconds = 0.0f;
+  float RadiusCm = 12.0f;
+};
+
+struct FCrowdDemoProjectileVisualRoundCounts
+{
+  int32 Spawn = 0;
+  int32 Impact = 0;
+  int32 Expire = 0;
+};
+
 UCLASS()
 class MASSAICROWDDEMO_API ACrowdDemoReplicator : public AActor
 {
@@ -21,6 +52,7 @@ public:
   virtual void Tick(float DeltaSeconds) override;
   virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
   UInstancedStaticMeshComponent* GetCrowdInstancesForClientVisuals() const;
+  UInstancedStaticMeshComponent* GetCrowdHitFlashInstancesForClientVisuals() const;
   void ClearCrowdVisualInstances();
   int32 GetCrowdVisualInstanceCount() const;
   void RecordClientVisualSample(float ReplicationSampleAgeMs, float DisplayToAuthoritativeCm);
@@ -29,6 +61,14 @@ public:
   void UpsertClientMassEntityState(const FCrowdDemoEntityState& State);
   void SetLocalVisualHostOnly(bool bInLocalVisualHostOnly);
   bool IsLocalVisualHostOnly() const { return bLocalVisualHostOnly; }
+  void ApplyProjectileVisualEvents(TConstArrayView<FCrowdDemoProjectileVisualEvent> Events);
+  bool GetProjectileVisualEventCounts(
+    int32 RoundId,
+    int32& OutSpawn,
+    int32& OutImpact,
+    int32& OutExpire,
+    int32& OutActive) const;
+  int32 GetActiveProjectileVisualCount() const { return ActiveProjectileVisuals.Num(); }
 
 protected:
   UPROPERTY(VisibleAnywhere)
@@ -36,6 +76,15 @@ protected:
 
   UPROPERTY(VisibleAnywhere)
   TObjectPtr<UInstancedStaticMeshComponent> CrowdInstances;
+
+  UPROPERTY(VisibleAnywhere)
+  TObjectPtr<UInstancedStaticMeshComponent> CrowdHitFlashInstances;
+
+  UPROPERTY(VisibleAnywhere)
+  TObjectPtr<UInstancedStaticMeshComponent> ProjectileInstances;
+
+  UPROPERTY(VisibleAnywhere)
+  TObjectPtr<UInstancedStaticMeshComponent> ProjectileImpactInstances;
 
   UPROPERTY(VisibleAnywhere)
   TObjectPtr<UStaticMeshComponent> PreviewFloor;
@@ -48,6 +97,7 @@ private:
   bool bServerSummaryLogged = false;
   bool bClientSummaryLogged = false;
   bool bVisualMaterialLoaded = false;
+  bool bVatRuntimeMeshLoaded = false;
   bool bLocalVisualHostOnly = false;
 
   TArray<FCrowdDemoEntityState> EntityStates;
@@ -58,11 +108,16 @@ private:
   TArray<float> RoundVisualCorrectionOffsetCmSamples;
   TArray<float> RoundVisualYawOffsetDegSamples;
   int32 RoundVisualSmoothingActiveCount = 0;
+  TMap<uint64, FCrowdDemoProjectileVisualRuntime> ActiveProjectileVisuals;
+  TMap<int32, FCrowdDemoProjectileVisualRoundCounts> ProjectileVisualRoundCounts;
+  TSet<FCrowdDemoProjectileVisualEventKey> SeenProjectileVisualEvents;
+  TArray<double> ProjectileImpactExpireWorldSeconds;
 
   void RefreshServerSummaryState();
   FCrowdDemoEntityState& FindOrAddEntityState(int32 Id, int32 LifecycleSerial);
   void LogSummaryIfReady();
   FCrowdDemoSummaryMetrics BuildSummaryMetrics() const;
+  void UpdateProjectileVisuals();
 
   static float ComputeP95(TArray<float> Samples);
   static int32 ResolveEntityCount();

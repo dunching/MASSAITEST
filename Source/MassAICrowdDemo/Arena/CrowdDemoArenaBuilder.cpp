@@ -41,6 +41,33 @@ void ACrowdDemoArenaBuilder::BeginPlay()
 
 TArray<FCrowdDemoSharedFlowObstacleSpec> ACrowdDemoArenaBuilder::BuildObstacleList() const
 {
+  if (const UWorld* World = GetWorld())
+  {
+    for (TActorIterator<ACrowdDemoScenarioConfigActor> It(World); It; ++It)
+    {
+      const ACrowdDemoScenarioConfigActor* Config = *It;
+      if (Config
+        && Config->ScenarioOverrideValue == static_cast<int32>(ECrowdDemoScenario::SimRoundSoftPressure)
+        && (Config->SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::OpenSpawnRelaxation
+          || Config->SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::OpenCohortMovement
+          || Config->SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::BidirectionalSwap
+          || Config->SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat))
+      {
+        return {};
+      }
+    }
+    if (const UCrowdDemoMassSubsystem* Mass = World->GetSubsystem<UCrowdDemoMassSubsystem>())
+    {
+      if (Mass->GetScenario() == ECrowdDemoScenario::SimRoundSoftPressure
+        && (Mass->GetSoftPressureTestCase() == ECrowdDemoSoftPressureTestCase::OpenSpawnRelaxation
+          || Mass->GetSoftPressureTestCase() == ECrowdDemoSoftPressureTestCase::OpenCohortMovement
+          || Mass->GetSoftPressureTestCase() == ECrowdDemoSoftPressureTestCase::BidirectionalSwap
+          || Mass->GetSoftPressureTestCase() == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat))
+      {
+        return {};
+      }
+    }
+  }
   return FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(1).ObstacleSpecs;
 }
 

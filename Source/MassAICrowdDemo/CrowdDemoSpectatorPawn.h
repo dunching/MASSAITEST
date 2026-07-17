@@ -29,5 +29,6 @@ protected:
   TObjectPtr<UFloatingPawnMovement> Movement;
 
 private:
+  void ApplyConfiguredView();
   void ApplyDemoViewTarget();
 };

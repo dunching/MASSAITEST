@@ -39,6 +39,9 @@ struct FReplicatedCrowdDemoAgent : public FReplicatedAgentBase
   uint8 VatPlayRateByte = 128;
 
   UPROPERTY(Transient)
+  FCrowdDemoCombatNetState Combat;
+
+  UPROPERTY(Transient)
   float ServerSampleTimeSeconds = 0.0f;
 
   UPROPERTY(Transient)

@@ -97,6 +97,13 @@ void AMassAICrowdDemoGameMode::BeginPlay()
     return;
   }
 
+  // Arena BeginPlay consumes these facts. Publish them before spawning the
+  // builder so T1 cannot accidentally render the default CorridorRoute walls.
+  MassSubsystem->SetScenario(Scenario);
+  MassSubsystem->SetSoftPressureTestCase(Config
+    ? Config->SoftPressureTestCase
+    : ECrowdDemoSoftPressureTestCase::CorridorRoute);
+
   FActorSpawnParameters SpawnParams;
   SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
   SpawnParams.Name = TEXT("CrowdDemoArena");
@@ -105,10 +112,6 @@ void AMassAICrowdDemoGameMode::BeginPlay()
   SpawnParams.Name = TEXT("CrowdDemoTarget");
   ACrowdDemoTargetActor* Target = World->SpawnActor<ACrowdDemoTargetActor>(ACrowdDemoTargetActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
   MassSubsystem->SetTargetActor(Target);
-  MassSubsystem->SetScenario(Scenario);
-  MassSubsystem->SetSoftPressureTestCase(Config
-    ? Config->SoftPressureTestCase
-    : ECrowdDemoSoftPressureTestCase::CorridorRoute);
 
   const int32 AgentCount = Config && Config->EntityCountOverride > 0 ? Config->EntityCountOverride : ResolveAgentCount();
   const FCrowdDemoMassSpawnResult SpawnResult = MassSubsystem->SpawnAgents(AgentCount);

@@ -53,9 +53,12 @@ public:
   int32 GetAliveAgentCount() const;
   int32 BuildVisualSnapshot(TArray<FCrowdDemoEntityState>& OutSnapshot, float ServerTimeSeconds) const;
   int32 BuildRoundAgentStates(TArray<FCrowdDemoRoundAgentState>& OutStates) const;
+  void MirrorProjectileStates(TConstArrayView<struct FCrowdDemoProjectileState> Projectiles);
+  int32 GetTrackedProjectilePoolCount() const { return TrackedProjectiles.Num(); }
 
 private:
   TArray<FMassEntityHandle> TrackedAgents;
+  TArray<FMassEntityHandle> TrackedProjectiles;
   TWeakObjectPtr<AActor> TargetActor;
   ECrowdDemoScenario CurrentScenario = ECrowdDemoScenario::SimRoundObstacle;
   ECrowdDemoSoftPressureTestCase SoftPressureTestCase =
@@ -69,6 +72,7 @@ private:
 
   FVector MakeSpawnLocation(int32 AgentIndex, int32 AgentCount) const;
   void DestroyTrackedAgents();
+  void SpawnProjectilePool(FMassEntityManager& EntityManager, int32 PoolSize);
   void InitializeAgentFragments(FMassEntityManager& EntityManager, FMassEntityHandle Entity, int32 AgentIndex, int32 AgentCount) const;
   void RegisterRoundSimProcessors();
   void UnregisterRoundSimProcessors();

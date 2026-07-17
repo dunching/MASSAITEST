@@ -1,10 +1,16 @@
 #include "CrowdDemoRoundSimCoordinator.h"
 
+#include "CrowdDemoReplicator.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "Mass/CrowdDemoRoundCheckpointTransport.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
+#include "Mass/CrowdDemoOpenSpawnRelaxationKernel.h"
+#include "Mass/CrowdDemoOpenCohortMovementKernel.h"
+#include "Mass/CrowdDemoBidirectionalSwapKernel.h"
+#include "Mass/CrowdDemoValidCorridorTransitKernel.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
@@ -683,7 +689,152 @@ namespace
     Header.PbdSolverMsP95 = Packet.PbdSolverMsP95;
     Header.TrafficMetrics = Packet.TrafficMetrics;
     Header.ParticleMetrics = Packet.ParticleMetrics;
+    Header.ProjectileMetrics = Packet.ProjectileMetrics;
     return Header;
+  }
+
+  ACrowdDemoReplicator* FindProjectileVisualHost(UWorld& World)
+  {
+    ACrowdDemoReplicator* LocalFallback = nullptr;
+    for (TActorIterator<ACrowdDemoReplicator> It(&World); It; ++It)
+    {
+      ACrowdDemoReplicator* Candidate = *It;
+      if (!Candidate)
+      {
+        continue;
+      }
+      if (!Candidate->IsLocalVisualHostOnly())
+      {
+        return Candidate;
+      }
+      LocalFallback = LocalFallback ? LocalFallback : Candidate;
+    }
+    return LocalFallback;
+  }
+
+  FString SerializeLocalPredictiveComponentFixture(
+    const FCrowdDemoLocalPredictiveComponentFixture& Fixture)
+  {
+    FString Json = FString::Printf(
+      TEXT("{\n  \"contract_version\":1,\n  \"valid\":%s,\n  \"fixed_step\":%d,\n  \"stable_hash\":%u,\n  \"settings\":{\"fixed_step\":%.6f,\"time_horizon\":%.3f,\"cell_size\":%.1f,\"velocity_quantum\":%.3f,\"epsilon\":%.3f,\"requested_progress\":%.1f,\"blocked_progress\":%.1f,\"granted_responsibility\":%.3f,\"grant_steps\":%d,\"joint_iterations\":%d},\n  \"witness_agent_ids\":["),
+      Fixture.bValid ? TEXT("true") : TEXT("false"), Fixture.FixedStepIndex,
+      Fixture.StableHash, Fixture.Settings.FixedStepSeconds,
+      Fixture.Settings.TimeHorizonSeconds, Fixture.Settings.SpatialCellSizeCm,
+      Fixture.Settings.VelocityQuantumCmps,
+      Fixture.Settings.ConstraintEpsilonCmps,
+      Fixture.Settings.RequestedProgressThresholdCmps,
+      Fixture.Settings.BlockedProgressThresholdCmps,
+      Fixture.Settings.GrantedResponsibility, Fixture.Settings.GrantDurationSteps,
+      Fixture.Settings.JointIterationCount);
+    for (int32 Index = 0; Index < Fixture.WitnessAgentIds.Num(); ++Index)
+      Json += FString::Printf(TEXT("%s%d"), Index ? TEXT(",") : TEXT(""),
+        Fixture.WitnessAgentIds[Index]);
+    Json += TEXT("],\n  \"agents\":[\n");
+    for (int32 Index = 0; Index < Fixture.Agents.Num(); ++Index)
+    {
+      const auto& Agent = Fixture.Agents[Index];
+      Json += FString::Printf(
+        TEXT("    {\"id\":%d,\"position\":[%.1f,%.1f],\"velocity\":[%.1f,%.1f],\"preferred\":[%.1f,%.1f],\"radius\":%.1f,\"hard_gap\":%.1f,\"max_speed\":%.1f,\"blocked_age\":%d}%s\n"),
+        Agent.AgentId, Agent.Position.X, Agent.Position.Y,
+        Agent.Velocity.X, Agent.Velocity.Y, Agent.PreferredVelocity.X,
+        Agent.PreferredVelocity.Y, Agent.PhysicalRadiusCm,
+        Agent.HardSafetyGapCm, Agent.MaxSpeedCmps, Agent.BlockedAgeSteps,
+        Index + 1 < Fixture.Agents.Num() ? TEXT(",") : TEXT(""));
+    }
+    Json += TEXT("  ],\n  \"pairs\":[\n");
+    for (int32 Index = 0; Index < Fixture.ConflictPairs.Num(); ++Index)
+    {
+      const auto& Pair = Fixture.ConflictPairs[Index];
+      Json += FString::Printf(
+        TEXT("    {\"agents\":[%d,%d],\"closest_time\":%.4f,\"predicted_separation\":%.3f,\"required_separation\":%.3f,\"responsibility\":[%.3f,%.3f]}%s\n"),
+        Pair.MinAgentId, Pair.MaxAgentId, Pair.ClosestTimeSeconds,
+        Pair.PredictedSeparationCm, Pair.RequiredSeparationCm,
+        Pair.MinAgentResponsibility, Pair.MaxAgentResponsibility,
+        Index + 1 < Fixture.ConflictPairs.Num() ? TEXT(",") : TEXT(""));
+    }
+    const auto AppendResults = [&](const TCHAR* Name,
+      const TArray<FCrowdDemoLocalPredictiveResult>& Results)
+    {
+      Json += FString::Printf(TEXT("  ],\n  \"%s\":[\n"), Name);
+      for (int32 Index = 0; Index < Results.Num(); ++Index)
+      {
+        const auto& Result = Results[Index];
+        Json += FString::Printf(
+          TEXT("    {\"id\":%d,\"velocity\":[%.1f,%.1f],\"neighbors\":%d,\"constraints\":%d,\"blocked_age\":%d,\"component\":%u,\"granted\":%s,\"yielding\":%s,\"valid\":%s}%s\n"),
+          Result.AgentId, Result.Velocity.X, Result.Velocity.Y,
+          Result.NeighborCount, Result.ConstraintCount,
+          Result.NextBlockedAgeSteps, Result.ComponentKey,
+          Result.bGranted ? TEXT("true") : TEXT("false"),
+          Result.bYielding ? TEXT("true") : TEXT("false"),
+          Result.bValid ? TEXT("true") : TEXT("false"),
+          Index + 1 < Results.Num() ? TEXT(",") : TEXT(""));
+      }
+    };
+    AppendResults(TEXT("initial_independent"),
+      Fixture.Trace.InitialIndependentResults);
+    AppendResults(TEXT("completed_independent"),
+      Fixture.Trace.CompletedIndependentResults);
+    AppendResults(TEXT("final_results"), Fixture.Results);
+    Json += TEXT("  ],\n  \"components\":[\n");
+    for (int32 ComponentIndex = 0;
+      ComponentIndex < Fixture.Trace.Components.Num(); ++ComponentIndex)
+    {
+      const auto& Component = Fixture.Trace.Components[ComponentIndex];
+      Json += FString::Printf(
+        TEXT("    {\"key\":%u,\"granted\":%d,\"common_velocity\":[%.1f,%.1f],\"common_valid\":%s,\"full_joint_safe\":%s,\"coherent_translation_applied\":%s,\"coherent_translation\":[%.1f,%.1f],\"joint_preferred_recovery_applied\":%s,\"safe_alpha_q15\":%d,\"pre_translation\":["),
+        Component.ComponentKey, Component.GrantedAgentId,
+        Component.CommonVelocity.X, Component.CommonVelocity.Y,
+        Component.bCommonVelocityValid ? TEXT("true") : TEXT("false"),
+        Component.bFullJointVelocitySafe ? TEXT("true") : TEXT("false"),
+        Component.bCoherentTranslationApplied ? TEXT("true") : TEXT("false"),
+        Component.CoherentTranslation.X, Component.CoherentTranslation.Y,
+        Component.bJointPreferredRecoveryApplied ? TEXT("true") : TEXT("false"),
+        Component.SafeAlphaQ15);
+      for (int32 Index = 0; Index < Component.PreTranslationVelocities.Num(); ++Index)
+      {
+        const auto& Velocity = Component.PreTranslationVelocities[Index];
+        Json += FString::Printf(TEXT("%s{\"id\":%d,\"v\":[%.1f,%.1f]}"),
+          Index ? TEXT(",") : TEXT(""), Velocity.AgentId,
+          Velocity.Velocity.X, Velocity.Velocity.Y);
+      }
+      Json += TEXT("],\"pre_recovery\":[");
+      for (int32 Index = 0; Index < Component.PreRecoveryVelocities.Num(); ++Index)
+      {
+        const auto& Velocity = Component.PreRecoveryVelocities[Index];
+        Json += FString::Printf(TEXT("%s{\"id\":%d,\"v\":[%.1f,%.1f]}"),
+          Index ? TEXT(",") : TEXT(""), Velocity.AgentId,
+          Velocity.Velocity.X, Velocity.Velocity.Y);
+      }
+      Json += TEXT("],\"recovered\":[");
+      for (int32 Index = 0; Index < Component.RecoveredVelocities.Num(); ++Index)
+      {
+        const auto& Velocity = Component.RecoveredVelocities[Index];
+        Json += FString::Printf(TEXT("%s{\"id\":%d,\"v\":[%.1f,%.1f]}"),
+          Index ? TEXT(",") : TEXT(""), Velocity.AgentId,
+          Velocity.Velocity.X, Velocity.Velocity.Y);
+      }
+      Json += TEXT("],\"joint\":[");
+      for (int32 Index = 0; Index < Component.JointProjectedVelocities.Num(); ++Index)
+      {
+        const auto& Velocity = Component.JointProjectedVelocities[Index];
+        Json += FString::Printf(TEXT("%s{\"id\":%d,\"v\":[%.1f,%.1f]}"),
+          Index ? TEXT(",") : TEXT(""), Velocity.AgentId,
+          Velocity.Velocity.X, Velocity.Velocity.Y);
+      }
+      Json += TEXT("],\"final\":[");
+      for (int32 Index = 0; Index < Component.FinalVelocities.Num(); ++Index)
+      {
+        const auto& Velocity = Component.FinalVelocities[Index];
+        Json += FString::Printf(TEXT("%s{\"id\":%d,\"v\":[%.1f,%.1f]}"),
+          Index ? TEXT(",") : TEXT(""), Velocity.AgentId,
+          Velocity.Velocity.X, Velocity.Velocity.Y);
+      }
+      Json += FString::Printf(TEXT("]}%s\n"),
+        ComponentIndex + 1 < Fixture.Trace.Components.Num()
+          ? TEXT(",") : TEXT(""));
+    }
+    Json += TEXT("  ]\n}\n");
+    return Json;
   }
 
 }
@@ -827,6 +978,13 @@ void ACrowdDemoRoundSimCoordinator::OnRep_RoundResultHeader()
   PendingClientResultHeaderReceiveTimes.Add(
     RoundResultHeader.StateFrameRevision,
     GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0);
+  if (RoundResultHeader.ProjectileMetrics.ProjectileSpawnedCount > 0)
+  {
+    bPendingProjectileVisualValidation = true;
+    PendingProjectileVisualRoundId = RoundResultHeader.RoundId;
+    PendingProjectileVisualValidationStartSeconds =
+      GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+  }
   UE_LOG(
     LogTemp,
     Display,
@@ -857,6 +1015,20 @@ void ACrowdDemoRoundSimCoordinator::MulticastRoundPlan_Implementation(const FCro
   }
 }
 
+void ACrowdDemoRoundSimCoordinator::MulticastProjectileVisualEvents_Implementation(
+  const TArray<FCrowdDemoProjectileVisualEvent>& Events)
+{
+  UWorld* World = GetWorld();
+  if (!World || World->GetNetMode() == NM_DedicatedServer || Events.IsEmpty())
+  {
+    return;
+  }
+  if (ACrowdDemoReplicator* VisualHost = FindProjectileVisualHost(*World))
+  {
+    VisualHost->ApplyProjectileVisualEvents(Events);
+  }
+}
+
 void ACrowdDemoRoundSimCoordinator::TickServer()
 {
   UWorld* World = GetWorld();
@@ -867,6 +1039,13 @@ void ACrowdDemoRoundSimCoordinator::TickServer()
   if (!World || !MassSubsystem || !Pipeline || !IsCrowdDemoRoundSimScenario(MassSubsystem->GetScenario()))
   {
     return;
+  }
+
+
+  TArray<FCrowdDemoProjectileVisualEvent> ProjectileVisualEvents;
+  if (Pipeline->DequeueProjectileVisualEvents(ProjectileVisualEvents))
+  {
+    MulticastProjectileVisualEvents(ProjectileVisualEvents);
   }
 
   const float NowSeconds = World->GetTimeSeconds();
@@ -947,6 +1126,54 @@ void ACrowdDemoRoundSimCoordinator::TickClient()
 
   DropExpiredCorrectionAssemblies();
   TryProcessClientCorrectionAssemblies();
+  TryValidateProjectileVisualEvents();
+}
+
+void ACrowdDemoRoundSimCoordinator::TryValidateProjectileVisualEvents()
+{
+  if (!bPendingProjectileVisualValidation || PendingProjectileVisualRoundId == INDEX_NONE)
+  {
+    return;
+  }
+  UWorld* World = GetWorld();
+  ACrowdDemoReplicator* VisualHost = World ? FindProjectileVisualHost(*World) : nullptr;
+  int32 Spawn = 0;
+  int32 Impact = 0;
+  int32 Expire = 0;
+  int32 Active = 0;
+  const bool bHasCounts = VisualHost && VisualHost->GetProjectileVisualEventCounts(
+    PendingProjectileVisualRoundId, Spawn, Impact, Expire, Active);
+  const FCrowdDemoProjectileMetrics& Expected = RoundResultHeader.ProjectileMetrics;
+  const bool bMatches = bHasCounts
+    && Spawn == Expected.VisualSpawnEventCount
+    && Impact == Expected.VisualImpactEventCount
+    && Expire == Expected.VisualExpireEventCount
+    && Active == Expected.ProjectileActiveCount;
+  if (bMatches)
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoProjectileVisual role=client round_id=%d valid=1 spawn=%d impact=%d expire=%d active=%d source=ProjectileEventISM"),
+      PendingProjectileVisualRoundId, Spawn, Impact, Expire, Active);
+    bPendingProjectileVisualValidation = false;
+    PendingProjectileVisualRoundId = INDEX_NONE;
+    return;
+  }
+
+  const double NowSeconds = World ? World->GetTimeSeconds() : 0.0;
+  const bool bExceededExpected = Spawn > Expected.VisualSpawnEventCount
+    || Impact > Expected.VisualImpactEventCount
+    || Expire > Expected.VisualExpireEventCount
+    || Active > Expected.ProjectileActiveCount;
+  if (bExceededExpected || NowSeconds - PendingProjectileVisualValidationStartSeconds >= 3.0)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("CrowdDemoProjectileVisual role=client round_id=%d valid=0 spawn=%d/%d impact=%d/%d expire=%d/%d active=%d/%d VIOLATION"),
+      PendingProjectileVisualRoundId, Spawn, Expected.VisualSpawnEventCount,
+      Impact, Expected.VisualImpactEventCount, Expire, Expected.VisualExpireEventCount,
+      Active, Expected.ProjectileActiveCount);
+    bPendingProjectileVisualValidation = false;
+    PendingProjectileVisualRoundId = INDEX_NONE;
+  }
 }
 
 void ACrowdDemoRoundSimCoordinator::StartServerRound(UCrowdDemoMassSubsystem& MassSubsystem, const float StartServerTimeSeconds)
@@ -982,6 +1209,7 @@ void ACrowdDemoRoundSimCoordinator::ActivateServerRoundPlan(
   UCrowdDemoMassSubsystem& MassSubsystem,
   const FCrowdDemoRoundPlanPacket& Plan)
 {
+  CurrentRoundPlan = Plan;
   if (UCrowdDemoRoundSimPipelineSubsystem* Pipeline = GetWorld()->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>())
   {
     Pipeline->QueueRoundPlan(Plan);
@@ -1012,16 +1240,8 @@ void ACrowdDemoRoundSimCoordinator::ActivateServerRoundPlan(
 
 void ACrowdDemoRoundSimCoordinator::PublishServerRoundPlan(const FCrowdDemoRoundPlanPacket& Plan)
 {
-  CurrentRoundPlan = Plan;
-  if (UWorld* World = GetWorld())
-  {
-    if (UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>())
-    {
-      // Queue the one-second lead plan immediately. It becomes due only at the
-      // shared round boundary, so the last old-round step/result is still built first.
-      Pipeline->QueueRoundPlan(Plan);
-    }
-  }
+  // Publication is a network operation only. The authority queues the plan in
+  // ActivateServerRoundPlan after the old result/checkpoint has been frozen.
   MulticastRoundPlan(Plan);
   ForceNetUpdate();
   UE_LOG(
@@ -1095,6 +1315,27 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
     RoundResultPacket.ArrivalCount,
     RoundResultPacket.EndServerTimeSeconds);
 
+  if (RoundResultPacket.ProjectileMetrics.ProjectileSpawnedCount > 0)
+  {
+    const FCrowdDemoProjectileMetrics& Projectile = RoundResultPacket.ProjectileMetrics;
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoProjectileCheckpoint role=server round_id=%d valid=%d acquired=%d windup=%d spawned=%d active=%d impacted=%d expired=%d duplicate_fire=%d duplicate_hit=%d damage=%d visual_spawn=%d visual_impact=%d visual_expire=%d invalid_target_lifecycle=%d invalid_projectile=%d attack_hash=%u projectile_hash=%u event_hash=%u source=RoundSim%s"),
+      RoundResultPacket.RoundId, Projectile.bValid, Projectile.TargetAcquiredCount,
+      Projectile.CompletedWindupCount, Projectile.ProjectileSpawnedCount,
+      Projectile.ProjectileActiveCount, Projectile.ProjectileImpactedCount,
+      Projectile.ProjectileExpiredCount, Projectile.DuplicateFireCount,
+      Projectile.DuplicateHitCount, Projectile.DamageAppliedCount,
+      Projectile.VisualSpawnEventCount, Projectile.VisualImpactEventCount,
+      Projectile.VisualExpireEventCount, Projectile.InvalidTargetLifecycleCount,
+      Projectile.InvalidProjectileCount, Projectile.AttackStateHash,
+      Projectile.ProjectileStateHash, Projectile.EventHash,
+      Projectile.bValid ? TEXT("") : TEXT(" VIOLATION"));
+    if (!Projectile.bValid)
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdDemoProjectileCheckpoint role=server round_id=%d valid=0 VIOLATION"),
+        RoundResultPacket.RoundId);
+  }
+
   if (IsCrowdDemoRoundSimScenario(Pipeline->GetRules().Scenario))
   {
     const FCrowdDemoRoundCompareMetrics& Metrics = Pipeline->GetLastCompletedRoundMetrics();
@@ -1123,7 +1364,7 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoParticleCheckpoint role=server round_id=%d agents=%d navigation_hard_clearance_cm=%.3f flow_connectivity_contract_version=%d flow_field_build_hash=%u flow_valid_directed_edges=%d flow_recovered_count=%d desired_segment_hard_obstacle_violation_count=%d soft_pair_count=%d soft_violating_pair_count=%d soft_error_cm_p50=%.3f soft_error_cm_p95=%.3f soft_error_cm_max=%.3f hard_pair_violation_count=%d swept_pair_violation_count=%d pressure_influenced_agent_count=%d first_influenced_iteration_max=%d particle_corrected_agent_count=%d max_agent_correction_cm=%.3f settling_steps=%d obstacle_penetration_count=%d bounds_violation_count=%d environment_soft_contact_count=%d environment_soft_applied_agent_count=%d environment_soft_error_cm_p50=%.3f environment_soft_error_cm_p95=%.3f environment_soft_error_cm_max=%.3f environment_soft_requested_correction_cm_max=%.3f environment_soft_realized_correction_cm_max=%.3f unified_hard_constraint_count=%d unified_hard_residual_cm_max=%.3f unified_hard_infeasible_count=%d invalid_step_count=%d global_fallback_step_count=%d particle_solver_ms_p95=%.3f particle_candidate_hash=%u particle_applied_state_hash=%u failure_fixture_step=%d failure_pair=%d,%d failure_fixture_hash=%u rollback_hit=%d rollback_miss=%d rollback_mismatch=%d rollback_replayed_steps=%d source=MassPipeline"),
       RoundResultPacket.RoundId, RoundResultPacket.Agents.Num(),
-      Pipeline->GetRules().ParticleProfile.GetNavigationHardClearanceCm(),
+      Pipeline->GetRules().GetParticleEnvironmentHardClearanceCm(),
       Pipeline->GetRules().FlowFieldConfig.ConnectivityContractVersion,
       RoundResultPacket.TrafficMetrics.SharedFlowFieldBuildHash,
       Pipeline->GetSharedFlowField().ValidDirectedEdgeCount,
@@ -1148,6 +1389,139 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
       Particle.ParticleFailureMaxAgentId, Particle.ParticleFailureFixtureHash,
       Particle.RollbackSnapshotHitCount, Particle.RollbackSnapshotMissCount,
       Particle.RollbackAgentMismatchCount, Particle.RollbackReplayedStepCount);
+    if (Pipeline->IsTargetStabilityDiagnosticEnabled())
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetStabilityDiagnostic role=server round_id=%d valid=%d cause=%d samples=%d window=%d agents=%d inside_min=%d coverage=%d/%d contended_steps=%d contended_groups=%d merge_blocked_agents=%d merge_blocked_max_steps=%d terminal_chatter_agents=%d terminal_chatter=%d attraction_rejection=%d particle_settled_windows=%d particle_settled_max_steps=%d target_relative_speed_p95=%.3f target_relative_speed_max=%.3f position_peak_to_peak_p95=%.3f position_peak_to_peak_max=%.3f witness_step=%d witness_agent=%d witness_next_cell=%d hash=%u source=MassPipeline%s"),
+        RoundResultPacket.RoundId, Particle.bTargetStabilityDiagnosticValid,
+        Particle.TargetStabilityPrimaryCause, Particle.TargetStabilitySampleStepCount,
+        Particle.TargetStabilityWindowStepCount, Particle.TargetStabilityAgentCount,
+        Particle.TargetStabilityInsideBandMin, Particle.TargetStabilityCoverageMin,
+        Particle.TargetStabilityCoverageRequired, Particle.TargetStabilityContendedStepCount,
+        Particle.TargetStabilityContendedGroupCount,
+        Particle.TargetStabilityMergeBlockedAgentCount,
+        Particle.TargetStabilityMergeBlockedMaxSteps,
+        Particle.TargetStabilityTerminalChatterAgentCount,
+        Particle.TargetStabilityTerminalChatterCount,
+        Particle.TargetStabilityAttractionRejectionCycleCount,
+        Particle.TargetStabilityParticleSettledWindowCount,
+        Particle.TargetStabilityParticleSettledMaxSteps,
+        Particle.TargetStabilityTargetRelativeSpeedCmpsP95,
+        Particle.TargetStabilityTargetRelativeSpeedCmpsMax,
+        Particle.TargetStabilityPositionPeakToPeakCmP95,
+        Particle.TargetStabilityPositionPeakToPeakCmMax,
+        Particle.TargetStabilityFirstWitnessStep,
+        Particle.TargetStabilityFirstWitnessAgentId,
+        Particle.TargetStabilityFirstWitnessNextCellKey,
+        Particle.TargetStabilityDiagnosticHash,
+        Particle.bTargetStabilityDiagnosticValid ? TEXT("") : TEXT(" VIOLATION"));
+      const FCrowdDemoLocalPredictiveComponentFixture& Fixture =
+        Pipeline->GetLocalPredictiveComponentFixture();
+      FString FixtureOutputPath;
+      const bool bHasFixtureOutputPath = FParse::Value(FCommandLine::Get(),
+        TEXT("CrowdDemoLocalPredictiveFixtureOutput="), FixtureOutputPath);
+      bool bFixtureWritten = false;
+      if (Fixture.bValid && bHasFixtureOutputPath && !FixtureOutputPath.IsEmpty())
+      {
+        IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+        PlatformFile.CreateDirectoryTree(*FPaths::GetPath(FixtureOutputPath));
+        bFixtureWritten = FFileHelper::SaveStringToFile(
+          SerializeLocalPredictiveComponentFixture(Fixture), *FixtureOutputPath,
+          FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+      }
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoLocalPredictiveComponentFixtureFile role=server round_id=%d valid=%d output_path=%d written=%d agents=%d witnesses=%d hash=%u source=MassPipeline%s"),
+        RoundResultPacket.RoundId, Fixture.bValid ? 1 : 0,
+        bHasFixtureOutputPath ? 1 : 0, bFixtureWritten ? 1 : 0,
+        Fixture.Agents.Num(), Fixture.WitnessAgentIds.Num(), Fixture.StableHash,
+        Fixture.bValid && bHasFixtureOutputPath && !bFixtureWritten
+          ? TEXT(" VIOLATION") : TEXT(""));
+      if (Fixture.bValid && bHasFixtureOutputPath && !bFixtureWritten)
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdDemoLocalPredictiveComponentFixtureFile role=server round_id=%d write_failed=1 hash=%u VIOLATION"),
+          RoundResultPacket.RoundId, Fixture.StableHash);
+    }
+    if (Particle.bT1Valid != 0)
+    {
+      FString ActiveTransitions;
+      for (int32 Index = 0; Index < Particle.T1ActiveCountTransitions.Num(); ++Index)
+      {
+        if (Index) ActiveTransitions += TEXT(",");
+        ActiveTransitions += FString::FromInt(Particle.T1ActiveCountTransitions[Index]);
+      }
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoT1Checkpoint role=server round_id=%d valid=%d phase=%d transitions=%d active=%d active_sequence=%s batches=%d inserted=%d removed=%d layer_max=%d influenced=%d insert_settle=%d post_remove_settle=%d old_layout_returned=%d new_equilibrium_displaced=%d external_preferred_nonzero=%d participation_hash=%u propagation_hash=%u phase_hash=%u source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.bT1Valid, Particle.T1Phase,
+        Particle.T1PhaseTransitionCount, Particle.T1ActiveAgentCount,
+        *ActiveTransitions, Particle.T1BatchActivationCount,
+        Particle.T1InsertedAgentId, Particle.T1RemovedAgentId,
+        Particle.T1PressurePropagationLayerMax, Particle.T1InfluencedAgentCount,
+        Particle.T1InsertSettlingStep, Particle.T1PostRemovalSettlingStep,
+        Particle.T1OldLayoutReturnedAgentCount,
+        Particle.T1NewEquilibriumDisplacedAgentCount,
+        Particle.T1ExternalPreferredNonzeroCount,
+        Particle.T1ParticipationHash, Particle.T1PropagationHash,
+        Particle.T1PhaseHash);
+    }
+    if (Particle.T2LayoutHash != 0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoT2Checkpoint role=server round_id=%d valid=%d layout_hash=%u route_hash=%u progress_hash=%u flow_approach_entered_count=%d transport_handoff_count=%d inside_effective_band_count=%d feasible_region_count=%d feasible_region_coverage_count=%d plan_unrouted_count=%d guidance_unrouted_count=%d transport_validation_failure_count=%d terminal_settled_count=%d terminal_settled_step=%d applied_forward_cmps_p50=%.3f applied_forward_cmps_p95=%.3f flow_contract_violation_count=%d final_deadlock_agent_count=%d topology_hash=%u demand_hash=%u plan_hash=%u guidance_hash=%u validation_hash=%u source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.bT2Valid, Particle.T2LayoutHash,
+        Particle.T2RouteDiagnosticHash, Particle.T2ProgressHash,
+        Particle.T2FlowApproachEnteredCount, Particle.T2TransportHandoffCount,
+        Particle.T2InsideEffectiveBandCount, Particle.T2FeasibleRegionCount,
+        Particle.T2FeasibleRegionCoverageCount, Particle.T2PlanUnroutedCount,
+        Particle.T2GuidanceUnroutedCount,
+        Particle.T2TransportValidationFailureCount,
+        Particle.T2TerminalSettledCount, Particle.T2TerminalSettledStep,
+        Particle.T2AppliedForwardCmpsP50, Particle.T2AppliedForwardCmpsP95,
+        Particle.T2FlowContractViolationCount, Particle.T2FinalDeadlockAgentCount,
+        Particle.TargetTransportTopologyHash, Particle.TargetTransportDemandHash,
+        Particle.TargetTransportPlanHash, Particle.TargetTransportGuidanceHash,
+        Particle.TargetTransportValidationHash);
+    }
+    if (Particle.T3LayoutHash != 0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoT3Checkpoint role=server round_id=%d valid=%d layout_hash=%u flow_hashes=%u,%u progress_hash=%u cohort_agents=%d,%d center_crossed=%d,%d completed=%d,%d total_completed=%d throughput_difference=%d final_deadlock=%d unreachable_samples=%d last_step=%d completion_step_max=%d source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.bT3Valid, Particle.T3LayoutHash,
+        Particle.T3Cohort0FlowHash, Particle.T3Cohort1FlowHash,
+        Particle.T3ProgressHash,
+        Particle.T3Cohort0AgentCount, Particle.T3Cohort1AgentCount,
+        Particle.T3Cohort0CenterCrossedCount,
+        Particle.T3Cohort1CenterCrossedCount,
+        Particle.T3Cohort0CompletedCount, Particle.T3Cohort1CompletedCount,
+        Particle.T3CompletedCount, Particle.T3ThroughputDifference,
+        Particle.T3FinalDeadlockAgentCount, Particle.T3UnreachableSampleCount,
+        Particle.T3LastFixedStep, Particle.T3CompletionStepMax);
+    }
+    if (Particle.T4LayoutHash != 0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoT4Checkpoint role=server round_id=%d valid=%d layout_hash=%u flow_hash=%u progress_hash=%u wall_passed=%d corridor_exited=%d completed=%d final_deadlock=%d unreachable_samples=%d last_step=%d completion_step_max=%d source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.bT4Valid, Particle.T4LayoutHash,
+        Particle.T4FlowHash, Particle.T4ProgressHash,
+        Particle.T4WallPassedCount, Particle.T4CorridorExitedCount,
+        Particle.T4CompletedCount, Particle.T4FinalDeadlockAgentCount,
+        Particle.T4UnreachableSampleCount, Particle.T4LastFixedStep,
+        Particle.T4CompletionStepMax);
+    }
+    if (Particle.T6TransitLayoutHash != 0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoT6TransitCheckpoint role=server round_id=%d valid=%d layout_hash=%u flow_hash=%u progress_hash=%u capability_profiles=%d membership_hash=%u wall_passed=%d corridor_exited=%d completed=%d final_deadlock=%d unreachable_samples=%d cross_profile_hard=%d cross_profile_swept=%d last_step=%d completion_step_max=%d source=MassPipeline"),
+        RoundResultPacket.RoundId, Particle.bT6TransitValid,
+        Particle.T6TransitLayoutHash, Particle.T6TransitFlowHash,
+        Particle.T6TransitProgressHash, Particle.CapabilityProfileCount,
+        Particle.CapabilityMembershipHash, Particle.T6TransitWallPassedCount,
+        Particle.T6TransitCorridorExitedCount, Particle.T6TransitCompletedCount,
+        Particle.T6TransitFinalDeadlockAgentCount,
+        Particle.T6TransitUnreachableSampleCount,
+        Particle.CrossProfileHardViolationCount,
+        Particle.CrossProfileSweptViolationCount,
+        Particle.T6TransitLastFixedStep, Particle.T6TransitCompletionStepMax);
+    }
     if (Pipeline->GetRules().TargetInfluenceSettings.bEnabled != 0
       && Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0)
     {
@@ -1341,6 +1715,36 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
         Particle.TargetTransportPlanHash,
         Particle.TargetTransportGuidanceHash,
         Particle.TargetTransportValidationHash);
+      if (Pipeline->GetRules().bEnableHeterogeneousProfiles != 0)
+      {
+        FString Profiles;
+        for (int32 Index = 0; Index < Particle.CapabilityProfiles.Num(); ++Index)
+        {
+          const FCrowdDemoCapabilityProfileMetrics& Profile = Particle.CapabilityProfiles[Index];
+          if (Index > 0) Profiles += TEXT(";");
+          Profiles += FString::Printf(
+            TEXT("%u:%d:%d:%d:%d:%d:%d:%d:%d:%.1f:%.1f:%.1f:%d:%d:%d:%u:%u:%u:%u:%u"),
+            Profile.CapabilityProfileKey, Profile.DemandRegionPhaseOffset, Profile.AgentCount,
+            Profile.FeasibleRegionCount, Profile.FeasibleRegionCoverageCount,
+            Profile.InsideBandCount, Profile.DistanceBandInsideCount,
+            Profile.BelowBandCount, Profile.AboveBandCount,
+            Profile.OutsideBandErrorCmMax,
+            Profile.OutsideBandProgressCmpsMin,
+            Profile.OutsideBandProgressCmpsMax,
+            Profile.RoutedAgentCount,
+            Profile.UnroutedAgentCount, Profile.MaximumRegionPopulation,
+            Profile.TopologyHash, Profile.DemandHash, Profile.TransportHash,
+            Profile.GuidanceHash, Profile.ValidationHash);
+        }
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoT6TargetCheckpoint role=server round_id=%d testcase=%d valid=%d capability_profiles=%d membership_hash=%u profiles=[%s] cross_profile_hard=%d cross_profile_swept=%d source=MassPipeline"),
+          RoundResultPacket.RoundId,
+          static_cast<int32>(Pipeline->GetRules().SoftPressureTestCase),
+          Particle.bCapabilityProfilesValid, Particle.CapabilityProfileCount,
+          Particle.CapabilityMembershipHash, *Profiles,
+          Particle.CrossProfileHardViolationCount,
+          Particle.CrossProfileSweptViolationCount);
+      }
     }
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoTargetApproachCheckpoint role=server round_id=%d valid=%d target_fact_hash=%u target_approach_hash=%u agent_input_hash=%u fine_kinematic_hash=%u agent_config_hash=%u temporal_hash=%u settings_hash=%u slot_input_hash=%u full_input_hash=%u owner_state_hash=%u transition_hash=%u guidance_hash=%u guidance_location_hash=%u guidance_velocity_hash=%u ring_entered=%d ring_waiting=%d functional_capacity=%d functional_occupied=%d fill_capacity=%d fill_occupied=%d slot_ingress=%d slot_occupied=%d free_settle=%d free_settled=%d duplicate_owner=%d invalid_owner=%d state_transitions=%d source=MassPipeline"),
@@ -2134,6 +2538,8 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
 {
   FCrowdDemoRoundRules CompactRules;
   CompactRules.Scenario = MassSubsystem.GetScenario();
+  CompactRules.RoundStartPolicy =
+    ECrowdDemoRoundStartPolicy::ResetToStableInitialState;
   CompactRules.RandomSeed = 1337;
   CompactRules.FixedStepSeconds = 1.0f / 30.0f;
   CompactRules.FlowFieldConfig = FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(1);
@@ -2170,11 +2576,89 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
   if (bSf2)
   {
     CompactRules.SoftPressureTestCase = MassSubsystem.GetSoftPressureTestCase();
+    if (CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::OpenSpawnRelaxation)
+    {
+      CompactRules.FlowFieldConfig = FCrowdDemoOpenSpawnRelaxationKernel::MakeOpenFlowConfig();
+      CompactRules.SpawnOrigin = FVector::ZeroVector;
+      CompactRules.bEnableObstacle = 0;
+    }
+    else if (CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::OpenCohortMovement)
+    {
+      CompactRules.FlowFieldConfig = FCrowdDemoOpenCohortMovementKernel::MakeOpenFlowConfig();
+      CompactRules.SpawnOrigin = FVector(0.0f, -2850.0f, 60.0f);
+      CompactRules.bEnableObstacle = 0;
+    }
+    else if (CompactRules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::BidirectionalSwap)
+    {
+      CompactRules.FlowFieldConfig =
+        FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(0);
+      CompactRules.SpawnOrigin = FVector::ZeroVector;
+      CompactRules.FormationColumns = 10;
+      CompactRules.FormationSpacingCm = 128.0f;
+      CompactRules.bEnableObstacle = 0;
+    }
+    else if (CompactRules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::ValidCorridorTransit
+      || CompactRules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::HeterogeneousTransit)
+    {
+      CompactRules.FlowFieldConfig =
+        FCrowdDemoValidCorridorTransitKernel::MakeFlowConfig();
+      CompactRules.SpawnOrigin = FVector(0.0f, -2850.0f, 60.0f);
+      CompactRules.FormationColumns = 10;
+      CompactRules.FormationSpacingCm = CompactRules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::HeterogeneousTransit ? 140.0f : 128.0f;
+      CompactRules.bEnableObstacle = 1;
+    }
+    else if (CompactRules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat)
+    {
+      CompactRules.FlowFieldConfig = FCrowdDemoOpenCohortMovementKernel::MakeOpenFlowConfig();
+      CompactRules.SpawnOrigin = FVector(0.0f, 0.0f, 60.0f);
+      CompactRules.FormationColumns = 10;
+      CompactRules.FormationSpacingCm = 128.0f;
+      CompactRules.bEnableObstacle = 0;
+      CompactRules.RangedCombatSettings.bEnabled = 1;
+      CompactRules.RangedCombatSettings.ShooterCount = 10;
+      CompactRules.RangedCombatSettings.WindupFixedSteps = 15;
+      CompactRules.RangedCombatSettings.RecoveryFixedSteps = 12;
+      CompactRules.RangedCombatSettings.CooldownFixedSteps = 30;
+      CompactRules.RangedCombatSettings.ProjectileSpeedCmps = 1800.0f;
+      CompactRules.RangedCombatSettings.ProjectileRadiusCm = 12.0f;
+      CompactRules.RangedCombatSettings.ProjectileLifetimeFixedSteps = 60;
+      CompactRules.RangedCombatSettings.MuzzleForwardOffsetCm = 70.0f;
+      CompactRules.RangedCombatSettings.Damage = 20.0f;
+      CompactRules.RangedCombatSettings.HorizontalImpulseCmps = 0.0f;
+      CompactRules.RangedCombatSettings.VerticalImpulseCmps = 0.0f;
+    }
+    const bool bHeterogeneousProfiles =
+      CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTransit
+      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetStatic
+      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving;
+    CompactRules.bEnableHeterogeneousProfiles = bHeterogeneousProfiles ? 1 : 0;
+    if (bHeterogeneousProfiles)
+    {
+      // P0 LargeHeavy/LargeHeavy requires 130cm. Start all T6 scenes from a
+      // strictly non-overlapping layout rather than asking the first solver
+      // boundary to repair invalid input.
+      CompactRules.FormationSpacingCm = 140.0f;
+      // Shared Flow is a common navigation fact. Use the largest P0 hard wall
+      // clearance so every heterogeneous member can consume the same field.
+      CompactRules.FlowFieldConfig.AgentInflateCm = 70.0f;
+    }
+    else
+    {
     CompactRules.FlowFieldConfig.AgentInflateCm =
       CompactRules.ParticleProfile.GetNavigationHardClearanceCm();
+    }
     CompactRules.FlowFieldConfig.ConnectivityContractVersion = 2;
-    if (CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettle
-      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving)
+    if (FCrowdDemoOpenCohortMovementKernel::ShouldEnablePolarHandoff(
+          CompactRules.SoftPressureTestCase)
+      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettle
+      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving
+      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetStatic
+      || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving)
     {
       CompactRules.TargetApproachSettings.bEnabled = 0;
       CompactRules.TargetInfluenceSettings.bEnabled = 1;
@@ -2208,7 +2692,8 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
       CompactRules.TargetMotion.TargetRevision = 1;
       CompactRules.TargetMotion.InitialLocation = CompactRules.FlowFieldConfig.GoalLocation;
       CompactRules.TargetMotion.LinearVelocity =
-        CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving
+        (CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving
+          || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving)
         ? FVector(-80.0f, 0.0f, 0.0f)
         : FVector::ZeroVector;
       CompactRules.TargetMotion.InitialYawDegrees = 0.0f;
@@ -2402,6 +2887,7 @@ bool ACrowdDemoRoundSimCoordinator::TryBuildClientRoundResult(
   OutResult.PbdSolverMsP95 = Header->PbdSolverMsP95;
   OutResult.TrafficMetrics = Header->TrafficMetrics;
   OutResult.ParticleMetrics = Header->ParticleMetrics;
+  OutResult.ProjectileMetrics = Header->ProjectileMetrics;
   return true;
 }
 

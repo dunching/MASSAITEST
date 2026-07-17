@@ -10,7 +10,6 @@
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "Materials/MaterialInterface.h"
-#include "Materials/MaterialInstanceDynamic.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -38,6 +37,22 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   CrowdInstances->SetMobility(EComponentMobility::Movable);
   CrowdInstances->NumCustomDataFloats = 3;
 
+  CrowdHitFlashInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("CrowdHitFlashInstances"));
+  CrowdHitFlashInstances->SetupAttachment(SceneRoot);
+  CrowdHitFlashInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  CrowdHitFlashInstances->SetMobility(EComponentMobility::Movable);
+  CrowdHitFlashInstances->NumCustomDataFloats = 3;
+
+  ProjectileInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ProjectileInstances"));
+  ProjectileInstances->SetupAttachment(SceneRoot);
+  ProjectileInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  ProjectileInstances->SetMobility(EComponentMobility::Movable);
+
+  ProjectileImpactInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ProjectileImpactInstances"));
+  ProjectileImpactInstances->SetupAttachment(SceneRoot);
+  ProjectileImpactInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  ProjectileImpactInstances->SetMobility(EComponentMobility::Movable);
+
   PreviewFloor = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PreviewFloor"));
   PreviewFloor->SetupAttachment(SceneRoot);
   PreviewFloor->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -48,16 +63,46 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
   if (CubeMesh.Succeeded())
   {
-    CrowdInstances->SetStaticMesh(CubeMesh.Object);
     PreviewFloor->SetStaticMesh(CubeMesh.Object);
+  }
+
+  static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+  if (SphereMesh.Succeeded())
+  {
+    ProjectileInstances->SetStaticMesh(SphereMesh.Object);
+    ProjectileImpactInstances->SetStaticMesh(SphereMesh.Object);
+  }
+
+  static ConstructorHelpers::FObjectFinder<UStaticMesh> VatMesh(
+    TEXT("/Game/CrowdDemo/VAT/T7/Meshes/SM_CrowdDemoBug_Source.SM_CrowdDemoBug_Source"));
+  if (VatMesh.Succeeded())
+  {
+    CrowdInstances->SetStaticMesh(VatMesh.Object);
+    CrowdHitFlashInstances->SetStaticMesh(VatMesh.Object);
+    bVatRuntimeMeshLoaded = true;
   }
 
   static ConstructorHelpers::FObjectFinder<UMaterialInterface> BasicShapeMaterial(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
   if (BasicShapeMaterial.Succeeded())
   {
-    CrowdInstances->SetMaterial(0, BasicShapeMaterial.Object);
     PreviewFloor->SetMaterial(0, BasicShapeMaterial.Object);
+    ProjectileInstances->SetMaterial(0, BasicShapeMaterial.Object);
+    ProjectileImpactInstances->SetMaterial(0, BasicShapeMaterial.Object);
+  }
+
+  static ConstructorHelpers::FObjectFinder<UMaterialInterface> VatRuntimeMaterial(
+    TEXT("/Game/CrowdDemo/VAT/T7/Materials/MI_CrowdDemoBug_Runtime_VAT.MI_CrowdDemoBug_Runtime_VAT"));
+  if (VatRuntimeMaterial.Succeeded())
+  {
+    CrowdInstances->SetMaterial(0, VatRuntimeMaterial.Object);
     bVisualMaterialLoaded = true;
+  }
+
+  static ConstructorHelpers::FObjectFinder<UMaterialInterface> VatHitFlashMaterial(
+    TEXT("/Game/CrowdDemo/VAT/T7/Materials/MI_CrowdDemoBug_Runtime_HitFlash_VAT.MI_CrowdDemoBug_Runtime_HitFlash_VAT"));
+  if (VatHitFlashMaterial.Succeeded())
+  {
+    CrowdHitFlashInstances->SetMaterial(0, VatHitFlashMaterial.Object);
   }
 }
 
@@ -65,12 +110,6 @@ void ACrowdDemoReplicator::BeginPlay()
 {
   Super::BeginPlay();
 
-  if (CrowdInstances && CrowdInstances->GetMaterial(0))
-  {
-    UMaterialInstanceDynamic* CohortAMaterial = UMaterialInstanceDynamic::Create(CrowdInstances->GetMaterial(0), this);
-    CohortAMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.08f, 0.42f, 1.0f, 1.0f));
-    CrowdInstances->SetMaterial(0, CohortAMaterial);
-  }
   EntityCount = ResolveEntityCount();
   DurationSeconds = ResolveDurationSeconds();
   StartedSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -78,16 +117,16 @@ void ACrowdDemoReplicator::BeginPlay()
 
   if (bLocalVisualHostOnly)
   {
-    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client_visual_host duration=%.2f visual_material=%s source=MassClientBubble"), DurationSeconds, bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
+    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client_visual_host duration=%.2f vat_mesh=%s vat_material=%s source=MassClientBubble"), DurationSeconds, bVatRuntimeMeshLoaded ? TEXT("loaded") : TEXT("missing"), bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
   }
   else if (HasAuthority())
   {
     RefreshServerSummaryState();
-    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=server entity_count=%d duration=%.2f visual_material=%s source=MassClientBubble"), EntityStates.Num(), DurationSeconds, bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
+    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=server entity_count=%d duration=%.2f vat_mesh=%s vat_material=%s source=MassClientBubble"), EntityStates.Num(), DurationSeconds, bVatRuntimeMeshLoaded ? TEXT("loaded") : TEXT("missing"), bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
   }
   else
   {
-    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client duration=%.2f visual_material=%s source=MassClientBubble"), DurationSeconds, bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
+    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client duration=%.2f vat_mesh=%s vat_material=%s source=MassClientBubble"), DurationSeconds, bVatRuntimeMeshLoaded ? TEXT("loaded") : TEXT("missing"), bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
   }
 }
 
@@ -99,6 +138,11 @@ void ACrowdDemoReplicator::Tick(const float DeltaSeconds)
   {
     ServerFrameMsSamples.Add(DeltaSeconds * 1000.0f);
     RefreshServerSummaryState();
+  }
+
+  if (GetWorld() && GetWorld()->GetNetMode() != NM_DedicatedServer)
+  {
+    UpdateProjectileVisuals();
   }
 
   LogSummaryIfReady();
@@ -115,12 +159,22 @@ UInstancedStaticMeshComponent* ACrowdDemoReplicator::GetCrowdInstancesForClientV
   return CrowdInstances;
 }
 
+UInstancedStaticMeshComponent* ACrowdDemoReplicator::GetCrowdHitFlashInstancesForClientVisuals() const
+{
+  return CrowdHitFlashInstances;
+}
+
 void ACrowdDemoReplicator::ClearCrowdVisualInstances()
 {
   if (CrowdInstances)
   {
     CrowdInstances->ClearInstances();
     CrowdInstances->MarkRenderStateDirty();
+  }
+  if (CrowdHitFlashInstances)
+  {
+    CrowdHitFlashInstances->ClearInstances();
+    CrowdHitFlashInstances->MarkRenderStateDirty();
   }
   EntityStates.Reset();
 }
@@ -178,6 +232,121 @@ void ACrowdDemoReplicator::UpsertClientMassEntityState(const FCrowdDemoEntitySta
 void ACrowdDemoReplicator::SetLocalVisualHostOnly(const bool bInLocalVisualHostOnly)
 {
   bLocalVisualHostOnly = bInLocalVisualHostOnly;
+}
+
+void ACrowdDemoReplicator::ApplyProjectileVisualEvents(
+  const TConstArrayView<FCrowdDemoProjectileVisualEvent> Events)
+{
+  TArray<FCrowdDemoProjectileVisualEvent> Sorted(Events);
+  Sorted.Sort([](const auto& A, const auto& B)
+  {
+    if (A.FixedStepIndex != B.FixedStepIndex) return A.FixedStepIndex < B.FixedStepIndex;
+    if (A.ProjectileId != B.ProjectileId) return A.ProjectileId < B.ProjectileId;
+    return static_cast<uint8>(A.Kind) < static_cast<uint8>(B.Kind);
+  });
+
+  for (const FCrowdDemoProjectileVisualEvent& Event : Sorted)
+  {
+    const FCrowdDemoProjectileVisualEventKey EventKey{
+      Event.ProjectileId, static_cast<uint8>(Event.Kind)};
+    if (SeenProjectileVisualEvents.Contains(EventKey))
+    {
+      continue;
+    }
+    SeenProjectileVisualEvents.Add(EventKey);
+    const int32 RoundId = static_cast<int32>((Event.ProjectileId >> 48) & 0xffffu);
+    FCrowdDemoProjectileVisualRoundCounts& Counts = ProjectileVisualRoundCounts.FindOrAdd(RoundId);
+    if (Event.Kind == ECrowdDemoProjectileVisualEventKind::Spawn)
+    {
+      FCrowdDemoProjectileVisualRuntime& Runtime = ActiveProjectileVisuals.FindOrAdd(Event.ProjectileId);
+      Runtime.Position = FVector(Event.Position);
+      Runtime.Velocity = FVector(Event.Velocity);
+      Runtime.ServerTimeSeconds = Event.ServerTimeSeconds;
+      Runtime.RadiusCm = Event.RadiusCm;
+      ++Counts.Spawn;
+    }
+    else if (Event.Kind == ECrowdDemoProjectileVisualEventKind::Impact)
+    {
+      ActiveProjectileVisuals.Remove(Event.ProjectileId);
+      ++Counts.Impact;
+      if (ProjectileImpactInstances)
+      {
+        const float Scale = FMath::Max(Event.RadiusCm * 2.0f / 100.0f, 0.01f) * 2.5f;
+        ProjectileImpactInstances->AddInstance(
+          FTransform(FRotator::ZeroRotator, FVector(Event.Position), FVector(Scale)), true);
+        ProjectileImpactExpireWorldSeconds.Add(
+          (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0) + 0.18);
+      }
+    }
+    else if (Event.Kind == ECrowdDemoProjectileVisualEventKind::Expire)
+    {
+      ActiveProjectileVisuals.Remove(Event.ProjectileId);
+      ++Counts.Expire;
+    }
+  }
+}
+
+bool ACrowdDemoReplicator::GetProjectileVisualEventCounts(
+  const int32 RoundId,
+  int32& OutSpawn,
+  int32& OutImpact,
+  int32& OutExpire,
+  int32& OutActive) const
+{
+  const FCrowdDemoProjectileVisualRoundCounts* Counts = ProjectileVisualRoundCounts.Find(RoundId);
+  OutSpawn = Counts ? Counts->Spawn : 0;
+  OutImpact = Counts ? Counts->Impact : 0;
+  OutExpire = Counts ? Counts->Expire : 0;
+  OutActive = 0;
+  for (const auto& Pair : ActiveProjectileVisuals)
+  {
+    if (static_cast<int32>((Pair.Key >> 48) & 0xffffu) == RoundId)
+    {
+      ++OutActive;
+    }
+  }
+  return Counts != nullptr;
+}
+
+void ACrowdDemoReplicator::UpdateProjectileVisuals()
+{
+  if (!ProjectileInstances || !ProjectileImpactInstances)
+  {
+    return;
+  }
+  const AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+  const float ServerSeconds = GameState
+    ? GameState->GetServerWorldTimeSeconds()
+    : (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f);
+  TArray<uint64> ProjectileIds;
+  ActiveProjectileVisuals.GetKeys(ProjectileIds);
+  ProjectileIds.Sort();
+  ProjectileInstances->ClearInstances();
+  for (const uint64 ProjectileId : ProjectileIds)
+  {
+    const FCrowdDemoProjectileVisualRuntime* Runtime = ActiveProjectileVisuals.Find(ProjectileId);
+    if (!Runtime)
+    {
+      continue;
+    }
+    const float Elapsed = FMath::Max(0.0f, ServerSeconds - Runtime->ServerTimeSeconds);
+    const FVector DisplayPosition = Runtime->Position + Runtime->Velocity * Elapsed;
+    const float Scale = FMath::Max(Runtime->RadiusCm * 2.0f / 100.0f, 0.01f);
+    ProjectileInstances->AddInstance(
+      FTransform(Runtime->Velocity.Rotation(), DisplayPosition, FVector(Scale)), true);
+  }
+  ProjectileInstances->MarkRenderStateDirty();
+
+  const double NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+  for (int32 Index = ProjectileImpactExpireWorldSeconds.Num() - 1; Index >= 0; --Index)
+  {
+    if (NowSeconds >= ProjectileImpactExpireWorldSeconds[Index])
+    {
+      ProjectileImpactInstances->RemoveInstance(Index);
+      ProjectileImpactExpireWorldSeconds.RemoveAt(Index);
+    }
+  }
+  ProjectileImpactInstances->MarkRenderStateDirty();
 }
 
 void ACrowdDemoReplicator::RefreshServerSummaryState()
