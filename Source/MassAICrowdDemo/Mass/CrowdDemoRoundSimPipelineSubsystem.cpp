@@ -1,7 +1,6 @@
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
-#include "Mass/CrowdDemoSeparationKernel.h"
 
 namespace
 {
@@ -13,15 +12,7 @@ namespace
   bool IsFlowScenario(const ECrowdDemoScenario Scenario)
   {
     return Scenario == ECrowdDemoScenario::SimRoundObstacle
-      || Scenario == ECrowdDemoScenario::SimRoundSoftPressure
-      || Scenario == ECrowdDemoScenario::SimRoundCrowdTraffic
-      || Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
-  }
-
-  bool IsTrafficScenario(const ECrowdDemoScenario Scenario)
-  {
-    return Scenario == ECrowdDemoScenario::SimRoundCrowdTraffic
-      || Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
+      || Scenario == ECrowdDemoScenario::SimRoundSoftPressure;
   }
 
   uint32 FoldHash(uint32 Hash, const uint32 Value)
@@ -375,6 +366,28 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   }
   ActivePlan = Packet;
   bPlanActive = true;
+  for (TArray<float>& Samples : RoundPerformanceStageMsSamples)
+  {
+    Samples.Reset();
+  }
+  FixedStepPipelineMsSamples.Reset();
+  FixedStepsPerGameFrameSamples.Reset();
+  RollbackReplayMsSamples.Reset();
+  PerformanceCatchupFrameCount = 0;
+  PerformanceCatchupCpuBudgetHitCount = 0;
+  PerformanceCatchupCpuBudgetConsecutiveCount = 0;
+  PerformanceCatchupCpuBudgetConsecutiveMax = 0;
+  PerformanceMaxFixedStepsPerFrameHitCount = 0;
+  PerformanceFixedStepBacklogMsMax = 0.0f;
+  PerformanceRoundWallStartSeconds = FPlatformTime::Seconds();
+  PerformanceRoundSimStartSeconds = Packet.StartServerTimeSeconds;
+  PendingRollbackReplaySteps = 0;
+  PendingRollbackReplayMilliseconds = 0.0f;
+  PerformanceZeroErrorRollbackReplayCount = 0;
+  PerformanceTargetTopologyBuildCount = 0;
+  PerformanceTargetTopologyCacheHitCount = 0;
+  PerformanceTargetDemandFullBuildCount = 0;
+  PerformanceTargetDemandPopulationUpdateCount = 0;
   RoundInputHash = 0;
   RoundInitialStateHash = 0;
   RoundResetCount = 0;
@@ -389,6 +402,10 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     && Packet.Rules.TargetInfluenceSettings.bEnabled != 0;
   bTargetStabilityDiagnosticPlanEnabled = FParse::Param(
       FCommandLine::Get(), TEXT("CrowdDemoTargetStabilityDiagnostic"))
+    && Packet.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+    && Packet.Rules.TargetRegionTransportSettings.bEnabled != 0;
+  bTargetRegionPlanLifecycleDiagnosticPlanEnabled = FParse::Param(
+      FCommandLine::Get(), TEXT("CrowdDemoTargetRegionPlanLifecycleDiagnostic"))
     && Packet.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
     && Packet.Rules.TargetRegionTransportSettings.bEnabled != 0;
   CurrentFixedStepSeconds = FMath::Max(1.0f / 120.0f, Packet.Rules.FixedStepSeconds);
@@ -434,9 +451,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     SoftPressureRollbackSnapshotMissCount = 0;
     SoftPressureRollbackAgentMismatchCount = 0;
     SoftPressureRollbackReplayedStepCount = 0;
-    FlowSeparationOverlapPairSamples.Reset();
-    FlowSeparationSevereOverlapPairSamples.Reset();
-    PbdSolverMillisecondsSamples.Reset();
     ParticleSolverMillisecondsSamples.Reset();
     LastParticleCandidateSummary = FCrowdDemoParticleConstraintSummary();
     LastParticleAppliedSummary = FCrowdDemoParticleConstraintSummary();
@@ -497,6 +511,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     PreparedTargetRegionAgents.Reset();
     PreparedTargetRegionDemand = {};
     PreparedTargetRegionPlan = {};
+    TargetRegionQuotaExecution = {};
     TargetRegionPlanValidation = {};
     PreparedTargetRegionGuidance.Reset();
     TargetRegionGuidanceSummary = {};
@@ -531,143 +546,15 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     TargetRegionCapabilityCohorts.Reset();
     CapabilityProfileSummary = {};
     CapabilityCohortRebuildCount = 0;
+    TargetRegionPlanLifecycleSummary = {};
+    TargetRegionPlanLifecycleFixture = {};
     LastCompareMetrics.InitialOverlapPairCount = 0;
-    LastCompareMetrics.OverlapPairCountP50 = -1.0f;
-    LastCompareMetrics.OverlapPairCountP95 = -1.0f;
-    LastCompareMetrics.OverlapPairCountMax = 0;
-    LastCompareMetrics.SevereOverlapPairCountP50 = -1.0f;
-    LastCompareMetrics.SevereOverlapPairCountP95 = -1.0f;
-    LastCompareMetrics.SevereOverlapPairCountMax = 0;
-    LastCompareMetrics.SoftSeparationAppliedAgentCount = 0;
-    LastCompareMetrics.PbdCorrectedAgentCount = 0;
-    LastCompareMetrics.PbdCorrectedPairCount = 0;
-    LastCompareMetrics.PbdMaxPairCorrectionCm = 0.0f;
-    LastCompareMetrics.PbdMaxAgentTotalCorrectionCm = 0.0f;
-    LastCompareMetrics.PbdMaxObstacleReprojectDeltaCm = 0.0f;
-    LastCompareMetrics.PbdMaxFinalSafetyDeltaCm = 0.0f;
-    LastCompareMetrics.PbdSolverMsP95 = -1.0f;
-  }
-  if (IsTrafficScenario(Packet.Rules.Scenario))
-  {
-    for (FCrowdDemoSf3StageHash& StageHash : Sf3StageHashes)
-    {
-      StageHash = FCrowdDemoSf3StageHash();
-    }
-    Sf3StageHashHistory.Reset();
-    Sf3RollbackHistory.Reset();
-    PreparedTrafficAgents.Reset();
-    PreparedTrafficCells.Reset();
-    PreparedTrafficPortals.Reset();
-    PortalExtractionSummary = FCrowdDemoPortalExtractionSummary();
-    PreparedPortalCandidates.Reset();
-    PreparedPortalDecisions.Reset();
-    PreparedOrcaAgents.Reset();
-    PreparedOrcaResults.Reset();
-    PursuitTargetFact = FCrowdDemoPursuitTargetFact();
-    PursuitPositioningSettings = FCrowdDemoPursuitPositioningSettings();
-    PreparedPositionCandidates.Reset();
-    PreparedPositionAssignments.Reset();
-    PreparedHoldingCandidates.Reset();
-    TransitCapacitySelection = FCrowdDemoTransitCapacityResult();
-    PreparedHoldingCompatibilities.Reset();
-    PreparedHoldingAssignments.Reset();
-    PreparedCommitRequests.Reset();
-    PreparedCommitGateResult = FCrowdDemoCommitGateResult();
-    PreparedSteeringGuidance.Reset();
-    HoldingSummary = FCrowdDemoHoldingSummary();
-    HoldingCompatibilityInputHash = 0;
-    JointAssignmentInputHash = 0;
-    ResidualPositioningSummary = FCrowdDemoResidualPositioningSummary();
-    HoldingMatchingResult = FCrowdDemoHoldingMatchingResult();
-    HoldingHallFixture = FCrowdDemoHoldingHallFixture();
-    HallGeometryFixture = FCrowdDemoHallGeometryFixture();
-    JointPositioningResult = FCrowdDemoJointPositioningResult();
-    UnfinishedBoundaryFixture = FCrowdDemoSf4UnfinishedBoundaryFixture();
-    PhysicalUnsatisfiedBoundaryFixture = FCrowdDemoSf4PhysicalUnsatisfiedBoundaryFixture();
-    JointCommitResidualResult = FCrowdDemoJointCommitResidualResult();
-    SteeringStateHash = 2166136261u;
-    PreparedPositionApproachRoutes.Reset();
-    PreparedFrontPhaseReservationRequests.Reset();
-    PreparedFrontPhaseReservationResult = FCrowdDemoFrontPhaseReservationResult();
-    PreparedFrontPhaseReservationDecisions.Reset();
-    PreparedFrontAdmissionResult = FCrowdDemoFrontAdmissionResult();
-    PreparedFrontReservationWaitEdges.Reset();
-    FrontReservationWaitGraphSummary = FCrowdDemoFrontReservationWaitGraphSummary();
-    FrontReservationWaitGraphFixture = FCrowdDemoFrontReservationWaitGraphFixture();
-    Sf4ReservationOrcaDiagnosticFixture = FCrowdDemoSf4ReservationOrcaDiagnosticFixture();
-    Sf4ReservationOrcaCapturedRoundId = INDEX_NONE;
-    TransitJointDiagnosticFixture = FCrowdDemoTransitJointDiagnosticFixture();
-    TransitJointDiagnosticCapturedRoundId = INDEX_NONE;
-    TransitCapacityShadowAgents.Reset();
-    TransitCapacityShadowPairs.Reset();
-    TransitCapacityShadowComponents.Reset();
-    TransitCapacityShadowResults.Reset();
-    TransitCapacityShadowSummary = FCrowdDemoTransitCapacityShadowSummary();
-    TransitCapacityShadowSolverMsSamples.Reset();
-    ElasticCrowdShadowAgents.Reset();
-    ElasticCrowdShadowResults.Reset();
-    ElasticCrowdShadowSummary = FCrowdDemoElasticCrowdSummary();
-    ElasticParallelState = FCrowdDemoElasticShadowParallelState();
-    for (int32 ElasticStageIndex = 0; ElasticStageIndex < 8; ++ElasticStageIndex)
-    {
-      ElasticBaselineDesiredForward[ElasticStageIndex] = 0;
-      ElasticBaselineActualForward[ElasticStageIndex] = 0;
-      ElasticTwinDesiredForward[ElasticStageIndex] = 0;
-      ElasticTwinActualForward[ElasticStageIndex] = 0;
-    }
-    ElasticZeroProgressSteps.Reset();
-    ElasticSpacingDeficitSamples.Reset();
-    ElasticTransitDeficitSamples.Reset();
-    ElasticRecoveryErrorSamples.Reset();
-    ElasticSolverMsSamples.Reset();
-    ElasticFailureFixture = FCrowdDemoElasticShadowFailureFixture();
-    TransitCapacityFailureFixture = FCrowdDemoTransitCapacityFailureFixture();
-    LastPositioningSummary = FCrowdDemoPositioningSummary();
-    LastPositionIngressSummary = FCrowdDemoPositionIngressSummary();
-    MinimumPositionIngressFixture = FCrowdDemoPositionIngressFixture();
-    PositionIngressLowSpeedStepsByAgentId.Reset();
-    PositionPromotedAgentIds.Reset();
-    PositionCandidateBuiltRevision = INDEX_NONE;
-    PositionAssignmentRevision = 0;
-    Sf3GoalDiagnostics.Reset();
-    FlowReachabilityPreviousStage.Reset();
-    FlowFinalInvalidAgentIds.Reset();
-    FlowReachabilityPreviousStep = INDEX_NONE;
-    for (FCrowdDemoFlowReachabilityWitness& Witness : FlowReachabilityWitnesses)
-      Witness = FCrowdDemoFlowReachabilityWitness();
-    TrafficQueueSamples.Reset();
-    TrafficOccupiedSamples.Reset();
-    BandLateralErrorSamples.Reset();
-    OrcaNeighborSamples.Reset();
-    OrcaConstraintSamples.Reset();
-    OrcaSolverMsSamples.Reset();
-    OrcaOracleRecoveryMsSamples.Reset();
-    PhaseReservationHeldStepSamples.Reset();
-    FlowSeparationOverlapPairSamples.Reset();
-    FlowSeparationSevereOverlapPairSamples.Reset();
-    TrafficRoundHash = PortalRoundHash = OrcaRoundHash = PriorityOrcaRoundHash = 2166136261u;
-    TrafficFixedStepIndex = 0;
-    LastCompareMetrics.TrafficMetrics = FCrowdDemoTrafficMetrics();
-    LastCompareMetrics.OverlapPairCountP50 = -1.0f;
-    LastCompareMetrics.OverlapPairCountP95 = -1.0f;
-    LastCompareMetrics.OverlapPairCountMax = 0;
-    LastCompareMetrics.SevereOverlapPairCountP50 = -1.0f;
-    LastCompareMetrics.SevereOverlapPairCountP95 = -1.0f;
-    LastCompareMetrics.SevereOverlapPairCountMax = 0;
-    PbdSolverMillisecondsSamples.Reset();
-    LastCompareMetrics.PbdCorrectedAgentCount = 0;
-    LastCompareMetrics.PbdCorrectedPairCount = 0;
-    LastCompareMetrics.PbdMaxPairCorrectionCm = 0.0f;
-    LastCompareMetrics.PbdMaxAgentTotalCorrectionCm = 0.0f;
-    LastCompareMetrics.PbdMaxObstacleReprojectDeltaCm = 0.0f;
-    LastCompareMetrics.PbdMaxFinalSafetyDeltaCm = 0.0f;
-    LastCompareMetrics.PbdSolverMsP95 = -1.0f;
   }
   const UWorld* World = GetWorld();
   UE_LOG(
     LogTemp,
     Display,
-    TEXT("CrowdDemoRoundInit role=%s round_id=%d revision=%d previous_checkpoint_revision=%d agents=%d start_server_time=%.3f duration=%.3f fixed_step=%.4f scenario=%d plan_late=%d source=MassPipeline"),
+    TEXT("CrowdDemoRoundInit role=%s round_id=%d revision=%d previous_checkpoint_revision=%d agents=%d start_server_time=%.3f duration=%.3f nominal_duration=%.3f completion_grace=%.3f fixed_step=%.4f scenario=%d plan_late=%d source=MassPipeline"),
     World && World->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
     Packet.RoundId,
     Packet.Revision,
@@ -675,6 +562,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     AgentCount,
     Packet.StartServerTimeSeconds,
     Packet.DurationSeconds,
+    Packet.NominalDurationSeconds,
+    Packet.CompletionGraceSeconds,
     CurrentFixedStepSeconds,
     static_cast<int32>(Packet.Rules.Scenario),
     bLate ? 1 : 0);
@@ -788,840 +677,6 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureDynamicSharedFlowField(
   return SharedFlowField.IsValid();
 }
 
-void UCrowdDemoRoundSimPipelineSubsystem::RecordPositioningMetrics(
-  const FCrowdDemoPositioningSummary& Summary,
-  const int32 StableOccupiedCount,
-  const int32 ReserveHoldCount,
-  const int32 ChurnCount,
-  const float ArrivalErrorP95)
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.PositionCandidateCount = Summary.CandidateCount;
-  Metrics.PositionFrontCapacity = Summary.FrontCapacity;
-  Metrics.PositionReserveCapacity = Summary.ReserveCapacity;
-  Metrics.PositionAssignedCount = Summary.AssignedCount;
-  Metrics.PositionUnassignedCount = Summary.UnassignedCount;
-  Metrics.PositionAssignmentReusedCount = Summary.ReusedCount;
-  Metrics.PositionAssignmentChangedCount += Summary.ChangedCount;
-  Metrics.PositionInvalidatedCount += Summary.InvalidatedCount;
-  Metrics.PositionCandidateOverlapCount = Summary.CandidateOverlapCount;
-  Metrics.PositionCandidateUnreachableCount = Summary.CandidateUnreachableCount;
-  Metrics.PositionCandidateHash = Summary.CandidateHash != 0
-    ? Summary.CandidateHash : Metrics.PositionCandidateHash;
-  Metrics.PositionAssignmentHash = Summary.AssignmentHash != 0
-    ? Summary.AssignmentHash : Metrics.PositionAssignmentHash;
-  Metrics.PositionStableOccupiedCount = StableOccupiedCount;
-  Metrics.PositionReserveHoldCount = ReserveHoldCount;
-  Metrics.PositionAssignmentChurnCount = ChurnCount;
-  Metrics.PositionArrivalErrorCmP95 = ArrivalErrorP95;
-  uint32 TargetHash = 2166136261u;
-  TargetHash = FoldHash(TargetHash, static_cast<uint32>(PursuitTargetFact.TargetId));
-  TargetHash = FoldHash(TargetHash, static_cast<uint32>(FMath::RoundToInt(PursuitTargetFact.Location.X)));
-  TargetHash = FoldHash(TargetHash, static_cast<uint32>(FMath::RoundToInt(PursuitTargetFact.Location.Y)));
-  TargetHash = FoldHash(TargetHash, static_cast<uint32>(PursuitTargetFact.Revision));
-  Metrics.TargetFactHash = TargetHash;
-  Metrics.TargetRevisionCount = PursuitTargetFact.Revision;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordTransitCapacitySelection()
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.TransitCapacityPositionCount = TransitCapacitySelection.PositionCapacity;
-  Metrics.TransitCapacityHoldingCount = TransitCapacitySelection.HoldingCapacity;
-  Metrics.TransitCapacityPositionDeficit = TransitCapacitySelection.PositionCapacityDeficit;
-  Metrics.TransitCapacityHoldingDeficit = TransitCapacitySelection.HoldingCapacityDeficit;
-  Metrics.TransitCapacitySelectionHash = TransitCapacitySelection.CapacityHash;
-  Metrics.bTransitCapacitySelectionApplied = TransitCapacitySelection.bValid
-    && TransitCapacitySelection.PositionCapacityDeficit == 0
-    && TransitCapacitySelection.HoldingCapacityDeficit == 0 ? 1 : 0;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordPositionPromotionTransitions(
-  const TConstArrayView<int32> AgentIds)
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  for (const int32 AgentId : AgentIds)
-  {
-    if (PositionPromotedAgentIds.Contains(AgentId)) continue;
-    PositionPromotedAgentIds.Add(AgentId);
-    ++Metrics.PositionPromotionTransitionCount;
-  }
-  Metrics.PositionPromotionAgentCount = PositionPromotedAgentIds.Num();
-  Metrics.PositionPromotionCount = Metrics.PositionPromotionTransitionCount;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSteeringFirstMetrics(
-  const uint32 InSteeringHash, const int32 PursuitCount, const int32 HoldingCount,
-  const int32 CommitCount, const int32 StableCount, const int32 ReserveCount,
-  const int32 ReacquireCount, const int32 ArrivedCount, const int32 ReleaseCount,
-  const int32 CommitReleaseCount, const int32 NoProgressCount,
-  const int32 GhostOwnerCount)
-{
-  SteeringStateHash = InSteeringHash;
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.HoldingCandidateCount = HoldingSummary.CandidateCount;
-  Metrics.HoldingCompatibilityEdgeCount = HoldingSummary.CompatibilityCount;
-  Metrics.HoldingAssignedAgentCount = HoldingSummary.AssignedCount;
-  Metrics.HoldingAllocationFailureCount = HoldingSummary.UnassignedCount;
-  Metrics.HoldingSelectedCompatibilityValidCount = HoldingSummary.SelectedCompatibilityValidCount;
-  Metrics.HoldingSelectedCompatibilityInvalidCount = HoldingSummary.SelectedCompatibilityInvalidCount;
-  Metrics.HoldingDuplicateCompatibilityKeyCount = HoldingSummary.DuplicateCompatibilityKeyCount;
-  Metrics.HoldingArrivedAgentCount = FMath::Max(Metrics.HoldingArrivedAgentCount, ArrivedCount);
-  Metrics.CommitRequestCount += PreparedCommitRequests.Num();
-  Metrics.CommitGrantedCount += PreparedCommitGateResult.GrantedAgentIds.Num();
-  Metrics.CommitHeldCount += PreparedCommitGateResult.HeldCount;
-  Metrics.CommitInvalidCount += PreparedCommitGateResult.ReacquireCount;
-  Metrics.CommitInvalidPositionCount += PreparedCommitGateResult.InvalidPositionCount;
-  Metrics.CommitTargetRevisionMismatchCount += PreparedCommitGateResult.TargetRevisionMismatchCount;
-  Metrics.CommitCompatibilityMissingCount += PreparedCommitGateResult.CompatibilityMissingCount;
-  Metrics.CommitCompatibilityRejectedCount += PreparedCommitGateResult.CompatibilityRejectedCount;
-  Metrics.CommitUniqueAgentCount = FMath::Max(Metrics.CommitUniqueAgentCount,
-    PreparedCommitGateResult.GrantedAgentIds.Num());
-  Metrics.SteeringStatePursuitCount = PursuitCount;
-  Metrics.SteeringStateHoldingCount = HoldingCount;
-  Metrics.SteeringStateCommitCount = CommitCount;
-  Metrics.SteeringStateStableCount = StableCount;
-  Metrics.SteeringStateReserveCount = ReserveCount;
-  Metrics.SteeringStateReacquireCount = ReacquireCount;
-  Metrics.HoldingReleaseCount += ReleaseCount;
-  Metrics.CommitReleaseCount += CommitReleaseCount;
-  Metrics.PositioningNoProgressAgentCount = NoProgressCount;
-  Metrics.GhostOwnerCount = GhostOwnerCount;
-  Metrics.HoldingCandidateHash = HoldingSummary.CandidateHash;
-  Metrics.HoldingAssignmentHash = HoldingSummary.AssignmentHash;
-  Metrics.CommitDecisionHash = PreparedCommitGateResult.DecisionHash;
-  Metrics.SteeringStateHash = InSteeringHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSteeringFirstRuntimeDiagnostic(
-  const FCrowdDemoSteeringFirstRuntimeDiagnostic& Diagnostic)
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.SteeringStateFinalCounts = Diagnostic.StateCounts;
-  Metrics.SteeringStateDistanceCmP50 = Diagnostic.DistanceP50;
-  Metrics.SteeringStateDistanceCmP95 = Diagnostic.DistanceP95;
-  Metrics.SteeringStatePreferredForwardCmpsP50 = Diagnostic.PreferredForwardP50;
-  Metrics.SteeringStatePreferredForwardCmpsP95 = Diagnostic.PreferredForwardP95;
-  Metrics.SteeringStateOrcaForwardCmpsP50 = Diagnostic.OrcaForwardP50;
-  Metrics.SteeringStateOrcaForwardCmpsP95 = Diagnostic.OrcaForwardP95;
-  Metrics.SteeringStateFinalForwardCmpsP50 = Diagnostic.FinalForwardP50;
-  Metrics.SteeringStateFinalForwardCmpsP95 = Diagnostic.FinalForwardP95;
-  Metrics.PursuitOutsideHandoffCount = Diagnostic.PursuitOutsideHandoffCount;
-  Metrics.PursuitInvalidFlowCount = Diagnostic.PursuitInvalidFlowCount;
-  Metrics.HoldingFinalDistanceNotReadyCount =
-    PreparedCommitGateResult.HoldingDistanceNotReadyCount;
-  Metrics.HoldingFinalSpeedNotReadyCount =
-    PreparedCommitGateResult.HoldingSpeedNotReadyCount;
-  Metrics.HoldingFinalReadyConflictCount = PreparedCommitGateResult.ReadyConflictHeldCount;
-  Metrics.HoldingFinalReadyGrantedCount = PreparedCommitGateResult.ReadyGrantedCount;
-  Metrics.HoldingFinalTargetRejectCount = PreparedCommitGateResult.ReadyTargetRejectCount;
-  Metrics.HoldingFinalFlowRejectCount = PreparedCommitGateResult.ReadyFlowRejectCount;
-  Metrics.HoldingFinalObstacleRejectCount = PreparedCommitGateResult.ReadyObstacleRejectCount;
-  Metrics.HoldingFinalStableBlockerRejectCount =
-    PreparedCommitGateResult.ReadyStableBlockerRejectCount;
-  Metrics.HoldingFinalReserveBlockerRejectCount =
-    PreparedCommitGateResult.ReadyReserveBlockerRejectCount;
-  Metrics.HoldingFinalActiveCommitConflictCount =
-    PreparedCommitGateResult.ReadyActiveCommitConflictCount;
-  Metrics.HoldingFinalSelectedConflictCount = PreparedCommitGateResult.ReadySelectedConflictCount;
-  Metrics.CommitGateYieldableStableConflictCount =
-    PreparedCommitGateResult.YieldableStableConflictCount;
-  Metrics.CommitGateYieldableReserveConflictCount =
-    PreparedCommitGateResult.YieldableReserveConflictCount;
-  Metrics.CommitGateHardConflictHeldCount = PreparedCommitGateResult.HardConflictHeldCount;
-  Metrics.CommitPreferredNonzeroOrcaZeroCount =
-    Diagnostic.CommitPreferredNonzeroOrcaZeroCount;
-  Metrics.CommitRouteForwardSpeedCmpsP50 = Diagnostic.CommitRouteForwardSpeedCmpsP50;
-  Metrics.CommitRouteForwardSpeedCmpsP95 = Diagnostic.CommitRouteForwardSpeedCmpsP95;
-  Metrics.StablePhysicalDisplacedCount = Diagnostic.StablePhysicalDisplacedCount;
-  Metrics.StablePhysicalDisplacementCmP95 = Diagnostic.StablePhysicalDisplacementCmP95;
-  Metrics.StablePhysicalDisplacementCmMax = Diagnostic.StablePhysicalDisplacementCmMax;
-  Metrics.ReservePhysicalDisplacedCount = Diagnostic.ReservePhysicalDisplacedCount;
-  Metrics.ReservePhysicalDisplacementCmP95 = Diagnostic.ReservePhysicalDisplacementCmP95;
-  Metrics.ReservePhysicalDisplacementCmMax = Diagnostic.ReservePhysicalDisplacementCmMax;
-  Metrics.PhysicallySatisfiedPositionCount = Diagnostic.PhysicallySatisfiedPositionCount;
-  Metrics.SteeringStateOrcaConstraintSourceMatrix = Diagnostic.OrcaConstraintSourceMatrix;
-  Metrics.SteeringStateOrcaInfeasibleCounts = Diagnostic.OrcaInfeasibleCounts;
-  Metrics.SteeringStateOrcaFallbackStopCounts = Diagnostic.OrcaFallbackStopCounts;
-  Metrics.SteeringReacquireReasonCounts = Diagnostic.ReacquireReasonCounts;
-  Metrics.SteeringCommitArrivalErrorCmP95 = Diagnostic.CommitArrivalErrorCmP95;
-  Metrics.SteeringCommitNoProgressStepsMax = Diagnostic.CommitNoProgressStepsMax;
-  Metrics.SteeringCommitObstacleCorrectionCmP95 = Diagnostic.CommitObstacleCorrectionCmP95;
-  Metrics.SteeringCommitPbdCorrectionCmP95 = Diagnostic.CommitPbdCorrectionCmP95;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordResidualPositioningSummary(
-  const FCrowdDemoResidualPositioningSummary& Summary)
-{
-  ResidualPositioningSummary = Summary;
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.ResidualUnfinishedAgentCount = Summary.UnfinishedAgentCount;
-  M.ResidualRemainingPositionCount = Summary.RemainingPositionCount;
-  M.ResidualCompatibleEdgeCount = Summary.CompatibleEdgeCount;
-  M.ResidualMaximumMatchingCount = Summary.MaximumMatchingCount;
-  M.ResidualAgentWithoutHoldingCount = Summary.AgentWithoutHoldingCount;
-  M.ResidualAgentWithoutPositionEdgeCount = Summary.AgentWithoutPositionEdgeCount;
-  M.ResidualAgentWithoutCommitRouteCount = Summary.AgentWithoutCommitRouteCount;
-  M.ResidualStableBlockerEdgeRejectCount = Summary.StableBlockerEdgeRejectCount;
-  M.ResidualReserveBlockerEdgeRejectCount = Summary.ReserveBlockerEdgeRejectCount;
-  M.ResidualTargetRejectCount = Summary.TargetRejectCount;
-  M.ResidualObstacleRejectCount = Summary.ObstacleRejectCount;
-  M.ResidualFlowRejectCount = Summary.FlowRejectCount;
-  M.ResidualRevisionRejectCount = Summary.RevisionRejectCount;
-  M.ResidualCurrentMatching = Summary.CurrentMatching;
-  M.ResidualNoStableMatching = Summary.NoStableMatching;
-  M.ResidualNoReserveMatching = Summary.NoReserveMatching;
-  M.ResidualBestSingleBlockerRemovalGain = Summary.BestSingleBlockerRemovalGain;
-  M.ResidualBlockerCriticalCount = Summary.BlockerCriticalCount;
-  M.ResidualTargetLimitedCount = Summary.TargetLimitedCount;
-  M.ResidualGeometryLimitedCount = Summary.GeometryLimitedCount;
-  M.ResidualCapacityHash = Summary.ResidualCapacityHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordHoldingMatchingDiagnostic(
-  const int32 PositionValidCount, const int32 GreedyCount)
-{
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.ResidualPositionValidCount = PositionValidCount;
-  M.ResidualHoldingMatchingCount = HoldingMatchingResult.MaximumCardinality;
-  M.ResidualJointFeasibleCount = FMath::Min(PositionValidCount,
-    HoldingMatchingResult.MaximumCardinality);
-  M.ResidualGreedyHoldingCount = GreedyCount;
-  M.ResidualHoldingMatchingHash = HoldingMatchingResult.MatchingHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordHoldingHallDiagnostic()
-{
-  const FCrowdDemoHoldingHallSummary& S = HoldingHallFixture.Summary;
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.HoldingHallCurrentMatchingCount = S.CurrentMatchingCount;
-  M.HoldingHallNoStableOwnerMatchingCount = S.NoStableOwnerMatchingCount;
-  M.HoldingHallNoReserveOwnerMatchingCount = S.NoReserveOwnerMatchingCount;
-  M.HoldingHallNoCommitOwnerMatchingCount = S.NoCommitOwnerMatchingCount;
-  M.HoldingHallAgentCount = S.HallAgentCount;
-  M.HoldingHallAvailableHoldingCount = S.HallAvailableHoldingCount;
-  M.HoldingHallDeficiency = S.HallDeficiency;
-  M.HoldingHallMissingCompatibilityRecordCount = S.MissingCompatibilityRecordCount;
-  M.HoldingHallFlowRejectCount = S.FlowRejectCount;
-  M.HoldingHallTargetRejectCount = S.TargetRejectCount;
-  M.HoldingHallObstacleRejectCount = S.ObstacleRejectCount;
-  M.HoldingHallRevisionRejectCount = S.RevisionRejectCount;
-  M.HoldingHallStableOwnerRejectCount = S.StableOwnerRejectCount;
-  M.HoldingHallReserveOwnerRejectCount = S.ReserveOwnerRejectCount;
-  M.HoldingHallFixtureHash = S.StableHash;
-  M.HoldingHallFullDeficiency = S.FullHallDeficiency;
-  M.HoldingHallOwnerReleaseStableMatchingCount = S.OwnerReleaseStableMatchingCount;
-  M.HoldingHallOwnerReleaseReserveMatchingCount = S.OwnerReleaseReserveMatchingCount;
-  M.HoldingHallOwnerReleaseCommitMatchingCount = S.OwnerReleaseCommitMatchingCount;
-  M.HoldingHallPhysicalStableRemovalMatchingCount = S.PhysicalStableBlockerRemovalMatchingCount;
-  M.HoldingHallPhysicalReserveRemovalMatchingCount = S.PhysicalReserveBlockerRemovalMatchingCount;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordHallGeometryDiagnostic()
-{
-  const FCrowdDemoHallGeometryFixture& F = HallGeometryFixture;
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.HallGeometryAgentId = F.AgentId;
-  M.HallGeometryPositionId = F.PositionId;
-  M.HallGeometryBestHoldingId = F.BestHoldingId;
-  M.HallGeometryBestBlockerAgentId = F.BestBlockerAgentId;
-  M.HallGeometryBestClearanceMarginCm = F.BestClearanceMarginCm;
-  M.HallGeometryNonNegativeMarginHoldingCount = F.NonNegativeMarginHoldingCount;
-  M.HallGeometryTargetOnlyRejectCount = F.TargetOnlyRejectCount;
-  M.HallGeometryStableOnlyRejectCount = F.StableOnlyRejectCount;
-  M.HallGeometryMultiLabelRejectCount = F.MultiLabelRejectCount;
-  M.HallGeometrySelfBlockerCount = F.SelfBlockerCount;
-  M.HallGeometryWitnessPositionBlockerCount = F.BlockerUsesWitnessPositionCount;
-  M.HallGeometryDuplicateBlockerCount = F.DuplicateBlockerCount;
-  M.HallGeometryStaleBlockerCount = F.StaleBlockerCount;
-  M.HallGeometryRadiusSemanticsErrorCount = F.RadiusSemanticsErrorCount;
-  M.HallGeometryEndpointContactCount = F.EndpointContactCount;
-  M.HallGeometryFormalMismatchCount = F.FormalClassificationMismatchCount;
-  M.HallGeometryFixtureHash = F.FixtureHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordJointPositioningDiagnostic()
-{
-  const FCrowdDemoJointPositioningResult& R = JointPositioningResult;
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.JointPositioningMaximumCardinality = R.MaximumCardinality;
-  M.JointPositioningHardLockedCount = R.HardLockedCount;
-  M.JointPositioningReusedCombinationCount = R.ReusedCombinationCount;
-  M.JointPositioningUnmatchedAgentCount = R.UnmatchedAgentCount;
-  M.JointPositioningDuplicateHoldingCount = R.DuplicateHoldingCount;
-  M.JointPositioningDuplicatePositionCount = R.DuplicatePositionCount;
-  M.JointPositioningHash = R.StableHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordJointCommitResidualDiagnostic()
-{
-  const FCrowdDemoJointCommitResidualResult& R=JointCommitResidualResult;
-  FCrowdDemoTrafficMetrics& M=LastCompareMetrics.TrafficMetrics;
-  M.JointCommitResidualCandidateCount=R.CandidateCount;
-  M.JointCommitResidualFeasibleCount=R.FeasibleCount;
-  M.JointCommitResidualInfeasibleCount=R.InfeasibleCount;
-  M.JointCommitResidualHash=R.StableHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordUnfinishedBoundaryDiagnostic()
-{
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.Sf4UnfinishedBoundaryAgentCount = UnfinishedBoundaryFixture.Agents.Num();
-  M.Sf4UnfinishedBoundaryHash = UnfinishedBoundaryFixture.StableHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordPhysicalUnsatisfiedBoundaryDiagnostic()
-{
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.Sf4PhysicalUnsatisfiedAgentCount = PhysicalUnsatisfiedBoundaryFixture.Agents.Num();
-  M.Sf4PhysicalUnsatisfiedTotalAgentCount =
-    PhysicalUnsatisfiedBoundaryFixture.TotalAgentCount;
-  M.Sf4PhysicalUnsatisfiedSatisfiedCount =
-    PhysicalUnsatisfiedBoundaryFixture.PhysicallySatisfiedCount;
-  M.Sf4PhysicalUnsatisfiedCountClosed =
-    PhysicalUnsatisfiedBoundaryFixture.bCountClosed ? 1 : 0;
-  M.Sf4PhysicalUnsatisfiedHash = PhysicalUnsatisfiedBoundaryFixture.StableHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordFrontAdmission(
-  const FCrowdDemoFrontAdmissionResult& Result)
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.PositionFrontAdmissionGrantCount += Result.GrantedAgentIds.Num();
-  Metrics.PositionFrontAdmissionRequeueCount += Result.RequeuedAgentIds.Num();
-  Metrics.PositionFrontAdmissionDecisionHash = FoldHash(
-    FoldHash(Metrics.PositionFrontAdmissionDecisionHash,
-      static_cast<uint32>(GetCurrentFixedStepIndex())), Result.DecisionHash);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordFrontPhaseReservationSchedule(
-  const TConstArrayView<FCrowdDemoFrontPhaseReservationRequest> Requests,
-  const TConstArrayView<FCrowdDemoFrontPhaseReservationDecisionRecord> Decisions,
-  const uint32 DecisionHash)
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  for (const FCrowdDemoFrontPhaseReservationRequest& Request : Requests)
-    Metrics.PhaseReservationRequestCount += Request.bHasRequest ? 1 : 0;
-  for (const FCrowdDemoFrontPhaseReservationDecisionRecord& Decision : Decisions)
-  {
-    Metrics.PhaseReservationGrantedCount += Decision.Decision
-      == ECrowdDemoFrontPhaseReservationDecision::Granted ? 1 : 0;
-    Metrics.PhaseReservationHeldCount += Decision.Decision
-      == ECrowdDemoFrontPhaseReservationDecision::Held ? 1 : 0;
-    Metrics.PhaseReservationInvalidCount += Decision.Decision
-      == ECrowdDemoFrontPhaseReservationDecision::Invalid ? 1 : 0;
-    Metrics.PhaseReservationTargetExclusionRejectCount += Decision.Reason
-      == ECrowdDemoFrontPhaseReservationReason::TargetExclusion ? 1 : 0;
-    Metrics.PhaseReservationRouteConflictCount += Decision.Reason
-      == ECrowdDemoFrontPhaseReservationReason::RouteConflict ? 1 : 0;
-  }
-  Metrics.PhaseReservationDecisionHash = FoldHash(
-    FoldHash(Metrics.PhaseReservationDecisionHash,
-      static_cast<uint32>(GetCurrentFixedStepIndex())), DecisionHash);
-  Metrics.PhaseReservationClientHashMatch = 1;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordFrontPhaseReservationTransitions(
-  const int32 TransitionCount,
-  const TConstArrayView<int32> HeldSteps)
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.PhaseReservationTransitionCount += TransitionCount;
-  for (const int32 Steps : HeldSteps)
-    PhaseReservationHeldStepSamples.Add(static_cast<float>(Steps));
-  TArray<float> Sorted = PhaseReservationHeldStepSamples;
-  Sorted.Sort();
-  Metrics.PhaseReservationHeldStepsP95 = Sorted.IsEmpty() ? 0.0f : Sorted[FMath::Clamp(
-    FMath::CeilToInt(static_cast<float>(Sorted.Num()) * 0.95f) - 1, 0, Sorted.Num() - 1)];
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordFrontReservationWaitGraph(
-  const FCrowdDemoFrontReservationWaitGraphSummary& Summary,
-  const FCrowdDemoFrontReservationWaitGraphFixture& Fixture)
-{
-  FrontReservationWaitGraphSummary = Summary;
-  if (Fixture.bValid && (!FrontReservationWaitGraphFixture.bValid
-      || Fixture.Agents.Num() < FrontReservationWaitGraphFixture.Agents.Num()
-      || (Fixture.Agents.Num() == FrontReservationWaitGraphFixture.Agents.Num()
-        && Fixture.StableHash < FrontReservationWaitGraphFixture.StableHash)))
-  {
-    FrontReservationWaitGraphFixture = Fixture;
-  }
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.PhaseReservationUniqueBlockedRequestCount = FMath::Max(
-    Metrics.PhaseReservationUniqueBlockedRequestCount, Summary.UniqueBlockedRequestCount);
-  Metrics.PhaseReservationUniqueBlockerCount = FMath::Max(
-    Metrics.PhaseReservationUniqueBlockerCount, Summary.UniqueBlockerCount);
-  Metrics.PhaseReservationWaitEdgeCount = FMath::Max(
-    Metrics.PhaseReservationWaitEdgeCount, Summary.WaitEdgeCount);
-  Metrics.PhaseReservationReciprocalEdgeCount = FMath::Max(
-    Metrics.PhaseReservationReciprocalEdgeCount, Summary.ReciprocalEdgeCount);
-  Metrics.PhaseReservationCycleCount = FMath::Max(
-    Metrics.PhaseReservationCycleCount, Summary.CycleCount);
-  Metrics.PhaseReservationMaxCycleSize = FMath::Max(
-    Metrics.PhaseReservationMaxCycleSize, Summary.MaxCycleSize);
-  Metrics.PhaseReservationStalledBlockerCount = FMath::Max(
-    Metrics.PhaseReservationStalledBlockerCount, Summary.StalledBlockerCount);
-  Metrics.PhaseReservationProgressingBlockerCount = FMath::Max(
-    Metrics.PhaseReservationProgressingBlockerCount, Summary.ProgressingBlockerCount);
-  Metrics.PhaseReservationStaleOwnerCount = FMath::Max(
-    Metrics.PhaseReservationStaleOwnerCount, Summary.StaleOwnerCount);
-  Metrics.PhaseReservationBlockerRadialCount = FMath::Max(
-    Metrics.PhaseReservationBlockerRadialCount, Summary.BlockerRadialCount);
-  Metrics.PhaseReservationBlockerAngularCount = FMath::Max(
-    Metrics.PhaseReservationBlockerAngularCount, Summary.BlockerAngularCount);
-  Metrics.PhaseReservationBlockerRadialCommitCount = FMath::Max(
-    Metrics.PhaseReservationBlockerRadialCommitCount, Summary.BlockerRadialCommitCount);
-  Metrics.PhaseReservationAtomicHandoffCycleCount = FMath::Max(
-    Metrics.PhaseReservationAtomicHandoffCycleCount, Summary.AtomicHandoffCycleCount);
-  Metrics.PhaseReservationMaxAtomicHandoffSetSize = FMath::Max(
-    Metrics.PhaseReservationMaxAtomicHandoffSetSize, Summary.MaxAtomicHandoffSetSize);
-  Metrics.PhaseReservationWaitGraphHash = FoldHash(
-    FoldHash(Metrics.PhaseReservationWaitGraphHash,
-      static_cast<uint32>(GetCurrentFixedStepIndex())), Summary.WaitGraphHash);
-  Metrics.PhaseReservationWaitGraphClientHashMatch = 1;
-  if (FrontReservationWaitGraphFixture.bValid)
-  {
-    Metrics.PhaseReservationWaitGraphFixtureHash = FrontReservationWaitGraphFixture.StableHash;
-    Metrics.PhaseReservationWaitGraphFixtureAgentCount =
-      FrontReservationWaitGraphFixture.Agents.Num();
-    Metrics.PhaseReservationWaitGraphFixtureEdgeCount =
-      FrontReservationWaitGraphFixture.Edges.Num();
-  }
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordPositionIngressDiagnostic(
-  const FCrowdDemoPositionIngressSummary& Summary,
-  const FCrowdDemoPositionIngressFixture& Fixture,
-  TMap<int32, int32>&& LowSpeedStepsByAgentId)
-{
-  if (!IsSf4IngressDiagnosticEnabled()) return;
-  LastPositionIngressSummary = Summary;
-  if (Fixture.bValid && (!MinimumPositionIngressFixture.bValid
-      || Fixture.ConstraintCount < MinimumPositionIngressFixture.ConstraintCount
-      || (Fixture.ConstraintCount == MinimumPositionIngressFixture.ConstraintCount
-        && Fixture.StableHash < MinimumPositionIngressFixture.StableHash)))
-  {
-    MinimumPositionIngressFixture = Fixture;
-  }
-  PositionIngressLowSpeedStepsByAgentId = MoveTemp(LowSpeedStepsByAgentId);
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.PositionIngressSlotCommitCount = Summary.SlotCommitCount;
-  Metrics.PositionIngressErrorOver300Count = Summary.SlotCommitErrorOver300Count;
-  Metrics.PositionIngressTargetBlockedCount = Summary.DirectPathTargetBlockedCount;
-  Metrics.PositionIngressStableBlockedCount = Summary.DirectPathStableBlockedCount;
-  Metrics.PositionIngressReserveBlockedCount = Summary.DirectPathReserveBlockedCount;
-  Metrics.PositionIngressCommitBlockedCount = Summary.DirectPathCommitBlockedCount;
-  Metrics.PositionIngressStableBlockerPairCount = Summary.StableBlockerPairCount;
-  Metrics.PositionIngressReserveBlockerPairCount = Summary.ReserveBlockerPairCount;
-  Metrics.PositionIngressCommitBlockerPairCount = Summary.CommitBlockerPairCount;
-  Metrics.PositionIngressSectorDeltaP50 = Summary.AssignedSectorDeltaP50;
-  Metrics.PositionIngressSectorDeltaP95 = Summary.AssignedSectorDeltaP95;
-  Metrics.PositionIngressSectorDeltaMax = Summary.AssignedSectorDeltaMax;
-  Metrics.PositionIngressRadialDeltaP50 = Summary.AssignedRadialDeltaP50;
-  Metrics.PositionIngressRadialDeltaP95 = Summary.AssignedRadialDeltaP95;
-  Metrics.PositionIngressRadialDeltaMax = Summary.AssignedRadialDeltaMax;
-  Metrics.PositionIngressUnblockedAlternativeFrontCount = Summary.UnblockedAlternativeFrontCount;
-  Metrics.PositionIngressSameSideAlternativeFrontCount = Summary.SameSideAlternativeFrontCount;
-  Metrics.PositionIngressNoAlternativeFrontCount = Summary.NoAlternativeFrontCount;
-  Metrics.PositionIngressOrcaFromStableCount = Summary.OrcaConstraintsFromStableCount;
-  Metrics.PositionIngressOrcaFromReserveCount = Summary.OrcaConstraintsFromReserveCount;
-  Metrics.PositionIngressOrcaFromCommitCount = Summary.OrcaConstraintsFromCommitCount;
-  Metrics.PositionIngressOrcaFromOtherCount = Summary.OrcaConstraintsFromOtherCount;
-  Metrics.PositionIngressPreferredSpeedP95 = Summary.SlotCommitPreferredSpeedP95;
-  Metrics.PositionIngressOrcaSpeedP95 = Summary.SlotCommitOrcaSpeedP95;
-  Metrics.PositionIngressObstacleSpeedP95 = Summary.SlotCommitObstacleSpeedP95;
-  Metrics.PositionIngressFinalSpeedP95 = Summary.SlotCommitFinalSpeedP95;
-  Metrics.PositionIngressLowSpeedStepsMax = Summary.SlotCommitLowSpeedStepsMax;
-  Metrics.PositionIngressTargetExclusionCrossingCount = Summary.TargetExclusionCrossingCount;
-  Metrics.PositionIngressOrderInversionCount = Summary.IngressOrderInversionCount;
-  Metrics.PositionIngressPbdPushAwayCount = Summary.PbdPushAwayCount;
-  Metrics.PositionIngressObstaclePushAwayCount = Summary.ObstaclePushAwayCount;
-  Metrics.PositionIngressMinimumFixtureHash = MinimumPositionIngressFixture.StableHash;
-  Metrics.PositionIngressMinimumFixtureConstraintCount = MinimumPositionIngressFixture.ConstraintCount;
-  Metrics.PositionIngressEvaluationHash = Summary.EvaluationHash;
-  Metrics.PositionFrontAssignedWaitingCount = Summary.FrontAssignedWaitingCount;
-  Metrics.PositionFrontRadialStageCount = Summary.RadialStageCount;
-  Metrics.PositionFrontAngularAlignCount = Summary.AngularAlignCount;
-  Metrics.PositionFrontRadialCommitCount = Summary.RadialCommitCount;
-  Metrics.PositionFrontGateInvalidCount = Summary.GateInvalidCount;
-  Metrics.PositionFrontRadialCommitBlockedCount = Summary.RadialCommitBlockedCount;
-  Metrics.PositionFrontRouteHash = Summary.RouteHash;
-  Metrics.PositionFrontRadialPreferredSpeedP95 = Summary.RadialPreferredSpeedP95;
-  Metrics.PositionFrontRadialOrcaSpeedP95 = Summary.RadialOrcaSpeedP95;
-  Metrics.PositionFrontRadialFinalSpeedP95 = Summary.RadialFinalSpeedP95;
-  Metrics.PositionFrontRadialOrcaForwardSpeedP50 = Summary.RadialOrcaForwardSpeedP50;
-  Metrics.PositionFrontRadialOrcaForwardSpeedMin = Summary.RadialOrcaForwardSpeedMin;
-  Metrics.PositionFrontRadialFinalForwardSpeedP50 = Summary.RadialFinalForwardSpeedP50;
-  Metrics.PositionFrontRadialFinalForwardSpeedMin = Summary.RadialFinalForwardSpeedMin;
-  Metrics.PositionFrontRadialOrcaConstraintP95 = Summary.RadialOrcaConstraintP95;
-  Metrics.PositionFrontRadialConstraintFromActiveCount = Summary.RadialConstraintFromActiveCount;
-  Metrics.PositionFrontRadialConstraintFromWaitingCount = Summary.RadialConstraintFromWaitingCount;
-  Metrics.PositionFrontRadialConstraintFromReserveCommitCount = Summary.RadialConstraintFromReserveCommitCount;
-  Metrics.PositionFrontRadialConstraintFromStableCount = Summary.RadialConstraintFromStableCount;
-  Metrics.PositionFrontRadialConstraintFromOtherCount = Summary.RadialConstraintFromOtherCount;
-  Metrics.PositionFrontRadialErrorP50 = Summary.RadialErrorP50;
-  Metrics.PositionFrontRadialErrorP95 = Summary.RadialErrorP95;
-  Metrics.PositionFrontRadialErrorMax = Summary.RadialErrorMax;
-  Metrics.PositionFrontRadialErrorImprovedCount = Summary.RadialErrorImprovedCount;
-  Metrics.PositionFrontRadialQuantizedProgressStallCount = Summary.RadialQuantizedProgressStallCount;
-  Metrics.PositionFrontComposeBoundarySwitchCount = Summary.ComposeBoundarySwitchCount;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSf4ReservationOrcaDiagnostic(
-  const FCrowdDemoSf4ReservationOrcaDiagnosticFixture& Fixture)
-{
-  if (!IsSf4ReservationOrcaDiagnosticEnabled()
-    || Sf4ReservationOrcaCapturedRoundId == GetCurrentRoundId()) return;
-  Sf4ReservationOrcaCapturedRoundId = GetCurrentRoundId();
-  Sf4ReservationOrcaDiagnosticFixture = Fixture;
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.Sf4ReservationOrcaFixtureValid = Fixture.bValid ? 1 : 0;
-  Metrics.Sf4ReservationOrcaFixtureTooLarge = Fixture.Summary.bFixtureTooLarge ? 1 : 0;
-  Metrics.Sf4ReservationOrcaFixtureAgentCount = Fixture.Agents.Num();
-  Metrics.Sf4ReservationOrcaCoreConstraintCount = Fixture.CoreConstraints.Num();
-  Metrics.Sf4ReservationOrcaActiveConflictCount = Fixture.Summary.ActiveRouteConflictCount;
-  Metrics.Sf4ReservationOrcaActiveDisjointContainedCount =
-    Fixture.Summary.ActiveRouteDisjointContainedCount;
-  Metrics.Sf4ReservationOrcaActiveOutsideCorridorCount =
-    Fixture.Summary.ActiveRouteDisjointOutsideCorridorCount;
-  Metrics.Sf4ReservationOrcaWaitingCount = Fixture.Summary.WaitingCount;
-  Metrics.Sf4ReservationOrcaStableCount = Fixture.Summary.StableCount;
-  Metrics.Sf4ReservationOrcaOtherCount = Fixture.Summary.OtherCount;
-  Metrics.Sf4ReservationOrcaFixtureHash = Fixture.StableHash;
-  Metrics.Sf4ReservationOrcaClientHashMatch = 1;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordTransitJointDiagnostic(
-  const FCrowdDemoTransitJointDiagnosticFixture& Fixture)
-{
-  if (!IsTransitJointDiagnosticEnabled()
-    || TransitJointDiagnosticCapturedRoundId == GetCurrentRoundId()) return;
-  TransitJointDiagnosticCapturedRoundId = GetCurrentRoundId();
-  TransitJointDiagnosticFixture = Fixture;
-  LastCompletedTransitJointDiagnosticFixture = Fixture;
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.TransitJointFixtureValid = Fixture.bValid ? 1 : 0;
-  Metrics.TransitJointFixtureTooLarge = Fixture.Summary.bFixtureTooLarge ? 1 : 0;
-  Metrics.TransitJointFixtureAgentCount = Fixture.Summary.ComponentAgentCount;
-  Metrics.TransitJointFixturePairCount = Fixture.Summary.ComponentPairCount;
-  Metrics.TransitJointFixtureConstraintCount = Fixture.Summary.ConstraintCount;
-  Metrics.TransitJointPriorityForwardSpeedCmps = Fixture.Summary.PriorityForwardSpeedCmps;
-  Metrics.TransitJointFinalSpeedCmps = Fixture.Summary.FinalSpeedCmps;
-  Metrics.TransitJointForwardSpeedCmps = Fixture.Summary.JointForwardSpeedCmps;
-  Metrics.TransitJointDownstreamZeroStage =
-    static_cast<int32>(Fixture.Summary.DownstreamZeroStage);
-  Metrics.TransitJointSafeForward = Fixture.Summary.bJointQuantizedSafeForward ? 1 : 0;
-  Metrics.TransitJointFixtureHash = Fixture.StableHash;
-  Metrics.TransitJointClientHashMatch = 1;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordTransitCapacityShadow(
-  const TConstArrayView<FCrowdDemoJointVelocityAgent> Agents,
-  const TConstArrayView<FCrowdDemoJointVelocityPair> Pairs,
-  const TConstArrayView<FCrowdDemoJointVelocityComponent> Components,
-  const TConstArrayView<FCrowdDemoJointVelocityComponentResult> Results,
-  const FCrowdDemoTransitCapacityShadowSummary& Summary)
-{
-  if (!IsTransitCapacityShadowEnabled()) return;
-  TransitCapacityShadowAgents = TArray<FCrowdDemoJointVelocityAgent>(Agents);
-  TransitCapacityShadowPairs = TArray<FCrowdDemoJointVelocityPair>(Pairs);
-  TransitCapacityShadowComponents = TArray<FCrowdDemoJointVelocityComponent>(Components);
-  TransitCapacityShadowResults = TArray<FCrowdDemoJointVelocityComponentResult>(Results);
-  TransitCapacityShadowSummary = Summary;
-  TransitCapacityShadowSolverMsSamples.Add(Summary.SolverMs);
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.TransitCapacityShadowComponentCount += Summary.ComponentCount;
-  M.TransitCapacityShadowMaximumComponentSize = FMath::Max(
-    M.TransitCapacityShadowMaximumComponentSize, Summary.MaximumComponentSize);
-  M.TransitCapacityShadowComponent2Count += Summary.Component2Count;
-  M.TransitCapacityShadowComponent5Count += Summary.Component5Count;
-  M.TransitCapacityShadowComponent8Count += Summary.Component8Count;
-  M.TransitCapacityShadowComponent12Count += Summary.Component12Count;
-  M.TransitCapacityShadowComponent20Count += Summary.Component20Count;
-  M.TransitCapacityShadowOversizeCount += Summary.OversizeCount;
-  M.TransitCapacityShadowSolvedCount += Summary.SolvedCount;
-  M.TransitCapacityShadowInfeasibleCount += Summary.InfeasibleCount;
-  M.TransitCapacityShadowHardInfeasibleCount += Summary.HardInfeasibleCount;
-  M.TransitCapacityShadowIterationLimitCount += Summary.IterationLimitCount;
-  M.TransitCapacityShadowClearanceNotAchievedCount +=
-    Summary.ClearanceNotAchievedCount;
-  M.TransitCapacityShadowNoForwardGainCount += Summary.NoForwardGainCount;
-  M.TransitCapacityShadowInvalidInputCount += Summary.InvalidInputCount;
-  M.TransitCapacityShadowNumericalFailureCount += Summary.NumericalFailureCount;
-  M.TransitCapacityShadowQuantizedFailureCount += Summary.QuantizedFailureCount;
-  M.TransitCapacityShadowYieldingAgentCount += Summary.YieldingAgentCount;
-  M.TransitCapacityShadowDirectRelevantAgentCount +=
-    Summary.TransitDirectRelevantAgentCount;
-  M.TransitCapacityShadowHardSafetyClosureAgentCount +=
-    Summary.HardSafetyClosureAgentCount;
-  M.TransitCapacityShadowHardPairViolationCount += Summary.HardPairViolationCount;
-  M.TransitCapacityShadowJointCandidateHardPairViolationCount +=
-    Summary.JointCandidateHardPairViolationCount;
-  M.TransitCapacityShadowBaselineHardPairViolationCount +=
-    Summary.BaselineFallbackHardPairViolationCount;
-  M.TransitCapacityShadowObstacleViolationCount += Summary.ObstacleViolationCount;
-  M.TransitCapacityShadowFlowBoundsViolationCount += Summary.FlowBoundsViolationCount;
-  M.TransitCapacityShadowTargetViolationCount += Summary.TargetViolationCount;
-  M.TransitCapacityShadowJointCandidateFlowBoundsViolationCount +=
-    Summary.JointCandidateFlowBoundsViolationCount;
-  M.TransitCapacityShadowJointCandidateObstacleViolationCount +=
-    Summary.JointCandidateObstacleViolationCount;
-  M.TransitCapacityShadowJointCandidateTargetViolationCount +=
-    Summary.JointCandidateTargetViolationCount;
-  M.TransitCapacityShadowBaselineFlowBoundsViolationCount +=
-    Summary.BaselineFallbackFlowBoundsViolationCount;
-  M.TransitCapacityShadowBaselineObstacleViolationCount +=
-    Summary.BaselineFallbackObstacleViolationCount;
-  M.TransitCapacityShadowBaselineTargetViolationCount +=
-    Summary.BaselineFallbackTargetViolationCount;
-  M.TransitCapacityShadowPairDoubleOwnerCount += Summary.PairDoubleOwnerCount;
-  M.TransitCapacityShadowForwardSpeedRatioQ15 = Summary.TransitForwardSpeedRatioQ15;
-  M.TransitCapacityShadowPreferredSpacingDeficitCmMax = FMath::Max(
-    M.TransitCapacityShadowPreferredSpacingDeficitCmMax,
-    Summary.PreferredSpacingDeficitCmMax);
-  M.TransitCapacityShadowApertureDeficitCmMax = FMath::Max(
-    M.TransitCapacityShadowApertureDeficitCmMax, Summary.ApertureDeficitCmMax);
-  M.TransitCapacityShadowClearanceDeficitCmMax = FMath::Max(
-    M.TransitCapacityShadowClearanceDeficitCmMax,
-    Summary.TransitCapsuleClearanceDeficitCmMax);
-  M.TransitCapacityShadowJointCandidateClearanceDeficitCmMax = FMath::Max(
-    M.TransitCapacityShadowJointCandidateClearanceDeficitCmMax,
-    Summary.JointCandidateClearanceDeficitCmMax);
-  M.TransitCapacityShadowBaselineClearanceDeficitCmMax = FMath::Max(
-    M.TransitCapacityShadowBaselineClearanceDeficitCmMax,
-    Summary.BaselineFallbackClearanceDeficitCmMax);
-  M.TransitCapacityShadowMaximumYieldDisplacementCm = FMath::Max(
-    M.TransitCapacityShadowMaximumYieldDisplacementCm,
-    Summary.MaximumYieldDisplacementCm);
-  M.TransitCapacityShadowSolverMsP95 = Percentile(
-    TransitCapacityShadowSolverMsSamples, 0.95f);
-  M.TransitCapacityShadowHash = FoldHash(FoldHash(
-    M.TransitCapacityShadowHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
-    Summary.StableHash);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordTransitCapacityFailureFixture(
-  const FCrowdDemoTransitCapacityFailureFixture& Fixture)
-{
-  if (!IsTransitCapacityShadowEnabled() || !Fixture.bValid) return;
-  TransitCapacityFailureFixture = Fixture;
-  LastCompletedTransitCapacityFailureFixture = Fixture;
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.TransitCapacityFailureFixtureAgentCount = Fixture.Agents.Num();
-  M.TransitCapacityFailureFixturePairCount = Fixture.Pairs.Num();
-  M.TransitCapacityFailureFixtureStatus = static_cast<int32>(Fixture.Result.Status);
-  M.TransitCapacityFailureFixtureHash = Fixture.StableHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordElasticCrowdShadow(
-  const FCrowdDemoElasticShadowTwinResult& Twin,
-  const int32 ZeroProgressStepMax,
-  const float SolverMs)
-{
-  if (!IsElasticCrowdShadowEnabled() || !Twin.bValid) return;
-  ElasticCrowdShadowResults = Twin.Elastic.ElasticResults;
-  ElasticCrowdShadowSummary = Twin.Elastic.ElasticSummary;
-  for (const FCrowdDemoElasticCrowdResult& Result : Twin.Elastic.ElasticResults)
-  {
-    ElasticSpacingDeficitSamples.Add(Result.MaxSpacingDeficitCm);
-    ElasticTransitDeficitSamples.Add(Result.MaxTransitDeficitCm);
-  }
-  ElasticSolverMsSamples.Add(SolverMs);
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  constexpr int32 StageCount = static_cast<int32>(ECrowdDemoElasticShadowStage::Count);
-  if (M.ElasticBaselineStageHashes.Num() != StageCount)
-  {
-    M.ElasticBaselineStageHashes.Init(2166136261u, StageCount);
-    M.ElasticTwinStageHashes.Init(2166136261u, StageCount);
-    M.ElasticBaselineStageHardPairCounts.Init(0, StageCount);
-    M.ElasticTwinStageHardPairCounts.Init(0, StageCount);
-    M.ElasticBaselineStageTargetCounts.Init(0, StageCount);
-    M.ElasticTwinStageTargetCounts.Init(0, StageCount);
-    M.ElasticBaselineStageSourceForwardQ15.Init(32767, StageCount);
-    M.ElasticTwinStageSourceForwardQ15.Init(32767, StageCount);
-  }
-  for (int32 Index = 0; Index < StageCount; ++Index)
-  {
-    const auto& B = Twin.Baseline.StageSummaries[Index];
-    const auto& E = Twin.Elastic.StageSummaries[Index];
-    ElasticBaselineDesiredForward[Index] += B.DesiredSourceForwardCmps;
-    ElasticBaselineActualForward[Index] += B.ActualSourceForwardCmps;
-    ElasticTwinDesiredForward[Index] += E.DesiredSourceForwardCmps;
-    ElasticTwinActualForward[Index] += E.ActualSourceForwardCmps;
-    M.ElasticBaselineStageHashes[Index] = FoldHash(FoldHash(
-      M.ElasticBaselineStageHashes[Index], static_cast<uint32>(GetCurrentFixedStepIndex())),
-      B.StableHash);
-    M.ElasticTwinStageHashes[Index] = FoldHash(FoldHash(
-      M.ElasticTwinStageHashes[Index], static_cast<uint32>(GetCurrentFixedStepIndex())),
-      E.StableHash);
-    M.ElasticBaselineStageHardPairCounts[Index] += B.HardPairViolationCount;
-    M.ElasticTwinStageHardPairCounts[Index] += E.HardPairViolationCount;
-    M.ElasticBaselineStageTargetCounts[Index] += B.TargetViolationCount;
-    M.ElasticTwinStageTargetCounts[Index] += E.TargetViolationCount;
-    M.ElasticBaselineStageSourceForwardQ15[Index] = ElasticBaselineDesiredForward[Index] > 0
-      ? FMath::Clamp(FMath::RoundToInt(static_cast<double>(ElasticBaselineActualForward[Index])
-        * 32767.0 / static_cast<double>(ElasticBaselineDesiredForward[Index])), 0, 131068)
-      : 32767;
-    M.ElasticTwinStageSourceForwardQ15[Index] = ElasticTwinDesiredForward[Index] > 0
-      ? FMath::Clamp(FMath::RoundToInt(static_cast<double>(ElasticTwinActualForward[Index])
-        * 32767.0 / static_cast<double>(ElasticTwinDesiredForward[Index])), 0, 131068)
-      : 32767;
-  }
-  const int32 ObstacleStage = static_cast<int32>(ECrowdDemoElasticShadowStage::Obstacle);
-  const int32 ReprojectStage = static_cast<int32>(ECrowdDemoElasticShadowStage::Reproject);
-  const auto& Obstacle = Twin.Elastic.StageSummaries[ObstacleStage];
-  const auto& Reproject = Twin.Elastic.StageSummaries[ReprojectStage];
-  M.ElasticObstacleClippedCount += Obstacle.ObstacleClippedCount + Reproject.ObstacleClippedCount;
-  M.ElasticObstacleSlideCount += Obstacle.ObstacleSlideCount + Reproject.ObstacleSlideCount;
-  M.ElasticObstacleStoppedCount += Obstacle.ObstacleStoppedCount + Reproject.ObstacleStoppedCount;
-  M.ElasticObstacleConstraintDeltaCmMax = FMath::Max(M.ElasticObstacleConstraintDeltaCmMax,
-    FMath::Max(Obstacle.MaximumObstacleDeltaCm, Reproject.MaximumObstacleDeltaCm));
-  M.ElasticOrcaInfeasibleCount += Twin.Elastic.OrcaSummary.InfeasibleAgentCount;
-  M.ElasticOrcaFallbackStopCount += Twin.Elastic.OrcaSummary.FallbackStopCount;
-  M.ElasticOrcaStopViolationCount += Twin.Elastic.OrcaSummary.StopViolatesConstraintCount;
-  const FCrowdDemoElasticCrowdSummary& Summary = Twin.Elastic.ElasticSummary;
-  M.ElasticSpacingPairCount = FMath::Max(M.ElasticSpacingPairCount, Summary.SpacingPairCount);
-  M.ElasticInfluencedAgentCount = FMath::Max(
-    M.ElasticInfluencedAgentCount, Summary.InfluencedAgentCount);
-  M.ElasticPropagationLayerMax = FMath::Max(
-    M.ElasticPropagationLayerMax, Summary.PropagationLayerCount);
-  M.ElasticSpacingDeficitCmP95 = Percentile(ElasticSpacingDeficitSamples, 0.95f);
-  M.ElasticSpacingDeficitCmMax = FMath::Max(
-    M.ElasticSpacingDeficitCmMax, Summary.MaxSpacingDeficitCm);
-  M.ElasticTransitDeficitCmP95 = Percentile(ElasticTransitDeficitSamples, 0.95f);
-  M.ElasticTransitDeficitCmMax = FMath::Max(
-    M.ElasticTransitDeficitCmMax, Summary.MaxTransitDeficitCm);
-  M.ElasticSourceForwardRatioQ15 = M.ElasticTwinStageSourceForwardQ15[ReprojectStage];
-  M.ElasticBaselineSourceForwardRatioQ15 =
-    M.ElasticBaselineStageSourceForwardQ15[ReprojectStage];
-  M.ElasticZeroProgressStepMax = FMath::Max(
-    M.ElasticZeroProgressStepMax, ZeroProgressStepMax);
-  M.ElasticHardPairViolationCount += Reproject.HardPairViolationCount;
-  M.ElasticObstacleViolationCount += Obstacle.ObstaclePenetrationCount
-    + Reproject.ObstaclePenetrationCount;
-  M.ElasticFlowBoundsViolationCount += Obstacle.FlowBoundsHitCount + Reproject.FlowBoundsHitCount;
-  M.ElasticTargetViolationCount += Reproject.TargetViolationCount;
-  M.ElasticInvalidInputCount += Summary.InvalidInputCount;
-  M.ElasticSolverMsP95 = Percentile(ElasticSolverMsSamples, 0.95f);
-  M.ElasticShadowHash = FoldHash(FoldHash(
-    M.ElasticShadowHash, static_cast<uint32>(GetCurrentFixedStepIndex())), Twin.StableHash);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordElasticParallelRollout(
-  const FCrowdDemoElasticShadowParallelState& State,
-  const FCrowdDemoElasticShadowTwinResult& Step)
-{
-  if (!IsElasticCrowdShadowEnabled() || !State.bActive || !Step.bValid) return;
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.ElasticParallelCompletedSteps = State.StepIndex;
-  M.ElasticParallelHash = FoldHash(FoldHash(M.ElasticParallelHash,
-    static_cast<uint32>(State.StepIndex)), Step.StableHash);
-  if (!State.bCompleted) return;
-  const auto& S = State.Summary;
-  M.ElasticParallelEligibleRecoveryCount = S.EligibleRecoveryAgentCount;
-  M.ElasticParallelBaselineRecoveryCompletedCount = S.BaselineRecoveryCompletedCount;
-  M.ElasticParallelRecoveryCompletedCount = S.ElasticRecoveryCompletedCount;
-  M.ElasticParallelBaselineImprovedCount = S.BaselineImprovedCount;
-  M.ElasticParallelImprovedCount = S.ElasticImprovedCount;
-  M.ElasticParallelBaselinePermanentHoleCount = S.BaselinePermanentHoleCount;
-  M.ElasticParallelPermanentHoleCount = S.ElasticPermanentHoleCount;
-  M.ElasticParallelBaselineRecoveryTimeP95 = Percentile(S.BaselineRecoveryTimesSeconds, 0.95f);
-  M.ElasticParallelRecoveryTimeP95 = Percentile(S.ElasticRecoveryTimesSeconds, 0.95f);
-  M.ElasticParallelBaselineEndErrorCmP95 = Percentile(S.BaselineEndErrorsCm, 0.95f);
-  M.ElasticParallelEndErrorCmP95 = Percentile(S.ElasticEndErrorsCm, 0.95f);
-  M.ElasticParallelBaselineSourceForwardQ15 = S.BaselineDesiredSourceForwardCmps > 0
-    ? FMath::Clamp(FMath::RoundToInt(static_cast<double>(S.BaselineActualSourceForwardCmps)
-      * 32767.0 / static_cast<double>(S.BaselineDesiredSourceForwardCmps)), 0, 131068)
-    : 32767;
-  M.ElasticParallelSourceForwardQ15 = S.ElasticDesiredSourceForwardCmps > 0
-    ? FMath::Clamp(FMath::RoundToInt(static_cast<double>(S.ElasticActualSourceForwardCmps)
-      * 32767.0 / static_cast<double>(S.ElasticDesiredSourceForwardCmps)), 0, 131068)
-    : 32767;
-  M.ElasticParallelBaselineHardPairViolationCount = S.BaselineHardPairViolationCount;
-  M.ElasticParallelHardPairViolationCount = S.ElasticHardPairViolationCount;
-  M.ElasticParallelBaselineObstaclePenetrationCount = S.BaselineObstaclePenetrationCount;
-  M.ElasticParallelObstaclePenetrationCount = S.ElasticObstaclePenetrationCount;
-  M.ElasticParallelBaselineTargetViolationCount = S.BaselineTargetViolationCount;
-  M.ElasticParallelTargetViolationCount = S.ElasticTargetViolationCount;
-  M.ElasticParallelBaselineOrcaStopViolationCount = S.BaselineOrcaStopViolationCount;
-  M.ElasticParallelOrcaStopViolationCount = S.ElasticOrcaStopViolationCount;
-  M.ElasticRecoveryErrorCmP95 = M.ElasticParallelEndErrorCmP95;
-  M.ElasticParallelHash = FoldHash(M.ElasticParallelHash, S.StableHash);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordElasticCrowdFailureFixture(
-  const FCrowdDemoElasticShadowFailureFixture& Fixture)
-{
-  if (!IsElasticCrowdShadowEnabled() || !Fixture.bValid
-    || ElasticFailureFixture.bValid) return;
-  if (!Fixture.bFixtureTooLarge
-    && (Fixture.Agents.Num() < 2 || Fixture.Agents.Num() > 20)) return;
-  ElasticFailureFixture = Fixture;
-  LastCompletedElasticFailureFixture = Fixture;
-  FCrowdDemoTrafficMetrics& M = LastCompareMetrics.TrafficMetrics;
-  M.ElasticFailureFixtureAgentCount = Fixture.ClosureAgentCount;
-  M.ElasticFailureFixtureHash = Fixture.StableHash;
-  M.ElasticFailureFixedStep = Fixture.FixedStepIndex;
-  M.ElasticFailureStage = static_cast<int32>(Fixture.Stage);
-  M.ElasticFailureKind = static_cast<int32>(Fixture.FailureKind);
-  M.ElasticFailureAttribution = static_cast<int32>(Fixture.Attribution);
-  M.ElasticFailureClosureAgentCount = Fixture.ClosureAgentCount;
-  M.ElasticFailureFixtureTooLarge = Fixture.bFixtureTooLarge ? 1 : 0;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordPositioningDiagnostic(
-  const FCrowdDemoPositioningRuntimeDiagnostic& Diagnostic)
-{
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.PositionSlotCommitCount = Diagnostic.SlotCommitCount;
-  Metrics.PositionReserveCommitCount = Diagnostic.ReserveCommitCount;
-  Metrics.PositionUnsettledPortalOwnedCount = Diagnostic.PortalOwnedCount;
-  Metrics.PositionUnsettledOutsideComposeRangeCount = Diagnostic.OutsideComposeRangeCount;
-  Metrics.PositionUnsettledGuidanceActiveCount = Diagnostic.GuidanceActiveCount;
-  Metrics.PositionUnsettledArrivalSpeedRejectedCount = Diagnostic.ArrivalSpeedRejectedCount;
-  Metrics.PositionUnsettledErrorLe30Count = Diagnostic.ErrorLe30Count;
-  Metrics.PositionUnsettledError31To100Count = Diagnostic.Error31To100Count;
-  Metrics.PositionUnsettledError101To300Count = Diagnostic.Error101To300Count;
-  Metrics.PositionUnsettledErrorOver300Count = Diagnostic.ErrorOver300Count;
-  Metrics.PositionUnsettledPreviousOrcaFallbackCount = Diagnostic.PreviousOrcaFallbackCount;
-  Metrics.PositionUnsettledPreviousOrcaInfeasibleCount = Diagnostic.PreviousOrcaInfeasibleCount;
-  Metrics.PositionUnsettledPreviousPbdCorrectedCount = Diagnostic.PreviousPbdCorrectedCount;
-  Metrics.PositionUnsettledSpeedCmpsP95 = Diagnostic.SpeedP95;
-  Metrics.PositionUnsettledGuidanceSpeedCmpsP95 = Diagnostic.GuidanceSpeedP95;
-  Metrics.PositionUnsettledOrcaSpeedCmpsP95 = Diagnostic.OrcaSpeedP95;
-  Metrics.PositionUnsettledObstacleSpeedCmpsP95 = Diagnostic.ObstacleSpeedP95;
-  Metrics.PositionUnsettledOrcaAdjustedCount = Diagnostic.OrcaAdjustedCount;
-  Metrics.PositionUnsettledOrcaZeroCount = Diagnostic.OrcaZeroCount;
-  Metrics.PositionUnsettledObstacleHitCount = Diagnostic.ObstacleHitCount;
-  Metrics.PositionUnsettledOrcaConstraintP95 = Diagnostic.OrcaConstraintP95;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::EnsureTrafficFlowFields()
-{
-  if (!IsActive()
-    || (!IsTrafficScenario(GetRules().Scenario)
-      && GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure))
-  {
-    return false;
-  }
-  bool bAllValid = true;
-  for (const FCrowdDemoTrafficCohortRule& Cohort : GetRules().TrafficCohorts)
-  {
-    FCrowdDemoSharedFlowField& Field = TrafficFlowFields.FindOrAdd(Cohort.CohortId);
-    if (!Field.IsValid() || Field.Config.Revision != Cohort.FlowFieldConfig.Revision
-      || !FVector(Field.Config.GoalLocation).Equals(FVector(Cohort.FlowFieldConfig.GoalLocation), 0.01f))
-    {
-      bAllValid &= FCrowdDemoSharedFlowFieldKernel::Build(Cohort.FlowFieldConfig, Field);
-    }
-  }
-  return bAllValid;
-}
-
-const FCrowdDemoSharedFlowField* UCrowdDemoRoundSimPipelineSubsystem::FindTrafficFlowField(const int32 CohortId) const
-{
-  return TrafficFlowFields.Find(CohortId);
-}
 
 bool UCrowdDemoRoundSimPipelineSubsystem::EnsureBidirectionalSwapFlowFields()
 {
@@ -1654,173 +709,6 @@ UCrowdDemoRoundSimPipelineSubsystem::FindBidirectionalSwapFlowField(
     ? &BidirectionalSwapFlowFields[CohortId] : nullptr;
 }
 
-void UCrowdDemoRoundSimPipelineSubsystem::RecordTrafficStep(
-  const FCrowdDemoTrafficStepSummary& TrafficSummary,
-  const FCrowdDemoOrcaSummary& OrcaSummary,
-  const float OrcaSolverMs)
-{
-  if (!IsActive() || !IsTrafficScenario(GetRules().Scenario))
-  {
-    return;
-  }
-  LastTrafficStepSummary = TrafficSummary;
-  LastOrcaSummary = OrcaSummary;
-  TrafficRoundHash = FoldHash(FoldHash(TrafficRoundHash, TrafficFixedStepIndex), TrafficSummary.TrafficFieldHash);
-  PortalRoundHash = FoldHash(FoldHash(PortalRoundHash, TrafficFixedStepIndex), TrafficSummary.PortalDecisionHash);
-  OrcaRoundHash = FoldHash(FoldHash(OrcaRoundHash, TrafficFixedStepIndex), OrcaSummary.VelocityHash);
-  PriorityOrcaRoundHash = FoldHash(
-    FoldHash(PriorityOrcaRoundHash, TrafficFixedStepIndex), OrcaSummary.PriorityHash);
-  ++TrafficFixedStepIndex;
-  TrafficQueueSamples.Add(static_cast<float>(TrafficSummary.QueuedCount));
-  TrafficOccupiedSamples.Add(static_cast<float>(TrafficSummary.OccupiedCount));
-  OrcaNeighborSamples.Append(OrcaSummary.NeighborCounts);
-  OrcaConstraintSamples.Append(OrcaSummary.ConstraintCounts);
-  OrcaSolverMsSamples.Add(OrcaSolverMs);
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.TrafficFieldHash = TrafficRoundHash;
-  Metrics.PortalDecisionHash = PortalRoundHash;
-  Metrics.OrcaVelocityHash = OrcaRoundHash;
-  Metrics.PriorityOrcaHash = PriorityOrcaRoundHash;
-  Metrics.TrafficPortalCount = TrafficSummary.PortalCount;
-  Metrics.RawPortalCandidateCount = PortalExtractionSummary.RawCrossSectionCandidateCount;
-  Metrics.ExtractedPortalCount = PortalExtractionSummary.ExtractedPortalCount;
-  Metrics.TrafficPortalQueueCountP50 = Percentile(TrafficQueueSamples, 0.50f);
-  Metrics.TrafficPortalQueueCountP95 = Percentile(TrafficQueueSamples, 0.95f);
-  Metrics.TrafficPortalQueueCountMax = FMath::Max(Metrics.TrafficPortalQueueCountMax, TrafficSummary.QueuedCount);
-  Metrics.TrafficPortalOccupiedCountP95 = Percentile(TrafficOccupiedSamples, 0.95f);
-  Metrics.TrafficPortalOccupiedCountMax = FMath::Max(Metrics.TrafficPortalOccupiedCountMax, TrafficSummary.OccupiedCount);
-  Metrics.TrafficAdmissionGrantedCount += TrafficSummary.AdmissionGrantedCount;
-  Metrics.TrafficAdmissionDeniedCount += TrafficSummary.AdmissionDeniedCount;
-  Metrics.PortalBindCount += TrafficSummary.PortalBindCount;
-  Metrics.PortalRebindCount += TrafficSummary.PortalRebindCount;
-  Metrics.PortalReleaseCount += TrafficSummary.PortalReleaseCount;
-  Metrics.InvalidSideCandidateCount += TrafficSummary.InvalidSideCandidateCount;
-  Metrics.WrongSpanCandidateCount += TrafficSummary.WrongSpanCandidateCount;
-  Metrics.ReservedToInsideCount += TrafficSummary.ReservedToInsideCount;
-  Metrics.InsideToExitedCount += TrafficSummary.InsideToExitedCount;
-  Metrics.PortalZeroThroughputStepCount += TrafficSummary.QueuedCount > 0
-    && TrafficSummary.InsideToExitedCount == 0 ? 1 : 0;
-  Metrics.TrafficBandAssignmentCount += TrafficSummary.BandAssignmentCount;
-  Metrics.TrafficBandReassignmentCount += TrafficSummary.BandReassignmentCount;
-  Metrics.HoldingTargetCount = FMath::Max(Metrics.HoldingTargetCount, TrafficSummary.HoldingTargetCount);
-  Metrics.HoldingTargetAllocationFailureCount += TrafficSummary.HoldingTargetAllocationFailureCount;
-  Metrics.HoldingTargetOverlapCount += TrafficSummary.HoldingTargetOverlapCount;
-  BandLateralErrorSamples.Append(TrafficSummary.BandLateralErrors);
-  Metrics.BandLateralErrorP50 = Percentile(BandLateralErrorSamples, 0.50f);
-  Metrics.BandLateralErrorP95 = Percentile(BandLateralErrorSamples, 0.95f);
-  for (const float Error : TrafficSummary.BandLateralErrors)
-    Metrics.BandLateralErrorMax = FMath::Max(Metrics.BandLateralErrorMax, Error);
-  Metrics.ReservedPositiveAxialVelocityCount += TrafficSummary.ReservedPositiveAxialVelocityCount;
-  Metrics.ReservedZeroVelocityCount += TrafficSummary.ReservedZeroVelocityCount;
-  Metrics.TrafficDirectionEpochChangeCount += TrafficSummary.DirectionEpochChangeCount;
-  Metrics.ReservationTimeoutCount += TrafficSummary.ReservationTimeoutCount;
-  Metrics.TransitTimeoutCount += TrafficSummary.TransitTimeoutCount;
-  Metrics.PortalCapacityViolationCount += TrafficSummary.CapacityViolationCount;
-  Metrics.TrafficDensityAgentCountMax = FMath::Max(Metrics.TrafficDensityAgentCountMax, TrafficSummary.DensityAgentCountMax);
-  Metrics.OrcaProcessedAgentCount += OrcaSummary.ProcessedAgentCount;
-  Metrics.OrcaNeighborCountP50 = Percentile(OrcaNeighborSamples, 0.50f);
-  Metrics.OrcaNeighborCountP95 = Percentile(OrcaNeighborSamples, 0.95f);
-  Metrics.OrcaNeighborCountMax = FMath::Max(Metrics.OrcaNeighborCountMax, OrcaSummary.NeighborCountMax);
-  Metrics.OrcaConstraintCountP50 = Percentile(OrcaConstraintSamples, 0.50f);
-  Metrics.OrcaConstraintCountP95 = Percentile(OrcaConstraintSamples, 0.95f);
-  Metrics.OrcaConstraintCountMax = FMath::Max(Metrics.OrcaConstraintCountMax, OrcaSummary.ConstraintCountMax);
-  Metrics.OrcaConstraintCutoffCircleCount += OrcaSummary.CutoffCircleConstraintCount;
-  Metrics.OrcaConstraintLeftLegCount += OrcaSummary.LeftLegConstraintCount;
-  Metrics.OrcaConstraintRightLegCount += OrcaSummary.RightLegConstraintCount;
-  Metrics.OrcaConstraintPenetrationCount += OrcaSummary.PenetrationConstraintCount;
-  Metrics.OrcaNoConstraintCount += OrcaSummary.NoConstraintCount;
-  Metrics.OrcaPreferredFeasibleCount += OrcaSummary.PreferredFeasibleCount;
-  Metrics.OrcaLpFeasibleCount += OrcaSummary.LpFeasibleCount;
-  Metrics.OrcaSingleConstraintOutsideSpeedCircleCount += OrcaSummary.SingleConstraintOutsideSpeedCircleCount;
-  Metrics.OrcaMultiConstraintEmptyCount += OrcaSummary.MultiConstraintEmptyIntersectionCount;
-  Metrics.OrcaQuantizationDestroyedCount += OrcaSummary.QuantizationDestroyedFeasibilityCount;
-  Metrics.OrcaFallbackFlowFeasibleCount += OrcaSummary.FallbackFlowFeasibleCount;
-  Metrics.OrcaFallbackPortalFeasibleCount += OrcaSummary.FallbackPortalFeasibleCount;
-  Metrics.OrcaStopFeasibleCount += OrcaSummary.StopFeasibleCount;
-  Metrics.OrcaStopViolationCount += OrcaSummary.StopViolationCount;
-  Metrics.OrcaAdjustedAgentCount = FMath::Max(Metrics.OrcaAdjustedAgentCount, OrcaSummary.AdjustedAgentCount);
-  Metrics.OrcaInfeasibleAgentCount += OrcaSummary.InfeasibleAgentCount;
-  Metrics.OrcaFallbackStopCount += OrcaSummary.FallbackStopCount;
-  Metrics.OrcaStopSatisfiesConstraintCount += OrcaSummary.StopSatisfiesConstraintCount;
-  Metrics.OrcaStopViolatesConstraintCount += OrcaSummary.StopViolatesConstraintCount;
-  Metrics.PriorityOrcaEqualPairCount += OrcaSummary.PriorityEqualPairCount;
-  Metrics.PriorityOrcaAsymmetricPairCount += OrcaSummary.PriorityAsymmetricPairCount;
-  Metrics.PriorityOrcaHighSide25Count += OrcaSummary.PriorityHighSide25Count;
-  Metrics.PriorityOrcaLowSide75Count += OrcaSummary.PriorityLowSide75Count;
-  Metrics.PriorityOrcaResponsibilitySumViolationCount +=
-    OrcaSummary.PriorityResponsibilitySumViolationCount;
-  Metrics.OrcaFormalLpFeasibleCount += OrcaSummary.FormalLpFeasibleCount;
-  Metrics.OrcaFormalLpQuantizedRecoveredCount += OrcaSummary.FormalLpQuantizedRecoveredCount;
-  Metrics.OrcaFormalLpQuantizedGeometryRecoveredCount +=
-    OrcaSummary.FormalLpQuantizedGeometryRecoveredCount;
-  Metrics.OrcaFormalLpMissedZeroRecoveredCount += OrcaSummary.FormalLpMissedZeroRecoveredCount;
-  Metrics.OrcaFormalLpMissedOracleRecoveredCount += OrcaSummary.FormalLpMissedOracleRecoveredCount;
-  Metrics.OrcaContinuousFeasibleQuantizedEmptyCount += OrcaSummary.ContinuousFeasibleQuantizedEmptyCount;
-  Metrics.OrcaTrueNoFeasibleWitnessCount += OrcaSummary.TrueNoFeasibleWitnessCount;
-  Metrics.OrcaOracleInvocationCount += OrcaSummary.OracleInvocationCount;
-  Metrics.OrcaCalledAfterContinuousFailureCount += OrcaSummary.OracleCalledAfterContinuousFailureCount;
-  Metrics.OrcaCalledAfterQuantizationFailureCount += OrcaSummary.OracleCalledAfterQuantizationFailureCount;
-  Metrics.OrcaQuantizedWitnessUsedCount += OrcaSummary.OracleQuantizedWitnessUsedCount;
-  Metrics.OrcaNeighborhood3x3RecoveredCount += OrcaSummary.Neighborhood3x3RecoveredCount;
-  Metrics.OrcaOracleNoWitnessCount += OrcaSummary.OracleNoWitnessCount;
-  Metrics.OrcaTrueNoWitnessReachableFlowCount += OrcaSummary.TrueNoWitnessReachableFlowCount;
-  Metrics.OrcaTrueNoWitnessInvalidFlowCount += OrcaSummary.TrueNoWitnessInvalidFlowCount;
-  Metrics.OrcaTrueNoWitnessGoalNearCount += OrcaSummary.TrueNoWitnessGoalNearCount;
-  Metrics.OrcaTrueNoWitnessCorridorCount += OrcaSummary.TrueNoWitnessCorridorCount;
-  Metrics.OrcaParallelBranchCount += OrcaSummary.ParallelBranchCount;
-  Metrics.OrcaNearParallelBranchCount += OrcaSummary.NearParallelBranchCount;
-  Metrics.OrcaRedundantParallelCount += OrcaSummary.RedundantParallelCount;
-  Metrics.OrcaStricterParallelCount += OrcaSummary.StricterParallelCount;
-  Metrics.OrcaTrueParallelContradictionCount += OrcaSummary.TrueParallelContradictionCount;
-  Metrics.OrcaNumericalToleranceAcceptanceCount += OrcaSummary.NumericalToleranceAcceptanceCount;
-  Metrics.OrcaOracleRecoveryMsP95 = Percentile(OrcaOracleRecoveryMsSamples, 0.95f);
-  Metrics.WaitingOrcaInfeasibleCount += OrcaSummary.WaitingInfeasibleCount;
-  Metrics.ApproachOrcaInfeasibleCount += OrcaSummary.ApproachInfeasibleCount;
-  Metrics.ReservedOrcaInfeasibleCount += OrcaSummary.ReservedInfeasibleCount;
-  Metrics.InsideOrcaInfeasibleCount += OrcaSummary.InsideInfeasibleCount;
-  Metrics.WaitingOrcaFallbackStopCount += OrcaSummary.WaitingFallbackStopCount;
-  Metrics.ApproachOrcaFallbackStopCount += OrcaSummary.ApproachFallbackStopCount;
-  Metrics.ReservedOrcaFallbackStopCount += OrcaSummary.ReservedFallbackStopCount;
-  Metrics.InsideOrcaFallbackStopCount += OrcaSummary.InsideFallbackStopCount;
-  Metrics.OrcaSolverMsP95 = Percentile(OrcaSolverMsSamples, 0.95f);
-  Metrics.OrcaSolverMsP50 = Percentile(OrcaSolverMsSamples, 0.50f);
-  Metrics.OrcaSolverMsMax = OrcaSolverMsSamples.IsEmpty() ? 0.0f : FMath::Max(OrcaSolverMs, Metrics.OrcaSolverMsMax);
-  auto AccumulateStateCounts = [](TArray<int32>& Target, const TStaticArray<int32, 6>& Source)
-  {
-    if (Target.Num() != 6) Target.Init(0, 6);
-    for (int32 Index = 0; Index < 6; ++Index) Target[Index] += Source[Index];
-  };
-  AccumulateStateCounts(Metrics.OrcaProcessedByAdmissionState, OrcaSummary.ProcessedByAdmissionState);
-  AccumulateStateCounts(Metrics.OrcaFormalLpMissedByAdmissionState, OrcaSummary.FormalLpMissedByAdmissionState);
-  AccumulateStateCounts(Metrics.OrcaQuantizedEmptyByAdmissionState, OrcaSummary.QuantizedEmptyByAdmissionState);
-  AccumulateStateCounts(Metrics.OrcaInfeasibleByAdmissionState, OrcaSummary.InfeasibleByAdmissionState);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSf3OverlapSample(
-  const int32 OverlapPairs,
-  const int32 SevereOverlapPairs,
-  const int32 ResidualPbdPairs,
-  const int32 ObstaclePenetrations)
-{
-  if (!IsActive() || !IsTrafficScenario(GetRules().Scenario))
-  {
-    return;
-  }
-  LastSeparationOverlapPairCount = OverlapPairs;
-  LastSeparationSevereOverlapPairCount = SevereOverlapPairs;
-  FlowSeparationOverlapPairSamples.Add(static_cast<float>(OverlapPairs));
-  FlowSeparationSevereOverlapPairSamples.Add(static_cast<float>(SevereOverlapPairs));
-  LastCompareMetrics.OverlapPairCountP50 = Percentile(FlowSeparationOverlapPairSamples, 0.50f);
-  LastCompareMetrics.OverlapPairCountP95 = Percentile(FlowSeparationOverlapPairSamples, 0.95f);
-  LastCompareMetrics.OverlapPairCountMax = FMath::Max(LastCompareMetrics.OverlapPairCountMax, OverlapPairs);
-  LastCompareMetrics.SevereOverlapPairCountP50 = Percentile(FlowSeparationSevereOverlapPairSamples, 0.50f);
-  LastCompareMetrics.SevereOverlapPairCountP95 = Percentile(FlowSeparationSevereOverlapPairSamples, 0.95f);
-  LastCompareMetrics.SevereOverlapPairCountMax = FMath::Max(
-    LastCompareMetrics.SevereOverlapPairCountMax, SevereOverlapPairs);
-  LastCompareMetrics.TrafficMetrics.ResidualPbdPenetrationPairCount = FMath::Max(
-    LastCompareMetrics.TrafficMetrics.ResidualPbdPenetrationPairCount, ResidualPbdPairs);
-  LastCompareMetrics.TrafficMetrics.FinalObstaclePenetrationCount += ObstaclePenetrations;
-}
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordFlowConnectivityStep(
   const int32 RecoveredCount,
@@ -1828,7 +716,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordFlowConnectivityStep(
   const int32 SourceAttachmentSuccessCount,
   const int32 UnreachableSampleCount)
 {
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
+  FCrowdDemoSharedFlowMetrics& Metrics = LastCompareMetrics.SharedFlowMetrics;
   Metrics.FlowRecoveredFromRasterMismatchCount += FMath::Max(0, RecoveredCount);
   Metrics.FlowDesiredSegmentHardObstacleViolationCount +=
     FMath::Max(0, DesiredSegmentViolationCount);
@@ -1836,10 +724,10 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordFlowConnectivityStep(
   Metrics.NavigationUnreachableSampleCount += FMath::Max(0, UnreachableSampleCount);
 }
 
-FCrowdDemoTrafficMetrics UCrowdDemoRoundSimPipelineSubsystem::BuildTrafficMetrics(
+FCrowdDemoSharedFlowMetrics UCrowdDemoRoundSimPipelineSubsystem::BuildSharedFlowMetrics(
   const TConstArrayView<FCrowdDemoRoundAgentState> States) const
 {
-  FCrowdDemoTrafficMetrics Metrics = LastCompareMetrics.TrafficMetrics;
+  FCrowdDemoSharedFlowMetrics Metrics = LastCompareMetrics.SharedFlowMetrics;
   Metrics.SharedFlowFieldBuildHash = SharedFlowField.BuildHash;
   Metrics.SharedFlowConnectivityContractVersion =
     SharedFlowField.Config.ConnectivityContractVersion;
@@ -1867,789 +755,7 @@ FCrowdDemoTrafficMetrics UCrowdDemoRoundSimPipelineSubsystem::BuildTrafficMetric
     Hash = FoldHash(Hash, static_cast<uint32>(FMath::RoundToInt(State.RadiusCm)));
   }
   Metrics.AgentStateHash = Hash;
-  Metrics.InvalidFlowDeadlockCount = 0;
-  for (const int32 AgentId : FlowFinalInvalidAgentIds)
-    Metrics.InvalidFlowDeadlockCount += FlowCorridorDeadlockAgentIds.Contains(AgentId) ? 1 : 0;
-  if (IsSf3OrcaReferenceDiagnosticEnabled())
-  {
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoSf3OrcaReferenceDiagnostic samples=%d current_exact=%d reference_exact=%d current_miss_reference_hit=%d both_miss_oracle_hit=%d current_hit_reference_miss=%d all_exact_miss=%d continuous_hit_quantized_miss=%d three_by_three_recovered=%d oracle_witness_available=%d best_effort_used=%d minimum_fixture_hash=%u minimum_fixture_constraints=%d source=MassPipeline"),
-      Metrics.OrcaReferenceSampleCount, Metrics.OrcaReferenceCurrentExactCount,
-      Metrics.OrcaReferenceExactCount, Metrics.OrcaCurrentMissReferenceHitCount,
-      Metrics.OrcaBothMissOracleHitCount, Metrics.OrcaCurrentHitReferenceMissCount,
-      Metrics.OrcaAllExactMissCount, Metrics.OrcaReferenceContinuousHitQuantizedMissCount,
-      Metrics.OrcaReferenceThreeByThreeRecoveredCount,
-      Metrics.OrcaReferenceOracleWitnessAvailableCount,
-      Metrics.OrcaReferenceBestEffortUsedCount, Metrics.OrcaReferenceMinimumFixtureHash,
-      Metrics.OrcaReferenceMinimumFixtureConstraintCount);
-  }
-  if (IsSf3FlowReachabilityDiagnosticEnabled())
-  {
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoSf3FlowReachability reachable=%d out_of_bounds=%d blocked_raster=%d unreachable_free=%d reachable_to_out_of_bounds=%d reachable_to_blocked=%d reachable_to_unreachable_free=%d at_predict=%d at_obstacle=%d at_pbd=%d at_reproject=%d final_invalid=%d invalid_to_reachable=%d continuous_legal_blocked=%d continuous_legal_unreachable_free=%d continuous_legal_out_of_bounds=%d blocked_penetrating=%d blocked_not_penetrating=%d invalid_preferred_zero=%d invalid_final_zero=%d invalid_deadlock=%d nearest_reachable_max_cm=%.3f navigation_domain_reproject_max_cm=%.3f source=MassPipeline"),
-      Metrics.FlowReachableFinalCount, Metrics.FlowOutOfBoundsFinalCount,
-      Metrics.FlowBlockedRasterFinalCount, Metrics.FlowUnreachableFreeFinalCount,
-      Metrics.FlowReachableToOutOfBoundsCount, Metrics.FlowReachableToBlockedCellCount,
-      Metrics.FlowReachableToUnreachableFreeCount, Metrics.FlowTransitionAtPredictCount,
-      Metrics.FlowTransitionAtObstacleConstraintCount, Metrics.FlowTransitionAtPbdCount,
-      Metrics.FlowTransitionAtObstacleReprojectCount, Metrics.FlowFinalInvalidAgentCount,
-      Metrics.FlowInvalidToReachableRecoveryCount, Metrics.ContinuousLegalButBlockedCellCount,
-      Metrics.ContinuousLegalButUnreachableFreeCount, Metrics.ContinuousLegalButOutOfBoundsCount,
-      Metrics.BlockedCellAndPenetratingCount, Metrics.BlockedCellButNotPenetratingCount,
-      Metrics.InvalidFlowPreferredZeroCount, Metrics.InvalidFlowFinalZeroVelocityCount,
-      Metrics.InvalidFlowDeadlockCount, Metrics.FlowNearestReachableDistanceCmMax,
-      Metrics.NavigationDomainReprojectDeltaCmMax);
-    const TCHAR* StageNames[] = {TEXT("StepStart"),TEXT("MovementPredict"),TEXT("ObstacleConstraint"),
-      TEXT("HardPBD"),TEXT("ObstacleReproject"),TEXT("MovementFinalize")};
-    const TCHAR* StatusNames[] = {TEXT("Reachable"),TEXT("OutOfBounds"),
-      TEXT("BlockedRasterCell"),TEXT("UnreachableFreeCell")};
-    for (const FCrowdDemoFlowReachabilityWitness& Witness : FlowReachabilityWitnesses)
-    {
-      if (!Witness.bValid) continue;
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoSf3FlowWitness stage=%s previous_cell=%d previous_status=%s next_cell=%d next_status=%s delta_x=%.3f delta_y=%.3f blocked=%d continuous_penetrating=%d nearest_reachable_cm=%.3f source=MassPipeline"),
-        StageNames[static_cast<int32>(Witness.Stage)], Witness.PreviousStableCellKey,
-        StatusNames[static_cast<int32>(Witness.PreviousStatus)], Witness.NextStableCellKey,
-        StatusNames[static_cast<int32>(Witness.NextStatus)], Witness.WorldDelta.X, Witness.WorldDelta.Y,
-        Witness.bBlocked ? 1 : 0, Witness.bContinuousPenetrating ? 1 : 0,
-        Witness.NearestReachableCellDistanceCm);
-    }
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoSf3OrcaRecoverySplit oracle_after_continuous_failure=%d oracle_after_quantization_failure=%d oracle_quantized_witness_used=%d neighborhood_3x3_recovered=%d oracle_no_witness=%d true_no_witness_reachable_flow=%d true_no_witness_invalid_flow=%d true_no_witness_goal_near=%d true_no_witness_corridor=%d source=MassPipeline"),
-      Metrics.OrcaCalledAfterContinuousFailureCount, Metrics.OrcaCalledAfterQuantizationFailureCount,
-      Metrics.OrcaQuantizedWitnessUsedCount, Metrics.OrcaNeighborhood3x3RecoveredCount,
-      Metrics.OrcaOracleNoWitnessCount, Metrics.OrcaTrueNoWitnessReachableFlowCount,
-      Metrics.OrcaTrueNoWitnessInvalidFlowCount, Metrics.OrcaTrueNoWitnessGoalNearCount,
-      Metrics.OrcaTrueNoWitnessCorridorCount);
-  }
-  if (IsSf3DeterminismDiagnosticEnabled())
-  {
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoSf3OrcaClassification constraints_cutoff=%d constraints_left_leg=%d constraints_right_leg=%d constraints_penetration=%d no_constraint=%d preferred_feasible=%d lp_feasible=%d single_outside_speed_circle=%d multi_empty=%d quantization_destroyed=%d fallback_flow=%d fallback_portal=%d stop_feasible=%d stop_violation=%d waiting_infeasible=%d approach_infeasible=%d reserved_infeasible=%d inside_infeasible=%d source=MassPipeline"),
-      Metrics.OrcaConstraintCutoffCircleCount,
-      Metrics.OrcaConstraintLeftLegCount,
-      Metrics.OrcaConstraintRightLegCount,
-      Metrics.OrcaConstraintPenetrationCount,
-      Metrics.OrcaNoConstraintCount,
-      Metrics.OrcaPreferredFeasibleCount,
-      Metrics.OrcaLpFeasibleCount,
-      Metrics.OrcaSingleConstraintOutsideSpeedCircleCount,
-      Metrics.OrcaMultiConstraintEmptyCount,
-      Metrics.OrcaQuantizationDestroyedCount,
-      Metrics.OrcaFallbackFlowFeasibleCount,
-      Metrics.OrcaFallbackPortalFeasibleCount,
-      Metrics.OrcaStopFeasibleCount,
-      Metrics.OrcaStopViolationCount,
-      Metrics.WaitingOrcaInfeasibleCount,
-      Metrics.ApproachOrcaInfeasibleCount,
-      Metrics.ReservedOrcaInfeasibleCount,
-      Metrics.InsideOrcaInfeasibleCount);
-    const auto StateValue = [](const TArray<int32>& Values, const int32 Index)
-    {
-      return Values.IsValidIndex(Index) ? Values[Index] : 0;
-    };
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoSf3OrcaLpRepair processed=%d preferred_feasible=%d formal_lp_feasible=%d formal_lp_quantized_recovered=%d formal_lp_geometry_recovered=%d formal_lp_missed_zero_recovered=%d formal_lp_missed_oracle_recovered=%d continuous_feasible_quantized_empty=%d true_no_feasible_witness=%d flow_fallback=%d portal_fallback=%d stop_feasible=%d stop_violation=%d infeasible=%d constraint_p50=%.3f constraint_p95=%.3f constraint_max=%d solver_ms_p50=%.3f solver_ms_p95=%.3f solver_ms_max=%.3f oracle_invocations=%d oracle_recovery_ms_p95=%.3f parallel=%d near_parallel=%d redundant_parallel=%d stricter_parallel=%d true_parallel_contradiction=%d numerical_tolerance_acceptance=%d processed_by_state=%d,%d,%d,%d,%d,%d missed_by_state=%d,%d,%d,%d,%d,%d quantized_empty_by_state=%d,%d,%d,%d,%d,%d infeasible_by_state=%d,%d,%d,%d,%d,%d source=MassPipeline"),
-      Metrics.OrcaProcessedAgentCount, Metrics.OrcaPreferredFeasibleCount,
-      Metrics.OrcaFormalLpFeasibleCount, Metrics.OrcaFormalLpQuantizedRecoveredCount,
-      Metrics.OrcaFormalLpQuantizedGeometryRecoveredCount,
-      Metrics.OrcaFormalLpMissedZeroRecoveredCount, Metrics.OrcaFormalLpMissedOracleRecoveredCount,
-      Metrics.OrcaContinuousFeasibleQuantizedEmptyCount, Metrics.OrcaTrueNoFeasibleWitnessCount,
-      Metrics.OrcaFallbackFlowFeasibleCount, Metrics.OrcaFallbackPortalFeasibleCount,
-      Metrics.OrcaStopFeasibleCount, Metrics.OrcaStopViolationCount,
-      Metrics.OrcaInfeasibleAgentCount, Metrics.OrcaConstraintCountP50,
-      Metrics.OrcaConstraintCountP95, Metrics.OrcaConstraintCountMax,
-      Metrics.OrcaSolverMsP50, Metrics.OrcaSolverMsP95, Metrics.OrcaSolverMsMax,
-      Metrics.OrcaOracleInvocationCount, Metrics.OrcaOracleRecoveryMsP95,
-      Metrics.OrcaParallelBranchCount, Metrics.OrcaNearParallelBranchCount,
-      Metrics.OrcaRedundantParallelCount, Metrics.OrcaStricterParallelCount,
-      Metrics.OrcaTrueParallelContradictionCount, Metrics.OrcaNumericalToleranceAcceptanceCount,
-      StateValue(Metrics.OrcaProcessedByAdmissionState,0), StateValue(Metrics.OrcaProcessedByAdmissionState,1),
-      StateValue(Metrics.OrcaProcessedByAdmissionState,2), StateValue(Metrics.OrcaProcessedByAdmissionState,3),
-      StateValue(Metrics.OrcaProcessedByAdmissionState,4), StateValue(Metrics.OrcaProcessedByAdmissionState,5),
-      StateValue(Metrics.OrcaFormalLpMissedByAdmissionState,0), StateValue(Metrics.OrcaFormalLpMissedByAdmissionState,1),
-      StateValue(Metrics.OrcaFormalLpMissedByAdmissionState,2), StateValue(Metrics.OrcaFormalLpMissedByAdmissionState,3),
-      StateValue(Metrics.OrcaFormalLpMissedByAdmissionState,4), StateValue(Metrics.OrcaFormalLpMissedByAdmissionState,5),
-      StateValue(Metrics.OrcaQuantizedEmptyByAdmissionState,0), StateValue(Metrics.OrcaQuantizedEmptyByAdmissionState,1),
-      StateValue(Metrics.OrcaQuantizedEmptyByAdmissionState,2), StateValue(Metrics.OrcaQuantizedEmptyByAdmissionState,3),
-      StateValue(Metrics.OrcaQuantizedEmptyByAdmissionState,4), StateValue(Metrics.OrcaQuantizedEmptyByAdmissionState,5),
-      StateValue(Metrics.OrcaInfeasibleByAdmissionState,0), StateValue(Metrics.OrcaInfeasibleByAdmissionState,1),
-      StateValue(Metrics.OrcaInfeasibleByAdmissionState,2), StateValue(Metrics.OrcaInfeasibleByAdmissionState,3),
-      StateValue(Metrics.OrcaInfeasibleByAdmissionState,4), StateValue(Metrics.OrcaInfeasibleByAdmissionState,5));
-  }
-  if (IsSf3GoalCongestionDiagnosticEnabled())
-  {
-    struct FBucket
-    {
-      int32 Agents = 0;
-      int32 Reached = 0;
-      int32 NonReached = 0;
-      int32 Stopped = 0;
-      int32 Processed = 0;
-      int32 Preferred = 0;
-      int32 Lp = 0;
-      int32 Infeasible = 0;
-      int32 FallbackStop = 0;
-      int32 StopFeasible = 0;
-      int32 StopViolation = 0;
-      int32 AgainstReached = 0;
-      int32 AgainstNonReached = 0;
-      TArray<float> Speeds;
-      TArray<float> StoppedSeconds;
-      TArray<float> Neighbors;
-      TArray<float> Constraints;
-    };
-    FVector Goal = FVector(GetRules().FlowFieldConfig.GoalLocation);
-    if (!GetRules().TrafficCohorts.IsEmpty())
-      Goal = FVector(GetRules().TrafficCohorts[0].FlowFieldConfig.GoalLocation);
-    TStaticArray<FBucket, 6> DistanceBuckets;
-    TStaticArray<FBucket, 6> RegionBuckets;
-    const auto Average = [](const TConstArrayView<float> Values)
-    {
-      float Sum = 0.0f;
-      for (const float Value : Values) Sum += Value;
-      return Values.IsEmpty() ? 0.0f : Sum / Values.Num();
-    };
-    const auto Maximum = [](const TConstArrayView<float> Values)
-    {
-      float Result = 0.0f;
-      for (const float Value : Values) Result = FMath::Max(Result, Value);
-      return Result;
-    };
-    TArray<float> ReachedDistances;
-    TArray<float> NonReachedDistances;
-    TArray<float> ReachedSpeeds;
-    TArray<float> OracleCandidates;
-    TArray<const FCrowdDemoRoundAgentState*> ReachedStates;
-    float NearestNonReached = MAX_flt;
-    float FarthestReached = 0.0f;
-    int32 FinalNonReached = 0;
-    int32 ReachedStillInOrca = 0;
-    int32 NonReachedWithReachedNeighbor = 0;
-    int32 ReachedToNonReachedConstraints = 0;
-    int32 ReachedZeroPreferred = 0;
-    int32 ReachedGeneratingConstraints = 0;
-    int32 LpFailedZeroFeasible = 0;
-    int32 LpFailedOracleFeasible = 0;
-    int32 LpFailedOracleNoWitness = 0;
-    int32 ContinuousQuantizedFailure = 0;
-    int32 GenuineSpeedCircleEmpty = 0;
-    int32 EverReached = 0;
-    int32 ReachedThenLeft = 0;
-    int32 NeverReached = 0;
-    int32 StoppedNear = 0;
-    int32 StoppedFar = 0;
-    int32 MovingNear = 0;
-    int32 MovingFar = 0;
-    uint32 DiagnosticHash = 2166136261u;
-    for (const FCrowdDemoRoundAgentState& State : States)
-    {
-      const FCrowdDemoSf3GoalAgentDiagnostic* Diagnostic = Sf3GoalDiagnostics.Find(State.AgentId);
-      const float Distance = FVector::Dist2D(State.Location, Goal);
-      const bool bReached = FlowGoalReachedAgentIds.Contains(State.AgentId)
-        || (Diagnostic && Diagnostic->bEverReached);
-      const float Speed = State.Velocity.Size2D();
-      const int32 DistanceBucketIndex = Sf3GoalDistanceBucket(Distance);
-      const int32 RegionBucketIndex = Sf3FlowRegionBucket(
-        State.Location, Diagnostic ? Diagnostic->IntegrationCost : MAX_int32, Distance);
-      auto AddToBucket = [&](FBucket& Bucket)
-      {
-        ++Bucket.Agents;
-        Bucket.Reached += bReached ? 1 : 0;
-        Bucket.NonReached += bReached ? 0 : 1;
-        Bucket.Speeds.Add(Speed);
-        if (!Diagnostic) return;
-        const bool bStopped = Speed < 1.0f && Diagnostic->MaxStoppedSeconds >= 2.0f;
-        Bucket.Stopped += bStopped ? 1 : 0;
-        Bucket.StoppedSeconds.Add(Diagnostic->MaxStoppedSeconds);
-        Bucket.Processed += Diagnostic->ProcessedAgentSteps;
-        Bucket.Preferred += Diagnostic->PreferredFeasibleCount;
-        Bucket.Lp += Diagnostic->LpFeasibleCount;
-        Bucket.Infeasible += Diagnostic->InfeasibleCount;
-        Bucket.FallbackStop += Diagnostic->FallbackStopCount;
-        Bucket.StopFeasible += Diagnostic->StopFeasibleCount;
-        Bucket.StopViolation += Diagnostic->StopViolationCount;
-        Bucket.AgainstReached += Diagnostic->ConstraintsAgainstReached;
-        Bucket.AgainstNonReached += Diagnostic->ConstraintsAgainstNonReached;
-        Bucket.Neighbors.Append(Diagnostic->NeighborCounts);
-        Bucket.Constraints.Append(Diagnostic->ConstraintCounts);
-      };
-      AddToBucket(DistanceBuckets[DistanceBucketIndex]);
-      AddToBucket(RegionBuckets[RegionBucketIndex]);
-      if (bReached)
-      {
-        ++EverReached;
-        ReachedDistances.Add(Distance);
-        ReachedSpeeds.Add(Speed);
-        ReachedStates.Add(&State);
-        FarthestReached = FMath::Max(FarthestReached, Distance);
-        ReachedThenLeft += Distance > 140.0f ? 1 : 0;
-        if (Diagnostic)
-        {
-          ReachedStillInOrca += Diagnostic->ProcessedAgentSteps > 0 ? 1 : 0;
-          ReachedZeroPreferred += Diagnostic->LastPreferredVelocity.Size() < 1.0f ? 1 : 0;
-          ReachedGeneratingConstraints += Diagnostic->ConstraintsAgainstReached
-            + Diagnostic->ConstraintsAgainstNonReached > 0 ? 1 : 0;
-        }
-      }
-      else
-      {
-        ++NeverReached;
-        ++FinalNonReached;
-        NonReachedDistances.Add(Distance);
-        NearestNonReached = FMath::Min(NearestNonReached, Distance);
-        if (Diagnostic)
-        {
-          NonReachedWithReachedNeighbor += Diagnostic->bHadReachedNeighbor ? 1 : 0;
-          ReachedToNonReachedConstraints += Diagnostic->ConstraintsAgainstReached;
-        }
-      }
-      if (Diagnostic)
-      {
-        LpFailedZeroFeasible += Diagnostic->LpFailedZeroFeasibleCount;
-        LpFailedOracleFeasible += Diagnostic->LpFailedOracleFeasibleCount;
-        LpFailedOracleNoWitness += Diagnostic->LpFailedOracleNoWitnessCount;
-        ContinuousQuantizedFailure += Diagnostic->ContinuousFeasibleQuantizedFailureCount;
-        GenuineSpeedCircleEmpty += Diagnostic->GenuineSpeedCircleEmptyCount;
-        OracleCandidates.Append(Diagnostic->OracleCandidateCounts);
-        const bool bStopped = Speed < 1.0f && Diagnostic->MaxStoppedSeconds >= 2.0f;
-        const bool bNear = Distance <= 400.0f;
-        if (bStopped && bNear) ++StoppedNear;
-        else if (bStopped) ++StoppedFar;
-        else if (bNear) ++MovingNear;
-        else ++MovingFar;
-      }
-      DiagnosticHash = FoldHash(DiagnosticHash, State.AgentId);
-      DiagnosticHash = FoldHash(DiagnosticHash, DistanceBucketIndex);
-      DiagnosticHash = FoldHash(DiagnosticHash, RegionBucketIndex);
-      DiagnosticHash = FoldHash(DiagnosticHash, bReached ? 1u : 0u);
-      DiagnosticHash = FoldHash(DiagnosticHash, Diagnostic ? Diagnostic->InfeasibleCount : 0u);
-    }
-    int32 ReachedOverlapPairs = 0;
-    for (int32 A = 0; A < ReachedStates.Num(); ++A)
-      for (int32 B = A + 1; B < ReachedStates.Num(); ++B)
-        ReachedOverlapPairs += FVector::DistSquared2D(
-          ReachedStates[A]->Location, ReachedStates[B]->Location)
-          < FMath::Square(ReachedStates[A]->RadiusCm + ReachedStates[B]->RadiusCm) ? 1 : 0;
-    FVector2D MinExtent(MAX_flt, MAX_flt), MaxExtent(-MAX_flt, -MAX_flt);
-    for (const FCrowdDemoRoundAgentState* State : ReachedStates)
-    {
-      MinExtent.X = FMath::Min(MinExtent.X, State->Location.X);
-      MinExtent.Y = FMath::Min(MinExtent.Y, State->Location.Y);
-      MaxExtent.X = FMath::Max(MaxExtent.X, State->Location.X);
-      MaxExtent.Y = FMath::Max(MaxExtent.Y, State->Location.Y);
-    }
-    static const TCHAR* DistanceNames[] = {
-      TEXT("0_100"), TEXT("100_200"), TEXT("200_400"),
-      TEXT("400_800"), TEXT("800_1200"), TEXT("1200_plus")};
-    static const TCHAR* RegionNames[] = {
-      TEXT("GoalCell"), TEXT("GoalNear"), TEXT("PostCorridor"),
-      TEXT("Corridor"), TEXT("PreCorridor"), TEXT("FarRoute")};
-    const TCHAR* Role = GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server");
-    for (int32 Index = 0; Index < 6; ++Index)
-    {
-      const FBucket& Bucket = DistanceBuckets[Index];
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoSf3GoalDistance role=%s round_id=%d bucket=%s agents=%d reached=%d non_reached=%d average_speed_cmps=%.3f speed_p50=%.3f speed_p95=%.3f stopped=%d stopped_seconds_p50=%.3f stopped_seconds_p95=%.3f stopped_seconds_max=%.3f processed=%d preferred_feasible=%d lp_feasible=%d infeasible=%d fallback_stop=%d stop_feasible=%d stop_violation=%d neighbor_p50=%.3f neighbor_p95=%.3f neighbor_max=%.3f constraint_p50=%.3f constraint_p95=%.3f constraint_max=%.3f constraints_against_reached=%d constraints_against_non_reached=%d source=MassPipeline"),
-        Role, GetCurrentRoundId(), DistanceNames[Index], Bucket.Agents, Bucket.Reached,
-        Bucket.NonReached, Average(Bucket.Speeds),
-        Percentile(Bucket.Speeds, 0.50f), Percentile(Bucket.Speeds, 0.95f), Bucket.Stopped,
-        Percentile(Bucket.StoppedSeconds, 0.50f), Percentile(Bucket.StoppedSeconds, 0.95f),
-        Maximum(Bucket.StoppedSeconds),
-        Bucket.Processed, Bucket.Preferred, Bucket.Lp, Bucket.Infeasible,
-        Bucket.FallbackStop, Bucket.StopFeasible, Bucket.StopViolation,
-        Percentile(Bucket.Neighbors, 0.50f), Percentile(Bucket.Neighbors, 0.95f),
-        Maximum(Bucket.Neighbors),
-        Percentile(Bucket.Constraints, 0.50f), Percentile(Bucket.Constraints, 0.95f),
-        Maximum(Bucket.Constraints),
-        Bucket.AgainstReached, Bucket.AgainstNonReached);
-      const FBucket& Region = RegionBuckets[Index];
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoSf3FlowRegion role=%s round_id=%d region=%s agents=%d non_reached=%d stopped=%d average_speed_cmps=%.3f infeasible=%d fallback_stop=%d stop_violation=%d source=MassPipeline"),
-        Role, GetCurrentRoundId(), RegionNames[Index], Region.Agents, Region.NonReached,
-        Region.Stopped, Average(Region.Speeds),
-        Region.Infeasible, Region.FallbackStop, Region.StopViolation);
-    }
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoSf3GoalCongestion role=%s round_id=%d diagnostic_hash=%u goal_reached_radius_cm=140.000 reached=%d final_non_reached=%d nearest_non_reached_goal_distance_cm=%.3f farthest_reached_goal_distance_cm=%.3f reached_still_in_orca=%d non_reached_with_reached_neighbor=%d reached_to_non_reached_constraints=%d reached_pair_overlaps=%d reached_extent_x=%.3f reached_extent_y=%.3f reached_radial_p50=%.3f reached_radial_p95=%.3f reached_radial_max=%.3f non_reached_radial_min=%.3f non_reached_radial_p50=%.3f non_reached_radial_p95=%.3f reached_average_speed=%.3f reached_zero_preferred=%d reached_generating_constraints=%d ever_reached=%d reached_then_left=%d never_reached=%d stopped_near=%d stopped_far=%d moving_near=%d moving_far=%d lp_failed_zero_feasible=%d lp_failed_oracle_feasible=%d lp_failed_oracle_no_witness=%d oracle_candidates_p95=%.3f continuous_feasible_quantized_failure=%d genuine_speed_circle_empty=%d source=MassPipeline"),
-      Role, GetCurrentRoundId(), DiagnosticHash, EverReached, FinalNonReached,
-      FinalNonReached > 0 ? NearestNonReached : -1.0f, FarthestReached,
-      ReachedStillInOrca, NonReachedWithReachedNeighbor, ReachedToNonReachedConstraints,
-      ReachedOverlapPairs, ReachedStates.IsEmpty() ? 0.0f : MaxExtent.X - MinExtent.X,
-      ReachedStates.IsEmpty() ? 0.0f : MaxExtent.Y - MinExtent.Y,
-      Percentile(ReachedDistances, 0.50f), Percentile(ReachedDistances, 0.95f),
-      Maximum(ReachedDistances),
-      NonReachedDistances.IsEmpty() ? -1.0f : NearestNonReached,
-      Percentile(NonReachedDistances, 0.50f), Percentile(NonReachedDistances, 0.95f),
-      Average(ReachedSpeeds),
-      ReachedZeroPreferred, ReachedGeneratingConstraints, EverReached, ReachedThenLeft,
-      NeverReached, StoppedNear, StoppedFar, MovingNear, MovingFar,
-      LpFailedZeroFeasible, LpFailedOracleFeasible, LpFailedOracleNoWitness,
-      Percentile(OracleCandidates, 0.95f), ContinuousQuantizedFailure,
-      GenuineSpeedCircleEmpty);
-  }
-  if (IsElasticCrowdShadowEnabled())
-  {
-    const auto JoinUInt = [](const TArray<uint32>& Values)
-    {
-      FString Out;
-      for (int32 Index = 0; Index < Values.Num(); ++Index)
-        Out += FString::Printf(TEXT("%s%u"), Index == 0 ? TEXT("") : TEXT(","), Values[Index]);
-      return Out;
-    };
-    const auto JoinInt = [](const TArray<int32>& Values)
-    {
-      FString Out;
-      for (int32 Index = 0; Index < Values.Num(); ++Index)
-        Out += FString::Printf(TEXT("%s%d"), Index == 0 ? TEXT("") : TEXT(","), Values[Index]);
-      return Out;
-    };
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoElasticCrowdShadow role=%s round_id=%d spacing_pairs=%d influenced=%d propagation_layer=%d spacing_p95_cm=%.3f spacing_max_cm=%.3f transit_p95_cm=%.3f transit_max_cm=%.3f source_forward_q15=%d baseline_forward_q15=%d zero_progress_steps=%d recovery_p95_cm=%.3f hard_violation=%d obstacle_violation=%d flow_bounds_violation=%d target_violation=%d invalid=%d solver_ms_p95=%.3f hash=%u source=MassPipeline"),
-      GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
-      GetCurrentRoundId(), Metrics.ElasticSpacingPairCount,
-      Metrics.ElasticInfluencedAgentCount, Metrics.ElasticPropagationLayerMax,
-      Metrics.ElasticSpacingDeficitCmP95, Metrics.ElasticSpacingDeficitCmMax,
-      Metrics.ElasticTransitDeficitCmP95, Metrics.ElasticTransitDeficitCmMax,
-      Metrics.ElasticSourceForwardRatioQ15,
-      Metrics.ElasticBaselineSourceForwardRatioQ15,
-      Metrics.ElasticZeroProgressStepMax, Metrics.ElasticRecoveryErrorCmP95,
-      Metrics.ElasticHardPairViolationCount, Metrics.ElasticObstacleViolationCount,
-      Metrics.ElasticFlowBoundsViolationCount, Metrics.ElasticTargetViolationCount,
-      Metrics.ElasticInvalidInputCount, Metrics.ElasticSolverMsP95,
-      Metrics.ElasticShadowHash);
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoElasticShadowScience role=%s round_id=%d first_step=%d first_stage=%d first_kind=%d attribution=%d closure=%d too_large=%d obstacle_clipped=%d obstacle_slide=%d obstacle_stopped=%d obstacle_delta_cm_max=%.3f orca_infeasible=%d orca_stop=%d orca_stop_violation=%d rollout_steps=%d recovery_eligible=%d baseline_completed=%d elastic_completed=%d baseline_improved=%d elastic_improved=%d baseline_holes=%d elastic_holes=%d baseline_recovery_p95=%.3f elastic_recovery_p95=%.3f baseline_end_error_p95=%.3f elastic_end_error_p95=%.3f rollout_hash=%u source=MassPipeline"),
-      GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
-      GetCurrentRoundId(), Metrics.ElasticFailureFixedStep,
-      Metrics.ElasticFailureStage, Metrics.ElasticFailureKind,
-      Metrics.ElasticFailureAttribution, Metrics.ElasticFailureClosureAgentCount,
-      Metrics.ElasticFailureFixtureTooLarge, Metrics.ElasticObstacleClippedCount,
-      Metrics.ElasticObstacleSlideCount, Metrics.ElasticObstacleStoppedCount,
-      Metrics.ElasticObstacleConstraintDeltaCmMax, Metrics.ElasticOrcaInfeasibleCount,
-      Metrics.ElasticOrcaFallbackStopCount, Metrics.ElasticOrcaStopViolationCount,
-      Metrics.ElasticParallelCompletedSteps, Metrics.ElasticParallelEligibleRecoveryCount,
-      Metrics.ElasticParallelBaselineRecoveryCompletedCount,
-      Metrics.ElasticParallelRecoveryCompletedCount,
-      Metrics.ElasticParallelBaselineImprovedCount, Metrics.ElasticParallelImprovedCount,
-      Metrics.ElasticParallelBaselinePermanentHoleCount,
-      Metrics.ElasticParallelPermanentHoleCount,
-      Metrics.ElasticParallelBaselineRecoveryTimeP95,
-      Metrics.ElasticParallelRecoveryTimeP95,
-      Metrics.ElasticParallelBaselineEndErrorCmP95,
-      Metrics.ElasticParallelEndErrorCmP95, Metrics.ElasticParallelHash);
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoElasticParallelSafety role=%s round_id=%d baseline_source_q15=%d elastic_source_q15=%d baseline_hard=%d elastic_hard=%d baseline_obstacle=%d elastic_obstacle=%d baseline_target=%d elastic_target=%d baseline_orca_stop_violation=%d elastic_orca_stop_violation=%d source=MassPipeline"),
-      GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
-      GetCurrentRoundId(), Metrics.ElasticParallelBaselineSourceForwardQ15,
-      Metrics.ElasticParallelSourceForwardQ15,
-      Metrics.ElasticParallelBaselineHardPairViolationCount,
-      Metrics.ElasticParallelHardPairViolationCount,
-      Metrics.ElasticParallelBaselineObstaclePenetrationCount,
-      Metrics.ElasticParallelObstaclePenetrationCount,
-      Metrics.ElasticParallelBaselineTargetViolationCount,
-      Metrics.ElasticParallelTargetViolationCount,
-      Metrics.ElasticParallelBaselineOrcaStopViolationCount,
-      Metrics.ElasticParallelOrcaStopViolationCount);
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoElasticShadowStages role=%s round_id=%d order=preferred,orca,predict,obstacle,pbd1,pbd2,pbd3,reproject baseline_hash=%s elastic_hash=%s baseline_hard=%s elastic_hard=%s baseline_target=%s elastic_target=%s baseline_source_q15=%s elastic_source_q15=%s source=MassPipeline"),
-      GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
-      GetCurrentRoundId(), *JoinUInt(Metrics.ElasticBaselineStageHashes),
-      *JoinUInt(Metrics.ElasticTwinStageHashes),
-      *JoinInt(Metrics.ElasticBaselineStageHardPairCounts),
-      *JoinInt(Metrics.ElasticTwinStageHardPairCounts),
-      *JoinInt(Metrics.ElasticBaselineStageTargetCounts),
-      *JoinInt(Metrics.ElasticTwinStageTargetCounts),
-      *JoinInt(Metrics.ElasticBaselineStageSourceForwardQ15),
-      *JoinInt(Metrics.ElasticTwinStageSourceForwardQ15));
-  }
   return Metrics;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsSf3DeterminismDiagnosticEnabled() const
-{
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoSf3DeterminismDiagnostic"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundCrowdTraffic;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsSf3GoalCongestionDiagnosticEnabled() const
-{
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoSf3GoalCongestionDiagnostic"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundCrowdTraffic;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsSf3FlowReachabilityDiagnosticEnabled() const
-{
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoSf3FlowReachabilityDiagnostic"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundCrowdTraffic;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsSf3OrcaReferenceDiagnosticEnabled() const
-{
-#if WITH_DEV_AUTOMATION_TESTS
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoSf3OrcaReferenceDiagnostic"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundCrowdTraffic;
-#else
-  return false;
-#endif
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsSf4IngressDiagnosticEnabled() const
-{
-#if WITH_DEV_AUTOMATION_TESTS
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoSf4IngressDiagnostic"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
-#else
-  return false;
-#endif
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsSf4ReservationOrcaDiagnosticEnabled() const
-{
-#if WITH_DEV_AUTOMATION_TESTS
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoSf4ReservationOrcaDiagnostic"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
-#else
-  return false;
-#endif
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::HasCapturedSf4ReservationOrcaDiagnostic() const
-{
-  return Sf4ReservationOrcaCapturedRoundId == GetCurrentRoundId();
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsTransitJointDiagnosticEnabled() const
-{
-#if WITH_DEV_AUTOMATION_TESTS
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoTransitJointDiagnostic"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
-#else
-  return false;
-#endif
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::HasCapturedTransitJointDiagnostic() const
-{
-  return TransitJointDiagnosticCapturedRoundId == GetCurrentRoundId();
-}
-
-FCrowdDemoAdaptiveSpacingSettings
-UCrowdDemoRoundSimPipelineSubsystem::GetTransitJointDiagnosticSettings() const
-{
-  FCrowdDemoAdaptiveSpacingSettings Settings;
-  Settings.HardSafetyGapCm = 0.0f;
-  Settings.PreferredSpacingGapCm = 0.0f;
-  Settings.DefaultContextScaleQ15 = 0;
-  Settings.MaximumComponentAgents = 8;
-  FParse::Value(FCommandLine::Get(), TEXT("CrowdDemoTransitHardSafetyGapCm="),
-    Settings.HardSafetyGapCm);
-  FParse::Value(FCommandLine::Get(), TEXT("CrowdDemoTransitPreferredSpacingGapCm="),
-    Settings.PreferredSpacingGapCm);
-  FParse::Value(FCommandLine::Get(), TEXT("CrowdDemoTransitContextScaleQ15="),
-    Settings.DefaultContextScaleQ15);
-  Settings.HardSafetyGapCm = FMath::Max(0.0f, Settings.HardSafetyGapCm);
-  Settings.PreferredSpacingGapCm = FMath::Max(0.0f, Settings.PreferredSpacingGapCm);
-  Settings.DefaultContextScaleQ15 = FMath::Clamp(Settings.DefaultContextScaleQ15, 0, 32767);
-  return Settings;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsTransitCapacityShadowEnabled() const
-{
-#if WITH_DEV_AUTOMATION_TESTS
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoTransitCapacityShadow"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
-#else
-  return false;
-#endif
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsElasticCrowdShadowEnabled() const
-{
-#if WITH_DEV_AUTOMATION_TESTS
-  static const bool bEnabled = FParse::Param(
-    FCommandLine::Get(), TEXT("CrowdDemoElasticCrowdShadow"));
-  return bEnabled && IsActive()
-    && GetRules().Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
-#else
-  return false;
-#endif
-}
-
-FCrowdDemoAdaptiveSpacingSettings
-UCrowdDemoRoundSimPipelineSubsystem::GetTransitCapacityShadowSettings() const
-{
-  FCrowdDemoAdaptiveSpacingSettings Settings;
-  Settings.HardSafetyGapCm = 10.0f;
-  Settings.PreferredSpacingGapCm = 34.0f;
-  Settings.DefaultContextScaleQ15 = 32767;
-  Settings.MaximumComponentAgents = 20;
-  Settings.SolverIterations = 128;
-  Settings.TransitClearanceWeightQ8 = 256;
-  Settings.TransitClearanceSpeedLimitQ15 = 29490;
-  return Settings;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSf3OrcaReferenceDifferential(
-  const FCrowdDemoOrcaReferenceDifferentialSummary& Summary)
-{
-  if (!IsSf3OrcaReferenceDiagnosticEnabled()) return;
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  Metrics.OrcaReferenceSampleCount += Summary.SampleCount;
-  Metrics.OrcaReferenceCurrentExactCount += Summary.CurrentExactCount;
-  Metrics.OrcaReferenceExactCount += Summary.ReferenceExactCount;
-  Metrics.OrcaCurrentMissReferenceHitCount += Summary.CurrentMissReferenceHitCount;
-  Metrics.OrcaBothMissOracleHitCount += Summary.BothMissOracleHitCount;
-  Metrics.OrcaCurrentHitReferenceMissCount += Summary.CurrentHitReferenceMissCount;
-  Metrics.OrcaAllExactMissCount += Summary.AllExactMissCount;
-  Metrics.OrcaReferenceContinuousHitQuantizedMissCount += Summary.ContinuousHitQuantizedMissCount;
-  Metrics.OrcaReferenceThreeByThreeRecoveredCount += Summary.ThreeByThreeRecoveredCount;
-  Metrics.OrcaReferenceOracleWitnessAvailableCount += Summary.OracleWitnessAvailableCount;
-  Metrics.OrcaReferenceBestEffortUsedCount += Summary.BestEffortUsedCount;
-  if (Summary.MinimumFixtureHash != 0
-    && (Metrics.OrcaReferenceMinimumFixtureHash == 0
-      || Summary.MinimumFixtureConstraintCount < Metrics.OrcaReferenceMinimumFixtureConstraintCount
-      || (Summary.MinimumFixtureConstraintCount == Metrics.OrcaReferenceMinimumFixtureConstraintCount
-        && Summary.MinimumFixtureHash < Metrics.OrcaReferenceMinimumFixtureHash)))
-  {
-    Metrics.OrcaReferenceMinimumFixtureHash = Summary.MinimumFixtureHash;
-    Metrics.OrcaReferenceMinimumFixtureConstraintCount = Summary.MinimumFixtureConstraintCount;
-  }
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSf3FlowReachabilityStage(
-  const ECrowdDemoFlowReachabilityStage Stage,
-  const TConstArrayView<FCrowdDemoFlowReachabilityStageSample> Samples)
-{
-  if (!IsSf3FlowReachabilityDiagnosticEnabled()) return;
-  const int32 Step = GetCurrentFixedStepIndex();
-  if (Stage == ECrowdDemoFlowReachabilityStage::StepStart
-    || FlowReachabilityPreviousStep != Step)
-  {
-    FlowReachabilityPreviousStage.Reset();
-    FlowReachabilityPreviousStep = Step;
-  }
-  FCrowdDemoTrafficMetrics& Metrics = LastCompareMetrics.TrafficMetrics;
-  TMap<int32, FCrowdDemoFlowReachabilityStageSample> Current;
-  Current.Reserve(Samples.Num());
-  if (Stage == ECrowdDemoFlowReachabilityStage::MovementFinalize)
-  {
-    Metrics.FlowReachableFinalCount = 0;
-    Metrics.FlowOutOfBoundsFinalCount = 0;
-    Metrics.FlowBlockedRasterFinalCount = 0;
-    Metrics.FlowUnreachableFreeFinalCount = 0;
-    Metrics.FlowFinalInvalidAgentCount = 0;
-    Metrics.InvalidFlowDeadlockCount = 0;
-    FlowFinalInvalidAgentIds.Reset();
-  }
-  for (const FCrowdDemoFlowReachabilityStageSample& Sample : Samples)
-  {
-    Current.Add(Sample.AgentId, Sample);
-    const FCrowdDemoFlowReachabilityStageSample* Previous = FlowReachabilityPreviousStage.Find(Sample.AgentId);
-    if (Previous && Previous->Status == ECrowdDemoFlowLocationStatus::Reachable
-      && Sample.Status != ECrowdDemoFlowLocationStatus::Reachable)
-    {
-      int32 WitnessIndex = 0;
-      if (Sample.Status == ECrowdDemoFlowLocationStatus::OutOfBounds)
-      {
-        ++Metrics.FlowReachableToOutOfBoundsCount;
-        ++Metrics.ContinuousLegalButOutOfBoundsCount;
-        WitnessIndex = 2;
-      }
-      else if (Sample.Status == ECrowdDemoFlowLocationStatus::BlockedRasterCell)
-      {
-        ++Metrics.FlowReachableToBlockedCellCount;
-        if (Sample.bContinuousPenetrating)
-          ++Metrics.BlockedCellAndPenetratingCount;
-        else
-        {
-          ++Metrics.BlockedCellButNotPenetratingCount;
-          ++Metrics.ContinuousLegalButBlockedCellCount;
-        }
-        WitnessIndex = 0;
-      }
-      else
-      {
-        ++Metrics.FlowReachableToUnreachableFreeCount;
-        if (!Sample.bContinuousPenetrating)
-          ++Metrics.ContinuousLegalButUnreachableFreeCount;
-        WitnessIndex = 1;
-      }
-      switch (Stage)
-      {
-      case ECrowdDemoFlowReachabilityStage::MovementPredict: ++Metrics.FlowTransitionAtPredictCount; break;
-      case ECrowdDemoFlowReachabilityStage::ObstacleConstraint: ++Metrics.FlowTransitionAtObstacleConstraintCount; break;
-      case ECrowdDemoFlowReachabilityStage::HardPbd: ++Metrics.FlowTransitionAtPbdCount; break;
-      case ECrowdDemoFlowReachabilityStage::ObstacleReproject: ++Metrics.FlowTransitionAtObstacleReprojectCount; break;
-      default: break;
-      }
-      FCrowdDemoFlowReachabilityWitness& Witness = FlowReachabilityWitnesses[WitnessIndex];
-      if (!Witness.bValid)
-      {
-        Witness.bValid = true;
-        Witness.Stage = Stage;
-        Witness.PreviousStatus = Previous->Status;
-        Witness.NextStatus = Sample.Status;
-        Witness.PreviousStableCellKey = Previous->StableCellKey;
-        Witness.NextStableCellKey = Sample.StableCellKey;
-        Witness.WorldDelta = Sample.Location - Previous->Location;
-        Witness.bBlocked = Sample.Status == ECrowdDemoFlowLocationStatus::BlockedRasterCell;
-        Witness.bContinuousPenetrating = Sample.bContinuousPenetrating;
-        const FCrowdDemoReachableFlowCellSearchResult Nearest =
-          FCrowdDemoSharedFlowFieldKernel::FindNearestReachableCell(SharedFlowField, Sample.Location, 8);
-        Witness.NearestReachableCellDistanceCm = Nearest.bFound ? Nearest.WorldDistanceCm : -1.0f;
-        if (Nearest.bFound)
-          Metrics.FlowNearestReachableDistanceCmMax = FMath::Max(
-            Metrics.FlowNearestReachableDistanceCmMax, Nearest.WorldDistanceCm);
-      }
-    }
-    else if (Previous && Previous->Status != ECrowdDemoFlowLocationStatus::Reachable
-      && Sample.Status == ECrowdDemoFlowLocationStatus::Reachable)
-    {
-      ++Metrics.FlowInvalidToReachableRecoveryCount;
-    }
-    if (Stage == ECrowdDemoFlowReachabilityStage::StepStart
-      && Sample.Status != ECrowdDemoFlowLocationStatus::Reachable
-      && Sample.Velocity.IsNearlyZero(0.01f))
-      ++Metrics.InvalidFlowPreferredZeroCount;
-    if (Stage == ECrowdDemoFlowReachabilityStage::MovementFinalize)
-    {
-      switch (Sample.Status)
-      {
-      case ECrowdDemoFlowLocationStatus::Reachable: ++Metrics.FlowReachableFinalCount; break;
-      case ECrowdDemoFlowLocationStatus::OutOfBounds: ++Metrics.FlowOutOfBoundsFinalCount; break;
-      case ECrowdDemoFlowLocationStatus::BlockedRasterCell: ++Metrics.FlowBlockedRasterFinalCount; break;
-      case ECrowdDemoFlowLocationStatus::UnreachableFreeCell: ++Metrics.FlowUnreachableFreeFinalCount; break;
-      }
-      if (Sample.Status != ECrowdDemoFlowLocationStatus::Reachable)
-      {
-        ++Metrics.FlowFinalInvalidAgentCount;
-        FlowFinalInvalidAgentIds.Add(Sample.AgentId);
-        if (Sample.Velocity.IsNearlyZero(0.01f)) ++Metrics.InvalidFlowFinalZeroVelocityCount;
-        if (FlowCorridorDeadlockAgentIds.Contains(Sample.AgentId)) ++Metrics.InvalidFlowDeadlockCount;
-      }
-    }
-  }
-  FlowReachabilityPreviousStage = MoveTemp(Current);
-}
-
-int32 UCrowdDemoRoundSimPipelineSubsystem::Sf3GoalDistanceBucket(const float DistanceCm)
-{
-  if (DistanceCm < 100.0f) return 0;
-  if (DistanceCm < 200.0f) return 1;
-  if (DistanceCm < 400.0f) return 2;
-  if (DistanceCm < 800.0f) return 3;
-  if (DistanceCm < 1200.0f) return 4;
-  return 5;
-}
-
-int32 UCrowdDemoRoundSimPipelineSubsystem::Sf3FlowRegionBucket(
-  const FVector& Location,
-  const int32 IntegrationCost,
-  const float GoalDistanceCm)
-{
-  if (IntegrationCost == 0) return 0;
-  if (GoalDistanceCm <= 400.0f) return 1;
-  if (Location.Y > 750.0f) return 2;
-  if (Location.Y > -2050.0f && Location.Y < -650.0f) return 3;
-  if (Location.Y <= -2050.0f) return 4;
-  return 5;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSf3GoalOrcaStep(
-  const TConstArrayView<FCrowdDemoOrcaAgent> Agents,
-  const TConstArrayView<FCrowdDemoOrcaResult> Results)
-{
-  if (!IsSf3GoalCongestionDiagnosticEnabled()) return;
-  FVector Goal = FVector(GetRules().FlowFieldConfig.GoalLocation);
-  if (!GetRules().TrafficCohorts.IsEmpty())
-  {
-    Goal = FVector(GetRules().TrafficCohorts[0].FlowFieldConfig.GoalLocation);
-  }
-  TMap<int32, const FCrowdDemoOrcaAgent*> AgentById;
-  TSet<int32> ReachedNow;
-  for (const FCrowdDemoOrcaAgent& Agent : Agents)
-  {
-    AgentById.Add(Agent.AgentId, &Agent);
-    if (FlowGoalReachedAgentIds.Contains(Agent.AgentId)
-      || (Agent.Position - FVector2f(Goal.X, Goal.Y)).Size() <= 140.0f)
-    {
-      ReachedNow.Add(Agent.AgentId);
-    }
-  }
-  for (const FCrowdDemoOrcaResult& Result : Results)
-  {
-    const FCrowdDemoOrcaAgent* const* AgentPtr = AgentById.Find(Result.AgentId);
-    if (!AgentPtr) continue;
-    const FCrowdDemoOrcaAgent& Agent = **AgentPtr;
-    FCrowdDemoSf3GoalAgentDiagnostic& Diagnostic = Sf3GoalDiagnostics.FindOrAdd(Result.AgentId);
-    Diagnostic.AgentId = Result.AgentId;
-    Diagnostic.FinalLocation = FVector(Agent.Position.X, Agent.Position.Y, Goal.Z);
-    Diagnostic.FinalVelocity = FVector(Result.Velocity.X, Result.Velocity.Y, 0.0f);
-    Diagnostic.LastPreferredVelocity = Agent.PreferredVelocity;
-    Diagnostic.RadiusCm = Agent.RadiusCm;
-    Diagnostic.IntegrationCost = Agent.IntegrationCost;
-    Diagnostic.bEverReached |= ReachedNow.Contains(Result.AgentId);
-    ++Diagnostic.ProcessedAgentSteps;
-    Diagnostic.PreferredFeasibleCount += Result.FailureReason == ECrowdDemoOrcaFeasibility::PreferredFeasible ? 1 : 0;
-    Diagnostic.LpFeasibleCount += Result.FailureReason == ECrowdDemoOrcaFeasibility::FormalLpFeasible
-      || Result.FailureReason == ECrowdDemoOrcaFeasibility::FormalLpQuantizedRecovered ? 1 : 0;
-    Diagnostic.InfeasibleCount += Result.bInfeasible ? 1 : 0;
-    Diagnostic.FallbackStopCount += Result.FallbackStage == 4 ? 1 : 0;
-    Diagnostic.StopFeasibleCount += Result.Feasibility == ECrowdDemoOrcaFeasibility::StopFeasible ? 1 : 0;
-    Diagnostic.StopViolationCount += Result.Feasibility == ECrowdDemoOrcaFeasibility::StopViolation ? 1 : 0;
-    Diagnostic.ContinuousFeasibleQuantizedFailureCount +=
-      Result.FailureReason == ECrowdDemoOrcaFeasibility::ContinuousFeasibleQuantizedEmpty ? 1 : 0;
-    Diagnostic.GenuineSpeedCircleEmptyCount +=
-      Result.FailureReason == ECrowdDemoOrcaFeasibility::SingleConstraintOutsideSpeedCircle ? 1 : 0;
-    Diagnostic.NeighborCounts.Add(static_cast<float>(Result.NeighborCount));
-    Diagnostic.ConstraintCounts.Add(static_cast<float>(Result.ConstraintCount));
-    const float Speed = Result.Velocity.Size();
-    if (Speed < 1.0f)
-    {
-      Diagnostic.CurrentStoppedSeconds += GetCurrentFixedStepSeconds();
-      Diagnostic.MaxStoppedSeconds = FMath::Max(
-        Diagnostic.MaxStoppedSeconds, Diagnostic.CurrentStoppedSeconds);
-    }
-    else
-    {
-      Diagnostic.CurrentStoppedSeconds = 0.0f;
-    }
-    for (const FCrowdDemoOrcaConstraint& Constraint : Result.Constraints)
-    {
-      if (ReachedNow.Contains(Constraint.OtherAgentId))
-      {
-        ++Diagnostic.ConstraintsAgainstReached;
-        Diagnostic.bHadReachedNeighbor = true;
-      }
-      else
-      {
-        ++Diagnostic.ConstraintsAgainstNonReached;
-      }
-    }
-    Diagnostic.LpFailedZeroFeasibleCount +=
-      Result.FailureReason == ECrowdDemoOrcaFeasibility::FormalLpMissedZeroRecovered ? 1 : 0;
-    Diagnostic.LpFailedOracleFeasibleCount +=
-      Result.FailureReason == ECrowdDemoOrcaFeasibility::FormalLpMissedOracleRecovered ? 1 : 0;
-    Diagnostic.LpFailedOracleNoWitnessCount +=
-      Result.FailureReason == ECrowdDemoOrcaFeasibility::TrueNoFeasibleWitness ? 1 : 0;
-  }
 }
 
 int32 UCrowdDemoRoundSimPipelineSubsystem::GetCurrentFixedStepIndex() const
@@ -2663,190 +769,6 @@ int32 UCrowdDemoRoundSimPipelineSubsystem::GetCurrentFixedStepIndex() const
       - ActivePlan.StartServerTimeSeconds)
     / CurrentFixedStepSeconds));
 }
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSf3StageHash(
-  const ECrowdDemoSf3DeterminismStage Stage,
-  const uint32 Hash,
-  const int32 ItemCount,
-  const TConstArrayView<int32> StableKeys)
-{
-  if (!IsSf3DeterminismDiagnosticEnabled())
-  {
-    return;
-  }
-  FCrowdDemoSf3StageHash& Snapshot = Sf3StageHashes[static_cast<int32>(Stage)];
-  Snapshot.Hash = Hash;
-  Snapshot.ItemCount = ItemCount;
-  Snapshot.FixedStepIndex = GetCurrentFixedStepIndex();
-  Snapshot.StableKeys.Reset();
-  const int32 KeyCount = FMath::Min(8, StableKeys.Num());
-  Snapshot.StableKeys.Append(StableKeys.GetData(), KeyCount);
-  const int32 StepIndex = Snapshot.FixedStepIndex;
-  Sf3StageHashHistory.FindOrAdd(StepIndex)[static_cast<int32>(Stage)] = Snapshot;
-  const int32 OldestStepToKeep = StepIndex - 128;
-  Sf3StageHashHistory.Remove(OldestStepToKeep);
-}
-
-const FCrowdDemoSf3StageHash& UCrowdDemoRoundSimPipelineSubsystem::GetSf3StageHash(
-  const ECrowdDemoSf3DeterminismStage Stage) const
-{
-  return Sf3StageHashes[static_cast<int32>(Stage)];
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::LogSf3DiagnosticBoundary(
-  const int32 CorrectionRevision,
-  const TCHAR* Phase,
-  const int32 FixedStepOverride) const
-{
-  if (!IsSf3DeterminismDiagnosticEnabled())
-  {
-    return;
-  }
-  const int32 StepIndex = FixedStepOverride != INDEX_NONE
-    ? FixedStepOverride
-    : GetSf3StageHash(ECrowdDemoSf3DeterminismStage::FinalState).FixedStepIndex;
-  const auto* Historical = Sf3StageHashHistory.Find(StepIndex);
-  const auto& Hashes = Historical ? *Historical : Sf3StageHashes;
-  const FCrowdDemoSf3StageHash& Final = Hashes[static_cast<int32>(ECrowdDemoSf3DeterminismStage::FinalState)];
-  const TCHAR* Role = GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server");
-  UE_LOG(LogTemp, Display,
-    TEXT("CrowdDemoSf3StageHash role=%s phase=%s round_id=%d correction_revision=%d fixed_step=%d counts=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d hashes=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u source=MassPipeline"),
-    Role, Phase, GetCurrentRoundId(), CorrectionRevision, Final.FixedStepIndex,
-    Hashes[0].ItemCount, Hashes[1].ItemCount, Hashes[2].ItemCount,
-    Hashes[3].ItemCount, Hashes[4].ItemCount, Hashes[5].ItemCount,
-    Hashes[6].ItemCount, Hashes[7].ItemCount, Hashes[8].ItemCount,
-    Hashes[9].ItemCount, Hashes[10].ItemCount,
-    Hashes[0].Hash, Hashes[1].Hash, Hashes[2].Hash,
-    Hashes[3].Hash, Hashes[4].Hash, Hashes[5].Hash,
-    Hashes[6].Hash, Hashes[7].Hash, Hashes[8].Hash,
-    Hashes[9].Hash, Hashes[10].Hash);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSf3RollbackSnapshot(
-  const int32 FixedStepIndex,
-  TArray<FCrowdDemoSf3RollbackAgentState>&& Agents)
-{
-  if (!IsActive() || !IsTrafficScenario(GetRules().Scenario))
-  {
-    return;
-  }
-  Agents.Sort([](const FCrowdDemoSf3RollbackAgentState& A, const FCrowdDemoSf3RollbackAgentState& B)
-  {
-    return A.AgentId < B.AgentId;
-  });
-  FCrowdDemoSf3RollbackSnapshot& Snapshot = Sf3RollbackHistory.FindOrAdd(FixedStepIndex);
-  Snapshot.FixedStepIndex = FixedStepIndex;
-  Snapshot.Agents = MoveTemp(Agents);
-  Snapshot.Portals = PreparedTrafficPortals;
-  Snapshot.TargetFact = PursuitTargetFact;
-  Snapshot.PositionCandidates = PreparedPositionCandidates;
-  Snapshot.PositionAssignments = PreparedPositionAssignments;
-  Snapshot.HoldingCandidates = PreparedHoldingCandidates;
-  Snapshot.TransitCapacitySelection = TransitCapacitySelection;
-  Snapshot.HoldingCompatibilities = PreparedHoldingCompatibilities;
-  Snapshot.HoldingAssignments = PreparedHoldingAssignments;
-  Snapshot.CommitRequests = PreparedCommitRequests;
-  Snapshot.CommitGateResult = PreparedCommitGateResult;
-  Snapshot.SteeringGuidance = PreparedSteeringGuidance;
-  Snapshot.HoldingSummary = HoldingSummary;
-  Snapshot.PositionApproachRoutes = PreparedPositionApproachRoutes;
-  Snapshot.FrontPhaseReservationRequests = PreparedFrontPhaseReservationRequests;
-  Snapshot.FrontPhaseReservationResult = PreparedFrontPhaseReservationResult;
-  Snapshot.FrontPhaseReservationDecisions = PreparedFrontPhaseReservationDecisions;
-  Snapshot.FrontAdmissionResult = PreparedFrontAdmissionResult;
-  Snapshot.FrontReservationWaitEdges = PreparedFrontReservationWaitEdges;
-  Snapshot.FrontReservationWaitGraphSummary = FrontReservationWaitGraphSummary;
-  Snapshot.FrontReservationWaitGraphFixture = FrontReservationWaitGraphFixture;
-  Snapshot.PositioningSummary = LastPositioningSummary;
-  Snapshot.PositionIngressSummary = LastPositionIngressSummary;
-  Snapshot.PositionIngressFixture = MinimumPositionIngressFixture;
-  Snapshot.PositionIngressLowSpeedSteps = PositionIngressLowSpeedStepsByAgentId;
-  Snapshot.PositionPromotedAgentIds = PositionPromotedAgentIds;
-  Snapshot.PositionCandidateBuiltRevision = PositionCandidateBuiltRevision;
-  Snapshot.PositionAssignmentRevision = PositionAssignmentRevision;
-  Snapshot.HoldingCompatibilityInputHash = HoldingCompatibilityInputHash;
-  Snapshot.JointAssignmentInputHash = JointAssignmentInputHash;
-  Snapshot.ResidualPositioningSummary = ResidualPositioningSummary;
-  Snapshot.HoldingMatchingResult = HoldingMatchingResult;
-  Snapshot.HoldingHallFixture = HoldingHallFixture;
-  Snapshot.HallGeometryFixture = HallGeometryFixture;
-  Snapshot.JointPositioningResult = JointPositioningResult;
-  Snapshot.JointCommitResidualResult = JointCommitResidualResult;
-  Snapshot.UnfinishedBoundaryFixture = UnfinishedBoundaryFixture;
-  Snapshot.PhysicalUnsatisfiedBoundaryFixture = PhysicalUnsatisfiedBoundaryFixture;
-  Snapshot.TransitJointDiagnosticFixture = TransitJointDiagnosticFixture;
-  Snapshot.TransitCapacityShadowAgents = TransitCapacityShadowAgents;
-  Snapshot.TransitCapacityShadowPairs = TransitCapacityShadowPairs;
-  Snapshot.TransitCapacityShadowComponents = TransitCapacityShadowComponents;
-  Snapshot.TransitCapacityShadowResults = TransitCapacityShadowResults;
-  Snapshot.TransitCapacityShadowSummary = TransitCapacityShadowSummary;
-  Snapshot.TransitCapacityShadowSolverMsSampleCount =
-    TransitCapacityShadowSolverMsSamples.Num();
-  Snapshot.ElasticCrowdShadowAgents = ElasticCrowdShadowAgents;
-  Snapshot.ElasticCrowdShadowResults = ElasticCrowdShadowResults;
-  Snapshot.ElasticCrowdShadowSummary = ElasticCrowdShadowSummary;
-  Snapshot.ElasticParallelState = ElasticParallelState;
-  Snapshot.ElasticBaselineDesiredForward = ElasticBaselineDesiredForward;
-  Snapshot.ElasticBaselineActualForward = ElasticBaselineActualForward;
-  Snapshot.ElasticTwinDesiredForward = ElasticTwinDesiredForward;
-  Snapshot.ElasticTwinActualForward = ElasticTwinActualForward;
-  Snapshot.ElasticZeroProgressSteps = ElasticZeroProgressSteps;
-  Snapshot.ElasticSpacingDeficitSampleCount = ElasticSpacingDeficitSamples.Num();
-  Snapshot.ElasticTransitDeficitSampleCount = ElasticTransitDeficitSamples.Num();
-  Snapshot.ElasticRecoveryErrorSampleCount = ElasticRecoveryErrorSamples.Num();
-  Snapshot.ElasticSolverMsSampleCount = ElasticSolverMsSamples.Num();
-  Snapshot.ElasticFailureFixture = ElasticFailureFixture;
-  Snapshot.TransitCapacityFailureFixture = TransitCapacityFailureFixture;
-  Snapshot.SteeringStateHash = SteeringStateHash;
-  Snapshot.TrafficRoundHash = TrafficRoundHash;
-  Snapshot.PortalRoundHash = PortalRoundHash;
-  Snapshot.OrcaRoundHash = OrcaRoundHash;
-  Snapshot.PriorityOrcaRoundHash = PriorityOrcaRoundHash;
-  Snapshot.TrafficFixedStepIndex = TrafficFixedStepIndex;
-  Snapshot.TrafficMetrics = LastCompareMetrics.TrafficMetrics;
-  Snapshot.TrafficQueueSampleCount = TrafficQueueSamples.Num();
-  Snapshot.TrafficOccupiedSampleCount = TrafficOccupiedSamples.Num();
-  Snapshot.BandLateralErrorSampleCount = BandLateralErrorSamples.Num();
-  Snapshot.OrcaNeighborSampleCount = OrcaNeighborSamples.Num();
-  Snapshot.OrcaConstraintSampleCount = OrcaConstraintSamples.Num();
-  Snapshot.OrcaSolverMsSampleCount = OrcaSolverMsSamples.Num();
-  Snapshot.OrcaOracleRecoveryMsSampleCount = OrcaOracleRecoveryMsSamples.Num();
-  Snapshot.PhaseReservationHeldStepSampleCount = PhaseReservationHeldStepSamples.Num();
-  Snapshot.ParticleCandidateSummary = LastParticleCandidateSummary;
-  Snapshot.ParticleAppliedSummary = LastParticleAppliedSummary;
-  Snapshot.ParticleSolverMsSampleCount = ParticleSolverMillisecondsSamples.Num();
-  Snapshot.ParticleCandidateStateHash = ParticleCandidateStateHash;
-  Snapshot.ParticleAppliedStateHash = ParticleAppliedStateHash;
-  Snapshot.ParticleInvalidStepCount = ParticleInvalidStepCount;
-  Snapshot.ParticleGlobalFallbackStepCount = ParticleGlobalFallbackStepCount;
-  Snapshot.ParticleStepCount = ParticleStepCount;
-  Snapshot.ParticleSettlingWindowCount = ParticleSettlingWindowCount;
-  Snapshot.ParticleSettlingSteps = ParticleSettlingSteps;
-  Snapshot.ParticlePreviousSoftErrorP95 = ParticlePreviousSoftErrorP95;
-  Snapshot.bParticleConstraintRunFailure = bParticleConstraintRunFailure;
-  Snapshot.ParticleFailureFixture = ParticleFailureFixture;
-  if (IsSf3GoalCongestionDiagnosticEnabled())
-  {
-    Snapshot.GoalDiagnostics = Sf3GoalDiagnostics;
-  }
-  if (IsSf3FlowReachabilityDiagnosticEnabled())
-  {
-    Snapshot.FlowReachabilityPreviousStage = FlowReachabilityPreviousStage;
-    Snapshot.FlowReachabilityPreviousStep = FlowReachabilityPreviousStep;
-  }
-  Snapshot.Portals.Sort([](const FCrowdDemoTrafficPortalRuntime& A, const FCrowdDemoTrafficPortalRuntime& B)
-  {
-    return A.Portal.PortalId < B.Portal.PortalId;
-  });
-  Sf3RollbackHistory.Remove(FixedStepIndex - 128);
-}
-
-const FCrowdDemoSf3RollbackSnapshot* UCrowdDemoRoundSimPipelineSubsystem::FindSf3RollbackSnapshot(
-  const int32 FixedStepIndex) const
-{
-  return Sf3RollbackHistory.Find(FixedStepIndex);
-}
-
 void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   const int32 FixedStepIndex,
   TArray<FCrowdDemoSoftPressureRollbackAgentState>&& Agents)
@@ -2905,6 +827,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.TargetRegionAgents = PreparedTargetRegionAgents;
   Snapshot.TargetRegionDemand = PreparedTargetRegionDemand;
   Snapshot.TargetRegionPlan = PreparedTargetRegionPlan;
+  Snapshot.TargetRegionQuotaExecution = TargetRegionQuotaExecution;
   Snapshot.TargetRegionPlanValidation = TargetRegionPlanValidation;
   Snapshot.TargetRegionGuidance = PreparedTargetRegionGuidance;
   Snapshot.TargetRegionGuidanceSummary = TargetRegionGuidanceSummary;
@@ -2939,6 +862,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.TargetRegionCapabilityCohorts = TargetRegionCapabilityCohorts;
   Snapshot.CapabilityProfileSummary = CapabilityProfileSummary;
   Snapshot.CapabilityCohortRebuildCount = CapabilityCohortRebuildCount;
+  Snapshot.TargetRegionPlanLifecycleSummary = TargetRegionPlanLifecycleSummary;
+  Snapshot.TargetRegionPlanLifecycleFixture = TargetRegionPlanLifecycleFixture;
   Snapshot.FlowGoalReachedAgentIds = FlowGoalReachedAgentIds;
   Snapshot.FlowWallPassAgentIds = FlowWallPassAgentIds;
   Snapshot.FlowCorridorExitAgentIds = FlowCorridorExitAgentIds;
@@ -3045,6 +970,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   PreparedTargetRegionAgents = Snapshot.TargetRegionAgents;
   PreparedTargetRegionDemand = Snapshot.TargetRegionDemand;
   PreparedTargetRegionPlan = Snapshot.TargetRegionPlan;
+  TargetRegionQuotaExecution = Snapshot.TargetRegionQuotaExecution;
   TargetRegionPlanValidation = Snapshot.TargetRegionPlanValidation;
   PreparedTargetRegionGuidance = Snapshot.TargetRegionGuidance;
   TargetRegionGuidanceSummary = Snapshot.TargetRegionGuidanceSummary;
@@ -3080,6 +1006,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   TargetRegionCapabilityCohorts = Snapshot.TargetRegionCapabilityCohorts;
   CapabilityProfileSummary = Snapshot.CapabilityProfileSummary;
   CapabilityCohortRebuildCount = Snapshot.CapabilityCohortRebuildCount;
+  TargetRegionPlanLifecycleSummary = Snapshot.TargetRegionPlanLifecycleSummary;
+  TargetRegionPlanLifecycleFixture = Snapshot.TargetRegionPlanLifecycleFixture;
   FlowGoalReachedAgentIds = Snapshot.FlowGoalReachedAgentIds;
   FlowWallPassAgentIds = Snapshot.FlowWallPassAgentIds;
   FlowCorridorExitAgentIds = Snapshot.FlowCorridorExitAgentIds;
@@ -3192,6 +1120,49 @@ void UCrowdDemoRoundSimPipelineSubsystem::SetCapabilityCohorts(
   ++CapabilityCohortRebuildCount;
 }
 
+void UCrowdDemoRoundSimPipelineSubsystem::FinalizeTargetRegionPlanLifecycleDiagnostic()
+{
+  if (!IsTargetRegionPlanLifecycleDiagnosticEnabled())
+  {
+    TargetRegionPlanLifecycleSummary = {};
+    TargetRegionPlanLifecycleFixture = {};
+    return;
+  }
+  uint32 MissingCohortKey = 0;
+  int32 MissingRegionKey = INDEX_NONE;
+  bool bFoundMissing = false;
+  TArray<FCrowdDemoTargetRegionPlanLifecycleRuntime> Runtimes;
+  int32 ExpectedRebuildCount = 0;
+  Runtimes.Reserve(TargetRegionCapabilityCohorts.Num());
+  for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime
+    : TargetRegionCapabilityCohorts)
+  {
+    Runtimes.Add(Runtime.PlanLifecycle);
+    ExpectedRebuildCount += Runtime.PlanRebuildCount;
+    if (!bFoundMissing)
+    {
+      for (const FCrowdDemoTargetDemandRegion& Region : Runtime.Demand.Regions)
+      {
+        if (Region.bFeasible
+          && Region.CurrentPopulation < Region.DesiredPopulation)
+        {
+          MissingCohortKey = Runtime.Cohort.CapabilityProfileKey;
+          MissingRegionKey = Region.StableRegionKey;
+          bFoundMissing = true;
+          break;
+        }
+      }
+    }
+  }
+  TargetRegionPlanLifecycleSummary =
+    FCrowdDemoTargetRegionPlanLifecycleDiagnosticKernel::BuildAggregateSummary(
+      Runtimes, MissingCohortKey, MissingRegionKey,
+      TargetRegionPlanLifecycleFixture);
+  TargetRegionPlanLifecycleSummary.bValid =
+    TargetRegionPlanLifecycleSummary.bValid
+    && TargetRegionPlanLifecycleSummary.RebuildCount == ExpectedRebuildCount;
+}
+
 void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetRegionTopologyStep()
 {
   TargetRegionTopologyRoundHash = FoldHash(
@@ -3211,7 +1182,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetRegionTransportStep(
 {
   TargetRegionTransportRoundHash = FoldHash(
     FoldHash(TargetRegionTransportRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
-    PreparedTargetRegionPlan.TransportHash);
+    FoldHash(PreparedTargetRegionPlan.TransportHash,
+      TargetRegionQuotaExecution.ExecutionHash));
   if (RebuildReason != 0)
   {
     ++TargetRegionPlanRebuildCount;
@@ -3360,138 +1332,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackOutcome(
   }
 }
 
-void UCrowdDemoRoundSimPipelineSubsystem::RestoreSf3PortalRuntime(
-  const FCrowdDemoSf3RollbackSnapshot& Snapshot)
-{
-  PreparedTrafficPortals = Snapshot.Portals;
-  PursuitTargetFact = Snapshot.TargetFact;
-  PreparedPositionCandidates = Snapshot.PositionCandidates;
-  PreparedPositionAssignments = Snapshot.PositionAssignments;
-  PreparedHoldingCandidates = Snapshot.HoldingCandidates;
-  TransitCapacitySelection = Snapshot.TransitCapacitySelection;
-  PreparedHoldingCompatibilities = Snapshot.HoldingCompatibilities;
-  PreparedHoldingAssignments = Snapshot.HoldingAssignments;
-  PreparedCommitRequests = Snapshot.CommitRequests;
-  PreparedCommitGateResult = Snapshot.CommitGateResult;
-  PreparedSteeringGuidance = Snapshot.SteeringGuidance;
-  HoldingSummary = Snapshot.HoldingSummary;
-  PreparedPositionApproachRoutes = Snapshot.PositionApproachRoutes;
-  PreparedFrontPhaseReservationRequests = Snapshot.FrontPhaseReservationRequests;
-  PreparedFrontPhaseReservationResult = Snapshot.FrontPhaseReservationResult;
-  PreparedFrontPhaseReservationDecisions = Snapshot.FrontPhaseReservationDecisions;
-  PreparedFrontAdmissionResult = Snapshot.FrontAdmissionResult;
-  PreparedFrontReservationWaitEdges = Snapshot.FrontReservationWaitEdges;
-  FrontReservationWaitGraphSummary = Snapshot.FrontReservationWaitGraphSummary;
-  FrontReservationWaitGraphFixture = Snapshot.FrontReservationWaitGraphFixture;
-  LastPositioningSummary = Snapshot.PositioningSummary;
-  LastPositionIngressSummary = Snapshot.PositionIngressSummary;
-  MinimumPositionIngressFixture = Snapshot.PositionIngressFixture;
-  PositionIngressLowSpeedStepsByAgentId = Snapshot.PositionIngressLowSpeedSteps;
-  PositionPromotedAgentIds = Snapshot.PositionPromotedAgentIds;
-  PositionCandidateBuiltRevision = Snapshot.PositionCandidateBuiltRevision;
-  PositionAssignmentRevision = Snapshot.PositionAssignmentRevision;
-  HoldingCompatibilityInputHash = Snapshot.HoldingCompatibilityInputHash;
-  JointAssignmentInputHash = Snapshot.JointAssignmentInputHash;
-  ResidualPositioningSummary = Snapshot.ResidualPositioningSummary;
-  HoldingMatchingResult = Snapshot.HoldingMatchingResult;
-  HoldingHallFixture = Snapshot.HoldingHallFixture;
-  HallGeometryFixture = Snapshot.HallGeometryFixture;
-  JointPositioningResult = Snapshot.JointPositioningResult;
-  JointCommitResidualResult = Snapshot.JointCommitResidualResult;
-  UnfinishedBoundaryFixture = Snapshot.UnfinishedBoundaryFixture;
-  PhysicalUnsatisfiedBoundaryFixture = Snapshot.PhysicalUnsatisfiedBoundaryFixture;
-  TransitJointDiagnosticFixture = Snapshot.TransitJointDiagnosticFixture;
-  TransitCapacityShadowAgents = Snapshot.TransitCapacityShadowAgents;
-  TransitCapacityShadowPairs = Snapshot.TransitCapacityShadowPairs;
-  TransitCapacityShadowComponents = Snapshot.TransitCapacityShadowComponents;
-  TransitCapacityShadowResults = Snapshot.TransitCapacityShadowResults;
-  TransitCapacityShadowSummary = Snapshot.TransitCapacityShadowSummary;
-  ElasticCrowdShadowAgents = Snapshot.ElasticCrowdShadowAgents;
-  ElasticCrowdShadowResults = Snapshot.ElasticCrowdShadowResults;
-  ElasticCrowdShadowSummary = Snapshot.ElasticCrowdShadowSummary;
-  ElasticParallelState = Snapshot.ElasticParallelState;
-  ElasticBaselineDesiredForward = Snapshot.ElasticBaselineDesiredForward;
-  ElasticBaselineActualForward = Snapshot.ElasticBaselineActualForward;
-  ElasticTwinDesiredForward = Snapshot.ElasticTwinDesiredForward;
-  ElasticTwinActualForward = Snapshot.ElasticTwinActualForward;
-  ElasticZeroProgressSteps = Snapshot.ElasticZeroProgressSteps;
-  ElasticFailureFixture = Snapshot.ElasticFailureFixture;
-  TransitCapacityFailureFixture = Snapshot.TransitCapacityFailureFixture;
-  SteeringStateHash = Snapshot.SteeringStateHash;
-  TrafficRoundHash = Snapshot.TrafficRoundHash;
-  PortalRoundHash = Snapshot.PortalRoundHash;
-  OrcaRoundHash = Snapshot.OrcaRoundHash;
-  PriorityOrcaRoundHash = Snapshot.PriorityOrcaRoundHash;
-  TrafficFixedStepIndex = Snapshot.TrafficFixedStepIndex;
-  LastCompareMetrics.TrafficMetrics = Snapshot.TrafficMetrics;
-  TrafficQueueSamples.SetNum(FMath::Min(TrafficQueueSamples.Num(), Snapshot.TrafficQueueSampleCount));
-  TrafficOccupiedSamples.SetNum(FMath::Min(TrafficOccupiedSamples.Num(), Snapshot.TrafficOccupiedSampleCount));
-  BandLateralErrorSamples.SetNum(FMath::Min(BandLateralErrorSamples.Num(), Snapshot.BandLateralErrorSampleCount));
-  OrcaNeighborSamples.SetNum(FMath::Min(OrcaNeighborSamples.Num(), Snapshot.OrcaNeighborSampleCount));
-  OrcaConstraintSamples.SetNum(FMath::Min(OrcaConstraintSamples.Num(), Snapshot.OrcaConstraintSampleCount));
-  OrcaSolverMsSamples.SetNum(FMath::Min(OrcaSolverMsSamples.Num(), Snapshot.OrcaSolverMsSampleCount));
-  TransitCapacityShadowSolverMsSamples.SetNum(FMath::Min(
-    TransitCapacityShadowSolverMsSamples.Num(),
-    Snapshot.TransitCapacityShadowSolverMsSampleCount));
-  ElasticSpacingDeficitSamples.SetNum(FMath::Min(
-    ElasticSpacingDeficitSamples.Num(), Snapshot.ElasticSpacingDeficitSampleCount));
-  ElasticTransitDeficitSamples.SetNum(FMath::Min(
-    ElasticTransitDeficitSamples.Num(), Snapshot.ElasticTransitDeficitSampleCount));
-  ElasticRecoveryErrorSamples.SetNum(FMath::Min(
-    ElasticRecoveryErrorSamples.Num(), Snapshot.ElasticRecoveryErrorSampleCount));
-  ElasticSolverMsSamples.SetNum(FMath::Min(
-    ElasticSolverMsSamples.Num(), Snapshot.ElasticSolverMsSampleCount));
-  OrcaOracleRecoveryMsSamples.SetNum(FMath::Min(
-    OrcaOracleRecoveryMsSamples.Num(), Snapshot.OrcaOracleRecoveryMsSampleCount));
-  PhaseReservationHeldStepSamples.SetNum(FMath::Min(
-    PhaseReservationHeldStepSamples.Num(), Snapshot.PhaseReservationHeldStepSampleCount));
-  LastParticleCandidateSummary = Snapshot.ParticleCandidateSummary;
-  LastParticleAppliedSummary = Snapshot.ParticleAppliedSummary;
-  ParticleSolverMillisecondsSamples.SetNum(FMath::Min(
-    ParticleSolverMillisecondsSamples.Num(), Snapshot.ParticleSolverMsSampleCount));
-  ParticleCandidateStateHash = Snapshot.ParticleCandidateStateHash;
-  ParticleAppliedStateHash = Snapshot.ParticleAppliedStateHash;
-  ParticleInvalidStepCount = Snapshot.ParticleInvalidStepCount;
-  ParticleGlobalFallbackStepCount = Snapshot.ParticleGlobalFallbackStepCount;
-  ParticleStepCount = Snapshot.ParticleStepCount;
-  ParticleSettlingWindowCount = Snapshot.ParticleSettlingWindowCount;
-  ParticleSettlingSteps = Snapshot.ParticleSettlingSteps;
-  ParticlePreviousSoftErrorP95 = Snapshot.ParticlePreviousSoftErrorP95;
-  bParticleConstraintRunFailure = Snapshot.bParticleConstraintRunFailure;
-  ParticleFailureFixture = Snapshot.ParticleFailureFixture;
-  if (IsSf3GoalCongestionDiagnosticEnabled())
-  {
-    Sf3GoalDiagnostics = Snapshot.GoalDiagnostics;
-  }
-  if (IsSf3FlowReachabilityDiagnosticEnabled())
-  {
-    FlowReachabilityPreviousStage = Snapshot.FlowReachabilityPreviousStage;
-    FlowReachabilityPreviousStep = Snapshot.FlowReachabilityPreviousStep;
-  }
-}
 
-bool UCrowdDemoRoundSimPipelineSubsystem::RecordSf3CompletedRoundHash(const uint32 AgentStateHash)
-{
-  if (FirstCompletedSf3AgentStateHash == 0)
-  {
-    FirstCompletedSf3AgentStateHash = AgentStateHash;
-  }
-  const bool bMatch = AgentStateHash == FirstCompletedSf3AgentStateHash;
-  const TCHAR* Role = GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server");
-  if (bMatch)
-  {
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoSf3RoundReplay role=%s round_id=%d agent_state_hash=%u first_round_hash=%u match=1"),
-      Role, GetCurrentRoundId(), AgentStateHash, FirstCompletedSf3AgentStateHash);
-  }
-  else
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("CrowdDemoSf3RoundReplay role=%s round_id=%d agent_state_hash=%u first_round_hash=%u match=0 VIOLATION"),
-      Role, GetCurrentRoundId(), AgentStateHash, FirstCompletedSf3AgentStateHash);
-  }
-  return bMatch;
-}
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordFlowAgentSamples(
   const TConstArrayView<FCrowdDemoRoundFlowAgentSample> Samples,
@@ -3589,70 +1430,6 @@ bool UCrowdDemoRoundSimPipelineSubsystem::IsRoundSimScenarioActive() const
   return bPlanActive && IsCrowdDemoRoundSimScenario(ActivePlan.Rules.Scenario);
 }
 
-void UCrowdDemoRoundSimPipelineSubsystem::SetLastSeparationSummary(
-  const int32 GridCells,
-  const int32 AppliedAgents,
-  const int32 OverlapPairs,
-  const int32 SevereOverlapPairs)
-{
-  LastSeparationGridCellCount = GridCells;
-  LastSeparationAppliedAgentCount = AppliedAgents;
-  LastSeparationOverlapPairCount = OverlapPairs;
-  LastSeparationSevereOverlapPairCount = SevereOverlapPairs;
-  if (IsActive() && GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure)
-  {
-    FlowSeparationOverlapPairSamples.Add(static_cast<float>(OverlapPairs));
-    FlowSeparationSevereOverlapPairSamples.Add(static_cast<float>(SevereOverlapPairs));
-    LastCompareMetrics.OverlapPairCountP50 = Percentile(FlowSeparationOverlapPairSamples, 0.50f);
-    LastCompareMetrics.OverlapPairCountP95 = Percentile(FlowSeparationOverlapPairSamples, 0.95f);
-    LastCompareMetrics.OverlapPairCountMax = FMath::Max(LastCompareMetrics.OverlapPairCountMax, OverlapPairs);
-    LastCompareMetrics.SevereOverlapPairCountP50 = Percentile(FlowSeparationSevereOverlapPairSamples, 0.50f);
-    LastCompareMetrics.SevereOverlapPairCountP95 = Percentile(FlowSeparationSevereOverlapPairSamples, 0.95f);
-    LastCompareMetrics.SevereOverlapPairCountMax = FMath::Max(
-      LastCompareMetrics.SevereOverlapPairCountMax,
-      SevereOverlapPairs);
-    LastCompareMetrics.SoftSeparationAppliedAgentCount = FMath::Max(
-      LastCompareMetrics.SoftSeparationAppliedAgentCount,
-      AppliedAgents);
-  }
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordHardSeparationPbdSummary(
-  const FCrowdDemoHardSeparationPbdSummary& Summary,
-  const float SolverMilliseconds)
-{
-  if (!IsActive() || (GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
-    && GetRules().Scenario != ECrowdDemoScenario::SimRoundCrowdTraffic))
-  {
-    return;
-  }
-  PbdSolverMillisecondsSamples.Add(SolverMilliseconds);
-  LastCompareMetrics.PbdCorrectedAgentCount = FMath::Max(
-    LastCompareMetrics.PbdCorrectedAgentCount,
-    Summary.CorrectedAgentCount);
-  LastCompareMetrics.PbdCorrectedPairCount = FMath::Max(
-    LastCompareMetrics.PbdCorrectedPairCount,
-    Summary.CorrectedPairCount);
-  LastCompareMetrics.PbdMaxPairCorrectionCm = FMath::Max(
-    LastCompareMetrics.PbdMaxPairCorrectionCm,
-    Summary.MaxPairCorrectionCm);
-  LastCompareMetrics.PbdMaxAgentTotalCorrectionCm = FMath::Max(
-    LastCompareMetrics.PbdMaxAgentTotalCorrectionCm,
-    Summary.MaxAgentTotalCorrectionCm);
-  LastCompareMetrics.PbdSolverMsP95 = Percentile(PbdSolverMillisecondsSamples, 0.95f);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordPbdSafetyDeltas(
-  const float ObstacleReprojectDeltaCm,
-  const float FinalSafetyDeltaCm)
-{
-  LastCompareMetrics.PbdMaxObstacleReprojectDeltaCm = FMath::Max(
-    LastCompareMetrics.PbdMaxObstacleReprojectDeltaCm,
-    ObstacleReprojectDeltaCm);
-  LastCompareMetrics.PbdMaxFinalSafetyDeltaCm = FMath::Max(
-    LastCompareMetrics.PbdMaxFinalSafetyDeltaCm,
-    FinalSafetyDeltaCm);
-}
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordParticleConstraintSummary(
   const FCrowdDemoParticleConstraintSummary& CandidateSummary,
@@ -3868,6 +1645,178 @@ float UCrowdDemoRoundSimPipelineSubsystem::GetParticleSolverMsP95() const
   return Percentile(ParticleSolverMillisecondsSamples, 0.95f);
 }
 
+void UCrowdDemoRoundSimPipelineSubsystem::RecordPerformanceStage(
+  const ECrowdDemoRoundPerformanceStage Stage,
+  const float Milliseconds)
+{
+  const uint8 Index = static_cast<uint8>(Stage);
+  if (Index < static_cast<uint8>(ECrowdDemoRoundPerformanceStage::Count)
+    && Milliseconds >= 0.0f)
+  {
+    RoundPerformanceStageMsSamples[Index].Add(Milliseconds);
+  }
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetTopologyPerformance(
+  const bool bBuilt)
+{
+  if (bBuilt) ++PerformanceTargetTopologyBuildCount;
+  else ++PerformanceTargetTopologyCacheHitCount;
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetDemandPerformance(
+  const bool bFullBuild)
+{
+  if (bFullBuild) ++PerformanceTargetDemandFullBuildCount;
+  else ++PerformanceTargetDemandPopulationUpdateCount;
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordFixedStepPerformance(
+  const float Milliseconds)
+{
+  if (Milliseconds < 0.0f)
+  {
+    return;
+  }
+  FixedStepPipelineMsSamples.Add(Milliseconds);
+  if (PendingRollbackReplaySteps > 0)
+  {
+    PendingRollbackReplayMilliseconds += Milliseconds;
+    --PendingRollbackReplaySteps;
+    if (PendingRollbackReplaySteps == 0)
+    {
+      RollbackReplayMsSamples.Add(PendingRollbackReplayMilliseconds);
+      PendingRollbackReplayMilliseconds = 0.0f;
+    }
+  }
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordPipelineFramePerformance(
+  const int32 ExecutedSteps,
+  const float TargetServerTimeSeconds,
+  const bool bHitFixedStepLimit,
+  const bool bHitCatchupCpuBudget)
+{
+  if (!IsActive())
+  {
+    return;
+  }
+  FixedStepsPerGameFrameSamples.Add(static_cast<float>(FMath::Max(0, ExecutedSteps)));
+  if (ExecutedSteps > 1)
+  {
+    ++PerformanceCatchupFrameCount;
+  }
+  if (bHitFixedStepLimit)
+  {
+    ++PerformanceMaxFixedStepsPerFrameHitCount;
+  }
+  if (bHitCatchupCpuBudget)
+  {
+    ++PerformanceCatchupCpuBudgetHitCount;
+    ++PerformanceCatchupCpuBudgetConsecutiveCount;
+    PerformanceCatchupCpuBudgetConsecutiveMax = FMath::Max(
+      PerformanceCatchupCpuBudgetConsecutiveMax,
+      PerformanceCatchupCpuBudgetConsecutiveCount);
+  }
+  else
+  {
+    PerformanceCatchupCpuBudgetConsecutiveCount = 0;
+  }
+  PerformanceFixedStepBacklogMsMax = FMath::Max(
+    PerformanceFixedStepBacklogMsMax,
+    FMath::Max(0.0f, TargetServerTimeSeconds - SimulatedServerTimeSeconds) * 1000.0f);
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::BeginRollbackReplayPerformance(
+  const int32 ReplayedSteps,
+  const float ApplyMilliseconds,
+  const bool bZeroErrorReplay)
+{
+  if (PendingRollbackReplaySteps > 0)
+  {
+    RollbackReplayMsSamples.Add(PendingRollbackReplayMilliseconds);
+  }
+  PendingRollbackReplaySteps = FMath::Max(0, ReplayedSteps);
+  PendingRollbackReplayMilliseconds = FMath::Max(0.0f, ApplyMilliseconds);
+  if (bZeroErrorReplay)
+  {
+    ++PerformanceZeroErrorRollbackReplayCount;
+  }
+  if (PendingRollbackReplaySteps == 0)
+  {
+    RollbackReplayMsSamples.Add(PendingRollbackReplayMilliseconds);
+    PendingRollbackReplayMilliseconds = 0.0f;
+  }
+}
+
+FCrowdDemoRoundPerformanceMetrics
+UCrowdDemoRoundSimPipelineSubsystem::BuildRoundPerformanceMetrics() const
+{
+  FCrowdDemoRoundPerformanceMetrics Result;
+  const auto MaxSample = [](const TArray<float>& Samples)
+  {
+    float MaxValue = -1.0f;
+    for (const float Value : Samples)
+    {
+      MaxValue = FMath::Max(MaxValue, Value);
+    }
+    return MaxValue;
+  };
+  const auto FillStage = [this, &MaxSample](
+      const ECrowdDemoRoundPerformanceStage Stage, float& OutP95, float& OutMax)
+  {
+    const TArray<float>& Samples =
+      RoundPerformanceStageMsSamples[static_cast<uint8>(Stage)];
+    OutP95 = Percentile(Samples, 0.95f);
+    OutMax = MaxSample(Samples);
+  };
+
+  Result.FixedStepPipelineMsP50 = Percentile(FixedStepPipelineMsSamples, 0.50f);
+  Result.FixedStepPipelineMsP95 = Percentile(FixedStepPipelineMsSamples, 0.95f);
+  Result.FixedStepPipelineMsMax = MaxSample(FixedStepPipelineMsSamples);
+  FillStage(ECrowdDemoRoundPerformanceStage::SharedFlow,
+    Result.SharedFlowStageMsP95, Result.SharedFlowStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::TargetTopology,
+    Result.TargetTopologyStageMsP95, Result.TargetTopologyStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::TargetDemand,
+    Result.TargetDemandStageMsP95, Result.TargetDemandStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::TargetPlan,
+    Result.TargetPlanStageMsP95, Result.TargetPlanStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::TargetGuidance,
+    Result.TargetGuidanceStageMsP95, Result.TargetGuidanceStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::LocalPredictive,
+    Result.LocalPredictiveStageMsP95, Result.LocalPredictiveStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::Particle,
+    Result.ParticleStageMsP95, Result.ParticleStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::FinalizeCommit,
+    Result.FinalizeCommitStageMsP95, Result.FinalizeCommitStageMsMax);
+  Result.TargetTopologyBuildCount = PerformanceTargetTopologyBuildCount;
+  Result.TargetTopologyCacheHitCount = PerformanceTargetTopologyCacheHitCount;
+  Result.TargetDemandFullBuildCount = PerformanceTargetDemandFullBuildCount;
+  Result.TargetDemandPopulationUpdateCount = PerformanceTargetDemandPopulationUpdateCount;
+  Result.FixedStepsPerGameFrameP50 = Percentile(FixedStepsPerGameFrameSamples, 0.50f);
+  Result.FixedStepsPerGameFrameP95 = Percentile(FixedStepsPerGameFrameSamples, 0.95f);
+  Result.FixedStepsPerGameFrameMax = FMath::Max(
+    0, FMath::RoundToInt(MaxSample(FixedStepsPerGameFrameSamples)));
+  Result.CatchupFrameCount = PerformanceCatchupFrameCount;
+  Result.CatchupCpuBudgetHitCount = PerformanceCatchupCpuBudgetHitCount;
+  Result.CatchupCpuBudgetConsecutiveMax = PerformanceCatchupCpuBudgetConsecutiveMax;
+  Result.MaxFixedStepsPerFrameHitCount = PerformanceMaxFixedStepsPerFrameHitCount;
+  Result.FixedStepBacklogMsMax = PerformanceFixedStepBacklogMsMax;
+  const double WallElapsedSeconds = FPlatformTime::Seconds() - PerformanceRoundWallStartSeconds;
+  if (WallElapsedSeconds > UE_SMALL_NUMBER)
+  {
+    Result.SimulationRealtimeFactor = FMath::Max(
+      0.0f, SimulatedServerTimeSeconds - PerformanceRoundSimStartSeconds)
+      / static_cast<float>(WallElapsedSeconds);
+  }
+  Result.RollbackReplayMsP95 = Percentile(RollbackReplayMsSamples, 0.95f);
+  Result.RollbackReplayMsMax = MaxSample(RollbackReplayMsSamples);
+  Result.RollbackReplaySampleCount = RollbackReplayMsSamples.Num();
+  Result.ZeroErrorRollbackReplayCount = PerformanceZeroErrorRollbackReplayCount;
+  return Result;
+}
+
 bool UCrowdDemoRoundSimPipelineSubsystem::IsSoftPressureRouteDiagnosticEnabled() const
 {
   static const bool bEnabled = FParse::Param(
@@ -3947,7 +1896,9 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordCorrectionComparisonAndApplied(
   LastCorrectionMetrics.CorrectionErrorAgentIdMax = MaxAgentId;
   LastCorrectionMetrics.RoundTimeDeltaMs = FMath::Max(0.0f, (CurrentServerTimeSeconds - Frame.ServerTimeSeconds) * 1000.0f);
   LastCorrectionMetrics.CorrectionFrameAgeMsP95 = LastCorrectionMetrics.RoundTimeDeltaMs;
-  LastCorrectionMetrics.CorrectionFrameReplayMsP95 = LastCorrectionMetrics.RoundTimeDeltaMs;
+  // Transport age is not CPU replay cost. Real replay work is measured by the
+  // fixed-step performance tracker after rollback restores the old boundary.
+  LastCorrectionMetrics.CorrectionFrameReplayMsP95 = -1.0f;
   if (Frame.RoundId > 0)
   {
     CorrectionIntervalPositionP95Samples.Add(LastCorrectionMetrics.CorrectionPositionErrorCmP95);
@@ -4024,8 +1975,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
       DynamicFlowRoundHash, Packet.ParticleMetrics.DynamicFlowRoundHash,
       bDynamicFlowMatch ? 1 : 0,
       bDynamicFlowMatch ? TEXT("") : TEXT(" VIOLATION"));
-    const FCrowdDemoTrafficMetrics LocalFlowMetrics = BuildTrafficMetrics(ClientStates);
-    const FCrowdDemoTrafficMetrics& ServerFlowMetrics = Packet.TrafficMetrics;
+    const FCrowdDemoSharedFlowMetrics LocalFlowMetrics = BuildSharedFlowMetrics(ClientStates);
+    const FCrowdDemoSharedFlowMetrics& ServerFlowMetrics = Packet.SharedFlowMetrics;
     const bool bFlowConnectivityMatch =
       LocalFlowMetrics.SharedFlowFieldBuildHash
         == ServerFlowMetrics.SharedFlowFieldBuildHash
@@ -4058,6 +2009,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
         == ServerFlowMetrics.GoalAttachmentCount
       && LocalFlowMetrics.NavigationUnreachableSampleCount
         == ServerFlowMetrics.NavigationUnreachableSampleCount
+      && LocalFlowMetrics.AgentStateHash
+        == ServerFlowMetrics.AgentStateHash
       && LocalFlowMetrics.NavigationV2Hash
         == ServerFlowMetrics.NavigationV2Hash;
     UE_LOG(LogTemp, Display,
@@ -4077,8 +2030,10 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
       bFlowConnectivityMatch ? 1 : 0,
       bFlowConnectivityMatch ? TEXT("") : TEXT(" VIOLATION"));
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoFlowV2Metrics role=client round_id=%d anchors=%d connections=%d safe_intervals=%d internal_edges=%d directed_edges=%d center_invalid_connected=%d source_attachment_success=%d goal_attachments=%d navigation_unreachable_samples=%d navigation_v2_hash=%u match=%d source=MassPipeline%s"),
-      Packet.RoundId, LocalFlowMetrics.NavigationCenterAnchorCount,
+      TEXT("CrowdDemoFlowV2Metrics role=client round_id=%d agent_state_hash=%u/%u anchors=%d connections=%d safe_intervals=%d internal_edges=%d directed_edges=%d center_invalid_connected=%d source_attachment_success=%d goal_attachments=%d navigation_unreachable_samples=%d navigation_v2_hash=%u match=%d source=MassPipeline%s"),
+      Packet.RoundId, LocalFlowMetrics.AgentStateHash,
+      ServerFlowMetrics.AgentStateHash,
+      LocalFlowMetrics.NavigationCenterAnchorCount,
       LocalFlowMetrics.NavigationConnectionPointCount,
       LocalFlowMetrics.NavigationSafeIntervalCount,
       LocalFlowMetrics.NavigationInternalEdgeCount,
@@ -4104,18 +2059,23 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
       SoftPressureRollbackAgentMismatchCount;
     LastCompareMetrics.ParticleMetrics.RollbackReplayedStepCount =
       SoftPressureRollbackReplayedStepCount;
+    LastCompareMetrics.ParticleMetrics.Performance.ZeroErrorRollbackReplayCount =
+      PerformanceZeroErrorRollbackReplayCount;
     const bool bRollbackValidationRequested = FParse::Param(
       FCommandLine::Get(), TEXT("CrowdDemoRequireParticleCorrectionReplay"));
     const bool bRollbackValidationPass = SoftPressureRollbackSnapshotHitCount > 0
-      && SoftPressureRollbackReplayedStepCount > 0
+      && (SoftPressureRollbackReplayedStepCount > 0
+        || PerformanceZeroErrorRollbackReplayCount > 0)
       && SoftPressureRollbackSnapshotMissCount == 0
       && SoftPressureRollbackAgentMismatchCount == 0;
     UE_LOG(LogTemp,
       Display,
-      TEXT("CrowdDemoSoftPressureRollbackSummary role=client round_id=%d hit=%d miss=%d mismatch=%d replayed_steps=%d validation_required=%d pass=%d source=MassPipeline"),
+      TEXT("CrowdDemoSoftPressureRollbackSummary role=client round_id=%d hit=%d miss=%d mismatch=%d replayed_steps=%d zero_error_fast_path=%d processed_corrections=%d validation_required=%d pass=%d source=MassPipeline"),
       Packet.RoundId, SoftPressureRollbackSnapshotHitCount,
       SoftPressureRollbackSnapshotMissCount, SoftPressureRollbackAgentMismatchCount,
-      SoftPressureRollbackReplayedStepCount, bRollbackValidationRequested ? 1 : 0,
+      SoftPressureRollbackReplayedStepCount, PerformanceZeroErrorRollbackReplayCount,
+      SoftPressureRollbackReplayedStepCount + PerformanceZeroErrorRollbackReplayCount,
+      bRollbackValidationRequested ? 1 : 0,
       bRollbackValidationPass ? 1 : 0);
     if (bRollbackValidationRequested && !bRollbackValidationPass)
     {
@@ -4160,11 +2120,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
     const bool bT2HashMatch = Packet.ParticleMetrics.T2LayoutHash == 0
       || (OpenCohortMovementLayout.bValid
         && OpenCohortMovementProgress.bValid
-        && SoftPressureRouteDiagnosticSummary.bValid
         && OpenCohortMovementLayout.LayoutHash == Packet.ParticleMetrics.T2LayoutHash
-        && OpenCohortMovementProgress.ProgressHash == Packet.ParticleMetrics.T2ProgressHash
-        && SoftPressureRouteDiagnosticSummary.StableHash
-          == Packet.ParticleMetrics.T2RouteDiagnosticHash);
+        && OpenCohortMovementProgress.ProgressHash == Packet.ParticleMetrics.T2ProgressHash);
     if (Packet.ParticleMetrics.T2LayoutHash != 0)
     {
       UE_LOG(LogTemp, Display,
@@ -4246,7 +2203,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
     if (Packet.ParticleMetrics.T4LayoutHash != 0)
     {
       UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoT4Checkpoint role=client round_id=%d valid=%d layout_hash=%u/%u flow_hash=%u/%u progress_hash=%u/%u wall_passed=%d corridor_exited=%d completed=%d final_deadlock=%d unreachable_samples=%d completion_step_max=%d match=%d%s"),
+        TEXT("CrowdDemoT4Checkpoint role=client round_id=%d valid=%d layout_hash=%u/%u flow_hash=%u/%u progress_hash=%u/%u wall_passed=%d corridor_exited=%d completed=%d final_settled=%d final_deadlock=%d unreachable_samples=%d completion_step_max=%d group_completion_step=%d group_settled_step=%d match=%d%s"),
         Packet.RoundId, Packet.ParticleMetrics.bT4Valid,
         ValidCorridorTransitLayout.LayoutHash, Packet.ParticleMetrics.T4LayoutHash,
         SharedFlowField.BuildHash, Packet.ParticleMetrics.T4FlowHash,
@@ -4255,9 +2212,12 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
         Packet.ParticleMetrics.T4WallPassedCount,
         Packet.ParticleMetrics.T4CorridorExitedCount,
         Packet.ParticleMetrics.T4CompletedCount,
+        Packet.ParticleMetrics.T4FinalSettledCount,
         Packet.ParticleMetrics.T4FinalDeadlockAgentCount,
         Packet.ParticleMetrics.T4UnreachableSampleCount,
         Packet.ParticleMetrics.T4CompletionStepMax,
+        Packet.ParticleMetrics.T4GroupCompletionStep,
+        Packet.ParticleMetrics.T4GroupSettledStep,
         bT4HashMatch ? 1 : 0, bT4HashMatch ? TEXT("") : TEXT(" VIOLATION"));
       if (!bT4HashMatch)
         UE_LOG(LogTemp, Error,
@@ -4278,7 +2238,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
     if (Packet.ParticleMetrics.T6TransitLayoutHash != 0)
     {
       UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoT6TransitCheckpoint role=client round_id=%d valid=%d layout_hash=%u/%u flow_hash=%u/%u progress_hash=%u/%u capability_profiles=%d membership_hash=%u/%u wall_passed=%d corridor_exited=%d completed=%d final_deadlock=%d unreachable_samples=%d cross_profile_hard=%d cross_profile_swept=%d completion_step_max=%d match=%d%s"),
+        TEXT("CrowdDemoT6TransitCheckpoint role=client round_id=%d valid=%d layout_hash=%u/%u flow_hash=%u/%u progress_hash=%u/%u capability_profiles=%d membership_hash=%u/%u wall_passed=%d corridor_exited=%d completed=%d final_settled=%d final_deadlock=%d unreachable_samples=%d cross_profile_hard=%d cross_profile_swept=%d completion_step_max=%d group_completion_step=%d group_settled_step=%d match=%d%s"),
         Packet.RoundId, Packet.ParticleMetrics.bT6TransitValid,
         ValidCorridorTransitLayout.LayoutHash,
         Packet.ParticleMetrics.T6TransitLayoutHash,
@@ -4291,11 +2251,14 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
         Packet.ParticleMetrics.T6TransitWallPassedCount,
         Packet.ParticleMetrics.T6TransitCorridorExitedCount,
         Packet.ParticleMetrics.T6TransitCompletedCount,
+        Packet.ParticleMetrics.T6TransitFinalSettledCount,
         Packet.ParticleMetrics.T6TransitFinalDeadlockAgentCount,
         Packet.ParticleMetrics.T6TransitUnreachableSampleCount,
         Packet.ParticleMetrics.CrossProfileHardViolationCount,
         Packet.ParticleMetrics.CrossProfileSweptViolationCount,
         Packet.ParticleMetrics.T6TransitCompletionStepMax,
+        Packet.ParticleMetrics.T6TransitGroupCompletionStep,
+        Packet.ParticleMetrics.T6TransitGroupSettledStep,
         bT6TransitHashMatch ? 1 : 0,
         bT6TransitHashMatch ? TEXT("") : TEXT(" VIOLATION"));
       if (!bT6TransitHashMatch)
@@ -4385,6 +2348,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
         TargetInfluenceSummary.Density.FieldHash
           == Packet.ParticleMetrics.TargetDensityFieldHash ? 1 : 0);
     }
+    if (IsTargetRegionPlanLifecycleDiagnosticEnabled())
+      FinalizeTargetRegionPlanLifecycleDiagnostic();
     uint32 LocalTransportTopologyHash = TargetRegionTopologyRoundHash;
     uint32 LocalTransportDemandHash = TargetRegionDemandRoundHash;
     uint32 LocalTransportPlanHash = TargetRegionTransportRoundHash;
@@ -4530,6 +2495,17 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
           == Packet.ParticleMetrics.bTargetTransportFailureFixtureValid
         && TargetRegionFailureFixtureHash
           == Packet.ParticleMetrics.TargetTransportFailureFixtureHash);
+    const bool bTargetPlanLifecycleMatch =
+      Packet.ParticleMetrics.bTargetPlanLifecycleDiagnosticValid == 0
+      || (TargetRegionPlanLifecycleSummary.bValid
+        && TargetRegionPlanLifecycleSummary.StableHash
+          == Packet.ParticleMetrics.TargetPlanLifecycleHash
+        && TargetRegionPlanLifecycleSummary.SampleBoundaryCount
+          == Packet.ParticleMetrics.TargetPlanLifecycleSampleBoundaryCount
+        && TargetRegionPlanLifecycleSummary.RebuildCount
+          == Packet.ParticleMetrics.TargetTransportPlanRebuildCount
+        && TargetRegionPlanLifecycleSummary.FixtureHash
+          == Packet.ParticleMetrics.TargetPlanLifecycleFixtureHash);
     if (bTargetTransportEnabled)
     {
       UE_LOG(LogTemp, Display,
@@ -4587,6 +2563,21 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
           Packet.ParticleMetrics.CapabilityMembershipHash, *Profiles,
           bTargetTransportHashMatch ? 1 : 0,
           bTargetTransportHashMatch ? TEXT("") : TEXT(" VIOLATION"));
+      }
+      if (Packet.ParticleMetrics.bTargetPlanLifecycleDiagnosticValid != 0)
+      {
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoTargetRegionPlanLifecycle role=client round_id=%d local_hash=%u server_hash=%u local_samples=%d server_samples=%d local_rebuilds=%d server_rebuilds=%d local_fixture=%u server_fixture=%u match=%d source=MassPipeline%s"),
+          Packet.RoundId, TargetRegionPlanLifecycleSummary.StableHash,
+          Packet.ParticleMetrics.TargetPlanLifecycleHash,
+          TargetRegionPlanLifecycleSummary.SampleBoundaryCount,
+          Packet.ParticleMetrics.TargetPlanLifecycleSampleBoundaryCount,
+          TargetRegionPlanLifecycleSummary.RebuildCount,
+          Packet.ParticleMetrics.TargetTransportPlanRebuildCount,
+          TargetRegionPlanLifecycleSummary.FixtureHash,
+          Packet.ParticleMetrics.TargetPlanLifecycleFixtureHash,
+          bTargetPlanLifecycleMatch ? 1 : 0,
+          bTargetPlanLifecycleMatch ? TEXT("") : TEXT(" VIOLATION"));
       }
     }
     UE_LOG(LogTemp, Display,
@@ -4646,6 +2637,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
       && bTargetFactHashMatch && bTargetApproachHashMatch
       && bTargetLayoutHashMatch && bTargetScheduleHashMatch && bTargetCommitHashMatch
       && bTargetInfluenceHashMatch && bTargetTransportHashMatch
+      && bTargetPlanLifecycleMatch
       && bCrossProfileViolationMatch && bRoundInitialStateMatch && bDynamicFlowMatch;
     LastCompareMetrics.ServerClientParticleHashMatch = bParticleHashMatch ? 1 : 0;
     if (!bAppliedHashMatch)
@@ -4837,6 +2829,32 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
         UE_LOG(LogTemp, Error,
           TEXT("CrowdDemoTargetStabilityDiagnostic role=client round_id=%d match=0 VIOLATION"),
           Packet.RoundId);
+      const auto& Counterfactual = TargetStabilitySummary.Counterfactual;
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoTargetRegionCounterfactual role=client round_id=%d valid=%d cohort=%u region=%d missing_steps=%d attachment_inflight_steps=%d attachment_recovered_guidance_steps=%d attachment_final_inflight=%d attachment_final_agent=%d attachment_remaining_edges=%d attachment_edges_min_max=%d,%d attachment_edge_transitions=%d,%d,%d attachment_final_relative_cmps=%.3f attachment_changes_final=%d terminal_hold_transitions=%d terminal_recovered_steps=%d terminal_final_held=%d terminal_cross_region_rejects=%d population_violations=%d terminal_restores_final=%d outcome=%d hash=%u target_stability_match=%d source=MassPipeline"),
+        Packet.RoundId, Counterfactual.bValid ? 1 : 0,
+        Counterfactual.CohortKey, Counterfactual.RegionKey,
+        Counterfactual.BaselineMissingStepCount,
+        Counterfactual.AttachmentObservedInFlightStepCount,
+        Counterfactual.AttachmentRecoveredGuidanceStepCount,
+        Counterfactual.AttachmentFinalInFlightAgentCount,
+        Counterfactual.AttachmentFinalInFlightAgentId,
+        Counterfactual.AttachmentFinalMinimumRemainingEdgeCount,
+        Counterfactual.AttachmentRemainingEdgeCountMin,
+        Counterfactual.AttachmentRemainingEdgeCountMax,
+        Counterfactual.AttachmentRemainingEdgeDecreaseCount,
+        Counterfactual.AttachmentRemainingEdgeIncreaseCount,
+        Counterfactual.AttachmentRemainingEdgeUnchangedCount,
+        Counterfactual.AttachmentFinalRelativeSpeedCmps,
+        Counterfactual.bAttachmentChangesFinalGuidance ? 1 : 0,
+        Counterfactual.TerminalEligibleHoldTransitionCount,
+        Counterfactual.TerminalRecoveredCoverageStepCount,
+        Counterfactual.TerminalFinalHeldAgentCount,
+        Counterfactual.TerminalCrossRegionRejectCount,
+        Counterfactual.PopulationConservationViolationCount,
+        Counterfactual.bTerminalRestoresFinalObservedCoverage ? 1 : 0,
+        static_cast<int32>(Counterfactual.Outcome),
+        Counterfactual.StableHash, bMatch ? 1 : 0);
 
       TArray<int32> SupplyWitnessIds;
       for (const auto& Region : TargetStabilitySummary.FinalRegions)
@@ -4973,220 +2991,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
     if (Packet.ParticleMetrics.ParticleInvalidStepCount > 0)
       StopAfterParticleConstraintFailure();
   }
-  if (IsTrafficScenario(GetRules().Scenario))
-  {
-    const FCrowdDemoTrafficMetrics Local = BuildTrafficMetrics(ClientStates);
-    RecordSf3CompletedRoundHash(Local.AgentStateHash);
-    const FCrowdDemoTrafficMetrics& Server = Packet.TrafficMetrics;
-    const bool bSf4ReservationDiagnosticRequested = FParse::Param(
-      FCommandLine::Get(), TEXT("CrowdDemoSf4ReservationOrcaDiagnostic"));
-    const bool bTransitJointDiagnosticRequested = FParse::Param(
-      FCommandLine::Get(), TEXT("CrowdDemoTransitJointDiagnostic"));
-    const bool bTransitCapacityShadowRequested = FParse::Param(
-      FCommandLine::Get(), TEXT("CrowdDemoTransitCapacityShadow"));
-    const bool bElasticCrowdShadowRequested = FParse::Param(
-      FCommandLine::Get(), TEXT("CrowdDemoElasticCrowdShadow"));
-    const bool bHashMatch = Local.TrafficFieldHash == Server.TrafficFieldHash
-      && Local.PortalDecisionHash == Server.PortalDecisionHash
-      && Local.OrcaVelocityHash == Server.OrcaVelocityHash
-      && (GetRules().Scenario != ECrowdDemoScenario::SimRoundPursuitPositioning
-        || Local.PriorityOrcaHash == Server.PriorityOrcaHash)
-      && Local.AgentStateHash == Server.AgentStateHash
-      && (GetRules().Scenario != ECrowdDemoScenario::SimRoundPursuitPositioning
-        || (Local.HoldingCandidateHash == Server.HoldingCandidateHash
-          && Local.TransitCapacityPositionCount == Server.TransitCapacityPositionCount
-          && Local.TransitCapacityHoldingCount == Server.TransitCapacityHoldingCount
-          && Local.TransitCapacityPositionDeficit == Server.TransitCapacityPositionDeficit
-          && Local.TransitCapacityHoldingDeficit == Server.TransitCapacityHoldingDeficit
-          && Local.TransitCapacitySelectionHash == Server.TransitCapacitySelectionHash
-          && Local.bTransitCapacitySelectionApplied == Server.bTransitCapacitySelectionApplied
-          && Local.HoldingAssignmentHash == Server.HoldingAssignmentHash
-          && Local.CommitDecisionHash == Server.CommitDecisionHash
-          && Local.SteeringStateHash == Server.SteeringStateHash
-          && Local.ResidualCapacityHash == Server.ResidualCapacityHash
-          && Local.ResidualHoldingMatchingHash == Server.ResidualHoldingMatchingHash
-          && Local.HoldingHallFixtureHash == Server.HoldingHallFixtureHash
-          && Local.HallGeometryFixtureHash == Server.HallGeometryFixtureHash
-          && Local.JointPositioningHash == Server.JointPositioningHash
-          && Local.JointCommitResidualHash == Server.JointCommitResidualHash
-          && Local.Sf4UnfinishedBoundaryAgentCount == Server.Sf4UnfinishedBoundaryAgentCount
-          && Local.Sf4UnfinishedBoundaryHash == Server.Sf4UnfinishedBoundaryHash
-          && Local.Sf4PhysicalUnsatisfiedAgentCount
-            == Server.Sf4PhysicalUnsatisfiedAgentCount
-          && Local.Sf4PhysicalUnsatisfiedTotalAgentCount
-            == Server.Sf4PhysicalUnsatisfiedTotalAgentCount
-          && Local.Sf4PhysicalUnsatisfiedSatisfiedCount
-            == Server.Sf4PhysicalUnsatisfiedSatisfiedCount
-          && Local.Sf4PhysicalUnsatisfiedCountClosed
-            == Server.Sf4PhysicalUnsatisfiedCountClosed
-          && Local.Sf4PhysicalUnsatisfiedHash == Server.Sf4PhysicalUnsatisfiedHash
-          && (!bTransitCapacityShadowRequested
-            || (Local.TransitCapacityShadowHash == Server.TransitCapacityShadowHash
-              && Local.TransitCapacityFailureFixtureAgentCount
-                == Server.TransitCapacityFailureFixtureAgentCount
-              && Local.TransitCapacityFailureFixturePairCount
-                == Server.TransitCapacityFailureFixturePairCount
-              && Local.TransitCapacityFailureFixtureStatus
-                == Server.TransitCapacityFailureFixtureStatus
-              && Local.TransitCapacityFailureFixtureHash
-                == Server.TransitCapacityFailureFixtureHash))
-          && (!bElasticCrowdShadowRequested
-            || (Local.ElasticShadowHash == Server.ElasticShadowHash
-              && Local.ElasticParallelHash == Server.ElasticParallelHash
-              && Local.ElasticFailureFixtureAgentCount
-                == Server.ElasticFailureFixtureAgentCount
-              && Local.ElasticFailureFixtureHash == Server.ElasticFailureFixtureHash
-              && Local.ElasticFailureFixedStep == Server.ElasticFailureFixedStep
-              && Local.ElasticFailureStage == Server.ElasticFailureStage
-              && Local.ElasticFailureKind == Server.ElasticFailureKind
-              && Local.ElasticFailureAttribution == Server.ElasticFailureAttribution))
-          && (!bSf4ReservationDiagnosticRequested
-            || (Local.Sf4ReservationOrcaFixtureValid == 1
-              && Server.Sf4ReservationOrcaFixtureValid == 1
-              && Local.Sf4ReservationOrcaFixtureHash
-                == Server.Sf4ReservationOrcaFixtureHash))
-          && (!bTransitJointDiagnosticRequested
-            || (Local.TransitJointFixtureValid == 1
-              && Server.TransitJointFixtureValid == 1
-              && Local.TransitJointFixtureHash == Server.TransitJointFixtureHash))));
-    if (bHashMatch)
-    {
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoSf3Hash role=client round_id=%d traffic=%u portal=%u orca=%u priority_orca=%u state=%u holding_candidate=%u holding_assignment=%u commit=%u steering=%u hall=%u hall_geometry=%u joint=%u joint_residual=%u unfinished=%d/%u physical_unsatisfied=%d/%d satisfied=%d count_closed=%d physical_hash=%u match=1"),
-        Packet.RoundId, Server.TrafficFieldHash, Server.PortalDecisionHash,
-        Server.OrcaVelocityHash, Server.PriorityOrcaHash, Server.AgentStateHash,
-        Server.HoldingCandidateHash, Server.HoldingAssignmentHash,
-        Server.CommitDecisionHash, Server.SteeringStateHash,
-        Server.HoldingHallFixtureHash, Server.HallGeometryFixtureHash,
-        Server.JointPositioningHash,Server.JointCommitResidualHash,
-        Server.Sf4UnfinishedBoundaryAgentCount,Server.Sf4UnfinishedBoundaryHash,
-        Server.Sf4PhysicalUnsatisfiedAgentCount,
-        Server.Sf4PhysicalUnsatisfiedTotalAgentCount,
-        Server.Sf4PhysicalUnsatisfiedSatisfiedCount,
-        Server.Sf4PhysicalUnsatisfiedCountClosed,
-        Server.Sf4PhysicalUnsatisfiedHash);
-      if (bTransitCapacityShadowRequested)
-      {
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoTransitCapacityShadow role=client round_id=%d components=%d max_component=%d solved=%d infeasible=%d numerical=%d quantized=%d yielding=%d hard_violation=%d obstacle_violation=%d flow_bounds_violation=%d target_violation=%d pair_double_owner=%d spacing_deficit_cm=%.3f aperture_deficit_cm=%.3f clearance_deficit_cm=%.3f max_yield_cm=%.3f solver_ms_p95=%.3f hash=%u match=1 source=MassPipeline"),
-          Packet.RoundId, Server.TransitCapacityShadowComponentCount,
-          Server.TransitCapacityShadowMaximumComponentSize,
-          Server.TransitCapacityShadowSolvedCount,
-          Server.TransitCapacityShadowInfeasibleCount,
-          Server.TransitCapacityShadowNumericalFailureCount,
-          Server.TransitCapacityShadowQuantizedFailureCount,
-          Server.TransitCapacityShadowYieldingAgentCount,
-          Server.TransitCapacityShadowHardPairViolationCount,
-          Server.TransitCapacityShadowObstacleViolationCount,
-          Server.TransitCapacityShadowFlowBoundsViolationCount,
-          Server.TransitCapacityShadowTargetViolationCount,
-          Server.TransitCapacityShadowPairDoubleOwnerCount,
-          Server.TransitCapacityShadowPreferredSpacingDeficitCmMax,
-          Server.TransitCapacityShadowApertureDeficitCmMax,
-          Server.TransitCapacityShadowClearanceDeficitCmMax,
-          Server.TransitCapacityShadowMaximumYieldDisplacementCm,
-          Server.TransitCapacityShadowSolverMsP95,
-          Server.TransitCapacityShadowHash);
-      }
-      if (bElasticCrowdShadowRequested)
-      {
-        const auto JoinUInt = [](const TArray<uint32>& Values)
-        {
-          FString Out;
-          for (int32 Index = 0; Index < Values.Num(); ++Index)
-            Out += FString::Printf(TEXT("%s%u"), Index == 0 ? TEXT("") : TEXT(","), Values[Index]);
-          return Out;
-        };
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoElasticCrowdShadow role=client round_id=%d spacing_pairs=%d influenced=%d propagation_layer=%d spacing_p95_cm=%.3f spacing_max_cm=%.3f transit_p95_cm=%.3f transit_max_cm=%.3f source_forward_q15=%d baseline_forward_q15=%d zero_progress_steps=%d recovery_p95_cm=%.3f hard_violation=%d obstacle_violation=%d flow_bounds_violation=%d target_violation=%d invalid=%d solver_ms_p95=%.3f hash=%u match=1 source=MassPipeline"),
-          Packet.RoundId, Server.ElasticSpacingPairCount,
-          Server.ElasticInfluencedAgentCount, Server.ElasticPropagationLayerMax,
-          Server.ElasticSpacingDeficitCmP95, Server.ElasticSpacingDeficitCmMax,
-          Server.ElasticTransitDeficitCmP95, Server.ElasticTransitDeficitCmMax,
-          Server.ElasticSourceForwardRatioQ15,
-          Server.ElasticBaselineSourceForwardRatioQ15,
-          Server.ElasticZeroProgressStepMax, Server.ElasticRecoveryErrorCmP95,
-          Server.ElasticHardPairViolationCount, Server.ElasticObstacleViolationCount,
-          Server.ElasticFlowBoundsViolationCount, Server.ElasticTargetViolationCount,
-          Server.ElasticInvalidInputCount, Server.ElasticSolverMsP95,
-          Server.ElasticShadowHash);
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoElasticShadowScience role=client round_id=%d first_step=%d first_stage=%d first_kind=%d attribution=%d closure=%d too_large=%d rollout_steps=%d recovery_eligible=%d baseline_completed=%d elastic_completed=%d baseline_holes=%d elastic_holes=%d rollout_hash=%u match=1 source=MassPipeline"),
-          Packet.RoundId, Server.ElasticFailureFixedStep,
-          Server.ElasticFailureStage, Server.ElasticFailureKind,
-          Server.ElasticFailureAttribution, Server.ElasticFailureClosureAgentCount,
-          Server.ElasticFailureFixtureTooLarge, Server.ElasticParallelCompletedSteps,
-          Server.ElasticParallelEligibleRecoveryCount,
-          Server.ElasticParallelBaselineRecoveryCompletedCount,
-          Server.ElasticParallelRecoveryCompletedCount,
-          Server.ElasticParallelBaselinePermanentHoleCount,
-          Server.ElasticParallelPermanentHoleCount, Server.ElasticParallelHash);
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoElasticParallelSafety role=client round_id=%d baseline_source_q15=%d elastic_source_q15=%d baseline_hard=%d elastic_hard=%d baseline_obstacle=%d elastic_obstacle=%d baseline_target=%d elastic_target=%d baseline_orca_stop_violation=%d elastic_orca_stop_violation=%d match=1 source=MassPipeline"),
-          Packet.RoundId, Server.ElasticParallelBaselineSourceForwardQ15,
-          Server.ElasticParallelSourceForwardQ15,
-          Server.ElasticParallelBaselineHardPairViolationCount,
-          Server.ElasticParallelHardPairViolationCount,
-          Server.ElasticParallelBaselineObstaclePenetrationCount,
-          Server.ElasticParallelObstaclePenetrationCount,
-          Server.ElasticParallelBaselineTargetViolationCount,
-          Server.ElasticParallelTargetViolationCount,
-          Server.ElasticParallelBaselineOrcaStopViolationCount,
-          Server.ElasticParallelOrcaStopViolationCount);
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoElasticShadowStages role=client round_id=%d order=preferred,orca,predict,obstacle,pbd1,pbd2,pbd3,reproject baseline_hash=%s elastic_hash=%s match=1 source=MassPipeline"),
-          Packet.RoundId, *JoinUInt(Server.ElasticBaselineStageHashes),
-          *JoinUInt(Server.ElasticTwinStageHashes));
-      }
-    }
-    else
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("CrowdDemoSf3Hash role=client round_id=%d traffic_local=%u traffic_server=%u portal_local=%u portal_server=%u orca_local=%u orca_server=%u priority_orca_local=%u priority_orca_server=%u state_local=%u state_server=%u holding_candidate_local=%u holding_candidate_server=%u holding_assignment_local=%u holding_assignment_server=%u commit_local=%u commit_server=%u steering_local=%u steering_server=%u match=0 VIOLATION"),
-        Packet.RoundId, Local.TrafficFieldHash, Server.TrafficFieldHash,
-        Local.PortalDecisionHash, Server.PortalDecisionHash,
-        Local.OrcaVelocityHash, Server.OrcaVelocityHash,
-        Local.PriorityOrcaHash, Server.PriorityOrcaHash,
-        Local.AgentStateHash, Server.AgentStateHash,
-        Local.HoldingCandidateHash, Server.HoldingCandidateHash,
-        Local.HoldingAssignmentHash, Server.HoldingAssignmentHash,
-        Local.CommitDecisionHash, Server.CommitDecisionHash,
-        Local.SteeringStateHash, Server.SteeringStateHash);
-    }
-    LastCompareMetrics.TrafficMetrics = Server;
-    LastCompareMetrics.TrafficMetrics.PhaseReservationClientHashMatch = bHashMatch ? 1 : 0;
-    LastCompareMetrics.TrafficMetrics.PhaseReservationWaitGraphClientHashMatch = bHashMatch ? 1 : 0;
-    LastCompareMetrics.TrafficMetrics.Sf4ReservationOrcaClientHashMatch =
-      bSf4ReservationDiagnosticRequested && Local.Sf4ReservationOrcaFixtureValid == 1
-        && Server.Sf4ReservationOrcaFixtureValid == 1
-        && Local.Sf4ReservationOrcaFixtureHash == Server.Sf4ReservationOrcaFixtureHash ? 1 : 0;
-    LastCompareMetrics.TrafficMetrics.TransitJointClientHashMatch =
-      bTransitJointDiagnosticRequested && Local.TransitJointFixtureValid == 1
-        && Server.TransitJointFixtureValid == 1
-        && Local.TransitJointFixtureHash == Server.TransitJointFixtureHash ? 1 : 0;
-    if (bTransitJointDiagnosticRequested)
-    {
-      const bool bTransitMatch = LastCompareMetrics.TrafficMetrics.TransitJointClientHashMatch == 1;
-      if (bTransitMatch)
-      {
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoTransitJointDiagnostic role=client round_id=%d valid_local=%d valid_server=%d agents=%d pairs=%d constraints=%d fixture_hash_local=%u fixture_hash_server=%u match=1"),
-          Packet.RoundId, Local.TransitJointFixtureValid, Server.TransitJointFixtureValid,
-          Server.TransitJointFixtureAgentCount, Server.TransitJointFixturePairCount,
-          Server.TransitJointFixtureConstraintCount,
-          Local.TransitJointFixtureHash, Server.TransitJointFixtureHash);
-      }
-      else
-      {
-        UE_LOG(LogTemp, Error,
-          TEXT("VIOLATION CrowdDemoTransitJointDiagnostic role=client round_id=%d valid_local=%d valid_server=%d agents=%d pairs=%d constraints=%d fixture_hash_local=%u fixture_hash_server=%u match=0"),
-          Packet.RoundId, Local.TransitJointFixtureValid, Server.TransitJointFixtureValid,
-          Server.TransitJointFixtureAgentCount, Server.TransitJointFixturePairCount,
-          Server.TransitJointFixtureConstraintCount,
-          Local.TransitJointFixtureHash, Server.TransitJointFixtureHash);
-      }
-    }
-  }
   const FCrowdDemoCorrectionFrameMetrics PreviousCorrectionMetrics = LastCorrectionMetrics;
   const int32 PreviousAppliedCorrectionRevision = LastAppliedCorrectionRevision;
   FCrowdDemoCorrectionFrame Frame;
@@ -5268,8 +3072,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundInitialState(
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordNavigationDomainReprojectDelta(const float DeltaCm)
 {
-  LastCompareMetrics.TrafficMetrics.NavigationDomainReprojectDeltaCmMax = FMath::Max(
-    LastCompareMetrics.TrafficMetrics.NavigationDomainReprojectDeltaCmMax, DeltaCm);
+  LastCompareMetrics.SharedFlowMetrics.NavigationDomainReprojectDeltaCmMax = FMath::Max(
+    LastCompareMetrics.SharedFlowMetrics.NavigationDomainReprojectDeltaCmMax, DeltaCm);
 }
 
 bool UCrowdDemoRoundSimPipelineSubsystem::ShouldBuildCorrectionFrame() const
@@ -5330,10 +3134,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::MarkRoundResultBuilt(const int32 Check
   ++LastCompareMetrics.CompletedRoundCount;
   LastCompareMetrics.CheckpointRevision = CheckpointRevision;
   LastCompletedRoundMetrics = LastCompareMetrics;
-  LastCompletedHoldingHallFixture = HoldingHallFixture;
-  LastCompletedHallGeometryFixture = HallGeometryFixture;
-  LastCompletedJointPositioningResult = JointPositioningResult;
-  LastCompletedJointCommitResidualResult = JointCommitResidualResult;
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::MergeNetworkCorrectionMetrics(

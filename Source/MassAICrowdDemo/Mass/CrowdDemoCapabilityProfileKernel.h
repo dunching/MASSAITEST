@@ -17,12 +17,20 @@ enum class ECrowdDemoTargetDistanceCapability : uint8
   Ranged = 2,
 };
 
+enum class ECrowdDemoTargetDistanceResponsePolicy : uint8
+{
+  StrictBand = 0,
+  AcquireThenHold = 1,
+};
+
 struct FCrowdDemoCapabilityProfile
 {
   int32 ProfileId = INDEX_NONE;
   ECrowdDemoParticleProfileId ParticleProfileId = ECrowdDemoParticleProfileId::Standard;
   ECrowdDemoTargetDistanceCapability TargetCapability =
     ECrowdDemoTargetDistanceCapability::Melee;
+  ECrowdDemoTargetDistanceResponsePolicy TargetDistanceResponsePolicy =
+    ECrowdDemoTargetDistanceResponsePolicy::StrictBand;
   FCrowdDemoParticleProfile Particle;
   float MinimumCenterDistanceCm = 0.0f;
   float MaximumCenterDistanceCm = 0.0f;

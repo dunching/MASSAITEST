@@ -177,6 +177,21 @@ public:
     float PositionQuantumCm,
     float VelocityQuantumCmps);
 
+  static FCrowdDemoTargetFact BuildReflectedLinearMotionFact(
+    int32 TargetId,
+    int32 TargetRevision,
+    int32 MotionStep,
+    const FVector2f& InitialLocation,
+    const FVector2f& LinearVelocity,
+    const FVector2f& MotionBoundsMin,
+    const FVector2f& MotionBoundsMax,
+    float InitialYawDegrees,
+    float YawRateDegreesPerSecond,
+    float PhysicalRadiusCm,
+    float FixedStepSeconds,
+    float PositionQuantumCm,
+    float VelocityQuantumCmps);
+
   static void ValidateAtomicCommit(
     int32 SlotLayoutRevision,
     TConstArrayView<FCrowdDemoTargetSlotSpec> Slots,

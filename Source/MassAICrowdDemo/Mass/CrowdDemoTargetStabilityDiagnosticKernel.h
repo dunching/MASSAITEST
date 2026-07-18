@@ -42,6 +42,7 @@ struct FCrowdDemoTargetStabilitySettings
 struct FCrowdDemoTargetStabilityAgentSample
 {
   int32 AgentId = INDEX_NONE;
+  uint32 CohortKey = 0;
   int32 CurrentCellKey = INDEX_NONE;
   int32 NextCellKey = INDEX_NONE;
   int32 CurrentRegionKey = INDEX_NONE;
@@ -67,6 +68,48 @@ struct FCrowdDemoTargetStabilityAgentSample
   bool bLocalValid = false;
   bool bLocalGranted = false;
   bool bLocalYielding = false;
+};
+
+enum class ECrowdDemoTargetStabilityCounterfactualOutcome : uint8
+{
+  Neither = 0,
+  AttachmentGuidanceOnly = 1,
+  TerminalRetentionOnly = 2,
+  Both = 3,
+  Invalid = 4,
+};
+
+// This is an observational counterfactual over the recorded stability window.
+// It can prove that an already observed route/guidance fact could be retained;
+// it does not simulate alternative particle positions and therefore is not a
+// replacement for a production rollout or a capability gate.
+struct FCrowdDemoTargetStabilityCounterfactualSummary
+{
+  bool bValid = false;
+  uint32 CohortKey = 0;
+  int32 RegionKey = INDEX_NONE;
+  int32 BaselineMissingStepCount = 0;
+  int32 AttachmentObservedInFlightStepCount = 0;
+  int32 AttachmentRecoveredGuidanceStepCount = 0;
+  int32 AttachmentFinalInFlightAgentCount = 0;
+  int32 AttachmentFinalInFlightAgentId = INDEX_NONE;
+  int32 AttachmentFinalMinimumRemainingEdgeCount = INDEX_NONE;
+  int32 AttachmentRemainingEdgeCountMin = INDEX_NONE;
+  int32 AttachmentRemainingEdgeCountMax = 0;
+  int32 AttachmentRemainingEdgeDecreaseCount = 0;
+  int32 AttachmentRemainingEdgeIncreaseCount = 0;
+  int32 AttachmentRemainingEdgeUnchangedCount = 0;
+  float AttachmentFinalRelativeSpeedCmps = 0.0f;
+  bool bAttachmentChangesFinalGuidance = false;
+  int32 TerminalEligibleHoldTransitionCount = 0;
+  int32 TerminalRecoveredCoverageStepCount = 0;
+  int32 TerminalFinalHeldAgentCount = 0;
+  int32 TerminalCrossRegionRejectCount = 0;
+  int32 PopulationConservationViolationCount = 0;
+  bool bTerminalRestoresFinalObservedCoverage = false;
+  ECrowdDemoTargetStabilityCounterfactualOutcome Outcome =
+    ECrowdDemoTargetStabilityCounterfactualOutcome::Neither;
+  uint32 StableHash = 2166136261u;
 };
 
 struct FCrowdDemoTargetStabilityRegionSample
@@ -172,6 +215,7 @@ struct FCrowdDemoTargetStabilitySummary
   TArray<FCrowdDemoTargetStabilityAgentSample> FinalAgents;
   TArray<FCrowdDemoTargetStabilityRegionSample> FinalRegions;
   TArray<FCrowdDemoTargetStabilityEdgeSample> FinalEdges;
+  FCrowdDemoTargetStabilityCounterfactualSummary Counterfactual;
 };
 
 class MASSAICROWDDEMO_API FCrowdDemoTargetStabilityDiagnosticKernel

@@ -6,6 +6,7 @@
 #include "Misc/AutomationTest.h"
 #include "Mass/CrowdDemoRoundInitialStateKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
+#include "Mass/CrowdDemoTargetApproachKernel.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoRoundStableInitialStateTest,
@@ -57,6 +58,48 @@ bool FCrowdDemoRoundStableInitialStateTest::RunTest(const FString& Parameters)
     ChangedSummary.InputHash, Summary1.InputHash);
   TestEqual(TEXT("target fact does not silently move formation"),
     ChangedSummary.InitialStateHash, Summary1.InitialStateHash);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoReflectedTargetMotionTest,
+  "CrowdDemo.SF.RoundContract.ReflectedTargetMotion",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoReflectedTargetMotionTest::RunTest(const FString& Parameters)
+{
+  constexpr float FixedStepSeconds = 1.0f / 30.0f;
+  const FVector2f Initial(0.0f, 1900.0f);
+  const FVector2f Velocity(-80.0f, 0.0f);
+  const FVector2f Minimum(-2480.0f, -3180.0f);
+  const FVector2f Maximum(2480.0f, 2180.0f);
+  const auto Build = [&](const int32 Step)
+  {
+    return FCrowdDemoTargetApproachKernel::BuildReflectedLinearMotionFact(
+      1, 1, Step, Initial, Velocity, Minimum, Maximum,
+      0.0f, 0.0f, 100.0f, FixedStepSeconds, 1.0f, 1.0f);
+  };
+
+  const FCrowdDemoTargetFact BeforeReflection = Build(900);
+  TestEqual(TEXT("bounded motion matches original linear path at thirty seconds"),
+    BeforeReflection.Location.X, -2400.0f);
+  TestTrue(TEXT("target still moves left before reflection"),
+    BeforeReflection.Velocity.X < 0.0f);
+
+  const FCrowdDemoTargetFact AfterReflection = Build(945);
+  TestEqual(TEXT("target reflects back from the declared minimum"),
+    AfterReflection.Location.X, -2440.0f);
+  TestTrue(TEXT("target velocity reverses after reflection"),
+    AfterReflection.Velocity.X > 0.0f);
+
+  for (int32 Step = 0; Step <= 1350; ++Step)
+  {
+    const FCrowdDemoTargetFact Fact = Build(Step);
+    TestTrue(TEXT("target remains inside declared X motion bounds"),
+      Fact.Location.X >= Minimum.X && Fact.Location.X <= Maximum.X);
+    TestTrue(TEXT("zero Y velocity preserves target Y"),
+      FMath::IsNearlyEqual(Fact.Location.Y, Initial.Y, 0.01f));
+  }
   return true;
 }
 

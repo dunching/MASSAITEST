@@ -157,6 +157,35 @@ bool FCrowdDemoSoftPressureRouteFailureOwnerTest::RunTest(const FString& Paramet
   TestEqual(TEXT("reached anomaly remains auxiliary"),
     ReachedViolationSummary.FailureOwnedFlowContractViolationCount, 0);
 
+  FCrowdDemoSoftPressureRouteDiagnosticRuntime TransportOwnedRuntime;
+  auto TransportOwned = MakeRouteSample(20, 0, FVector(300.0f, 0.0f, 0.0f));
+  TransportOwned.bFlowGuidanceOwner = false;
+  TransportOwned.FlowDirection = FVector::ZeroVector;
+  TransportOwned.DesiredVelocity = FVector(0.0f, 120.0f, 0.0f);
+  TransportOwned.PredictedVelocity = TransportOwned.DesiredVelocity;
+  FCrowdDemoSoftPressureRouteDiagnosticKernel::RecordStep(
+    {TransportOwned}, TransportOwnedRuntime);
+  FCrowdDemoSoftPressureRouteDiagnosticSummary TransportOwnedSummary;
+  FCrowdDemoSoftPressureRouteDiagnosticKernel::BuildSummary(
+    TransportOwnedRuntime, {}, TransportOwnedSummary);
+  TestEqual(TEXT("transport-owned guidance is not checked as Shared Flow"),
+    TransportOwnedSummary.FlowContractViolationCount, 0);
+  TestEqual(TEXT("transport-owned sample does not claim Flow ownership"),
+    TransportOwnedRuntime.Agents[0].FlowGuidanceOwnedSampleCount, 0);
+
+  FCrowdDemoSoftPressureRouteDiagnosticRuntime PseudoNeighborRuntime;
+  auto PseudoNeighbor = MakeRouteSample(21, 0, FVector(300.0f, 0.0f, 0.0f));
+  PseudoNeighbor.ActiveNeighborAgentIds = {-2};
+  FCrowdDemoSoftPressureRouteDiagnosticKernel::RecordStep(
+    {PseudoNeighbor}, PseudoNeighborRuntime);
+  FCrowdDemoSoftPressureRouteDiagnosticSummary PseudoNeighborSummary;
+  FCrowdDemoSoftPressureRouteDiagnosticKernel::BuildSummary(
+    PseudoNeighborRuntime, {}, PseudoNeighborSummary);
+  TestTrue(TEXT("non-agent environment/target neighbor does not invalidate component"),
+    PseudoNeighborSummary.bValid);
+  TestEqual(TEXT("pseudo neighbor is excluded from selected agent count"),
+    PseudoNeighborSummary.SelectedAgentCount, 1);
+
   FCrowdDemoSoftPressureRouteDiagnosticRuntime NeverReachedFlowRuntime;
   for (int32 Step = 0; Step < 46; ++Step)
   {

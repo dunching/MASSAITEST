@@ -4,7 +4,6 @@
 #include "MassEntityTypes.h"
 #include "CrowdDemoTypes.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
-#include "Mass/CrowdDemoPursuitPositioningKernel.h"
 #include "Mass/CrowdDemoTargetApproachKernel.h"
 #include "CrowdDemoMassFragments.generated.h"
 
@@ -146,9 +145,6 @@ struct FCrowdDemoMassMovementFragment : public FMassFragment
   float ContactRadiusCm = 42.0f;
 
   UPROPERTY(Transient)
-  float SeparationRadiusCm = 78.0f;
-
-  UPROPERTY(Transient)
   float MaxSpeedCmPerSecond = 260.0f;
 
   UPROPERTY(Transient)
@@ -223,6 +219,17 @@ struct FCrowdDemoRoundMoveIntentFragment : public FMassFragment
 
   UPROPERTY(Transient)
   int32 PlanRevision = 0;
+};
+
+USTRUCT()
+struct FCrowdDemoRoundFacingFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  UPROPERTY(Transient) float ResolvedYawDegrees = 0.0f;
+  UPROPERTY(Transient) int32 ConsecutiveFinalSettleSteps = 0;
+  UPROPERTY(Transient) bool bFinalPositionSettled = false;
+  UPROPERTY(Transient) bool bFacingTarget = false;
 };
 
 USTRUCT()
@@ -408,179 +415,7 @@ struct FCrowdDemoRoundObstacleConstraintFragment : public FMassFragment
   float FlowBoundsReprojectDeltaCm = 0.0f;
 };
 
-USTRUCT()
-struct FCrowdDemoRoundPbdCorrectionFragment : public FMassFragment
-{
-  GENERATED_BODY()
 
-  UPROPERTY(Transient)
-  FVector PrePbdLocation = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector CorrectedLocation = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector Correction = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  int32 CorrectedPairCount = 0;
-
-  UPROPERTY(Transient)
-  bool bCorrected = false;
-};
-
-USTRUCT()
-struct FCrowdDemoRoundSeparationFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient)
-  FVector PushVelocity = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  int32 NeighborCount = 0;
-
-  UPROPERTY(Transient)
-  int32 OverlapCount = 0;
-
-  UPROPERTY(Transient)
-  int32 SevereOverlapCount = 0;
-
-  UPROPERTY(Transient)
-  bool bHardSeparation = false;
-};
-
-UENUM()
-enum class ECrowdDemoPortalAdmissionState : uint8
-{
-  None,
-  Approach,
-  Waiting,
-  Reserved,
-  Inside,
-  Exited
-};
-
-USTRUCT()
-struct FCrowdDemoPortalAdmissionFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) int32 CohortId = 0;
-  UPROPERTY(Transient) int32 PortalId = INDEX_NONE;
-  UPROPERTY(Transient) int32 DirectionKey = 0;
-  UPROPERTY(Transient) int32 WaitSteps = 0;
-  UPROPERTY(Transient) int32 WaitEpoch = 0;
-  UPROPERTY(Transient) int32 TokenGrantedStep = INDEX_NONE;
-  UPROPERTY(Transient) int32 EnteredPortalStep = INDEX_NONE;
-  UPROPERTY(Transient) int32 LastTransitionStep = INDEX_NONE;
-  UPROPERTY(Transient) int32 DirectionEpoch = 0;
-  UPROPERTY(Transient) ECrowdDemoPortalAdmissionState State = ECrowdDemoPortalAdmissionState::None;
-};
-
-USTRUCT()
-struct FCrowdDemoPassingBandFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) int32 PortalId = INDEX_NONE;
-  UPROPERTY(Transient) int32 DirectionEpoch = INDEX_NONE;
-  UPROPERTY(Transient) int16 BandId = INDEX_NONE;
-  UPROPERTY(Transient) bool bValid = false;
-};
-
-USTRUCT()
-struct FCrowdDemoPositionAssignmentFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) int32 TargetId = INDEX_NONE;
-  UPROPERTY(Transient) int32 PositionId = INDEX_NONE;
-  UPROPERTY(Transient) int32 AssignmentRevision = 0;
-  ECrowdDemoPositionRole Role = ECrowdDemoPositionRole::Reserve;
-  ECrowdDemoPursuitPositionState State = ECrowdDemoPursuitPositionState::Pursuit;
-  UPROPERTY(Transient) FVector LocalOffset = FVector::ZeroVector;
-  UPROPERTY(Transient) FVector DesiredLocation = FVector::ZeroVector;
-  UPROPERTY(Transient) int32 StableArrivalStepCount = 0;
-  UPROPERTY(Transient) int32 ExitGraceStepCount = 0;
-  UPROPERTY(Transient) int32 LastReassignmentStep = INDEX_NONE;
-  UPROPERTY(Transient) int32 FrontCommitGrantedStep = INDEX_NONE;
-  ECrowdDemoFrontApproachPhase FrontApproachPhase = ECrowdDemoFrontApproachPhase::None;
-  ECrowdDemoFrontApproachPhase RequestedApproachPhase = ECrowdDemoFrontApproachPhase::None;
-  ECrowdDemoFrontPhaseReservationDecision PhaseReservationDecision =
-    ECrowdDemoFrontPhaseReservationDecision::None;
-  UPROPERTY(Transient) int32 PhaseReservationRevision = INDEX_NONE;
-  UPROPERTY(Transient) int32 PhaseReservationHeldSteps = 0;
-  ECrowdDemoFrontPhaseReservationReason PhaseReservationInvalidReason =
-    ECrowdDemoFrontPhaseReservationReason::None;
-  UPROPERTY(Transient) int32 FrontApproachRouteRevision = 0;
-  UPROPERTY(Transient) int32 FrontApproachBestErrorBucket = MAX_int32;
-  UPROPERTY(Transient) int32 FrontApproachLastProgressStep = INDEX_NONE;
-  UPROPERTY(Transient) int32 FrontApproachNoProgressSteps = 0;
-  UPROPERTY(Transient) float FrontApproachPreviousRadialErrorCm = -1.0f;
-  UPROPERTY(Transient) int32 FrontApproachPreviousErrorBucket = MAX_int32;
-  UPROPERTY(Transient) int32 FrontApproachComposeBoundarySwitchCount = 0;
-  UPROPERTY(Transient) bool bFrontApproachComposeStateInitialized = false;
-  UPROPERTY(Transient) bool bFrontApproachWasWithinComposeRange = false;
-  UPROPERTY(Transient) bool bFrontApproachRadialErrorImproved = false;
-  UPROPERTY(Transient) bool bFrontApproachQuantizedProgressStall = false;
-};
-
-UENUM()
-enum class ECrowdDemoPursuitSteeringInvalidReason : uint8
-{
-  None,
-  TargetRevision,
-  PositionInvalid,
-  HoldingInvalid,
-  CompatibilityInvalid,
-  OwnerMissing,
-  NoProgress
-};
-
-// Only cross-fixed-step steering ownership lives here. Candidate graphs and
-// decision arrays remain prepared SoA in the pipeline subsystem.
-USTRUCT()
-struct FCrowdDemoPursuitSteeringStateFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  ECrowdDemoPursuitSteeringState SteeringState = ECrowdDemoPursuitSteeringState::Pursuit;
-  UPROPERTY(Transient) int32 HoldingId = INDEX_NONE;
-  UPROPERTY(Transient) int32 AssignedPositionId = INDEX_NONE;
-  UPROPERTY(Transient) int32 TargetRevision = INDEX_NONE;
-  UPROPERTY(Transient) int32 StateRevision = 0;
-  UPROPERTY(Transient) int32 StateEnterFixedStep = INDEX_NONE;
-  UPROPERTY(Transient) int32 WaitEpoch = 0;
-  UPROPERTY(Transient) int32 CommitDecisionRevision = INDEX_NONE;
-  UPROPERTY(Transient) int32 StableArrivalStepCount = 0;
-  UPROPERTY(Transient) int32 LastProgressBucket = MAX_int32;
-  UPROPERTY(Transient) int32 LastProgressFixedStep = INDEX_NONE;
-  ECrowdDemoPursuitSteeringInvalidReason InvalidReason =
-    ECrowdDemoPursuitSteeringInvalidReason::None;
-};
-
-USTRUCT()
-struct FCrowdDemoPursuitGuidanceFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) FVector DesiredVelocity = FVector::ZeroVector;
-  UPROPERTY(Transient) bool bPositioningActive = false;
-};
-
-USTRUCT()
-struct FCrowdDemoOrcaVelocityFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) FVector Velocity = FVector::ZeroVector;
-  UPROPERTY(Transient) int32 NeighborCount = 0;
-  UPROPERTY(Transient) int32 ConstraintCount = 0;
-  UPROPERTY(Transient) uint8 FallbackStage = 0;
-  UPROPERTY(Transient) bool bAdjusted = false;
-  UPROPERTY(Transient) bool bInfeasible = false;
-};
 
 USTRUCT()
 struct FCrowdDemoMassVisualFragment : public FMassFragment
@@ -680,6 +515,39 @@ struct FCrowdDemoClientVisualOffsetFragment : public FMassFragment
 
   UPROPERTY(Transient)
   float RoundSimYawOffsetDegrees = 0.0f;
+
+  UPROPERTY(Transient)
+  FVector LastSubmittedSimLocation = FVector::ZeroVector;
+
+  UPROPERTY(Transient)
+  FVector LastSubmittedDisplayLocation = FVector::ZeroVector;
+
+  UPROPERTY(Transient)
+  float LastSubmittedSimServerTimeSeconds = 0.0f;
+
+  UPROPERTY(Transient)
+  float LastSubmittedWorldSeconds = 0.0f;
+
+  UPROPERTY(Transient)
+  int32 LastSubmittedPlanRevision = 0;
+
+  UPROPERTY(Transient)
+  FVector InterpolationFromLocation = FVector::ZeroVector;
+
+  UPROPERTY(Transient)
+  FVector InterpolationToLocation = FVector::ZeroVector;
+
+  UPROPERTY(Transient)
+  float InterpolationFromYawDegrees = 0.0f;
+
+  UPROPERTY(Transient)
+  float InterpolationToYawDegrees = 0.0f;
+
+  UPROPERTY(Transient)
+  float InterpolationStartWorldSeconds = 0.0f;
+
+  UPROPERTY(Transient)
+  float InterpolationDurationSeconds = 0.0f;
 
   UPROPERTY(Transient)
   bool bDisplayInitialized = false;

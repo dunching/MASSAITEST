@@ -45,6 +45,84 @@ namespace CrowdDemoTargetRegionTransportTests
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoTargetRegionAcquireThenHoldTest,
+  "CrowdDemo.SoftPressure.TargetRegionTransport.AcquireThenHold",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoTargetRegionAcquireThenHoldTest::RunTest(const FString& Parameters)
+{
+  using namespace CrowdDemoTargetRegionTransportTests;
+  auto FlowConfig = MakeFlowConfig();
+  auto Settings = MakeSettings();
+  Settings.MinimumCenterDistanceCm = 700.0f;
+  Settings.MaximumCenterDistanceCm = 850.0f;
+  Settings.DistanceResponsePolicy =
+    ECrowdDemoTargetDistanceResponsePolicy::AcquireThenHold;
+  const auto SupplyDecision =
+    FCrowdDemoTargetRegionTransportKernel::ResolveTargetEngagement(
+      Settings.DistanceResponsePolicy, false, true, true,
+      800.0f, 700.0f, 850.0f, 100.0f);
+  TestFalse(TEXT("surplus terminal supply cannot acquire hold"),
+    SupplyDecision.bEngagedHold);
+  const auto AcquireDecision =
+    FCrowdDemoTargetRegionTransportKernel::ResolveTargetEngagement(
+      Settings.DistanceResponsePolicy, false, true, false,
+      800.0f, 700.0f, 850.0f, 100.0f);
+  TestTrue(TEXT("demand-satisfying terminal acquires hold"),
+    AcquireDecision.bAcquired && AcquireDecision.bEngagedHold);
+  const auto SuppressedRetreat =
+    FCrowdDemoTargetRegionTransportKernel::ResolveTargetEngagement(
+      Settings.DistanceResponsePolicy, true, true, false,
+      650.0f, 700.0f, 850.0f, 100.0f);
+  TestTrue(TEXT("engaged ranged agent holds when target approaches"),
+    SuppressedRetreat.bEngagedHold && SuppressedRetreat.bSuppressedRetreat);
+  const auto SurplusRelease =
+    FCrowdDemoTargetRegionTransportKernel::ResolveTargetEngagement(
+      Settings.DistanceResponsePolicy, true, false, true,
+      650.0f, 700.0f, 850.0f, 100.0f);
+  TestTrue(TEXT("engaged hold releases when its region becomes surplus"),
+    SurplusRelease.bReleased && !SurplusRelease.bEngagedHold);
+  const auto ReleaseDecision =
+    FCrowdDemoTargetRegionTransportKernel::ResolveTargetEngagement(
+      Settings.DistanceResponsePolicy, true, true, false,
+      951.0f, 700.0f, 850.0f, 100.0f);
+  TestTrue(TEXT("engaged ranged agent releases beyond hysteresis"),
+    ReleaseDecision.bReleased && !ReleaseDecision.bEngagedHold);
+  FCrowdDemoTargetPolarTopology Topology;
+  FCrowdDemoTargetPolarTopologySummary TopologySummary;
+  FCrowdDemoTargetRegionTransportKernel::BuildTopology(
+    Settings, FlowConfig, Topology, TopologySummary);
+  FCrowdDemoTargetRegionTransportAgent Agent = MakeAgent(10, 0, 650.0f);
+  Agent.bEngagedHold = true;
+  FCrowdDemoTargetRegionDemandResult Demand;
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    {Agent}, Settings, FlowConfig, nullptr, Topology, Demand);
+  TestTrue(TEXT("engaged hold demand remains valid below minimum"), Demand.bValid);
+  TestEqual(TEXT("engaged hold counts as terminal population"),
+    Demand.CurrentTerminalPopulation, 1);
+  TestTrue(TEXT("engaged hold retains terminal ownership"),
+    Demand.AgentStates[0].bTerminalStay);
+  TestTrue(TEXT("engaged hold fact is explicit"),
+    Demand.AgentStates[0].bEngagedHold);
+
+  FCrowdDemoTargetRegionFlowPlan Plan;
+  FCrowdDemoTargetRegionTransportKernel::SolveTransport(
+    Topology, Demand, nullptr, 1, 0, 1, Plan);
+  FCrowdDemoTargetRegionQuotaExecutionState Execution;
+  FCrowdDemoTargetRegionTransportKernel::InitializeQuotaExecutionState(Plan, Execution);
+  TArray<FCrowdDemoTargetRegionGuidanceResult> Guidance;
+  FCrowdDemoTargetRegionGuidanceSummary GuidanceSummary;
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    {Agent}, Settings, Topology, Demand, Plan, Execution, Guidance, GuidanceSummary);
+  TestTrue(TEXT("engaged hold guidance valid"), GuidanceSummary.bValid);
+  TestEqual(TEXT("engaged hold uses explicit guidance mode"),
+    Guidance[0].Mode, ECrowdDemoTargetRegionGuidanceMode::EngagedHold);
+  TestTrue(TEXT("target approach does not create proactive retreat"),
+    Guidance[0].DesiredVelocity.IsNearlyZero());
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoTargetRegionTransportTopologyTest,
   "CrowdDemo.SoftPressure.TargetRegionTransport.Topology",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -143,6 +221,38 @@ bool FCrowdDemoTargetRegionTransportDemandTest::RunTest(const FString& Parameter
   FCrowdDemoTargetRegionTransportKernel::BuildDemand(
     Agents, Settings, Flow, nullptr, Topology, Demand);
   TestEqual(TEXT("agent input reversal preserves demand hash"), Demand.DemandHash, Hash);
+
+  FCrowdDemoTargetRegionDemandResult CachedDemand = Demand;
+  Agents[0].Location = MakeAgent(Agents[0].AgentId, 3, 500.0f).Location;
+  FCrowdDemoTargetRegionDemandResult RebuiltDemand;
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    Agents, Settings, Flow, nullptr, Topology, RebuiltDemand);
+  FCrowdDemoTargetRegionTransportKernel::UpdateStaticDemandPopulation(
+    Agents, Settings, Flow, nullptr, Topology, CachedDemand);
+  TestTrue(TEXT("static population update remains valid"), CachedDemand.bValid);
+  TestEqual(TEXT("static population update preserves full demand hash"),
+    CachedDemand.DemandHash, RebuiltDemand.DemandHash);
+  TestEqual(TEXT("static population update preserves supply count"),
+    CachedDemand.SupplyAgentCount, RebuiltDemand.SupplyAgentCount);
+  TestEqual(TEXT("static population update preserves terminal population"),
+    CachedDemand.CurrentTerminalPopulation, RebuiltDemand.CurrentTerminalPopulation);
+
+  TArray<FCrowdDemoTargetRegionTransportAgent> ExternalAgents;
+  ExternalAgents.Add(MakeAgent(1001, 2, 500.0f));
+  ExternalAgents.Add(MakeAgent(1002, 3, 600.0f));
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    Agents, Settings, Flow, nullptr, Topology, CachedDemand, ExternalAgents);
+  ExternalAgents[0].Location = MakeAgent(1001, 7, 450.0f).Location;
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    Agents, Settings, Flow, nullptr, Topology, RebuiltDemand, ExternalAgents);
+  FCrowdDemoTargetRegionTransportKernel::UpdateStaticDemandPopulation(
+    Agents, Settings, Flow, nullptr, Topology, CachedDemand, ExternalAgents);
+  TestTrue(TEXT("static population update with external cohort remains valid"),
+    CachedDemand.bValid);
+  TestEqual(TEXT("external cohort update preserves full demand hash"),
+    CachedDemand.DemandHash, RebuiltDemand.DemandHash);
+  TestEqual(TEXT("external cohort update preserves occupied-cell count"),
+    CachedDemand.ExternalOccupiedCellCount, RebuiltDemand.ExternalOccupiedCellCount);
 
   TArray<FCrowdDemoTargetRegionTransportAgent> PhaseAgents;
   for (int32 Index = 0; Index < 3; ++Index)
@@ -409,6 +519,35 @@ bool FCrowdDemoTargetRegionTransportDynamicContractTest::RunTest(const FString& 
   TestTrue(TEXT("validated boundary plan produces valid guidance"), GuidanceSummary.bValid);
   TestEqual(TEXT("validated plan produces no unrouted boundary agent"),
     GuidanceSummary.UnroutedAgentCount, 0);
+  TestTrue(TEXT("same-region terminal handoff prioritizes radial band entry"),
+    Guidance.Num() == 1
+      && FVector2f::DotProduct(Guidance[0].DesiredVelocity,
+        -BoundaryAgent.Location.GetSafeNormal()) > 290.0f);
+
+  auto RetentionAgent = MakeAgent(16, 0, 750.0f);
+  const float NearBoundaryAngle = FMath::DegreesToRadians(1.0f);
+  RetentionAgent.Location = FVector2f(FMath::Cos(NearBoundaryAngle),
+    FMath::Sin(NearBoundaryAngle)) * 750.0f;
+  TArray<FCrowdDemoTargetRegionTransportAgent> RetentionAgents = {RetentionAgent};
+  FCrowdDemoTargetRegionDemandResult RetentionDemand;
+  FCrowdDemoTargetRegionTransportKernel::BuildDemand(
+    RetentionAgents, Settings, Flow, nullptr, Topology, RetentionDemand);
+  FCrowdDemoTargetRegionFlowPlan RetentionPlan;
+  FCrowdDemoTargetRegionTransportKernel::SolveTransport(
+    Topology, RetentionDemand, nullptr, 1, 0, 1, RetentionPlan);
+  TArray<FCrowdDemoTargetRegionGuidanceResult> RetentionGuidance;
+  FCrowdDemoTargetRegionGuidanceSummary RetentionSummary;
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidance(
+    RetentionAgents, Settings, Topology, RetentionDemand, RetentionPlan,
+    RetentionGuidance, RetentionSummary);
+  const FVector2f RetentionNormal = RetentionAgent.Location.GetSafeNormal();
+  const FVector2f RetentionTangent(-RetentionNormal.Y, RetentionNormal.X);
+  TestTrue(TEXT("terminal region boundary applies inward tangential retention"),
+    RetentionGuidance.Num() == 1
+      && RetentionGuidance[0].Mode
+        == ECrowdDemoTargetRegionGuidanceMode::TerminalSettle
+      && FVector2f::DotProduct(RetentionGuidance[0].DesiredVelocity,
+        RetentionTangent) > 1.0f);
 
   const uint32 ValidValidationHash = Validation.ValidationHash;
   auto ReversedDemand = Demand;
@@ -480,8 +619,9 @@ bool FCrowdDemoTargetRegionTransportDynamicContractTest::RunTest(const FString& 
   FCrowdDemoTargetRegionPlanValidationResult GraphChangedValidation;
   FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
     GraphChanged, Demand, Plan, 1, GraphChangedValidation);
-  TestFalse(TEXT("edge cost graph change invalidates reused plan"), GraphChangedValidation.bValid);
-  TestNotEqual(TEXT("edge cost changes feasible graph hash"),
+  TestTrue(TEXT("edge cost refresh preserves immutable short plan"),
+    GraphChangedValidation.bValid);
+  TestEqual(TEXT("edge cost does not change feasibility contract hash"),
     GraphChanged.FeasibleGraphHash, Topology.FeasibleGraphHash);
 
   auto EdgeRemoved = Topology;
@@ -490,6 +630,10 @@ bool FCrowdDemoTargetRegionTransportDynamicContractTest::RunTest(const FString& 
     FCrowdDemoTargetRegionTransportKernel::ComputeFeasibleGraphHash(EdgeRemoved);
   TestNotEqual(TEXT("edge set changes feasible graph hash"),
     EdgeRemoved.FeasibleGraphHash, Topology.FeasibleGraphHash);
+  FCrowdDemoTargetRegionPlanValidationResult EdgeRemovedValidation;
+  FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
+    EdgeRemoved, Demand, Plan, 1, EdgeRemovedValidation);
+  TestFalse(TEXT("removed edge invalidates short plan"), EdgeRemovedValidation.bValid);
 
   FCrowdDemoTargetRegionPlanValidationResult TargetRevisionValidation;
   FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
@@ -540,6 +684,176 @@ bool FCrowdDemoTargetRegionTransportDynamicContractTest::RunTest(const FString& 
   TestTrue(TEXT("20cm clearance is not the old binary seventeen"),
     FCrowdDemoTargetRegionTransportKernel::ComputeEdgeSoftClearancePenaltyCm(
       FVector2f(-100.0f, 21.0f), FVector2f(100.0f, 21.0f), ClearanceSettings, ClearanceFlow) != 17);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoTargetRegionQuotaExecutionTest,
+  "CrowdDemo.SoftPressure.TargetRegionTransport.MultiEdgeQuotaExecution",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoTargetRegionQuotaExecutionTest::RunTest(const FString& Parameters)
+{
+  FCrowdDemoTargetPolarTopology Topology;
+  Topology.bValid = true;
+  Topology.FeasibleGraphHash = 12345u;
+  for (int32 CellKey = 0; CellKey < 3; ++CellKey)
+  {
+    FCrowdDemoTargetPolarCell& Cell = Topology.Cells.AddDefaulted_GetRef();
+    Cell.StableCellKey = CellKey;
+    Cell.WorldAnchorCm = FVector2f(static_cast<float>(CellKey) * 100.0f, 0.0f);
+    Cell.bFeasible = true;
+    Cell.bTerminal = CellKey == 2;
+    Cell.PrimaryDemandRegionKey = 0;
+  }
+  for (int32 CellKey = 0; CellKey < 2; ++CellKey)
+  {
+    FCrowdDemoTargetPolarEdge& Edge = Topology.Edges.AddDefaulted_GetRef();
+    Edge.FromCellKey = CellKey;
+    Edge.ToCellKey = CellKey + 1;
+    Edge.GeometryCostCm = 100;
+  }
+
+  FCrowdDemoTargetRegionFlowPlan Plan;
+  Plan.PlanEpoch = 7;
+  Plan.TargetRevision = 3;
+  Plan.FeasibleGraphHash = Topology.FeasibleGraphHash;
+  Plan.MembershipHash = 77u;
+  Plan.TransportHash = 999u;
+  Plan.RoutedAgentCount = 1;
+  Plan.bValid = true;
+  Plan.EdgeFlows = {{0, 1, 1, 0}, {1, 2, 1, 0}};
+
+  FCrowdDemoTargetRegionDemandResult Demand;
+  Demand.bValid = true;
+  Demand.MembershipHash = Plan.MembershipHash;
+  Demand.TotalDeficit = 1;
+  Demand.SupplyAgentCount = 1;
+  Demand.FeasibleRegionCount = 1;
+  Demand.DesiredPopulationTotal = 1;
+  FCrowdDemoTargetDemandRegion& Region = Demand.Regions.AddDefaulted_GetRef();
+  Region.StableRegionKey = 0;
+  Region.AvailableCapacity = 1;
+  Region.DesiredPopulation = 1;
+  Region.Deficit = 1;
+  Region.bFeasible = true;
+  FCrowdDemoTargetPolarCellRegionLink& Link = Topology.RegionLinks.AddDefaulted_GetRef();
+  Link.CellKey = 2;
+  Link.RegionKey = 0;
+  Link.bTerminal = true;
+  FCrowdDemoTargetRegionAgentDemandState& DemandState =
+    Demand.AgentStates.AddDefaulted_GetRef();
+  DemandState.AgentId = 10;
+  DemandState.CurrentCellKey = 0;
+  DemandState.CurrentRegionKey = 0;
+  DemandState.bSupply = true;
+
+  FCrowdDemoTargetRegionTransportAgent Agent;
+  Agent.AgentId = 10;
+  Agent.Location = Topology.Cells[0].WorldAnchorCm;
+  Agent.MaxSpeedCmps = 300.0f;
+  TArray<FCrowdDemoTargetRegionTransportAgent> Agents = {Agent};
+  FCrowdDemoTargetRegionTransportSettings Settings;
+  Settings.TargetLocation = Topology.Cells[2].WorldAnchorCm;
+  Settings.MinimumCenterDistanceCm = 0.0f;
+  Settings.MaximumCenterDistanceCm = 1000.0f;
+  Settings.InfluenceBlendWidthCm = 0.0f;
+
+  FCrowdDemoTargetRegionQuotaExecutionState Execution;
+  FCrowdDemoTargetRegionTransportKernel::InitializeQuotaExecutionState(Plan, Execution);
+  TArray<FCrowdDemoTargetRegionGuidanceResult> Guidance;
+  FCrowdDemoTargetRegionGuidanceSummary Summary;
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    Agents, Settings, Topology, Demand, Plan, Execution, Guidance, Summary);
+  TestTrue(TEXT("first edge claim is valid"), Summary.bValid);
+  TestEqual(TEXT("first edge selected"), Guidance[0].NextCellKey, 1);
+  TestEqual(TEXT("claim is reserved but not consumed"),
+    Execution.Edges[0].ConsumedQuota, 0);
+  TestEqual(TEXT("one transient claim exists"), Execution.ActiveClaims.Num(), 1);
+
+  FCrowdDemoTargetRegionFlowPlan ReplacedPlan;
+  FCrowdDemoTargetRegionQuotaExecutionState ReplacedExecution;
+  FCrowdDemoTargetRegionPlanReplacementSummary Replacement;
+  FCrowdDemoTargetRegionTransportKernel::ReplacePlanPreservingClaims(
+    Topology, Demand, Plan, Execution, 8, 15, 3,
+    ReplacedPlan, ReplacedExecution, Replacement);
+  TestTrue(TEXT("replacement with frozen claim is valid"), Replacement.bValid);
+  TestEqual(TEXT("eligible source claim migrates"), Replacement.MigratedClaimCount, 1);
+  TestEqual(TEXT("no eligible claim is released"), Replacement.ReleasedClaimCount, 0);
+  TestTrue(TEXT("migrated execution retains agent edge"),
+    ReplacedExecution.ActiveClaims.Num() == 1
+      && ReplacedExecution.ActiveClaims[0].AgentId == 10
+      && ReplacedExecution.ActiveClaims[0].FromCellKey == 0
+      && ReplacedExecution.ActiveClaims[0].ToCellKey == 1);
+  FCrowdDemoTargetRegionPlanValidationResult ReplacementValidation;
+  FCrowdDemoTargetRegionTransportKernel::ValidateQuotaExecutionState(
+    Topology, Demand, ReplacedPlan, ReplacedExecution, 3,
+    ReplacementValidation);
+  TestTrue(TEXT("migrated execution validates atomically"),
+    ReplacementValidation.bValid);
+
+  FCrowdDemoTargetPolarTopology ReversedTopology = Topology;
+  Algo::Reverse(ReversedTopology.Cells);
+  Algo::Reverse(ReversedTopology.Edges);
+  Algo::Reverse(ReversedTopology.RegionLinks);
+  FCrowdDemoTargetRegionDemandResult ReversedDemand = Demand;
+  Algo::Reverse(ReversedDemand.AgentStates);
+  Algo::Reverse(ReversedDemand.Regions);
+  FCrowdDemoTargetRegionQuotaExecutionState ReversedOldExecution = Execution;
+  Algo::Reverse(ReversedOldExecution.Edges);
+  Algo::Reverse(ReversedOldExecution.ActiveClaims);
+  FCrowdDemoTargetRegionFlowPlan ReversedPlan;
+  FCrowdDemoTargetRegionQuotaExecutionState ReversedExecution;
+  FCrowdDemoTargetRegionPlanReplacementSummary ReversedReplacement;
+  FCrowdDemoTargetRegionTransportKernel::ReplacePlanPreservingClaims(
+    ReversedTopology, ReversedDemand, Plan, ReversedOldExecution, 8, 15, 3,
+    ReversedPlan, ReversedExecution, ReversedReplacement);
+  TestTrue(TEXT("replacement remains valid after input reversal"),
+    ReversedReplacement.bValid);
+  TestEqual(TEXT("replacement hash ignores input order"),
+    ReversedReplacement.ReplacementHash, Replacement.ReplacementHash);
+  TestEqual(TEXT("replacement plan ignores input order"),
+    ReversedPlan.TransportHash, ReplacedPlan.TransportHash);
+  TestEqual(TEXT("replacement execution ignores input order"),
+    ReversedExecution.ExecutionHash, ReplacedExecution.ExecutionHash);
+
+  const FCrowdDemoTargetRegionQuotaExecutionState RollbackPoint = Execution;
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    Agents, Settings, Topology, Demand, Plan, Execution, Guidance, Summary);
+  TestTrue(TEXT("remaining in source preserves the same claim"), Summary.bValid);
+  TestEqual(TEXT("source wait does not double-consume quota"),
+    Execution.Edges[0].ConsumedQuota, 0);
+
+  Demand.AgentStates[0].CurrentCellKey = 1;
+  Agent.Location = Topology.Cells[1].WorldAnchorCm;
+  Agents[0] = Agent;
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    Agents, Settings, Topology, Demand, Plan, Execution, Guidance, Summary);
+  TestTrue(TEXT("crossing first edge advances within immutable plan"), Summary.bValid);
+  TestEqual(TEXT("first edge consumed exactly once"), Execution.Edges[0].ConsumedQuota, 1);
+  TestEqual(TEXT("second edge selected without rebuilding plan"), Guidance[0].NextCellKey, 2);
+  const uint32 AdvancedHash = Execution.ExecutionHash;
+
+  Execution = RollbackPoint;
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    Agents, Settings, Topology, Demand, Plan, Execution, Guidance, Summary);
+  TestEqual(TEXT("rollback replay reproduces execution hash"),
+    Execution.ExecutionHash, AdvancedHash);
+
+  Demand.AgentStates[0].CurrentCellKey = 2;
+  Demand.AgentStates[0].bSupply = false;
+  Demand.AgentStates[0].bTerminal = true;
+  Demand.AgentStates[0].bTerminalStay = true;
+  Agent.Location = Topology.Cells[2].WorldAnchorCm;
+  Agents[0] = Agent;
+  FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    Agents, Settings, Topology, Demand, Plan, Execution, Guidance, Summary);
+  TestTrue(TEXT("terminal arrival completes the short plan"), Summary.bValid);
+  TestEqual(TEXT("second edge consumed exactly once"), Execution.Edges[1].ConsumedQuota, 1);
+  TestEqual(TEXT("terminal agent has no persistent owner claim"),
+    Execution.ActiveClaims.Num(), 0);
+  TestEqual(TEXT("terminal mode is settle"), Guidance[0].Mode,
+    ECrowdDemoTargetRegionGuidanceMode::TerminalSettle);
   return true;
 }
 

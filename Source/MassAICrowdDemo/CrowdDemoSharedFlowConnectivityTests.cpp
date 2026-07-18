@@ -376,6 +376,29 @@ bool FCrowdDemoSharedFlowV2ConnectionGraphTest::RunTest(const FString& Parameter
     for (int32 Index = 0; Index < A.NavigationNextNodeIndex.Num(); ++Index)
       TestEqual(FString::Printf(TEXT("V2 next-node %d stable"), Index),
         B.NavigationNextNodeIndex[Index], A.NavigationNextNodeIndex[Index]);
+
+    FCrowdDemoSharedFlowField WithoutCellNodeCache = A;
+    WithoutCellNodeCache.NavigationCellNodes.Reset();
+    const FVector CacheSamples[] = {
+      FVector(200.0f, 60.0f, 60.0f),
+      FVector(200.0f, 240.0f, 60.0f),
+      FVector(200.0f, 440.0f, 60.0f)};
+    for (int32 Index = 0; Index < UE_ARRAY_COUNT(CacheSamples); ++Index)
+    {
+      const auto Cached = FCrowdDemoSharedFlowFieldKernel::Sample(A, CacheSamples[Index]);
+      const auto Fallback = FCrowdDemoSharedFlowFieldKernel::Sample(
+        WithoutCellNodeCache, CacheSamples[Index]);
+      TestEqual(FString::Printf(TEXT("V2 cell-node cache status %d"), Index),
+        Cached.Status, Fallback.Status);
+      TestEqual(FString::Printf(TEXT("V2 cell-node cache node %d"), Index),
+        Cached.NavigationNodeKey, Fallback.NavigationNodeKey);
+      TestEqual(FString::Printf(TEXT("V2 cell-node cache next node %d"), Index),
+        Cached.NextNavigationNodeKey, Fallback.NextNavigationNodeKey);
+      TestEqual(FString::Printf(TEXT("V2 cell-node cache integration %d"), Index),
+        Cached.IntegrationCost, Fallback.IntegrationCost);
+      TestTrue(FString::Printf(TEXT("V2 cell-node cache direction %d"), Index),
+        Cached.FlowDirection.Equals(Fallback.FlowDirection, KINDA_SMALL_NUMBER));
+    }
   }
 
   {

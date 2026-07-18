@@ -139,6 +139,10 @@ void ACrowdDemoReplicator::Tick(const float DeltaSeconds)
     ServerFrameMsSamples.Add(DeltaSeconds * 1000.0f);
     RefreshServerSummaryState();
   }
+  else if (GetWorld() && GetWorld()->GetNetMode() != NM_DedicatedServer)
+  {
+    ClientFrameMsSamples.Add(DeltaSeconds * 1000.0f);
+  }
 
   if (GetWorld() && GetWorld()->GetNetMode() != NM_DedicatedServer)
   {
@@ -212,6 +216,64 @@ void ACrowdDemoReplicator::RecordRoundSimVisualSmoothing(
   if (bSmoothingActive)
   {
     ++RoundVisualSmoothingActiveCount;
+  }
+}
+
+void ACrowdDemoReplicator::RecordRoundSimVisualContinuity(
+  const int32 AgentId,
+  const float SubmitIntervalMs,
+  const float SimDeltaCm,
+  const float DisplayDeltaCm,
+  const float ExpectedDisplayDeltaCm,
+  const int32 CollapsedSimSteps,
+  const bool bCorrectionBoundary,
+  const bool bPlanChanged,
+  const bool bDiscontinuity,
+  const int32 PreviousPlanRevision,
+  const int32 CurrentPlanRevision,
+  const float PreviousSimServerTimeSeconds,
+  const float CurrentSimServerTimeSeconds,
+  const FVector& PreviousDisplayLocation,
+  const FVector& CurrentDisplayLocation)
+{
+  if (SubmitIntervalMs >= 0.0f) VisualSubmitIntervalMsSamples.Add(SubmitIntervalMs);
+  if (SimDeltaCm >= 0.0f) VisualSimDeltaCmSamples.Add(SimDeltaCm);
+  if (DisplayDeltaCm >= 0.0f) VisualDisplayDeltaCmSamples.Add(DisplayDeltaCm);
+  VisualCollapsedSimStepSamples.Add(static_cast<float>(FMath::Max(0, CollapsedSimSteps)));
+  if (CollapsedSimSteps > 1) ++VisualCatchupSubmitCount;
+  if (bDiscontinuity && !bCorrectionBoundary && !bPlanChanged
+    && CollapsedSimSteps > 1)
+    ++VisualCatchupDiscontinuityCount;
+  if (bDiscontinuity && !bCorrectionBoundary && !bPlanChanged
+    && CollapsedSimSteps <= 1)
+  {
+    ++NonCorrectionVisualDiscontinuityCount;
+    if (NonCorrectionVisualDiscontinuityCount == 1)
+    {
+      UE_LOG(LogTemp, Warning,
+        TEXT("CrowdDemoVisualDiscontinuityWitness agent=%d display_delta_cm=%.3f expected_cm=%.3f sim_delta_cm=%.3f collapsed_steps=%d submit_interval_ms=%.3f correction=0 plan_changed=0 previous_plan=%d current_plan=%d previous_sim_time=%.3f current_sim_time=%.3f previous_display=(%.3f,%.3f) current_display=(%.3f,%.3f) source=MassClientVisual"),
+        AgentId, DisplayDeltaCm, ExpectedDisplayDeltaCm, SimDeltaCm,
+        CollapsedSimSteps, SubmitIntervalMs, PreviousPlanRevision,
+        CurrentPlanRevision, PreviousSimServerTimeSeconds,
+        CurrentSimServerTimeSeconds, PreviousDisplayLocation.X,
+        PreviousDisplayLocation.Y, CurrentDisplayLocation.X,
+        CurrentDisplayLocation.Y);
+    }
+  }
+  if (bDiscontinuity && bPlanChanged)
+    ++RoundResetVisualJumpCount;
+}
+
+void ACrowdDemoReplicator::RecordVisualInstanceRebuild()
+{
+  ++VisualIsmRebuildCount;
+}
+
+void ACrowdDemoReplicator::RecordVisualProcessorPerformance(const float Milliseconds)
+{
+  if (Milliseconds >= 0.0f)
+  {
+    VisualProcessorMsSamples.Add(Milliseconds);
   }
 }
 
@@ -417,7 +479,7 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
   UE_LOG(
     LogTemp,
     Display,
-    TEXT("CrowdDemoSummary role=%s agents=%d visible_instances=%d server_frame_ms_p95=%.3f crowd_solver_ms_p95=%.3f replication_sample_age_ms_p95=%.3f display_to_sim_cm_p95=%.3f current_round_id=%d completed_round_count=%d correction_frame_applied_count=%d sim_position_error_cm_p95=%.3f source=MassClientBubble"),
+    TEXT("CrowdDemoSummary role=%s agents=%d visible_instances=%d server_frame_ms_p95=%.3f snapshot_build_ms_p95=%.3f replication_sample_age_ms_p95=%.3f display_to_sim_cm_p95=%.3f current_round_id=%d completed_round_count=%d correction_frame_applied_count=%d sim_position_error_cm_p95=%.3f source=MassClientBubble"),
     SummaryRole,
     Metrics.Agents,
     Metrics.VisibleInstances,
@@ -429,6 +491,20 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
     Metrics.SimCompletedRoundCount,
     Metrics.CorrectionFrameAppliedCount,
     Metrics.SimPositionErrorCmP95);
+  if (!bServer)
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoVisualPerformance role=client client_frame_ms_p95=%.3f client_frame_ms_max=%.3f visual_processor_ms_p95=%.3f visual_processor_ms_max=%.3f submit_interval_ms_p95=%.3f submit_interval_ms_max=%.3f sim_delta_cm_p95=%.3f sim_delta_cm_max=%.3f display_delta_cm_p95=%.3f display_delta_cm_max=%.3f collapsed_steps_p95=%.3f collapsed_steps_max=%d catchup_submit_count=%d catchup_discontinuity_count=%d non_correction_discontinuity_count=%d round_reset_jump_count=%d ism_rebuild_count=%d source=MassClientVisual"),
+      Metrics.ClientFrameMsP95, Metrics.ClientFrameMsMax,
+      Metrics.VisualProcessorMsP95, Metrics.VisualProcessorMsMax,
+      Metrics.VisualSubmitIntervalMsP95, Metrics.VisualSubmitIntervalMsMax,
+      Metrics.VisualSimDeltaCmP95, Metrics.VisualSimDeltaCmMax,
+      Metrics.VisualDisplayDeltaCmP95, Metrics.VisualDisplayDeltaCmMax,
+      Metrics.VisualCollapsedSimStepsP95, Metrics.VisualCollapsedSimStepsMax,
+      Metrics.VisualCatchupSubmitCount, Metrics.VisualCatchupDiscontinuityCount,
+      Metrics.NonCorrectionVisualDiscontinuityCount,
+      Metrics.RoundResetVisualJumpCount, Metrics.VisualIsmRebuildCount);
+  }
 
   if (Metrics.FlowFieldRevision > 0)
   {
@@ -453,38 +529,6 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
       Metrics.SimPositionErrorCmP95,
       Metrics.CorrectionFrameAppliedCount);
   }
-  if (Metrics.PbdSolverMsP95 >= 0.0f)
-  {
-    UE_LOG(
-      LogTemp,
-      Display,
-      TEXT("CrowdDemoSf2Summary role=%s agents=%d visible_instances=%d initial_overlap_pair_count=%d overlap_pair_count_p50=%.3f overlap_pair_count_p95=%.3f overlap_pair_count_max=%d severe_overlap_pair_count_p50=%.3f severe_overlap_pair_count_p95=%.3f severe_overlap_pair_count_max=%d soft_separation_applied_agent_count=%d pbd_corrected_agent_count=%d pbd_corrected_pair_count=%d pbd_max_pair_correction_cm=%.3f pbd_max_agent_total_correction_cm=%.3f pbd_max_obstacle_reproject_delta_cm=%.3f pbd_max_final_safety_delta_cm=%.3f pbd_solver_ms_p95=%.3f flow_goal_reached_count=%d flow_corridor_exit_count=%d corridor_deadlock_agent_count=%d server_obstacle_penetration_count=%d client_sim_obstacle_penetration_count=%d sim_position_error_cm_p95=%.3f correction_frame_applied_count=%d source=MassPipeline"),
-      SummaryRole,
-      Metrics.Agents,
-      Metrics.VisibleInstances,
-      Metrics.InitialOverlapPairCount,
-      Metrics.OverlapPairCountP50,
-      Metrics.OverlapPairCountP95,
-      Metrics.OverlapPairCountMax,
-      Metrics.SevereOverlapPairCountP50,
-      Metrics.SevereOverlapPairCountP95,
-      Metrics.SevereOverlapPairCountMax,
-      Metrics.SoftSeparationAppliedAgentCount,
-      Metrics.PbdCorrectedAgentCount,
-      Metrics.PbdCorrectedPairCount,
-      Metrics.PbdMaxPairCorrectionCm,
-      Metrics.PbdMaxAgentTotalCorrectionCm,
-      Metrics.PbdMaxObstacleReprojectDeltaCm,
-      Metrics.PbdMaxFinalSafetyDeltaCm,
-      Metrics.PbdSolverMsP95,
-      Metrics.FlowGoalReachedCount,
-      Metrics.FlowCorridorExitCount,
-      Metrics.CorridorDeadlockAgentCount,
-      Metrics.ServerObstaclePenetrationCount,
-      Metrics.ClientSimObstaclePenetrationCount,
-      Metrics.SimPositionErrorCmP95,
-      Metrics.CorrectionFrameAppliedCount);
-  }
 }
 
 FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
@@ -494,6 +538,25 @@ FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
   Metrics.VisibleInstances = GetNetMode() != NM_DedicatedServer ? GetCrowdVisualInstanceCount() : 0;
   Metrics.ServerFrameMsP95 = ComputeP95(ServerFrameMsSamples);
   Metrics.CrowdSolverMsP95 = ComputeP95(SolverMsSamples);
+  Metrics.SnapshotBuildMsP95 = Metrics.CrowdSolverMsP95;
+  Metrics.ClientFrameMsP95 = ComputeP95(ClientFrameMsSamples);
+  Metrics.ClientFrameMsMax = ComputeMax(ClientFrameMsSamples);
+  Metrics.VisualProcessorMsP95 = ComputeP95(VisualProcessorMsSamples);
+  Metrics.VisualProcessorMsMax = ComputeMax(VisualProcessorMsSamples);
+  Metrics.VisualSubmitIntervalMsP95 = ComputeP95(VisualSubmitIntervalMsSamples);
+  Metrics.VisualSubmitIntervalMsMax = ComputeMax(VisualSubmitIntervalMsSamples);
+  Metrics.VisualSimDeltaCmP95 = ComputeP95(VisualSimDeltaCmSamples);
+  Metrics.VisualSimDeltaCmMax = ComputeMax(VisualSimDeltaCmSamples);
+  Metrics.VisualDisplayDeltaCmP95 = ComputeP95(VisualDisplayDeltaCmSamples);
+  Metrics.VisualDisplayDeltaCmMax = ComputeMax(VisualDisplayDeltaCmSamples);
+  Metrics.VisualCollapsedSimStepsP95 = ComputeP95(VisualCollapsedSimStepSamples);
+  Metrics.VisualCollapsedSimStepsMax = FMath::Max(
+    0, FMath::RoundToInt(ComputeMax(VisualCollapsedSimStepSamples)));
+  Metrics.VisualCatchupSubmitCount = VisualCatchupSubmitCount;
+  Metrics.VisualCatchupDiscontinuityCount = VisualCatchupDiscontinuityCount;
+  Metrics.NonCorrectionVisualDiscontinuityCount = NonCorrectionVisualDiscontinuityCount;
+  Metrics.RoundResetVisualJumpCount = RoundResetVisualJumpCount;
+  Metrics.VisualIsmRebuildCount = VisualIsmRebuildCount;
   Metrics.ReplicationSampleAgeMsP95 = ComputeP95(ReplicationSampleAgeMsSamples);
   Metrics.DisplayToAuthoritativeCmP95 = ComputeP95(DisplayToAuthoritativeCmSamples);
   Metrics.RoundVisualCorrectionOffsetCmP95 = ComputeP95(RoundVisualCorrectionOffsetCmSamples);
@@ -549,15 +612,7 @@ FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
       Metrics.FlowTurnExitCount = CompareMetrics.FlowTurnExitCount;
       Metrics.ServerObstaclePenetrationCount = CompareMetrics.ServerObstaclePenetrationCount;
       Metrics.ClientSimObstaclePenetrationCount = CompareMetrics.ClientSimObstaclePenetrationCount;
-      Metrics.SoftSeparationAppliedAgentCount = CompareMetrics.SoftSeparationAppliedAgentCount;
-      Metrics.PbdCorrectedAgentCount = CompareMetrics.PbdCorrectedAgentCount;
-      Metrics.PbdCorrectedPairCount = CompareMetrics.PbdCorrectedPairCount;
-      Metrics.PbdMaxPairCorrectionCm = CompareMetrics.PbdMaxPairCorrectionCm;
-      Metrics.PbdMaxAgentTotalCorrectionCm = CompareMetrics.PbdMaxAgentTotalCorrectionCm;
-      Metrics.PbdMaxObstacleReprojectDeltaCm = CompareMetrics.PbdMaxObstacleReprojectDeltaCm;
-      Metrics.PbdMaxFinalSafetyDeltaCm = CompareMetrics.PbdMaxFinalSafetyDeltaCm;
-      Metrics.PbdSolverMsP95 = CompareMetrics.PbdSolverMsP95;
-      Metrics.TrafficMetrics = CompareMetrics.TrafficMetrics;
+      Metrics.SharedFlowMetrics = CompareMetrics.SharedFlowMetrics;
       Metrics.CorridorDeadlockAgentCount = CompareMetrics.CorridorDeadlockAgentCount;
       const FCrowdDemoCorrectionFrameMetrics& CorrectionMetrics = It->GetLastCorrectionFrameMetrics();
       Metrics.CorrectionFrameRevision = CorrectionMetrics.CorrectionFrameRevision;
@@ -624,6 +679,16 @@ float ACrowdDemoReplicator::ComputeP95(TArray<float> Samples)
     0,
     Samples.Num() - 1);
   return Samples[Index];
+}
+
+float ACrowdDemoReplicator::ComputeMax(const TConstArrayView<float> Samples)
+{
+  float MaxValue = -1.0f;
+  for (const float Value : Samples)
+  {
+    MaxValue = FMath::Max(MaxValue, Value);
+  }
+  return MaxValue;
 }
 
 int32 ACrowdDemoReplicator::ResolveEntityCount()

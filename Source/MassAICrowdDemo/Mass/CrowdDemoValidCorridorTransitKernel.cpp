@@ -159,6 +159,31 @@ void FCrowdDemoValidCorridorTransitKernel::UpdateProgress(
     if (Agent.FlowStatus != ECrowdDemoFlowLocationStatus::Reachable)
       ++InOutProgress.UnreachableSampleCount;
   }
+  const bool bGroupComplete = InOutProgress.CompletedAgentIds.Num() == AgentCount;
+  if (bGroupComplete && InOutProgress.GroupCompletionStep == INDEX_NONE)
+    InOutProgress.GroupCompletionStep = FixedStepIndex;
+  if (bGroupComplete)
+  {
+    TSet<int32> CurrentSettled;
+    for (const FCrowdDemoValidCorridorTransitStepAgent& Agent : Sorted)
+    {
+      int32& SettledSteps = InOutProgress.
+        ConsecutivePostCompletionSettledStepsByAgentId.FindOrAdd(Agent.AgentId);
+      SettledSteps = Agent.Velocity.Size2D() <= StableExitSpeedCmps
+        ? SettledSteps + 1 : 0;
+      if (SettledSteps >= StableExitSteps)
+        CurrentSettled.Add(Agent.AgentId);
+    }
+    InOutProgress.FinalSettledAgentIds = MoveTemp(CurrentSettled);
+    if (InOutProgress.FinalSettledAgentIds.Num() == AgentCount
+      && InOutProgress.GroupSettledStep == INDEX_NONE)
+      InOutProgress.GroupSettledStep = FixedStepIndex;
+  }
+  else
+  {
+    InOutProgress.FinalSettledAgentIds.Reset();
+    InOutProgress.ConsecutivePostCompletionSettledStepsByAgentId.Reset();
+  }
   InOutProgress.FinalDeadlockAgentIds = MoveTemp(CurrentDeadlocks);
   InOutProgress.LastFixedStepIndex = FixedStepIndex;
   InOutProgress.bValid = InOutProgress.bValid && bStepValid;
@@ -170,8 +195,13 @@ void FCrowdDemoValidCorridorTransitKernel::UpdateProgress(
   FoldSortedSet(Hash, InOutProgress.WallPassedAgentIds);
   FoldSortedSet(Hash, InOutProgress.CorridorExitedAgentIds);
   FoldSortedSet(Hash, InOutProgress.CompletedAgentIds);
+  FoldSortedSet(Hash, InOutProgress.FinalSettledAgentIds);
   FoldSortedSet(Hash, InOutProgress.FinalDeadlockAgentIds);
   FoldSortedMap(Hash, InOutProgress.ConsecutiveLowSpeedStepsByAgentId);
+  FoldSortedMap(Hash,
+    InOutProgress.ConsecutivePostCompletionSettledStepsByAgentId);
   FoldSortedMap(Hash, InOutProgress.CompletionStepByAgentId);
+  Hash = Fold(Hash, InOutProgress.GroupCompletionStep);
+  Hash = Fold(Hash, InOutProgress.GroupSettledStep);
   InOutProgress.ProgressHash = Hash;
 }

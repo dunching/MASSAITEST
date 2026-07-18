@@ -74,9 +74,7 @@ UENUM(BlueprintType)
 enum class ECrowdDemoScenario : uint8
 {
   SimRoundObstacle = 0,
-  SimRoundSoftPressure = 1,
-  SimRoundCrowdTraffic = 2,
-  SimRoundPursuitPositioning = 3
+  SimRoundSoftPressure = 1
 };
 
 UENUM(BlueprintType)
@@ -128,9 +126,7 @@ struct FCrowdDemoProjectileVisualEvent
 inline bool IsCrowdDemoRoundSimScenario(const ECrowdDemoScenario Scenario)
 {
   return Scenario == ECrowdDemoScenario::SimRoundObstacle
-    || Scenario == ECrowdDemoScenario::SimRoundSoftPressure
-    || Scenario == ECrowdDemoScenario::SimRoundCrowdTraffic
-    || Scenario == ECrowdDemoScenario::SimRoundPursuitPositioning;
+    || Scenario == ECrowdDemoScenario::SimRoundSoftPressure;
 }
 
 USTRUCT(BlueprintType)
@@ -292,20 +288,11 @@ struct FCrowdDemoCrowdAggregateState
 {
   GENERATED_BODY()
 
-  UPROPERTY()
-  int32 AgentCount = 0;
-
-  UPROPERTY()
-  FVector_NetQuantize10 CrowdCenter = FVector::ZeroVector;
-
-  UPROPERTY()
-  float CrowdYawDegrees = 0.0f;
-
-  UPROPERTY()
-  FVector_NetQuantize10 CrowdVelocity = FVector::ZeroVector;
-
-  UPROPERTY()
-  float PlanPhase = 0.0f;
+  UPROPERTY() int32 AgentCount = 0;
+  UPROPERTY() FVector_NetQuantize10 CrowdCenter = FVector::ZeroVector;
+  UPROPERTY() float CrowdYawDegrees = 0.0f;
+  UPROPERTY() FVector_NetQuantize10 CrowdVelocity = FVector::ZeroVector;
+  UPROPERTY() float PlanPhase = 0.0f;
 };
 
 USTRUCT(BlueprintType)
@@ -638,693 +625,29 @@ struct FCrowdDemoParticleProfile
 };
 
 USTRUCT(BlueprintType)
-struct FCrowdDemoTrafficCohortRule
+struct FCrowdDemoSharedFlowMetrics
 {
   GENERATED_BODY()
 
-  UPROPERTY() int32 CohortId = 0;
-  UPROPERTY() int32 FirstFormationIndex = 0;
-  UPROPERTY() int32 AgentCount = 0;
-  UPROPERTY() FVector_NetQuantize10 SpawnOrigin = FVector(0.0f, -2850.0f, 60.0f);
-  UPROPERTY() int32 FormationColumns = 0;
-  UPROPERTY() FCrowdDemoSharedFlowFieldConfig FlowFieldConfig;
-};
-
-USTRUCT(BlueprintType)
-struct FCrowdDemoTrafficSettings
-{
-  GENERATED_BODY()
-
-  UPROPERTY() float CellSizeCm = 100.0f;
-  UPROPERTY() int32 PortalMaxWidthCells = 8;
-  UPROPERTY() int32 PortalMergeDistanceCells = 3;
-  UPROPERTY() int32 PortalClearanceWindowCells = 3;
-  UPROPERTY() int32 PortalApproachDepthCells = 3;
-  UPROPERTY() int32 PortalExitDepthCells = 2;
-  UPROPERTY() int32 ReservationTimeoutSteps = 60;
-  UPROPERTY() int32 TransitTimeoutSteps = 120;
-  UPROPERTY() int32 WaitEpochSteps = 30;
-  UPROPERTY() int32 MinGreenSteps = 30;
-  UPROPERTY() int32 MaxGreenSteps = 90;
-  UPROPERTY() int32 ClearanceSteps = 15;
-  UPROPERTY() int32 DensityComfortCount = 2;
-  UPROPERTY() int32 DensitySaturationCount = 6;
-  UPROPERTY() float DensityMinimumSpeedScale = 0.35f;
-  UPROPERTY() int32 MaxBandCount = 3;
-  UPROPERTY() float BandSpacingCm = 70.0f;
-  UPROPERTY() float BandLateralSpeedCmps = 180.0f;
-  UPROPERTY() float HoldingGapCm = 10.0f;
-  UPROPERTY() float HoldingTargetGainPerSecond = 2.0f;
-  UPROPERTY() float HoldingStopToleranceCm = 10.0f;
-  UPROPERTY() float HoldingSlowdownDistanceCm = 100.0f;
-  UPROPERTY() float BandLateralGainPerSecond = 2.0f;
-  UPROPERTY() float PortalClearingMinimumSpeedScale = 0.5f;
-};
-
-USTRUCT(BlueprintType)
-struct FCrowdDemoOrcaSettings
-{
-  GENERATED_BODY()
-
-  UPROPERTY() float NeighborDistanceCm = 600.0f;
-  UPROPERTY() int32 MaxNeighbors = 24;
-  UPROPERTY() float TimeHorizonSeconds = 1.25f;
-  UPROPERTY() float PositionQuantumCm = 1.0f;
-  UPROPERTY() float VelocityQuantumCmps = 1.0f;
-  UPROPERTY() float ConstraintEpsilonCmps = 0.1f;
-  UPROPERTY() float DistanceBucketCm = 10.0f;
-};
-
-USTRUCT(BlueprintType)
-struct FCrowdDemoTrafficMetrics
-{
-  GENERATED_BODY()
-
-  UPROPERTY() uint32 TrafficFieldHash = 0;
-  UPROPERTY() uint32 PortalDecisionHash = 0;
-  UPROPERTY() uint32 OrcaVelocityHash = 0;
   UPROPERTY() uint32 AgentStateHash = 0;
-  UPROPERTY() int32 TrafficPortalCount = 0;
-  UPROPERTY() int32 RawPortalCandidateCount = 0;
-  UPROPERTY() int32 ExtractedPortalCount = 0;
-  UPROPERTY() float TrafficPortalQueueCountP50 = 0.0f;
-  UPROPERTY() float TrafficPortalQueueCountP95 = 0.0f;
-  UPROPERTY() int32 TrafficPortalQueueCountMax = 0;
-  UPROPERTY() float TrafficPortalOccupiedCountP95 = 0.0f;
-  UPROPERTY() int32 TrafficPortalOccupiedCountMax = 0;
-  UPROPERTY() int32 TrafficAdmissionGrantedCount = 0;
-  UPROPERTY() int32 TrafficAdmissionDeniedCount = 0;
-  UPROPERTY() int32 PortalBindCount = 0;
-  UPROPERTY() int32 PortalRebindCount = 0;
-  UPROPERTY() int32 PortalReleaseCount = 0;
-  UPROPERTY() int32 InvalidSideCandidateCount = 0;
-  UPROPERTY() int32 WrongSpanCandidateCount = 0;
-  UPROPERTY() int32 ReservedToInsideCount = 0;
-  UPROPERTY() int32 InsideToExitedCount = 0;
-  UPROPERTY() int32 PortalZeroThroughputStepCount = 0;
-  UPROPERTY() float TrafficAdmissionWaitMsP95 = 0.0f;
-  UPROPERTY() float TrafficAdmissionWaitMsMax = 0.0f;
-  UPROPERTY() float TrafficPortalThroughputP50 = 0.0f;
-  UPROPERTY() float TrafficPortalThroughputP95 = 0.0f;
-  UPROPERTY() float TrafficZeroThroughputWhileQueuedMsMax = 0.0f;
-  UPROPERTY() int32 TrafficBandAssignmentCount = 0;
-  UPROPERTY() int32 TrafficBandReassignmentCount = 0;
-  UPROPERTY() int32 HoldingTargetCount = 0;
-  UPROPERTY() int32 HoldingTargetAllocationFailureCount = 0;
-  UPROPERTY() int32 HoldingTargetOverlapCount = 0;
-  UPROPERTY() float BandLateralErrorP50 = 0.0f;
-  UPROPERTY() float BandLateralErrorP95 = 0.0f;
-  UPROPERTY() float BandLateralErrorMax = 0.0f;
-  UPROPERTY() int32 ReservedPositiveAxialVelocityCount = 0;
-  UPROPERTY() int32 ReservedZeroVelocityCount = 0;
-  UPROPERTY() int32 TrafficDirectionEpochChangeCount = 0;
-  UPROPERTY() float TrafficDensityAgentCountP95 = 0.0f;
-  UPROPERTY() int32 TrafficDensityAgentCountMax = 0;
-  UPROPERTY() int32 OrcaProcessedAgentCount = 0;
-  UPROPERTY() float OrcaNeighborCountP50 = 0.0f;
-  UPROPERTY() float OrcaNeighborCountP95 = 0.0f;
-  UPROPERTY() int32 OrcaNeighborCountMax = 0;
-  UPROPERTY() float OrcaConstraintCountP50 = 0.0f;
-  UPROPERTY() float OrcaConstraintCountP95 = 0.0f;
-  UPROPERTY() int32 OrcaConstraintCountMax = 0;
-  UPROPERTY() int32 OrcaConstraintCutoffCircleCount = 0;
-  UPROPERTY() int32 OrcaConstraintLeftLegCount = 0;
-  UPROPERTY() int32 OrcaConstraintRightLegCount = 0;
-  UPROPERTY() int32 OrcaConstraintPenetrationCount = 0;
-  UPROPERTY() int32 OrcaNoConstraintCount = 0;
-  UPROPERTY() int32 OrcaPreferredFeasibleCount = 0;
-  UPROPERTY() int32 OrcaLpFeasibleCount = 0;
-  UPROPERTY() int32 OrcaSingleConstraintOutsideSpeedCircleCount = 0;
-  UPROPERTY() int32 OrcaMultiConstraintEmptyCount = 0;
-  UPROPERTY() int32 OrcaQuantizationDestroyedCount = 0;
-  UPROPERTY() int32 OrcaFallbackFlowFeasibleCount = 0;
-  UPROPERTY() int32 OrcaFallbackPortalFeasibleCount = 0;
-  UPROPERTY() int32 OrcaStopFeasibleCount = 0;
-  UPROPERTY() int32 OrcaStopViolationCount = 0;
-  UPROPERTY() int32 OrcaFormalLpFeasibleCount = 0;
-  UPROPERTY() int32 OrcaFormalLpQuantizedRecoveredCount = 0;
-  UPROPERTY() int32 OrcaFormalLpQuantizedGeometryRecoveredCount = 0;
-  UPROPERTY() int32 OrcaFormalLpMissedZeroRecoveredCount = 0;
-  UPROPERTY() int32 OrcaFormalLpMissedOracleRecoveredCount = 0;
-  UPROPERTY() int32 OrcaContinuousFeasibleQuantizedEmptyCount = 0;
-  UPROPERTY() int32 OrcaTrueNoFeasibleWitnessCount = 0;
-  UPROPERTY() int32 OrcaOracleInvocationCount = 0;
-  UPROPERTY() int32 OrcaCalledAfterContinuousFailureCount = 0;
-  UPROPERTY() int32 OrcaCalledAfterQuantizationFailureCount = 0;
-  UPROPERTY() int32 OrcaQuantizedWitnessUsedCount = 0;
-  UPROPERTY() int32 OrcaNeighborhood3x3RecoveredCount = 0;
-  UPROPERTY() int32 OrcaOracleNoWitnessCount = 0;
-  UPROPERTY() int32 OrcaTrueNoWitnessReachableFlowCount = 0;
-  UPROPERTY() int32 OrcaTrueNoWitnessInvalidFlowCount = 0;
-  UPROPERTY() int32 OrcaTrueNoWitnessGoalNearCount = 0;
-  UPROPERTY() int32 OrcaTrueNoWitnessCorridorCount = 0;
-  UPROPERTY() int32 OrcaReferenceSampleCount = 0;
-  UPROPERTY() int32 OrcaReferenceCurrentExactCount = 0;
-  UPROPERTY() int32 OrcaReferenceExactCount = 0;
-  UPROPERTY() int32 OrcaCurrentMissReferenceHitCount = 0;
-  UPROPERTY() int32 OrcaBothMissOracleHitCount = 0;
-  UPROPERTY() int32 OrcaCurrentHitReferenceMissCount = 0;
-  UPROPERTY() int32 OrcaAllExactMissCount = 0;
-  UPROPERTY() int32 OrcaReferenceContinuousHitQuantizedMissCount = 0;
-  UPROPERTY() int32 OrcaReferenceThreeByThreeRecoveredCount = 0;
-  UPROPERTY() int32 OrcaReferenceOracleWitnessAvailableCount = 0;
-  UPROPERTY() int32 OrcaReferenceBestEffortUsedCount = 0;
-  UPROPERTY() uint32 OrcaReferenceMinimumFixtureHash = 0;
-  UPROPERTY() int32 OrcaReferenceMinimumFixtureConstraintCount = 0;
-  UPROPERTY() int32 OrcaParallelBranchCount = 0;
-  UPROPERTY() int32 OrcaNearParallelBranchCount = 0;
-  UPROPERTY() int32 OrcaRedundantParallelCount = 0;
-  UPROPERTY() int32 OrcaStricterParallelCount = 0;
-  UPROPERTY() int32 OrcaTrueParallelContradictionCount = 0;
-  UPROPERTY() int32 OrcaNumericalToleranceAcceptanceCount = 0;
-  UPROPERTY() float OrcaOracleRecoveryMsP95 = 0.0f;
-  UPROPERTY() float OrcaSolverMsP50 = 0.0f;
-  UPROPERTY() float OrcaSolverMsMax = 0.0f;
-  UPROPERTY() TArray<int32> OrcaProcessedByAdmissionState;
-  UPROPERTY() TArray<int32> OrcaFormalLpMissedByAdmissionState;
-  UPROPERTY() TArray<int32> OrcaQuantizedEmptyByAdmissionState;
-  UPROPERTY() TArray<int32> OrcaInfeasibleByAdmissionState;
-  UPROPERTY() int32 OrcaAdjustedAgentCount = 0;
-  UPROPERTY() int32 OrcaInfeasibleAgentCount = 0;
-  UPROPERTY() int32 OrcaFallbackStopCount = 0;
-  UPROPERTY() int32 OrcaStopSatisfiesConstraintCount = 0;
-  UPROPERTY() int32 OrcaStopViolatesConstraintCount = 0;
-  UPROPERTY() uint32 PriorityOrcaHash = 2166136261u;
-  UPROPERTY() int32 PriorityOrcaEqualPairCount = 0;
-  UPROPERTY() int32 PriorityOrcaAsymmetricPairCount = 0;
-  UPROPERTY() int32 PriorityOrcaHighSide25Count = 0;
-  UPROPERTY() int32 PriorityOrcaLowSide75Count = 0;
-  UPROPERTY() int32 PriorityOrcaResponsibilitySumViolationCount = 0;
-  UPROPERTY() int32 WaitingOrcaInfeasibleCount = 0;
-  UPROPERTY() int32 ApproachOrcaInfeasibleCount = 0;
-  UPROPERTY() int32 ReservedOrcaInfeasibleCount = 0;
-  UPROPERTY() int32 InsideOrcaInfeasibleCount = 0;
-  UPROPERTY() int32 WaitingOrcaFallbackStopCount = 0;
-  UPROPERTY() int32 ApproachOrcaFallbackStopCount = 0;
-  UPROPERTY() int32 ReservedOrcaFallbackStopCount = 0;
-  UPROPERTY() int32 InsideOrcaFallbackStopCount = 0;
-  UPROPERTY() float OrcaSolverMsP95 = 0.0f;
-  UPROPERTY() int32 ReservationTimeoutCount = 0;
-  UPROPERTY() int32 TransitTimeoutCount = 0;
-  UPROPERTY() int32 PortalCapacityViolationCount = 0;
-  UPROPERTY() int32 ResidualPbdPenetrationPairCount = 0;
-  UPROPERTY() int32 FinalObstaclePenetrationCount = 0;
-  UPROPERTY() int32 Cohort0GoalReachedCount = 0;
-  UPROPERTY() int32 Cohort1GoalReachedCount = 0;
-  UPROPERTY() int32 FlowReachableFinalCount = 0;
-  UPROPERTY() int32 FlowOutOfBoundsFinalCount = 0;
-  UPROPERTY() int32 FlowBlockedRasterFinalCount = 0;
-  UPROPERTY() int32 FlowUnreachableFreeFinalCount = 0;
-  UPROPERTY() int32 FlowReachableToOutOfBoundsCount = 0;
-  UPROPERTY() int32 FlowReachableToBlockedCellCount = 0;
-  UPROPERTY() int32 FlowReachableToUnreachableFreeCount = 0;
-  UPROPERTY() int32 FlowTransitionAtPredictCount = 0;
-  UPROPERTY() int32 FlowTransitionAtObstacleConstraintCount = 0;
-  UPROPERTY() int32 FlowTransitionAtPbdCount = 0;
-  UPROPERTY() int32 FlowTransitionAtObstacleReprojectCount = 0;
-  UPROPERTY() int32 FlowFinalInvalidAgentCount = 0;
-  UPROPERTY() int32 FlowInvalidToReachableRecoveryCount = 0;
-  UPROPERTY() int32 ContinuousLegalButBlockedCellCount = 0;
-  UPROPERTY() int32 ContinuousLegalButUnreachableFreeCount = 0;
-  UPROPERTY() int32 ContinuousLegalButOutOfBoundsCount = 0;
-  UPROPERTY() int32 BlockedCellAndPenetratingCount = 0;
-  UPROPERTY() int32 BlockedCellButNotPenetratingCount = 0;
-  UPROPERTY() int32 InvalidFlowPreferredZeroCount = 0;
-  UPROPERTY() int32 InvalidFlowFinalZeroVelocityCount = 0;
-  UPROPERTY() int32 InvalidFlowDeadlockCount = 0;
-  UPROPERTY() int32 FlowRecoveredFromRasterMismatchCount = 0;
-  UPROPERTY() int32 FlowDesiredSegmentHardObstacleViolationCount = 0;
   UPROPERTY() uint32 SharedFlowFieldBuildHash = 0;
+  UPROPERTY() uint32 NavigationV2Hash = 0;
+  UPROPERTY() uint32 TargetFactHash = 0;
   UPROPERTY() int32 SharedFlowConnectivityContractVersion = 0;
   UPROPERTY() int32 SharedFlowValidDirectedEdgeCount = 0;
-  UPROPERTY() float NavigationHardClearanceCm = 0.0f;
-  UPROPERTY() int32 NavigationCenterAnchorCount = 0;
-  UPROPERTY() int32 NavigationConnectionPointCount = 0;
-  UPROPERTY() int32 NavigationSafeIntervalCount = 0;
-  UPROPERTY() int32 NavigationInternalEdgeCount = 0;
   UPROPERTY() int32 NavigationDirectedEdgeCount = 0;
-  UPROPERTY() int32 CenterInvalidButConnectedCellCount = 0;
-  UPROPERTY() int32 SourceAttachmentSuccessCount = 0;
+  UPROPERTY() int32 NavigationInternalEdgeCount = 0;
+  UPROPERTY() int32 NavigationConnectionPointCount = 0;
+  UPROPERTY() int32 NavigationCenterAnchorCount = 0;
+  UPROPERTY() int32 NavigationSafeIntervalCount = 0;
   UPROPERTY() int32 GoalAttachmentCount = 0;
+  UPROPERTY() int32 SourceAttachmentSuccessCount = 0;
+  UPROPERTY() int32 CenterInvalidButConnectedCellCount = 0;
   UPROPERTY() int32 NavigationUnreachableSampleCount = 0;
-  UPROPERTY() uint32 NavigationV2Hash = 0;
-  UPROPERTY() float FlowNearestReachableDistanceCmMax = 0.0f;
+  UPROPERTY() int32 FlowRecoveredFromRasterMismatchCount = 0;
+  UPROPERTY() int32 FlowDesiredSegmentHardObstacleViolationCount = 0;
+  UPROPERTY() float NavigationHardClearanceCm = 0.0f;
   UPROPERTY() float NavigationDomainReprojectDeltaCmMax = 0.0f;
-  UPROPERTY() int32 PositionCandidateCount = 0;
-  UPROPERTY() int32 HoldingCandidateCount = 0;
-  UPROPERTY() int32 TransitCapacityPositionCount = 0;
-  UPROPERTY() int32 TransitCapacityHoldingCount = 0;
-  UPROPERTY() int32 TransitCapacityPositionDeficit = 0;
-  UPROPERTY() int32 TransitCapacityHoldingDeficit = 0;
-  UPROPERTY() uint32 TransitCapacitySelectionHash = 2166136261u;
-  UPROPERTY() uint8 bTransitCapacitySelectionApplied = 0;
-  UPROPERTY() int32 HoldingCompatibilityEdgeCount = 0;
-  UPROPERTY() int32 HoldingAssignedAgentCount = 0;
-  UPROPERTY() int32 HoldingArrivedAgentCount = 0;
-  UPROPERTY() int32 HoldingAllocationFailureCount = 0;
-  UPROPERTY() int32 HoldingSelectedCompatibilityValidCount = 0;
-  UPROPERTY() int32 HoldingSelectedCompatibilityInvalidCount = 0;
-  UPROPERTY() int32 HoldingDuplicateCompatibilityKeyCount = 0;
-  UPROPERTY() int32 CommitRequestCount = 0;
-  UPROPERTY() int32 CommitGrantedCount = 0;
-  UPROPERTY() int32 CommitHeldCount = 0;
-  UPROPERTY() int32 CommitInvalidCount = 0;
-  UPROPERTY() int32 CommitInvalidPositionCount = 0;
-  UPROPERTY() int32 CommitTargetRevisionMismatchCount = 0;
-  UPROPERTY() int32 CommitCompatibilityMissingCount = 0;
-  UPROPERTY() int32 CommitCompatibilityRejectedCount = 0;
-  UPROPERTY() int32 CommitUniqueAgentCount = 0;
-  UPROPERTY() int32 CommitMaxHeldSteps = 0;
-  UPROPERTY() int32 CommitConflictCount = 0;
-  UPROPERTY() int32 SteeringStatePursuitCount = 0;
-  UPROPERTY() int32 SteeringStateHoldingCount = 0;
-  UPROPERTY() int32 SteeringStateCommitCount = 0;
-  UPROPERTY() int32 SteeringStateStableCount = 0;
-  UPROPERTY() int32 SteeringStateReserveCount = 0;
-  UPROPERTY() int32 SteeringStateReacquireCount = 0;
-  UPROPERTY() TArray<int32> SteeringStateFinalCounts;
-  UPROPERTY() TArray<float> SteeringStateDistanceCmP50;
-  UPROPERTY() TArray<float> SteeringStateDistanceCmP95;
-  UPROPERTY() TArray<float> SteeringStatePreferredForwardCmpsP50;
-  UPROPERTY() TArray<float> SteeringStatePreferredForwardCmpsP95;
-  UPROPERTY() TArray<float> SteeringStateOrcaForwardCmpsP50;
-  UPROPERTY() TArray<float> SteeringStateOrcaForwardCmpsP95;
-  UPROPERTY() TArray<float> SteeringStateFinalForwardCmpsP50;
-  UPROPERTY() TArray<float> SteeringStateFinalForwardCmpsP95;
-  UPROPERTY() int32 PursuitOutsideHandoffCount = 0;
-  UPROPERTY() int32 PursuitInvalidFlowCount = 0;
-  UPROPERTY() int32 HoldingFinalDistanceNotReadyCount = 0;
-  UPROPERTY() int32 HoldingFinalSpeedNotReadyCount = 0;
-  UPROPERTY() int32 HoldingFinalReadyConflictCount = 0;
-  UPROPERTY() int32 HoldingFinalReadyGrantedCount = 0;
-  UPROPERTY() int32 HoldingFinalTargetRejectCount = 0;
-  UPROPERTY() int32 HoldingFinalFlowRejectCount = 0;
-  UPROPERTY() int32 HoldingFinalObstacleRejectCount = 0;
-  UPROPERTY() int32 HoldingFinalStableBlockerRejectCount = 0;
-  UPROPERTY() int32 HoldingFinalReserveBlockerRejectCount = 0;
-  UPROPERTY() int32 HoldingFinalActiveCommitConflictCount = 0;
-  UPROPERTY() int32 HoldingFinalSelectedConflictCount = 0;
-  UPROPERTY() int32 CommitGateYieldableStableConflictCount = 0;
-  UPROPERTY() int32 CommitGateYieldableReserveConflictCount = 0;
-  UPROPERTY() int32 CommitGateHardConflictHeldCount = 0;
-  UPROPERTY() int32 CommitPreferredNonzeroOrcaZeroCount = 0;
-  UPROPERTY() float CommitRouteForwardSpeedCmpsP50 = 0.0f;
-  UPROPERTY() float CommitRouteForwardSpeedCmpsP95 = 0.0f;
-  UPROPERTY() int32 StablePhysicalDisplacedCount = 0;
-  UPROPERTY() float StablePhysicalDisplacementCmP95 = 0.0f;
-  UPROPERTY() float StablePhysicalDisplacementCmMax = 0.0f;
-  UPROPERTY() int32 ReservePhysicalDisplacedCount = 0;
-  UPROPERTY() float ReservePhysicalDisplacementCmP95 = 0.0f;
-  UPROPERTY() float ReservePhysicalDisplacementCmMax = 0.0f;
-  UPROPERTY() int32 PhysicallySatisfiedPositionCount = 0;
-  UPROPERTY() TArray<int32> SteeringStateOrcaConstraintSourceMatrix;
-  UPROPERTY() TArray<int32> SteeringStateOrcaInfeasibleCounts;
-  UPROPERTY() TArray<int32> SteeringStateOrcaFallbackStopCounts;
-  UPROPERTY() TArray<int32> SteeringReacquireReasonCounts;
-  UPROPERTY() float SteeringCommitArrivalErrorCmP95 = 0.0f;
-  UPROPERTY() int32 SteeringCommitNoProgressStepsMax = 0;
-  UPROPERTY() float SteeringCommitObstacleCorrectionCmP95 = 0.0f;
-  UPROPERTY() float SteeringCommitPbdCorrectionCmP95 = 0.0f;
-  UPROPERTY() int32 HoldingReleaseCount = 0;
-  UPROPERTY() int32 CommitReleaseCount = 0;
-  UPROPERTY() int32 GhostOwnerCount = 0;
-  UPROPERTY() int32 PositioningNoProgressAgentCount = 0;
-  UPROPERTY() uint32 HoldingCandidateHash = 2166136261u;
-  UPROPERTY() uint32 HoldingAssignmentHash = 2166136261u;
-  UPROPERTY() uint32 CommitDecisionHash = 2166136261u;
-  UPROPERTY() uint32 SteeringStateHash = 2166136261u;
-  UPROPERTY() int32 ResidualUnfinishedAgentCount = 0;
-  UPROPERTY() int32 ResidualRemainingPositionCount = 0;
-  UPROPERTY() int32 ResidualCompatibleEdgeCount = 0;
-  UPROPERTY() int32 ResidualMaximumMatchingCount = 0;
-  UPROPERTY() int32 ResidualAgentWithoutHoldingCount = 0;
-  UPROPERTY() int32 ResidualAgentWithoutPositionEdgeCount = 0;
-  UPROPERTY() int32 ResidualAgentWithoutCommitRouteCount = 0;
-  UPROPERTY() int32 ResidualStableBlockerEdgeRejectCount = 0;
-  UPROPERTY() int32 ResidualReserveBlockerEdgeRejectCount = 0;
-  UPROPERTY() int32 ResidualTargetRejectCount = 0;
-  UPROPERTY() int32 ResidualObstacleRejectCount = 0;
-  UPROPERTY() int32 ResidualFlowRejectCount = 0;
-  UPROPERTY() int32 ResidualRevisionRejectCount = 0;
-  UPROPERTY() int32 ResidualCurrentMatching = 0;
-  UPROPERTY() int32 ResidualNoStableMatching = 0;
-  UPROPERTY() int32 ResidualNoReserveMatching = 0;
-  UPROPERTY() int32 ResidualBestSingleBlockerRemovalGain = 0;
-  UPROPERTY() int32 ResidualBlockerCriticalCount = 0;
-  UPROPERTY() int32 ResidualTargetLimitedCount = 0;
-  UPROPERTY() int32 ResidualGeometryLimitedCount = 0;
-  UPROPERTY() uint32 ResidualCapacityHash = 2166136261u;
-  UPROPERTY() int32 ResidualPositionValidCount = 0;
-  UPROPERTY() int32 ResidualHoldingMatchingCount = 0;
-  UPROPERTY() int32 ResidualJointFeasibleCount = 0;
-  UPROPERTY() int32 ResidualGreedyHoldingCount = 0;
-  UPROPERTY() uint32 ResidualHoldingMatchingHash = 2166136261u;
-  UPROPERTY() int32 HoldingHallCurrentMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallNoStableOwnerMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallNoReserveOwnerMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallNoCommitOwnerMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallAgentCount = 0;
-  UPROPERTY() int32 HoldingHallAvailableHoldingCount = 0;
-  UPROPERTY() int32 HoldingHallDeficiency = 0;
-  UPROPERTY() int32 HoldingHallMissingCompatibilityRecordCount = 0;
-  UPROPERTY() int32 HoldingHallFlowRejectCount = 0;
-  UPROPERTY() int32 HoldingHallTargetRejectCount = 0;
-  UPROPERTY() int32 HoldingHallObstacleRejectCount = 0;
-  UPROPERTY() int32 HoldingHallRevisionRejectCount = 0;
-  UPROPERTY() int32 HoldingHallStableOwnerRejectCount = 0;
-  UPROPERTY() int32 HoldingHallReserveOwnerRejectCount = 0;
-  UPROPERTY() uint32 HoldingHallFixtureHash = 2166136261u;
-  UPROPERTY() int32 HoldingHallFullDeficiency = 0;
-  UPROPERTY() int32 HoldingHallOwnerReleaseStableMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallOwnerReleaseReserveMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallOwnerReleaseCommitMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallPhysicalStableRemovalMatchingCount = 0;
-  UPROPERTY() int32 HoldingHallPhysicalReserveRemovalMatchingCount = 0;
-  UPROPERTY() int32 HallGeometryAgentId = INDEX_NONE;
-  UPROPERTY() int32 HallGeometryPositionId = INDEX_NONE;
-  UPROPERTY() int32 HallGeometryBestHoldingId = INDEX_NONE;
-  UPROPERTY() int32 HallGeometryBestBlockerAgentId = INDEX_NONE;
-  UPROPERTY() float HallGeometryBestClearanceMarginCm = 0.0f;
-  UPROPERTY() int32 HallGeometryNonNegativeMarginHoldingCount = 0;
-  UPROPERTY() int32 HallGeometryTargetOnlyRejectCount = 0;
-  UPROPERTY() int32 HallGeometryStableOnlyRejectCount = 0;
-  UPROPERTY() int32 HallGeometryMultiLabelRejectCount = 0;
-  UPROPERTY() int32 HallGeometrySelfBlockerCount = 0;
-  UPROPERTY() int32 HallGeometryWitnessPositionBlockerCount = 0;
-  UPROPERTY() int32 HallGeometryDuplicateBlockerCount = 0;
-  UPROPERTY() int32 HallGeometryStaleBlockerCount = 0;
-  UPROPERTY() int32 HallGeometryRadiusSemanticsErrorCount = 0;
-  UPROPERTY() int32 HallGeometryEndpointContactCount = 0;
-  UPROPERTY() int32 HallGeometryFormalMismatchCount = 0;
-  UPROPERTY() uint32 HallGeometryFixtureHash = 2166136261u;
-  UPROPERTY() int32 JointPositioningMaximumCardinality = 0;
-  UPROPERTY() int32 JointPositioningHardLockedCount = 0;
-  UPROPERTY() int32 JointPositioningReusedCombinationCount = 0;
-  UPROPERTY() int32 JointPositioningUnmatchedAgentCount = 0;
-  UPROPERTY() int32 JointPositioningDuplicateHoldingCount = 0;
-  UPROPERTY() int32 JointPositioningDuplicatePositionCount = 0;
-  UPROPERTY() uint32 JointPositioningHash = 2166136261u;
-  UPROPERTY() int32 JointCommitResidualCandidateCount = 0;
-  UPROPERTY() int32 JointCommitResidualFeasibleCount = 0;
-  UPROPERTY() int32 JointCommitResidualInfeasibleCount = 0;
-  UPROPERTY() uint32 JointCommitResidualHash = 2166136261u;
-  UPROPERTY() int32 Sf4UnfinishedBoundaryAgentCount = 0;
-  UPROPERTY() uint32 Sf4UnfinishedBoundaryHash = 2166136261u;
-  UPROPERTY() int32 Sf4PhysicalUnsatisfiedAgentCount = 0;
-  UPROPERTY() int32 Sf4PhysicalUnsatisfiedTotalAgentCount = 0;
-  UPROPERTY() int32 Sf4PhysicalUnsatisfiedSatisfiedCount = 0;
-  UPROPERTY() int32 Sf4PhysicalUnsatisfiedCountClosed = 0;
-  UPROPERTY() uint32 Sf4PhysicalUnsatisfiedHash = 2166136261u;
-  UPROPERTY() int32 TransitCapacityShadowComponentCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowMaximumComponentSize = 0;
-  UPROPERTY() int32 TransitCapacityShadowComponent2Count = 0;
-  UPROPERTY() int32 TransitCapacityShadowComponent5Count = 0;
-  UPROPERTY() int32 TransitCapacityShadowComponent8Count = 0;
-  UPROPERTY() int32 TransitCapacityShadowComponent12Count = 0;
-  UPROPERTY() int32 TransitCapacityShadowComponent20Count = 0;
-  UPROPERTY() int32 TransitCapacityShadowOversizeCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowSolvedCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowInfeasibleCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowHardInfeasibleCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowIterationLimitCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowClearanceNotAchievedCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowNoForwardGainCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowInvalidInputCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowNumericalFailureCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowQuantizedFailureCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowYieldingAgentCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowDirectRelevantAgentCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowHardSafetyClosureAgentCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowHardPairViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowJointCandidateHardPairViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowBaselineHardPairViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowObstacleViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowFlowBoundsViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowTargetViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowJointCandidateFlowBoundsViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowJointCandidateObstacleViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowJointCandidateTargetViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowBaselineFlowBoundsViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowBaselineObstacleViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowBaselineTargetViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowPairDoubleOwnerCount = 0;
-  UPROPERTY() int32 TransitCapacityShadowForwardSpeedRatioQ15 = 0;
-  UPROPERTY() float TransitCapacityShadowPreferredSpacingDeficitCmMax = 0.0f;
-  UPROPERTY() float TransitCapacityShadowApertureDeficitCmMax = 0.0f;
-  UPROPERTY() float TransitCapacityShadowClearanceDeficitCmMax = 0.0f;
-  UPROPERTY() float TransitCapacityShadowJointCandidateClearanceDeficitCmMax = 0.0f;
-  UPROPERTY() float TransitCapacityShadowBaselineClearanceDeficitCmMax = 0.0f;
-  UPROPERTY() float TransitCapacityShadowMaximumYieldDisplacementCm = 0.0f;
-  UPROPERTY() float TransitCapacityShadowSolverMsP95 = -1.0f;
-  UPROPERTY() uint32 TransitCapacityShadowHash = 2166136261u;
-  UPROPERTY() int32 ElasticSpacingPairCount = 0;
-  UPROPERTY() int32 ElasticInfluencedAgentCount = 0;
-  UPROPERTY() int32 ElasticPropagationLayerMax = 0;
-  UPROPERTY() float ElasticSpacingDeficitCmP95 = 0.0f;
-  UPROPERTY() float ElasticSpacingDeficitCmMax = 0.0f;
-  UPROPERTY() float ElasticTransitDeficitCmP95 = 0.0f;
-  UPROPERTY() float ElasticTransitDeficitCmMax = 0.0f;
-  UPROPERTY() int32 ElasticSourceForwardRatioQ15 = 0;
-  UPROPERTY() int32 ElasticBaselineSourceForwardRatioQ15 = 0;
-  UPROPERTY() int32 ElasticZeroProgressStepMax = 0;
-  UPROPERTY() float ElasticRecoveryErrorCmP95 = 0.0f;
-  UPROPERTY() int32 ElasticHardPairViolationCount = 0;
-  UPROPERTY() int32 ElasticObstacleViolationCount = 0;
-  UPROPERTY() int32 ElasticFlowBoundsViolationCount = 0;
-  UPROPERTY() int32 ElasticTargetViolationCount = 0;
-  UPROPERTY() int32 ElasticInvalidInputCount = 0;
-  UPROPERTY() float ElasticSolverMsP95 = -1.0f;
-  UPROPERTY() uint32 ElasticShadowHash = 2166136261u;
-  UPROPERTY() int32 ElasticFailureFixtureAgentCount = 0;
-  UPROPERTY() uint32 ElasticFailureFixtureHash = 2166136261u;
-  UPROPERTY() TArray<uint32> ElasticBaselineStageHashes;
-  UPROPERTY() TArray<uint32> ElasticTwinStageHashes;
-  UPROPERTY() TArray<int32> ElasticBaselineStageHardPairCounts;
-  UPROPERTY() TArray<int32> ElasticTwinStageHardPairCounts;
-  UPROPERTY() TArray<int32> ElasticBaselineStageTargetCounts;
-  UPROPERTY() TArray<int32> ElasticTwinStageTargetCounts;
-  UPROPERTY() TArray<int32> ElasticBaselineStageSourceForwardQ15;
-  UPROPERTY() TArray<int32> ElasticTwinStageSourceForwardQ15;
-  UPROPERTY() int32 ElasticObstacleClippedCount = 0;
-  UPROPERTY() int32 ElasticObstacleSlideCount = 0;
-  UPROPERTY() int32 ElasticObstacleStoppedCount = 0;
-  UPROPERTY() float ElasticObstacleConstraintDeltaCmMax = 0.0f;
-  UPROPERTY() int32 ElasticOrcaInfeasibleCount = 0;
-  UPROPERTY() int32 ElasticOrcaFallbackStopCount = 0;
-  UPROPERTY() int32 ElasticOrcaStopViolationCount = 0;
-  UPROPERTY() int32 ElasticFailureFixedStep = INDEX_NONE;
-  UPROPERTY() int32 ElasticFailureStage = INDEX_NONE;
-  UPROPERTY() int32 ElasticFailureKind = 0;
-  UPROPERTY() int32 ElasticFailureAttribution = 0;
-  UPROPERTY() int32 ElasticFailureClosureAgentCount = 0;
-  UPROPERTY() int32 ElasticFailureFixtureTooLarge = 0;
-  UPROPERTY() int32 ElasticParallelCompletedSteps = 0;
-  UPROPERTY() int32 ElasticParallelEligibleRecoveryCount = 0;
-  UPROPERTY() int32 ElasticParallelBaselineRecoveryCompletedCount = 0;
-  UPROPERTY() int32 ElasticParallelRecoveryCompletedCount = 0;
-  UPROPERTY() int32 ElasticParallelBaselineImprovedCount = 0;
-  UPROPERTY() int32 ElasticParallelImprovedCount = 0;
-  UPROPERTY() int32 ElasticParallelBaselinePermanentHoleCount = 0;
-  UPROPERTY() int32 ElasticParallelPermanentHoleCount = 0;
-  UPROPERTY() float ElasticParallelBaselineRecoveryTimeP95 = -1.0f;
-  UPROPERTY() float ElasticParallelRecoveryTimeP95 = -1.0f;
-  UPROPERTY() float ElasticParallelBaselineEndErrorCmP95 = -1.0f;
-  UPROPERTY() float ElasticParallelEndErrorCmP95 = -1.0f;
-  UPROPERTY() uint32 ElasticParallelHash = 2166136261u;
-  UPROPERTY() int32 ElasticParallelBaselineSourceForwardQ15 = 32767;
-  UPROPERTY() int32 ElasticParallelSourceForwardQ15 = 32767;
-  UPROPERTY() int32 ElasticParallelBaselineHardPairViolationCount = 0;
-  UPROPERTY() int32 ElasticParallelHardPairViolationCount = 0;
-  UPROPERTY() int32 ElasticParallelBaselineObstaclePenetrationCount = 0;
-  UPROPERTY() int32 ElasticParallelObstaclePenetrationCount = 0;
-  UPROPERTY() int32 ElasticParallelBaselineTargetViolationCount = 0;
-  UPROPERTY() int32 ElasticParallelTargetViolationCount = 0;
-  UPROPERTY() int32 ElasticParallelBaselineOrcaStopViolationCount = 0;
-  UPROPERTY() int32 ElasticParallelOrcaStopViolationCount = 0;
-  UPROPERTY() int32 TransitCapacityFailureFixtureAgentCount = 0;
-  UPROPERTY() int32 TransitCapacityFailureFixturePairCount = 0;
-  UPROPERTY() int32 TransitCapacityFailureFixtureStatus = 0;
-  UPROPERTY() uint32 TransitCapacityFailureFixtureHash = 2166136261u;
-  UPROPERTY() int32 PositionFrontCapacity = 0;
-  UPROPERTY() int32 PositionReserveCapacity = 0;
-  UPROPERTY() int32 PositionAssignedCount = 0;
-  UPROPERTY() int32 PositionUnassignedCount = 0;
-  UPROPERTY() int32 PositionStableOccupiedCount = 0;
-  UPROPERTY() int32 PositionReserveHoldCount = 0;
-  UPROPERTY() int32 PositionAssignmentReusedCount = 0;
-  UPROPERTY() int32 PositionAssignmentChangedCount = 0;
-  UPROPERTY() int32 PositionAssignmentChurnCount = 0;
-  UPROPERTY() int32 PositionInvalidatedCount = 0;
-  UPROPERTY() int32 PositionPromotionCount = 0;
-  UPROPERTY() int32 PositionPromotionTransitionCount = 0;
-  UPROPERTY() int32 PositionPromotionAgentCount = 0;
-  UPROPERTY() int32 PositionFrontAdmissionGrantCount = 0;
-  UPROPERTY() int32 PositionFrontAdmissionRequeueCount = 0;
-  UPROPERTY() uint32 PositionFrontAdmissionDecisionHash = 2166136261u;
-  UPROPERTY() int32 PhaseReservationRequestCount = 0;
-  UPROPERTY() int32 PhaseReservationGrantedCount = 0;
-  UPROPERTY() int32 PhaseReservationHeldCount = 0;
-  UPROPERTY() int32 PhaseReservationInvalidCount = 0;
-  UPROPERTY() int32 PhaseReservationTargetExclusionRejectCount = 0;
-  UPROPERTY() int32 PhaseReservationRouteConflictCount = 0;
-  UPROPERTY() int32 PhaseReservationTransitionCount = 0;
-  UPROPERTY() float PhaseReservationHeldStepsP95 = 0.0f;
-  UPROPERTY() uint32 PhaseReservationDecisionHash = 2166136261u;
-  UPROPERTY() int32 PhaseReservationClientHashMatch = 0;
-  UPROPERTY() int32 PhaseReservationUniqueBlockedRequestCount = 0;
-  UPROPERTY() int32 PhaseReservationUniqueBlockerCount = 0;
-  UPROPERTY() int32 PhaseReservationWaitEdgeCount = 0;
-  UPROPERTY() int32 PhaseReservationReciprocalEdgeCount = 0;
-  UPROPERTY() int32 PhaseReservationCycleCount = 0;
-  UPROPERTY() int32 PhaseReservationMaxCycleSize = 0;
-  UPROPERTY() int32 PhaseReservationStalledBlockerCount = 0;
-  UPROPERTY() int32 PhaseReservationProgressingBlockerCount = 0;
-  UPROPERTY() int32 PhaseReservationStaleOwnerCount = 0;
-  UPROPERTY() int32 PhaseReservationBlockerRadialCount = 0;
-  UPROPERTY() int32 PhaseReservationBlockerAngularCount = 0;
-  UPROPERTY() int32 PhaseReservationBlockerRadialCommitCount = 0;
-  UPROPERTY() int32 PhaseReservationAtomicHandoffCycleCount = 0;
-  UPROPERTY() int32 PhaseReservationMaxAtomicHandoffSetSize = 0;
-  UPROPERTY() uint32 PhaseReservationWaitGraphHash = 2166136261u;
-  UPROPERTY() int32 PhaseReservationWaitGraphClientHashMatch = 0;
-  UPROPERTY() uint32 PhaseReservationWaitGraphFixtureHash = 0;
-  UPROPERTY() int32 PhaseReservationWaitGraphFixtureAgentCount = 0;
-  UPROPERTY() int32 PhaseReservationWaitGraphFixtureEdgeCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaFixtureValid = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaFixtureTooLarge = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaFixtureAgentCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaCoreConstraintCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaActiveConflictCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaActiveDisjointContainedCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaActiveOutsideCorridorCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaWaitingCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaStableCount = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaOtherCount = 0;
-  UPROPERTY() uint32 Sf4ReservationOrcaFixtureHash = 0;
-  UPROPERTY() int32 Sf4ReservationOrcaClientHashMatch = 0;
-  UPROPERTY() int32 TransitJointFixtureValid = 0;
-  UPROPERTY() int32 TransitJointFixtureTooLarge = 0;
-  UPROPERTY() int32 TransitJointFixtureAgentCount = 0;
-  UPROPERTY() int32 TransitJointFixturePairCount = 0;
-  UPROPERTY() int32 TransitJointFixtureConstraintCount = 0;
-  UPROPERTY() int32 TransitJointPriorityForwardSpeedCmps = 0;
-  UPROPERTY() int32 TransitJointFinalSpeedCmps = 0;
-  UPROPERTY() int32 TransitJointForwardSpeedCmps = 0;
-  UPROPERTY() int32 TransitJointDownstreamZeroStage = 0;
-  UPROPERTY() int32 TransitJointSafeForward = 0;
-  UPROPERTY() uint32 TransitJointFixtureHash = 0;
-  UPROPERTY() int32 TransitJointClientHashMatch = 0;
-  UPROPERTY() float PositionPromotionWaitStepsP95 = 0.0f;
-  UPROPERTY() float PositionArrivalErrorCmP95 = 0.0f;
-  UPROPERTY() int32 PositionExitAfterOccupiedCount = 0;
-  UPROPERTY() int32 PositionCandidateOverlapCount = 0;
-  UPROPERTY() int32 PositionCandidateUnreachableCount = 0;
-  UPROPERTY() int32 TargetRevisionCount = 0;
-  UPROPERTY() int32 TargetReanchorCount = 0;
-  UPROPERTY() float TargetFollowErrorCmP95 = 0.0f;
-  UPROPERTY() float TargetStopToSettleSeconds = -1.0f;
-  UPROPERTY() uint32 PositionCandidateHash = 0;
-  UPROPERTY() uint32 PositionAssignmentHash = 0;
-  UPROPERTY() uint32 TargetFactHash = 0;
-  UPROPERTY() int32 PositionSlotCommitCount = 0;
-  UPROPERTY() int32 PositionReserveCommitCount = 0;
-  UPROPERTY() int32 PositionUnsettledPortalOwnedCount = 0;
-  UPROPERTY() int32 PositionUnsettledOutsideComposeRangeCount = 0;
-  UPROPERTY() int32 PositionUnsettledGuidanceActiveCount = 0;
-  UPROPERTY() int32 PositionUnsettledArrivalSpeedRejectedCount = 0;
-  UPROPERTY() int32 PositionUnsettledErrorLe30Count = 0;
-  UPROPERTY() int32 PositionUnsettledError31To100Count = 0;
-  UPROPERTY() int32 PositionUnsettledError101To300Count = 0;
-  UPROPERTY() int32 PositionUnsettledErrorOver300Count = 0;
-  UPROPERTY() int32 PositionUnsettledPreviousOrcaFallbackCount = 0;
-  UPROPERTY() int32 PositionUnsettledPreviousOrcaInfeasibleCount = 0;
-  UPROPERTY() int32 PositionUnsettledPreviousPbdCorrectedCount = 0;
-  UPROPERTY() float PositionUnsettledSpeedCmpsP95 = 0.0f;
-  UPROPERTY() float PositionUnsettledGuidanceSpeedCmpsP95 = 0.0f;
-  UPROPERTY() float PositionUnsettledOrcaSpeedCmpsP95 = 0.0f;
-  UPROPERTY() float PositionUnsettledObstacleSpeedCmpsP95 = 0.0f;
-  UPROPERTY() int32 PositionUnsettledOrcaAdjustedCount = 0;
-  UPROPERTY() int32 PositionUnsettledOrcaZeroCount = 0;
-  UPROPERTY() int32 PositionUnsettledObstacleHitCount = 0;
-  UPROPERTY() float PositionUnsettledOrcaConstraintP95 = 0.0f;
-  UPROPERTY() int32 PositionIngressSlotCommitCount = 0;
-  UPROPERTY() int32 PositionIngressErrorOver300Count = 0;
-  UPROPERTY() int32 PositionIngressTargetBlockedCount = 0;
-  UPROPERTY() int32 PositionIngressStableBlockedCount = 0;
-  UPROPERTY() int32 PositionIngressReserveBlockedCount = 0;
-  UPROPERTY() int32 PositionIngressCommitBlockedCount = 0;
-  UPROPERTY() int32 PositionIngressStableBlockerPairCount = 0;
-  UPROPERTY() int32 PositionIngressReserveBlockerPairCount = 0;
-  UPROPERTY() int32 PositionIngressCommitBlockerPairCount = 0;
-  UPROPERTY() float PositionIngressSectorDeltaP50 = 0.0f;
-  UPROPERTY() float PositionIngressSectorDeltaP95 = 0.0f;
-  UPROPERTY() float PositionIngressSectorDeltaMax = 0.0f;
-  UPROPERTY() float PositionIngressRadialDeltaP50 = 0.0f;
-  UPROPERTY() float PositionIngressRadialDeltaP95 = 0.0f;
-  UPROPERTY() float PositionIngressRadialDeltaMax = 0.0f;
-  UPROPERTY() int32 PositionIngressUnblockedAlternativeFrontCount = 0;
-  UPROPERTY() int32 PositionIngressSameSideAlternativeFrontCount = 0;
-  UPROPERTY() int32 PositionIngressNoAlternativeFrontCount = 0;
-  UPROPERTY() int32 PositionIngressOrcaFromStableCount = 0;
-  UPROPERTY() int32 PositionIngressOrcaFromReserveCount = 0;
-  UPROPERTY() int32 PositionIngressOrcaFromCommitCount = 0;
-  UPROPERTY() int32 PositionIngressOrcaFromOtherCount = 0;
-  UPROPERTY() float PositionIngressPreferredSpeedP95 = 0.0f;
-  UPROPERTY() float PositionIngressOrcaSpeedP95 = 0.0f;
-  UPROPERTY() float PositionIngressObstacleSpeedP95 = 0.0f;
-  UPROPERTY() float PositionIngressFinalSpeedP95 = 0.0f;
-  UPROPERTY() int32 PositionIngressLowSpeedStepsMax = 0;
-  UPROPERTY() int32 PositionIngressTargetExclusionCrossingCount = 0;
-  UPROPERTY() int32 PositionIngressOrderInversionCount = 0;
-  UPROPERTY() int32 PositionIngressPbdPushAwayCount = 0;
-  UPROPERTY() int32 PositionIngressObstaclePushAwayCount = 0;
-  UPROPERTY() uint32 PositionIngressMinimumFixtureHash = 0;
-  UPROPERTY() int32 PositionIngressMinimumFixtureConstraintCount = 0;
-  UPROPERTY() uint32 PositionIngressEvaluationHash = 0;
-  UPROPERTY() int32 PositionFrontAssignedWaitingCount = 0;
-  UPROPERTY() int32 PositionFrontRadialStageCount = 0;
-  UPROPERTY() int32 PositionFrontAngularAlignCount = 0;
-  UPROPERTY() int32 PositionFrontRadialCommitCount = 0;
-  UPROPERTY() int32 PositionFrontGateInvalidCount = 0;
-  UPROPERTY() int32 PositionFrontRadialCommitBlockedCount = 0;
-  UPROPERTY() uint32 PositionFrontRouteHash = 2166136261u;
-  UPROPERTY() float PositionFrontRadialPreferredSpeedP95 = 0.0f;
-  UPROPERTY() float PositionFrontRadialOrcaSpeedP95 = 0.0f;
-  UPROPERTY() float PositionFrontRadialFinalSpeedP95 = 0.0f;
-  UPROPERTY() float PositionFrontRadialOrcaForwardSpeedP50 = 0.0f;
-  UPROPERTY() float PositionFrontRadialOrcaForwardSpeedMin = 0.0f;
-  UPROPERTY() float PositionFrontRadialFinalForwardSpeedP50 = 0.0f;
-  UPROPERTY() float PositionFrontRadialFinalForwardSpeedMin = 0.0f;
-  UPROPERTY() float PositionFrontRadialOrcaConstraintP95 = 0.0f;
-  UPROPERTY() int32 PositionFrontRadialConstraintFromActiveCount = 0;
-  UPROPERTY() int32 PositionFrontRadialConstraintFromWaitingCount = 0;
-  UPROPERTY() int32 PositionFrontRadialConstraintFromReserveCommitCount = 0;
-  UPROPERTY() int32 PositionFrontRadialConstraintFromStableCount = 0;
-  UPROPERTY() int32 PositionFrontRadialConstraintFromOtherCount = 0;
-  UPROPERTY() float PositionFrontRadialErrorP50 = 0.0f;
-  UPROPERTY() float PositionFrontRadialErrorP95 = 0.0f;
-  UPROPERTY() float PositionFrontRadialErrorMax = 0.0f;
-  UPROPERTY() int32 PositionFrontRadialErrorImprovedCount = 0;
-  UPROPERTY() int32 PositionFrontRadialQuantizedProgressStallCount = 0;
-  UPROPERTY() int32 PositionFrontComposeBoundarySwitchCount = 0;
-};
-
-USTRUCT(BlueprintType)
-struct FCrowdDemoElasticCrowdSettings
-{
-  GENERATED_BODY()
-
-  UPROPERTY() float FixedStepSeconds = 1.0f / 30.0f;
-  UPROPERTY() float HardSafetyGapCm = 10.0f;
-  UPROPERTY() float PreferredSpacingGapCm = 34.0f;
-  UPROPERTY() float SpacingGainPerSecond = 2.0f;
-  UPROPERTY() float MaxSpacingResponseCmps = 120.0f;
-  UPROPERTY() float TransitHorizonSeconds = 0.75f;
-  UPROPERTY() float TransitInfluenceFalloffCm = 34.0f;
-  UPROPERTY() float TransitGainPerSecond = 2.0f;
-  UPROPERTY() float MaxTransitYieldSpeedCmps = 260.0f;
-  UPROPERTY() float PositionQuantumCm = 1.0f;
-  UPROPERTY() float VelocityQuantumCmps = 1.0f;
 };
 
 USTRUCT(BlueprintType)
@@ -1360,6 +683,9 @@ struct FCrowdDemoTargetMotionRule
   UPROPERTY() int32 TargetRevision = 1;
   UPROPERTY() FVector_NetQuantize10 InitialLocation = FVector(0.0f, 2200.0f, 60.0f);
   UPROPERTY() FVector_NetQuantize10 LinearVelocity = FVector::ZeroVector;
+  UPROPERTY() uint8 bReflectAtMotionBounds = 0;
+  UPROPERTY() FVector_NetQuantize10 MotionBoundsMin = FVector(-100000.0f, -100000.0f, 0.0f);
+  UPROPERTY() FVector_NetQuantize10 MotionBoundsMax = FVector(100000.0f, 100000.0f, 0.0f);
   UPROPERTY() float InitialYawDegrees = 0.0f;
   UPROPERTY() float YawRateDegreesPerSecond = 0.0f;
 };
@@ -1398,18 +724,6 @@ struct FCrowdDemoTargetRegionTransportRuleSettings
   UPROPERTY() float TransportSpeedCmps = 300.0f;
   UPROPERTY() int32 DemandRegionCount = 16;
   UPROPERTY() int32 PlanLifetimeSteps = 15;
-};
-
-USTRUCT(BlueprintType)
-struct FCrowdDemoTargetSlotRule
-{
-  GENERATED_BODY()
-
-  UPROPERTY() int32 SlotId = INDEX_NONE;
-  UPROPERTY() uint8 bFunctional = 0;
-  UPROPERTY() FVector_NetQuantize10 TargetRelativeOffset = FVector::ZeroVector;
-  UPROPERTY() uint32 RequiredCapabilityMask = 0;
-  UPROPERTY() int32 StablePriority = 0;
 };
 
 USTRUCT(BlueprintType)
@@ -1533,37 +847,7 @@ struct FCrowdDemoRoundRules
   float FormationSpacingCm = 95.0f;
 
   UPROPERTY()
-  uint8 bEnableSeparation = 0;
-
-  UPROPERTY()
-  float SeparationCellSizeCm = 96.0f;
-
-  UPROPERTY()
-  float SeparationRadiusCm = 78.0f;
-
-  UPROPERTY()
-  float HardSeparationRadiusCm = 42.0f;
-
-  UPROPERTY()
-  float SeparationSpeedCmPerSecond = 120.0f;
-
-  UPROPERTY()
-  float HardSeparationSpeedCmPerSecond = 260.0f;
-
-  UPROPERTY()
-  float SeparationMaxOffsetCm = 320.0f;
-
-  UPROPERTY()
   uint8 bEnableObstacle = 0;
-
-  UPROPERTY()
-  uint8 bEnableHardSeparationPbd = 0;
-
-  UPROPERTY()
-  int32 HardSeparationPbdIterations = 3;
-
-  UPROPERTY()
-  float HardSeparationPbdMaxCorrectionCm = 24.0f;
 
   UPROPERTY()
   int32 ParticleConstraintIterations = 8;
@@ -1596,15 +880,6 @@ struct FCrowdDemoRoundRules
   FCrowdDemoParticleProfile ParticleProfile;
 
   UPROPERTY()
-  FCrowdDemoTrafficSettings TrafficSettings;
-
-  UPROPERTY()
-  FCrowdDemoOrcaSettings OrcaSettings;
-
-  UPROPERTY()
-  FCrowdDemoElasticCrowdSettings ElasticCrowdSettings;
-
-  UPROPERTY()
   ECrowdDemoSoftPressureTestCase SoftPressureTestCase = ECrowdDemoSoftPressureTestCase::CorridorRoute;
 
   UPROPERTY()
@@ -1627,12 +902,6 @@ struct FCrowdDemoRoundRules
 
   UPROPERTY()
   FCrowdDemoRangedCombatSettings RangedCombatSettings;
-
-  UPROPERTY()
-  TArray<FCrowdDemoTargetSlotRule> TargetSlots;
-
-  UPROPERTY()
-  TArray<FCrowdDemoTrafficCohortRule> TrafficCohorts;
 
   float GetParticleEnvironmentHardClearanceCm() const
   {
@@ -1684,6 +953,14 @@ struct FCrowdDemoRoundPlanPacket
 
   UPROPERTY()
   float DurationSeconds = 1.5f;
+
+  // The nominal capability observation window remains separate from an
+  // explicitly predeclared completion grace. DurationSeconds is their sum.
+  UPROPERTY()
+  float NominalDurationSeconds = 1.5f;
+
+  UPROPERTY()
+  float CompletionGraceSeconds = 0.0f;
 
   UPROPERTY()
   FCrowdDemoRoundRules Rules;
@@ -1756,6 +1033,49 @@ struct FCrowdDemoCapabilityProfileMetrics
 };
 
 USTRUCT(BlueprintType)
+struct FCrowdDemoRoundPerformanceMetrics
+{
+  GENERATED_BODY()
+
+  UPROPERTY() float FixedStepPipelineMsP50 = -1.0f;
+  UPROPERTY() float FixedStepPipelineMsP95 = -1.0f;
+  UPROPERTY() float FixedStepPipelineMsMax = -1.0f;
+  UPROPERTY() float SharedFlowStageMsP95 = -1.0f;
+  UPROPERTY() float SharedFlowStageMsMax = -1.0f;
+  UPROPERTY() float TargetTopologyStageMsP95 = -1.0f;
+  UPROPERTY() float TargetTopologyStageMsMax = -1.0f;
+  UPROPERTY() float TargetDemandStageMsP95 = -1.0f;
+  UPROPERTY() float TargetDemandStageMsMax = -1.0f;
+  UPROPERTY() float TargetPlanStageMsP95 = -1.0f;
+  UPROPERTY() float TargetPlanStageMsMax = -1.0f;
+  UPROPERTY() float TargetGuidanceStageMsP95 = -1.0f;
+  UPROPERTY() float TargetGuidanceStageMsMax = -1.0f;
+  UPROPERTY() float LocalPredictiveStageMsP95 = -1.0f;
+  UPROPERTY() float LocalPredictiveStageMsMax = -1.0f;
+  UPROPERTY() float ParticleStageMsP95 = -1.0f;
+  UPROPERTY() float ParticleStageMsMax = -1.0f;
+  UPROPERTY() float FinalizeCommitStageMsP95 = -1.0f;
+  UPROPERTY() float FinalizeCommitStageMsMax = -1.0f;
+  UPROPERTY() int32 TargetTopologyBuildCount = 0;
+  UPROPERTY() int32 TargetTopologyCacheHitCount = 0;
+  UPROPERTY() int32 TargetDemandFullBuildCount = 0;
+  UPROPERTY() int32 TargetDemandPopulationUpdateCount = 0;
+  UPROPERTY() float FixedStepsPerGameFrameP50 = -1.0f;
+  UPROPERTY() float FixedStepsPerGameFrameP95 = -1.0f;
+  UPROPERTY() int32 FixedStepsPerGameFrameMax = 0;
+  UPROPERTY() int32 CatchupFrameCount = 0;
+  UPROPERTY() int32 CatchupCpuBudgetHitCount = 0;
+  UPROPERTY() int32 CatchupCpuBudgetConsecutiveMax = 0;
+  UPROPERTY() int32 MaxFixedStepsPerFrameHitCount = 0;
+  UPROPERTY() float FixedStepBacklogMsMax = 0.0f;
+  UPROPERTY() float SimulationRealtimeFactor = -1.0f;
+  UPROPERTY() float RollbackReplayMsP95 = -1.0f;
+  UPROPERTY() float RollbackReplayMsMax = -1.0f;
+  UPROPERTY() int32 RollbackReplaySampleCount = 0;
+  UPROPERTY() int32 ZeroErrorRollbackReplayCount = 0;
+};
+
+USTRUCT(BlueprintType)
 struct FCrowdDemoParticleMetrics
 {
   GENERATED_BODY()
@@ -1769,6 +1089,7 @@ struct FCrowdDemoParticleMetrics
   UPROPERTY() uint32 DynamicFlowIntegrationHash = 0;
   UPROPERTY() int32 DynamicFlowIntegrationRebuildCount = 0;
   UPROPERTY() uint32 DynamicFlowRoundHash = 0;
+  UPROPERTY() FCrowdDemoRoundPerformanceMetrics Performance;
 
   UPROPERTY() uint8 bLocalPredictiveValid = 0;
   UPROPERTY() uint32 LocalPredictiveHash = 0;
@@ -1848,8 +1169,6 @@ struct FCrowdDemoParticleMetrics
   UPROPERTY() int32 DuplicateSlotOwnerCount = 0;
   UPROPERTY() int32 InvalidSlotOwnerCount = 0;
   UPROPERTY() int32 TargetApproachStateTransitionCount = 0;
-  UPROPERTY() int32 TargetApproachPhaseOscillationCount = 0;
-
   UPROPERTY() uint8 bTargetInfluenceValid = 0;
   UPROPERTY() int32 TargetInfluenceAgentCount = 0;
   UPROPERTY() int32 TargetInsideEffectiveBandCount = 0;
@@ -1982,6 +1301,36 @@ struct FCrowdDemoParticleMetrics
   UPROPERTY() int32 TargetTransportMembershipRebuildCount = 0;
   UPROPERTY() int32 TargetTransportDemandSatisfiedRebuildCount = 0;
   UPROPERTY() int32 TargetTransportPathInvalidRebuildCount = 0;
+  UPROPERTY() uint8 bTargetPlanLifecycleDiagnosticValid = 0;
+  UPROPERTY() int32 TargetPlanLifecycleSampleBoundaryCount = 0;
+  UPROPERTY() uint32 TargetPlanLifecycleHash = 0;
+  UPROPERTY() int32 TargetPlanLifecycleInitialInvalidRebuildCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleCostOnlyGraphChangeCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleCellFeasibilityChangeCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleEdgeSetChangeCount = 0;
+  UPROPERTY() int32 TargetPlanLifecyclePrematureRebuildCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleActiveClaimCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleGeometryEligibleClaimCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleSupplyEligibleClaimCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleNewPlanEligibleClaimCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleMigratedClaimCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleCompletedAtReplacementClaimCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleDroppedStillFeasibleClaimCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleStateMismatchCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleClaimOffEdgeCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleQuotaExceededCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleSupplyWithoutOutgoingQuotaCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleOtherInvalidCount = 0;
+  UPROPERTY() int32 TargetPlanLifecycleAgeP50 = 0;
+  UPROPERTY() int32 TargetPlanLifecycleAgeP95 = 0;
+  UPROPERTY() int32 TargetPlanLifecycleAgeMax = 0;
+  UPROPERTY() uint8 bTargetPlanLifecycleFixtureValid = 0;
+  UPROPERTY() int32 TargetPlanLifecycleFixtureStep = INDEX_NONE;
+  UPROPERTY() uint32 TargetPlanLifecycleFixtureCohortKey = 0;
+  UPROPERTY() int32 TargetPlanLifecycleFixtureReason = 0;
+  UPROPERTY() int32 TargetPlanLifecycleFixtureSelectionKind = 0;
+  UPROPERTY() int32 TargetPlanLifecycleFixtureRegionKey = INDEX_NONE;
+  UPROPERTY() uint32 TargetPlanLifecycleFixtureHash = 0;
   UPROPERTY() float TargetTransportSolverMsP95 = -1.0f;
   UPROPERTY() uint32 TargetTransportTopologyHash = 0;
   UPROPERTY() uint32 TargetTransportDemandHash = 0;
@@ -2094,10 +1443,13 @@ struct FCrowdDemoParticleMetrics
   UPROPERTY() int32 T4WallPassedCount = 0;
   UPROPERTY() int32 T4CorridorExitedCount = 0;
   UPROPERTY() int32 T4CompletedCount = 0;
+  UPROPERTY() int32 T4FinalSettledCount = 0;
   UPROPERTY() int32 T4FinalDeadlockAgentCount = 0;
   UPROPERTY() int32 T4UnreachableSampleCount = 0;
   UPROPERTY() int32 T4LastFixedStep = INDEX_NONE;
   UPROPERTY() int32 T4CompletionStepMax = INDEX_NONE;
+  UPROPERTY() int32 T4GroupCompletionStep = INDEX_NONE;
+  UPROPERTY() int32 T4GroupSettledStep = INDEX_NONE;
   UPROPERTY() uint8 bT6TransitValid = 0;
   UPROPERTY() uint32 T6TransitLayoutHash = 0;
   UPROPERTY() uint32 T6TransitFlowHash = 0;
@@ -2105,10 +1457,18 @@ struct FCrowdDemoParticleMetrics
   UPROPERTY() int32 T6TransitWallPassedCount = 0;
   UPROPERTY() int32 T6TransitCorridorExitedCount = 0;
   UPROPERTY() int32 T6TransitCompletedCount = 0;
+  UPROPERTY() int32 T6TransitFinalSettledCount = 0;
   UPROPERTY() int32 T6TransitFinalDeadlockAgentCount = 0;
   UPROPERTY() int32 T6TransitUnreachableSampleCount = 0;
   UPROPERTY() int32 T6TransitLastFixedStep = INDEX_NONE;
   UPROPERTY() int32 T6TransitCompletionStepMax = INDEX_NONE;
+  UPROPERTY() int32 T6TransitGroupCompletionStep = INDEX_NONE;
+  UPROPERTY() int32 T6TransitGroupSettledStep = INDEX_NONE;
+  UPROPERTY() int32 T6TransitTargetHandoffStep = INDEX_NONE;
+  UPROPERTY() int32 T6TransitTargetInsideBandCount = 0;
+  UPROPERTY() int32 T6TransitTargetCoverageCount = 0;
+  UPROPERTY() int32 T6TransitTargetRequiredCoverageCount = 0;
+  UPROPERTY() int32 T6TransitTargetEngagedHoldCount = 0;
   UPROPERTY() FCrowdDemoSoftPressureRouteMetrics RouteMetrics;
 };
 
@@ -2151,40 +1511,13 @@ struct FCrowdDemoRoundResultPacket
   int32 InitialSevereOverlapPairCount = 0;
 
   UPROPERTY()
-  int32 SeparationAppliedAgentCount = 0;
-
-  UPROPERTY()
-  int32 SeparationGridCellCount = 0;
-
-  UPROPERTY()
   int32 ObstaclePenetrationCount = 0;
 
   UPROPERTY()
   int32 ArrivalCount = 0;
 
   UPROPERTY()
-  int32 PbdCorrectedAgentCount = 0;
-
-  UPROPERTY()
-  int32 PbdCorrectedPairCount = 0;
-
-  UPROPERTY()
-  float PbdMaxPairCorrectionCm = 0.0f;
-
-  UPROPERTY()
-  float PbdMaxAgentTotalCorrectionCm = 0.0f;
-
-  UPROPERTY()
-  float PbdMaxObstacleReprojectDeltaCm = 0.0f;
-
-  UPROPERTY()
-  float PbdMaxFinalSafetyDeltaCm = 0.0f;
-
-  UPROPERTY()
-  float PbdSolverMsP95 = -1.0f;
-
-  UPROPERTY()
-  FCrowdDemoTrafficMetrics TrafficMetrics;
+  FCrowdDemoSharedFlowMetrics SharedFlowMetrics;
 
   UPROPERTY()
   FCrowdDemoParticleMetrics ParticleMetrics;
@@ -2198,6 +1531,13 @@ struct FCrowdDemoRoundResultHeader
 {
   GENERATED_BODY()
 
+  static constexpr uint8 CurrentContractVersion = 1;
+  static constexpr int32 MaximumSerializedBytes = 2048;
+
+  UPROPERTY() uint8 ContractVersion = CurrentContractVersion;
+  // 1 = SoftPressure, 2 = SoftPressure + projectile combat.
+  UPROPERTY() uint8 PayloadKind = 1;
+  UPROPERTY() int32 SerializedByteCount = 0;
   UPROPERTY() uint8 bValid = 0;
   UPROPERTY() int32 RoundId = 0;
   UPROPERTY() int32 Revision = 0;
@@ -2209,20 +1549,20 @@ struct FCrowdDemoRoundResultHeader
   UPROPERTY() int32 InitialOverlapPairCount = 0;
   UPROPERTY() int32 SevereOverlapPairCount = 0;
   UPROPERTY() int32 InitialSevereOverlapPairCount = 0;
-  UPROPERTY() int32 SeparationAppliedAgentCount = 0;
-  UPROPERTY() int32 SeparationGridCellCount = 0;
   UPROPERTY() int32 ObstaclePenetrationCount = 0;
   UPROPERTY() int32 ArrivalCount = 0;
-  UPROPERTY() int32 PbdCorrectedAgentCount = 0;
-  UPROPERTY() int32 PbdCorrectedPairCount = 0;
-  UPROPERTY() float PbdMaxPairCorrectionCm = 0.0f;
-  UPROPERTY() float PbdMaxAgentTotalCorrectionCm = 0.0f;
-  UPROPERTY() float PbdMaxObstacleReprojectDeltaCm = 0.0f;
-  UPROPERTY() float PbdMaxFinalSafetyDeltaCm = 0.0f;
-  UPROPERTY() float PbdSolverMsP95 = -1.0f;
-  UPROPERTY() FCrowdDemoTrafficMetrics TrafficMetrics;
+  UPROPERTY() FCrowdDemoSharedFlowMetrics SharedFlowMetrics;
   UPROPERTY() FCrowdDemoParticleMetrics ParticleMetrics;
   UPROPERTY() FCrowdDemoProjectileMetrics ProjectileMetrics;
+
+  bool NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess);
+};
+
+template<>
+struct TStructOpsTypeTraits<FCrowdDemoRoundResultHeader>
+  : public TStructOpsTypeTraitsBase2<FCrowdDemoRoundResultHeader>
+{
+  enum { WithNetSerializer = true };
 };
 
 USTRUCT(BlueprintType)
@@ -2372,31 +1712,7 @@ struct FCrowdDemoRoundCompareMetrics
   int32 ClientSimObstaclePenetrationCount = 0;
 
   UPROPERTY()
-  int32 SoftSeparationAppliedAgentCount = 0;
-
-  UPROPERTY()
-  int32 PbdCorrectedAgentCount = 0;
-
-  UPROPERTY()
-  int32 PbdCorrectedPairCount = 0;
-
-  UPROPERTY()
-  float PbdMaxPairCorrectionCm = 0.0f;
-
-  UPROPERTY()
-  float PbdMaxAgentTotalCorrectionCm = 0.0f;
-
-  UPROPERTY()
-  float PbdMaxObstacleReprojectDeltaCm = 0.0f;
-
-  UPROPERTY()
-  float PbdMaxFinalSafetyDeltaCm = 0.0f;
-
-  UPROPERTY()
-  float PbdSolverMsP95 = -1.0f;
-
-  UPROPERTY()
-  FCrowdDemoTrafficMetrics TrafficMetrics;
+  FCrowdDemoSharedFlowMetrics SharedFlowMetrics;
   FCrowdDemoParticleMetrics ParticleMetrics;
   int32 ServerClientParticleHashMatch = 0;
 
@@ -2410,6 +1726,24 @@ struct FCrowdDemoSummaryMetrics
   int32 VisibleInstances = 0;
   float ServerFrameMsP95 = -1.0f;
   float CrowdSolverMsP95 = -1.0f;
+  float SnapshotBuildMsP95 = -1.0f;
+  float ClientFrameMsP95 = -1.0f;
+  float ClientFrameMsMax = -1.0f;
+  float VisualProcessorMsP95 = -1.0f;
+  float VisualProcessorMsMax = -1.0f;
+  float VisualSubmitIntervalMsP95 = -1.0f;
+  float VisualSubmitIntervalMsMax = -1.0f;
+  float VisualSimDeltaCmP95 = -1.0f;
+  float VisualSimDeltaCmMax = -1.0f;
+  float VisualDisplayDeltaCmP95 = -1.0f;
+  float VisualDisplayDeltaCmMax = -1.0f;
+  float VisualCollapsedSimStepsP95 = -1.0f;
+  int32 VisualCollapsedSimStepsMax = 0;
+  int32 VisualCatchupSubmitCount = 0;
+  int32 VisualCatchupDiscontinuityCount = 0;
+  int32 NonCorrectionVisualDiscontinuityCount = 0;
+  int32 RoundResetVisualJumpCount = 0;
+  int32 VisualIsmRebuildCount = 0;
   float ReplicationSampleAgeMsP95 = -1.0f;
   float DisplayToAuthoritativeCmP95 = -1.0f;
   int32 SimCurrentRoundId = 0;
@@ -2505,15 +1839,6 @@ struct FCrowdDemoSummaryMetrics
   int32 FlowTurnExitCount = 0;
   int32 ServerObstaclePenetrationCount = 0;
   int32 ClientSimObstaclePenetrationCount = 0;
-  int32 SoftSeparationAppliedAgentCount = 0;
-  int32 PbdCorrectedAgentCount = 0;
-  int32 PbdCorrectedPairCount = 0;
-  float PbdMaxPairCorrectionCm = 0.0f;
-  float PbdMaxAgentTotalCorrectionCm = 0.0f;
-  float PbdMaxObstacleReprojectDeltaCm = 0.0f;
-  float PbdMaxFinalSafetyDeltaCm = 0.0f;
-  float PbdSolverMsP95 = -1.0f;
-
-  FCrowdDemoTrafficMetrics TrafficMetrics;
+  FCrowdDemoSharedFlowMetrics SharedFlowMetrics;
   int32 CorridorDeadlockAgentCount = 0;
 };

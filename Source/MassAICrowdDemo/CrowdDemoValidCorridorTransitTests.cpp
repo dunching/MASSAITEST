@@ -81,6 +81,10 @@ bool FCrowdDemoValidCorridorTransitProgressTest::RunTest(const FString& Paramete
   TestEqual(TEXT("T4 wall passed"), Progress.WallPassedAgentIds.Num(), 20);
   TestEqual(TEXT("T4 corridor exited"), Progress.CorridorExitedAgentIds.Num(), 20);
   TestEqual(TEXT("T4 completion plane crossed"), Progress.CompletedAgentIds.Num(), 20);
+  TestTrue(TEXT("T4 group completion activates exit hold"),
+    FCrowdDemoValidCorridorTransitKernel::ShouldHoldCompletedGroup(Progress));
+  TestEqual(TEXT("T4 moving group is not settled"),
+    Progress.FinalSettledAgentIds.Num(), 0);
   TestEqual(TEXT("T4 no final deadlock"), Progress.FinalDeadlockAgentIds.Num(), 0);
   TestEqual(TEXT("T4 input order invariant progress hash"),
     Reversed.ProgressHash, Progress.ProgressHash);
@@ -88,6 +92,20 @@ bool FCrowdDemoValidCorridorTransitProgressTest::RunTest(const FString& Paramete
     FVector::Dist2D(FVector(0.0f, 800.0f, 60.0f),
       FVector(FCrowdDemoValidCorridorTransitKernel::MakeFlowConfig().GoalLocation))
       > 140.0f);
+  for (FCrowdDemoValidCorridorTransitStepAgent& Agent : Agents)
+    Agent.Velocity = FVector::ZeroVector;
+  for (int32 Step = 201;
+    Step < 201 + FCrowdDemoValidCorridorTransitKernel::StableExitSteps; ++Step)
+  {
+    FCrowdDemoValidCorridorTransitKernel::UpdateProgress(Agents, Step, Progress);
+    FCrowdDemoValidCorridorTransitKernel::UpdateProgress(Agents, Step, Reversed);
+  }
+  TestEqual(TEXT("T4 exit hold settles all agents"),
+    Progress.FinalSettledAgentIds.Num(), 20);
+  TestEqual(TEXT("T4 exit settled hash is order invariant"),
+    Reversed.ProgressHash, Progress.ProgressHash);
+  TestTrue(TEXT("T4 exit settle step recorded"),
+    Progress.GroupSettledStep != INDEX_NONE);
   return true;
 }
 
@@ -124,6 +142,8 @@ bool FCrowdDemoValidCorridorTransitProductionRolloutTest::RunTest(
   int32 FirstLocalInvalidStep = INDEX_NONE;
   for (int32 Step = 0; Step < 900; ++Step)
   {
+    const bool bExitHold =
+      FCrowdDemoValidCorridorTransitKernel::ShouldHoldCompletedGroup(Progress);
     TArray<FCrowdDemoLocalPredictiveAgent> LocalAgents;
     for (auto& State : States)
     {
@@ -132,7 +152,7 @@ bool FCrowdDemoValidCorridorTransitProductionRolloutTest::RunTest(
       float Speed = 800.0f;
       if (Sample.GuidanceDistanceCm > 0.0f)
         Speed = FMath::Min(Speed, Sample.GuidanceDistanceCm / Settings.FixedStepSeconds);
-      const FVector Desired = Sample.bUnreachable
+      const FVector Desired = Sample.bUnreachable || bExitHold
         ? FVector::ZeroVector : Sample.FlowDirection * Speed;
       FCrowdDemoLocalPredictiveAgent& Local = LocalAgents.AddDefaulted_GetRef();
       Local.AgentId = State.AgentId;
@@ -210,6 +230,10 @@ bool FCrowdDemoValidCorridorTransitProductionRolloutTest::RunTest(
     Progress.CorridorExitedAgentIds.Num(), 20);
   TestEqual(TEXT("T4 production rollout completion plane"),
     Progress.CompletedAgentIds.Num(), 20);
+  TestEqual(TEXT("T4 production rollout final settled"),
+    Progress.FinalSettledAgentIds.Num(), 20);
+  TestTrue(TEXT("T4 production rollout group settle step"),
+    Progress.GroupSettledStep != INDEX_NONE);
   TestEqual(TEXT("T4 production rollout final deadlock"),
     Progress.FinalDeadlockAgentIds.Num(), 0);
   TestEqual(TEXT("T4 production rollout unreachable"),

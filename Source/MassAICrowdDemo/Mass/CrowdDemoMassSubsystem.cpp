@@ -40,6 +40,7 @@ namespace
     TemplateData.AddFragment<FCrowdDemoRoundSimStateFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFormationFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundMoveIntentFragment>();
+    TemplateData.AddFragment<FCrowdDemoRoundFacingFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundLocalVelocityFragment>();
     TemplateData.AddFragment<FCrowdDemoTargetApproachFragment>();
     TemplateData.AddFragment<FCrowdDemoTargetCapabilityFragment>();
@@ -49,14 +50,6 @@ namespace
     TemplateData.AddFragment<FCrowdDemoOpenSpawnRelaxationFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundParticleConstraintFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundObstacleConstraintFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundPbdCorrectionFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundSeparationFragment>();
-    TemplateData.AddFragment<FCrowdDemoPortalAdmissionFragment>();
-    TemplateData.AddFragment<FCrowdDemoPassingBandFragment>();
-    TemplateData.AddFragment<FCrowdDemoPositionAssignmentFragment>();
-    TemplateData.AddFragment<FCrowdDemoPursuitSteeringStateFragment>();
-    TemplateData.AddFragment<FCrowdDemoPursuitGuidanceFragment>();
-    TemplateData.AddFragment<FCrowdDemoOrcaVelocityFragment>();
     TemplateData.AddFragment<FCrowdDemoMassVisualFragment>();
     TemplateData.AddFragment<FCrowdDemoClientAuthorityFragment>();
     TemplateData.AddFragment<FCrowdDemoClientVisualOffsetFragment>();
@@ -234,7 +227,17 @@ AActor* UCrowdDemoMassSubsystem::GetTargetActor() const
 
 void UCrowdDemoMassSubsystem::SetScenario(const ECrowdDemoScenario InScenario)
 {
-  CurrentScenario = InScenario;
+  const int32 ScenarioValue = static_cast<int32>(InScenario);
+  CurrentScenario = ScenarioValue == static_cast<int32>(ECrowdDemoScenario::SimRoundObstacle)
+      || ScenarioValue == static_cast<int32>(ECrowdDemoScenario::SimRoundSoftPressure)
+    ? InScenario
+    : ECrowdDemoScenario::SimRoundObstacle;
+  if (CurrentScenario != InScenario)
+  {
+    UE_LOG(LogTemp, Warning,
+      TEXT("CrowdDemoScenario: unsupported=%d fallback=SimRoundObstacle source=MassSubsystem"),
+      ScenarioValue);
+  }
   if (ACrowdDemoTargetActor* CrowdTargetActor = Cast<ACrowdDemoTargetActor>(TargetActor.Get()))
   {
     CrowdTargetActor->ConfigureScenario(CurrentScenario);
@@ -604,7 +607,6 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
 
   FCrowdDemoMassMovementFragment& Movement = EntityManager.GetFragmentDataChecked<FCrowdDemoMassMovementFragment>(Entity);
   Movement.ContactRadiusCm = 42.0f;
-  Movement.SeparationRadiusCm = 78.0f;
   Movement.MaxSpeedCmPerSecond = 260.0f;
   Movement.YawDegrees = 0.0f;
   Movement.DesiredVelocity = FVector::ZeroVector;
@@ -626,6 +628,8 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
 
   FCrowdDemoRoundMoveIntentFragment& RoundMoveIntent = EntityManager.GetFragmentDataChecked<FCrowdDemoRoundMoveIntentFragment>(Entity);
   RoundMoveIntent = FCrowdDemoRoundMoveIntentFragment();
+  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundFacingFragment>(Entity) =
+    FCrowdDemoRoundFacingFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundLocalVelocityFragment>(Entity) =
     FCrowdDemoRoundLocalVelocityFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoTargetApproachFragment>(Entity) =
@@ -649,10 +653,7 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundParticleConstraintFragment>(Entity) =
     FCrowdDemoRoundParticleConstraintFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundObstacleConstraintFragment>(Entity) = FCrowdDemoRoundObstacleConstraintFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundPbdCorrectionFragment>(Entity) = FCrowdDemoRoundPbdCorrectionFragment();
 
-  FCrowdDemoRoundSeparationFragment& RoundSeparation = EntityManager.GetFragmentDataChecked<FCrowdDemoRoundSeparationFragment>(Entity);
-  RoundSeparation = FCrowdDemoRoundSeparationFragment();
 
   FCrowdDemoMassVisualFragment& Visual = EntityManager.GetFragmentDataChecked<FCrowdDemoMassVisualFragment>(Entity);
   Visual.AnimState = ECrowdDemoAnimState::Idle;

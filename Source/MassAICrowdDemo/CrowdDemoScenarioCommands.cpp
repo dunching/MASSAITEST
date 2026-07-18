@@ -11,7 +11,7 @@ void SetScenario(const TArray<FString>& Args, UWorld* World)
 {
   if (!World || Args.Num() != 1)
   {
-    UE_LOG(LogTemp, Warning, TEXT("CrowdDemoCommand: usage=CrowdDemo.SetScenario <0|1|2|SimRoundObstacle|SimRoundSoftPressure|SimRoundCrowdTraffic>"));
+    UE_LOG(LogTemp, Warning, TEXT("CrowdDemoCommand: usage=CrowdDemo.SetScenario <0|1|SimRoundObstacle|SimRoundSoftPressure>"));
     return;
   }
 
@@ -30,6 +30,6 @@ void SetScenario(const TArray<FString>& Args, UWorld* World)
 
 FAutoConsoleCommandWithWorldAndArgs GSetScenario(
   TEXT("CrowdDemo.SetScenario"),
-  TEXT("Set deterministic RoundSim scenario: 0 SF1, 1 SF2, 2 SF3."),
+  TEXT("Set deterministic RoundSim scenario: 0 Shared Flow, 1 SoftPressure."),
   FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetScenario));
 }

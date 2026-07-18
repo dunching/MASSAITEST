@@ -119,6 +119,9 @@ struct FCrowdDemoSharedFlowField
   TBitArray<> Unreachable;
   TArray<FCrowdDemoNavigationSafeInterval> NavigationSafeIntervals;
   TArray<FCrowdDemoNavigationNode> NavigationNodes;
+  // Stable topology cache used by runtime attachment sampling. Each entry is
+  // sorted by NavigationNodes index (and therefore StableNodeKey).
+  TArray<TArray<int32>> NavigationCellNodes;
   TArray<FCrowdDemoNavigationEdge> NavigationEdges;
   TArray<int32> NavigationIntegrationCost;
   TArray<int32> NavigationNextNodeIndex;

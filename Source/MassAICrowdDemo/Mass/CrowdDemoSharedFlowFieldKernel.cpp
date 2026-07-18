@@ -205,6 +205,7 @@ void FCrowdDemoSharedFlowField::Reset()
   Unreachable.Reset();
   NavigationSafeIntervals.Reset();
   NavigationNodes.Reset();
+  NavigationCellNodes.Reset();
   NavigationEdges.Reset();
   NavigationIntegrationCost.Reset();
   NavigationNextNodeIndex.Reset();
@@ -370,9 +371,45 @@ namespace
     const int32 BaseCell = Field.LocationToCellIndex(Location);
     if (BaseCell == INDEX_NONE) return Candidates;
     const int32 MaxRing = FMath::Max(Field.Width, Field.Height);
+    const bool bHasCellNodeCache = Field.NavigationCellNodes.Num()
+      == Field.Width * Field.Height;
     for (int32 Ring = 0; Ring <= MaxRing && Candidates.IsEmpty(); ++Ring)
     {
-      for (int32 NodeIndex = 0; NodeIndex < Field.NavigationNodes.Num(); ++NodeIndex)
+      TArray<int32> RingNodeIndices;
+      if (bHasCellNodeCache)
+      {
+        const int32 BaseX = BaseCell % Field.Width;
+        const int32 BaseY = BaseCell / Field.Width;
+        const int32 MinX = FMath::Max(0, BaseX - Ring);
+        const int32 MaxX = FMath::Min(Field.Width - 1, BaseX + Ring);
+        const int32 MinY = FMath::Max(0, BaseY - Ring);
+        const int32 MaxY = FMath::Min(Field.Height - 1, BaseY + Ring);
+        auto AppendCell = [&](const int32 X, const int32 Y)
+        {
+          RingNodeIndices.Append(Field.NavigationCellNodes[Y * Field.Width + X]);
+        };
+        for (int32 X = MinX; X <= MaxX; ++X)
+        {
+          AppendCell(X, MinY);
+          if (MaxY != MinY) AppendCell(X, MaxY);
+        }
+        for (int32 Y = MinY + 1; Y < MaxY; ++Y)
+        {
+          AppendCell(MinX, Y);
+          if (MaxX != MinX) AppendCell(MaxX, Y);
+        }
+        RingNodeIndices.Sort();
+        for (int32 Index = RingNodeIndices.Num() - 1; Index > 0; --Index)
+          if (RingNodeIndices[Index] == RingNodeIndices[Index - 1])
+            RingNodeIndices.RemoveAt(Index, 1, EAllowShrinking::No);
+      }
+      else
+      {
+        RingNodeIndices.Reserve(Field.NavigationNodes.Num());
+        for (int32 NodeIndex = 0; NodeIndex < Field.NavigationNodes.Num(); ++NodeIndex)
+          RingNodeIndices.Add(NodeIndex);
+      }
+      for (const int32 NodeIndex : RingNodeIndices)
       {
         const auto& Node = Field.NavigationNodes[NodeIndex];
         if (NavigationNodeRingDistance(Field, Node, BaseCell) != Ring) continue;
@@ -468,12 +505,10 @@ namespace
       const FIntPoint Point = bVertical
         ? FIntPoint(FMath::RoundToInt(FixedCoordinate), Midpoint)
         : FIntPoint(Midpoint, FMath::RoundToInt(FixedCoordinate));
-      const FVector WorldPoint(
-        static_cast<float>(Point.X), static_cast<float>(Point.Y),
-        FVector(Config.GoalLocation).Z);
-      if (!FCrowdDemoSharedFlowFieldKernel::CanTraverseWorldSegment(
-          Config, WorldPoint, WorldPoint))
-        return;
+      // ClippedMin/ClippedMax already apply the contracted flow bounds and
+      // Blockers are the inclusive projections of every inflated AABB onto
+      // this axis.  Re-testing the midpoint through CanTraverseWorldSegment
+      // would scan every obstacle again without adding a different contract.
       OutIntervals.Add(Interval);
       FCrowdDemoNavigationNode Node;
       Node.Kind = Kind;
@@ -499,14 +534,9 @@ namespace
           break;
         }
       }
-      const FIntPoint Point = bVertical
-        ? FIntPoint(FMath::RoundToInt(FixedCoordinate), Coordinate)
-        : FIntPoint(Coordinate, FMath::RoundToInt(FixedCoordinate));
-      const FVector WorldPoint(
-        static_cast<float>(Point.X), static_cast<float>(Point.Y),
-        FVector(Config.GoalLocation).Z);
-      bBlocked = bBlocked || !FCrowdDemoSharedFlowFieldKernel::CanTraverseWorldSegment(
-        Config, WorldPoint, WorldPoint);
+      // The point predicate is exactly the inclusive interval test above for
+      // the production AABB obstacle contract.  Avoid the former O(cm samples
+      // * obstacle count) duplicate scan; interval endpoints remain unchanged.
       if (!bBlocked && RunStart == INDEX_NONE) RunStart = Coordinate;
       if (bBlocked && RunStart != INDEX_NONE)
       {
@@ -585,31 +615,30 @@ namespace
     Field.NavigationSafeIntervalCount = Field.NavigationSafeIntervals.Num();
     if (Field.NavigationNodes.IsEmpty()) return false;
 
-    TArray<TArray<int32>> CellNodes;
-    CellNodes.SetNum(CellCount);
+    Field.NavigationCellNodes.SetNum(CellCount);
     for (int32 NodeIndex = 0; NodeIndex < Field.NavigationNodes.Num(); ++NodeIndex)
     {
       const auto& Node = Field.NavigationNodes[NodeIndex];
-      if (CellNodes.IsValidIndex(Node.PrimaryCellKey))
-        CellNodes[Node.PrimaryCellKey].Add(NodeIndex);
+      if (Field.NavigationCellNodes.IsValidIndex(Node.PrimaryCellKey))
+        Field.NavigationCellNodes[Node.PrimaryCellKey].Add(NodeIndex);
       if (Node.SecondaryCellKey != INDEX_NONE
         && Node.SecondaryCellKey != Node.PrimaryCellKey
-        && CellNodes.IsValidIndex(Node.SecondaryCellKey))
-        CellNodes[Node.SecondaryCellKey].Add(NodeIndex);
+        && Field.NavigationCellNodes.IsValidIndex(Node.SecondaryCellKey))
+        Field.NavigationCellNodes[Node.SecondaryCellKey].Add(NodeIndex);
     }
     for (int32 Cell = 0; Cell < CellCount; ++Cell)
     {
-      CellNodes[Cell].Sort([&](const int32 A, const int32 B)
+      Field.NavigationCellNodes[Cell].Sort([&](const int32 A, const int32 B)
       {
         return Field.NavigationNodes[A].StableNodeKey
           < Field.NavigationNodes[B].StableNodeKey;
       });
-      for (int32 A = 0; A < CellNodes[Cell].Num(); ++A)
+      for (int32 A = 0; A < Field.NavigationCellNodes[Cell].Num(); ++A)
       {
-        for (int32 B = A + 1; B < CellNodes[Cell].Num(); ++B)
+        for (int32 B = A + 1; B < Field.NavigationCellNodes[Cell].Num(); ++B)
         {
-          const auto& NodeA = Field.NavigationNodes[CellNodes[Cell][A]];
-          const auto& NodeB = Field.NavigationNodes[CellNodes[Cell][B]];
+          const auto& NodeA = Field.NavigationNodes[Field.NavigationCellNodes[Cell][A]];
+          const auto& NodeB = Field.NavigationNodes[Field.NavigationCellNodes[Cell][B]];
           if (!FCrowdDemoSharedFlowFieldKernel::CanTraverseWorldSegment(
               Config, NavigationNodeLocation(Field, NodeA),
               NavigationNodeLocation(Field, NodeB)))
@@ -642,6 +671,8 @@ namespace
     TMap<uint64, int32> NodeIndexByKey;
     for (int32 NodeIndex = 0; NodeIndex < Field.NavigationNodes.Num(); ++NodeIndex)
       NodeIndexByKey.Add(Field.NavigationNodes[NodeIndex].StableNodeKey, NodeIndex);
+    TSet<uint64> EdgeIndexKeys;
+    EdgeIndexKeys.Reserve(Field.NavigationEdges.Num());
     TArray<TArray<TPair<int32, int32>>> Adjacency;
     Adjacency.SetNum(Field.NavigationNodes.Num());
     for (const auto& Edge : Field.NavigationEdges)
@@ -649,6 +680,9 @@ namespace
       const int32* A = NodeIndexByKey.Find(Edge.MinNodeKey);
       const int32* B = NodeIndexByKey.Find(Edge.MaxNodeKey);
       if (!A || !B) return false;
+      const uint32 MinIndex = static_cast<uint32>(FMath::Min(*A, *B));
+      const uint32 MaxIndex = static_cast<uint32>(FMath::Max(*A, *B));
+      EdgeIndexKeys.Add((static_cast<uint64>(MinIndex) << 32) | MaxIndex);
       Adjacency[*A].Emplace(*B, Edge.QuantizedCost);
       Adjacency[*B].Emplace(*A, Edge.QuantizedCost);
     }
@@ -736,16 +770,21 @@ namespace
     {
       if (!Field.Blocked[Cell]) continue;
       bool bConnected = false;
-      for (const auto& Edge : Field.NavigationEdges)
+      const TArray<int32>& CellNodes = Field.NavigationCellNodes[Cell];
+      for (int32 A = 0; A < CellNodes.Num() && !bConnected; ++A)
       {
-        const int32* A = NodeIndexByKey.Find(Edge.MinNodeKey);
-        const int32* B = NodeIndexByKey.Find(Edge.MaxNodeKey);
-        if (A && B
-          && NavigationNodeBelongsToCell(Field.NavigationNodes[*A], Cell)
-          && NavigationNodeBelongsToCell(Field.NavigationNodes[*B], Cell))
+        for (int32 B = A + 1; B < CellNodes.Num(); ++B)
         {
-          bConnected = true;
-          break;
+          const uint32 MinIndex = static_cast<uint32>(
+            FMath::Min(CellNodes[A], CellNodes[B]));
+          const uint32 MaxIndex = static_cast<uint32>(
+            FMath::Max(CellNodes[A], CellNodes[B]));
+          if (EdgeIndexKeys.Contains(
+              (static_cast<uint64>(MinIndex) << 32) | MaxIndex))
+          {
+            bConnected = true;
+            break;
+          }
         }
       }
       Field.CenterInvalidButConnectedCellCount += bConnected ? 1 : 0;

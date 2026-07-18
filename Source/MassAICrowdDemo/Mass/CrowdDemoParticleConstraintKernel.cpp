@@ -807,6 +807,48 @@ void FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
   TArray<FCrowdDemoParticleHardConstraint> SortedConstraints(Constraints);
   SortedConstraints.Sort(ConstraintLess);
 
+  // The overwhelmingly common safety pass is already feasible after the
+  // previous projection/quantization.  Building component arrays and an
+  // active-set system for a set with no positive residual is pure overhead.
+  // Preserve the complete path whenever a prior dual can still relax or any
+  // constraint is currently violated.  Structural validation remains part of
+  // this fast path so invalid public-kernel inputs cannot be accepted.
+  bool bStructurallyValid = true;
+  bool bHasPositiveResidual = false;
+  for (const auto& Constraint : SortedConstraints)
+  {
+    int32 AgentAIndex = Constraint.MinAgentIndex;
+    int32 AgentBIndex = Constraint.MaxAgentIndex;
+    if (!Agents.IsValidIndex(AgentAIndex)
+      || Agents[AgentAIndex].AgentId != Constraint.MinAgentId)
+      AgentAIndex = Agents.IndexOfByPredicate([&](const auto& Agent)
+      { return Agent.AgentId == Constraint.MinAgentId; });
+    if (Constraint.MaxAgentId != INDEX_NONE
+      && (!Agents.IsValidIndex(AgentBIndex)
+        || Agents[AgentBIndex].AgentId != Constraint.MaxAgentId))
+      AgentBIndex = Agents.IndexOfByPredicate([&](const auto& Agent)
+      { return Agent.AgentId == Constraint.MaxAgentId; });
+    const bool bIndicesValid = Agents.IsValidIndex(AgentAIndex)
+      && (Constraint.MaxAgentId == INDEX_NONE || Agents.IsValidIndex(AgentBIndex));
+    const bool bNumericValid =
+      FMath::Abs(Constraint.Normal.SizeSquared2D() - 1.0f) <= 0.01f
+      && FMath::Abs(Constraint.Normal.Z) <= ConstraintEpsilonCm
+      && Constraint.CoefficientScale > 0.0f;
+    bStructurallyValid &= bIndicesValid && bNumericValid;
+    bHasPositiveResidual |= Constraint.InitialDeficitCm > ConstraintEpsilonCm;
+  }
+  if (!bStructurallyValid)
+  {
+    OutSummary.bValid = false;
+    OutSummary.InfeasibleConstraintCount = SortedConstraints.Num();
+    return;
+  }
+  if (!bHasPositiveResidual && InOutDualStates.IsEmpty())
+  {
+    OutSummary.bValid = true;
+    return;
+  }
+
   // Build deterministic connected components in agent-id space. Environment
   // constraints remain attached to their agent; pair constraints union both
   // endpoints. Each existing outer iteration still performs exactly one
@@ -1536,6 +1578,78 @@ void FCrowdDemoParticleConstraintKernel::Solve(
 
   constexpr float HardProtectionBandCm = 2.0f;
   const int32 SafetyIterationCount = FMath::Max(1, Settings.SafetyIterationCount);
+  const auto TryFastQuantizeHardComponents = [&](const TArray<FVector>& ContinuousPositions,
+    const TArray<FCrowdDemoParticleConstraintPair>& PairGraph,
+    TArray<FVector>& OutQuantizedPositions)
+  {
+    const float Quantum = FMath::Max(Settings.PositionQuantumCm, KINDA_SMALL_NUMBER);
+    if (ContinuousPositions.Num() != SortedAgents.Num()) return false;
+    OutQuantizedPositions.SetNumUninitialized(ContinuousPositions.Num());
+    for (int32 AgentIndex = 0; AgentIndex < ContinuousPositions.Num(); ++AgentIndex)
+    {
+      // Zero-mobility agents use the existing specialized lattice rule.  The
+      // production crowd has positive mobility, so keep that uncommon case on
+      // the complete path instead of duplicating its semantics here.
+      if (SortedAgents[AgentIndex].Mobility <= SMALL_NUMBER) return false;
+      const FVector& Continuous = ContinuousPositions[AgentIndex];
+      const int32 FloorX = FMath::FloorToInt(Continuous.X / Quantum);
+      const int32 CeilX = FMath::CeilToInt(Continuous.X / Quantum);
+      const int32 FloorY = FMath::FloorToInt(Continuous.Y / Quantum);
+      const int32 CeilY = FMath::CeilToInt(Continuous.Y / Quantum);
+      bool bHasBest = false;
+      double BestErrorSquared = 0.0;
+      int32 BestX = 0;
+      int32 BestY = 0;
+      const int32 XValues[2] = {FloorX, CeilX};
+      const int32 YValues[2] = {FloorY, CeilY};
+      for (const int32 X : XValues)
+      {
+        for (const int32 Y : YValues)
+        {
+          const FVector Candidate(X * Quantum, Y * Quantum, Continuous.Z);
+          const double ErrorSquared = FVector::DistSquared2D(Candidate, Continuous);
+          const bool bBetter = !bHasBest
+            || ErrorSquared < BestErrorSquared - 1.0e-9
+            || (FMath::IsNearlyEqual(ErrorSquared, BestErrorSquared, 1.0e-9)
+              && (X < BestX || (X == BestX && Y < BestY)));
+          if (!bBetter) continue;
+          bHasBest = true;
+          BestErrorSquared = ErrorSquared;
+          BestX = X;
+          BestY = Y;
+        }
+      }
+      OutQuantizedPositions[AgentIndex] = FVector(
+        BestX * Quantum, BestY * Quantum, Continuous.Z);
+    }
+
+    TArray<FCrowdDemoParticleEnvironmentContact> Contacts;
+    if (!BuildEnvironmentContacts(SortedAgents, OutQuantizedPositions,
+        Environment, Contacts)
+      || Contacts.ContainsByPredicate([](const auto& Contact)
+      {
+        return Contact.HardDeficitCm > ConstraintEpsilonCm;
+      }))
+      return false;
+
+    for (const auto& Pair : PairGraph)
+    {
+      if (!SortedAgents.IsValidIndex(Pair.MinAgentIndex)
+        || !SortedAgents.IsValidIndex(Pair.MaxAgentIndex)) return false;
+      const auto& A = SortedAgents[Pair.MinAgentIndex];
+      const auto& B = SortedAgents[Pair.MaxAgentIndex];
+      const float Required = PairHardDistance(A, B);
+      if (FVector::Dist2D(OutQuantizedPositions[Pair.MinAgentIndex],
+          OutQuantizedPositions[Pair.MaxAgentIndex]) + ConstraintEpsilonCm < Required)
+        return false;
+      const FSweptDistance Swept = EvaluateSweptDistance(
+        A.StartPosition, OutQuantizedPositions[Pair.MinAgentIndex],
+        B.StartPosition, OutQuantizedPositions[Pair.MaxAgentIndex],
+        Pair.MinAgentId, Pair.MaxAgentId);
+      if (Swept.Distance + ConstraintEpsilonCm < Required) return false;
+    }
+    return true;
+  };
   const auto QuantizeHardComponents = [&](const TArray<FVector>& ContinuousPositions,
     const TArray<FCrowdDemoParticleConstraintPair>& PairGraph,
     TArray<FVector>& OutQuantizedPositions)
@@ -1881,7 +1995,9 @@ void FCrowdDemoParticleConstraintKernel::Solve(
     TArray<FCrowdDemoParticleConstraintPair> LatticePairGraph;
     BuildCandidatePairs(SortedAgents, Positions, LatticePairGraph);
     TArray<FVector> JointQuantizedPositions;
-    if (QuantizeHardComponents(Positions, LatticePairGraph, JointQuantizedPositions))
+    if (TryFastQuantizeHardComponents(
+        Positions, LatticePairGraph, JointQuantizedPositions)
+      || QuantizeHardComponents(Positions, LatticePairGraph, JointQuantizedPositions))
     {
       Positions = MoveTemp(JointQuantizedPositions);
     }

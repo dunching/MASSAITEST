@@ -132,7 +132,9 @@ void FCrowdDemoSoftPressureRouteDiagnosticKernel::RecordStep(
 
     const bool bInsideGoalAtPredict = FVector::DistSquared2D(
       Sample.PredictStartLocation, Sample.Goal) <= FMath::Square(GoalRadiusCm);
-    if (!bInsideGoalAtPredict)
+    if (Sample.bFlowGuidanceOwner)
+      ++Agent->FlowGuidanceOwnedSampleCount;
+    if (Sample.bFlowGuidanceOwner && !bInsideGoalAtPredict)
     {
       const FVector ExpectedDesired = Sample.FlowDirection * Sample.MaxSpeedCmps;
       int32 FlowViolationMask = 0;
@@ -267,7 +269,7 @@ void FCrowdDemoSoftPressureRouteDiagnosticKernel::BuildSummary(
     const auto* Agent = FindAgent(Agents, Queue[Head]);
     if (!Agent) continue;
     for (const int32 NeighborId : Agent->FinalActiveNeighborAgentIds)
-      if (!SelectedIds.Contains(NeighborId))
+      if (FindAgent(Agents, NeighborId) && !SelectedIds.Contains(NeighborId))
       {
         SelectedIds.Add(NeighborId);
         Queue.Add(NeighborId);
@@ -288,7 +290,7 @@ void FCrowdDemoSoftPressureRouteDiagnosticKernel::BuildSummary(
     for (int32 Head = 0; Head < ComponentQueue.Num(); ++Head)
       if (const auto* Current = FindAgent(Agents, ComponentQueue[Head]))
         for (const int32 NeighborId : Current->FinalActiveNeighborAgentIds)
-          if (!Component.Contains(NeighborId))
+          if (FindAgent(Agents, NeighborId) && !Component.Contains(NeighborId))
           {
             Component.Add(NeighborId);
             ComponentQueue.Add(NeighborId);
@@ -383,6 +385,7 @@ void FCrowdDemoSoftPressureRouteDiagnosticKernel::BuildSummary(
     Hash = Fold(Hash, Agent.bEverReachedGoal ? 1 : 0);
     Hash = Fold(Hash, Agent.GoalBoundaryTransitionCount);
     Hash = Fold(Hash, Agent.CurrentLowSpeedSteps);
+    Hash = Fold(Hash, Agent.FlowGuidanceOwnedSampleCount);
     Hash = Fold(Hash, Result.ConstraintComponentSize);
     for (const int32 NeighborId : Agent.FinalActiveNeighborAgentIds)
       Hash = Fold(Hash, NeighborId);

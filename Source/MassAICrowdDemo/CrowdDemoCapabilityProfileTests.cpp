@@ -18,6 +18,12 @@ bool FCrowdDemoCapabilityProfileContractTest::RunTest(const FString& Parameters)
   TestEqual(TEXT("P0 profile count"), Profiles.Num(), 7);
   for (const auto& Profile : Profiles)
     TestTrue(TEXT("P0 profile valid"), Profile.bValid);
+  TestEqual(TEXT("melee keeps strict distance band"),
+    Profiles[0].TargetDistanceResponsePolicy,
+    ECrowdDemoTargetDistanceResponsePolicy::StrictBand);
+  TestEqual(TEXT("ranged uses acquire then hold"),
+    Profiles[1].TargetDistanceResponsePolicy,
+    ECrowdDemoTargetDistanceResponsePolicy::AcquireThenHold);
 
   TestEqual(TEXT("small-large hard distance"),
     FCrowdDemoCapabilityProfileKernel::ComputePairHardDistanceCm(
@@ -74,6 +80,10 @@ bool FCrowdDemoCapabilityProfileContractTest::RunTest(const FString& Parameters)
   ExpectChangedKey([](auto& P) { P.MaximumCenterDistanceCm += 1.0f; }, TEXT("maximum changes key"));
   ExpectChangedKey([](auto& P) { P.TargetPhysicalRadiusCm += 1.0f; }, TEXT("target radius changes key"));
   ExpectChangedKey([](auto& P) { P.TargetHardSafetyGapCm += 1.0f; }, TEXT("target gap changes key"));
+  ExpectChangedKey([](auto& P)
+  {
+    P.TargetDistanceResponsePolicy = ECrowdDemoTargetDistanceResponsePolicy::AcquireThenHold;
+  }, TEXT("distance response policy changes key"));
   return true;
 }
 
@@ -410,6 +420,8 @@ bool FCrowdDemoHeterogeneousTransitProductionRolloutTest::RunTest(
   bool bAllSafetyValid = true;
   for (int32 Step = 0; Step < 900; ++Step)
   {
+    const bool bExitHold =
+      FCrowdDemoValidCorridorTransitKernel::ShouldHoldCompletedGroup(Progress);
     TArray<FCrowdDemoParticleConstraintAgent> ParticleAgents;
     for (auto& State : States)
     {
@@ -420,7 +432,7 @@ bool FCrowdDemoHeterogeneousTransitProductionRolloutTest::RunTest(
       float Speed = 800.0f;
       if (Sample.GuidanceDistanceCm > 0.0f)
         Speed = FMath::Min(Speed, Sample.GuidanceDistanceCm / Settings.FixedStepSeconds);
-      const FVector Desired = Sample.bUnreachable
+      const FVector Desired = Sample.bUnreachable || bExitHold
         ? FVector::ZeroVector : Sample.FlowDirection * Speed;
       const int32 FormationIndex = State.AgentId - 100;
       const auto* Profile = ProfileByFormation.FindRef(FormationIndex);
@@ -463,6 +475,10 @@ bool FCrowdDemoHeterogeneousTransitProductionRolloutTest::RunTest(
     Progress.CorridorExitedAgentIds.Num(), 20);
   TestEqual(TEXT("T6A production rollout completed"),
     Progress.CompletedAgentIds.Num(), 20);
+  TestEqual(TEXT("T6A production rollout final settled"),
+    Progress.FinalSettledAgentIds.Num(), 20);
+  TestTrue(TEXT("T6A production rollout group settle step"),
+    Progress.GroupSettledStep != INDEX_NONE);
   TestEqual(TEXT("T6A production rollout final deadlock"),
     Progress.FinalDeadlockAgentIds.Num(), 0);
   TestEqual(TEXT("T6A production rollout unreachable"),

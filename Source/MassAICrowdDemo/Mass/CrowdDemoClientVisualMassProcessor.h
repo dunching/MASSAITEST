@@ -22,6 +22,7 @@ private:
   FMassEntityQuery EntityQuery;
   TWeakObjectPtr<ACrowdDemoReplicator> CachedVisualOwner;
   double LastVisualLogSeconds = 0.0;
+  double LastTargetMarkerDrawSeconds = -1.0;
   uint32 LastVisualStateMask = 0;
   int32 LastHitFlashActiveCount = 0;
   bool bRebuildInstancesNextFrame = false;

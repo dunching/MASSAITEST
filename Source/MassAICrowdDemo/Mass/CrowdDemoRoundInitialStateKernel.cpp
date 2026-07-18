@@ -63,6 +63,11 @@ namespace
     Hash = FoldQuantized(Hash, Rules.TargetMotion.InitialLocation.Y, 0.1f);
     Hash = FoldQuantized(Hash, Rules.TargetMotion.LinearVelocity.X, 0.1f);
     Hash = FoldQuantized(Hash, Rules.TargetMotion.LinearVelocity.Y, 0.1f);
+    Hash = Fold(Hash, Rules.TargetMotion.bReflectAtMotionBounds);
+    Hash = FoldQuantized(Hash, Rules.TargetMotion.MotionBoundsMin.X, 0.1f);
+    Hash = FoldQuantized(Hash, Rules.TargetMotion.MotionBoundsMin.Y, 0.1f);
+    Hash = FoldQuantized(Hash, Rules.TargetMotion.MotionBoundsMax.X, 0.1f);
+    Hash = FoldQuantized(Hash, Rules.TargetMotion.MotionBoundsMax.Y, 0.1f);
     return Hash;
   }
 }

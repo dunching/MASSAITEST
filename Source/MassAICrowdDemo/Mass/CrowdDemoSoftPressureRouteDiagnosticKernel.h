@@ -40,6 +40,9 @@ struct FCrowdDemoSoftPressureRouteStepSample
   TArray<int32> ActiveNeighborAgentIds;
   float FixedStepSeconds = 1.0f / 30.0f;
   float MaxSpeedCmps = 900.0f;
+  // The Shared Flow velocity contract only applies while Shared Flow owns the
+  // preferred velocity. Target transport/terminal settle are different owners.
+  bool bFlowGuidanceOwner = true;
 };
 
 struct FCrowdDemoSoftPressureRouteAgentAccumulator
@@ -86,6 +89,7 @@ struct FCrowdDemoSoftPressureRouteAgentAccumulator
   bool bEverCorridorStalled = false;
   bool bFinalCorridorDeadlock = false;
   int32 FlowContractViolationCount = 0;
+  int32 FlowGuidanceOwnedSampleCount = 0;
   int32 FirstFlowContractViolationStep = INDEX_NONE;
   int32 FirstFlowContractViolationMask = 0;
   float FirstFlowContractViolationPredictDistanceCm = 0.0f;

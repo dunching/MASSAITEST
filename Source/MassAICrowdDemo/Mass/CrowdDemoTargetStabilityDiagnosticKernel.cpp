@@ -37,6 +37,276 @@ const FCrowdDemoTargetStabilityAgentSample* FindAgent(
     ? &Step.Agents[Index] : nullptr;
 }
 
+const FCrowdDemoTargetStabilityRegionSample* FindRegion(
+  const FCrowdDemoTargetStabilityStepSample& Step,
+  const uint32 CohortKey, const int32 RegionKey)
+{
+  for (const auto& Region : Step.Regions)
+    if (Region.CohortKey == CohortKey && Region.RegionKey == RegionKey)
+      return &Region;
+  return nullptr;
+}
+
+int32 RemainingPlanEdgesToRegion(
+  const FCrowdDemoTargetStabilityStepSample& Step,
+  const uint32 CohortKey, const int32 StartCellKey, const int32 RegionKey)
+{
+  if (StartCellKey == INDEX_NONE) return INDEX_NONE;
+  TMap<int32, TArray<int32>> Adjacency;
+  TSet<int32> TerminalCells;
+  for (const auto& Edge : Step.Edges)
+  {
+    if (Edge.CohortKey != CohortKey || Edge.AgentQuota <= 0) continue;
+    Adjacency.FindOrAdd(Edge.FromCellKey).AddUnique(Edge.ToCellKey);
+    if (Edge.bToTerminal && Edge.ToRegionKey == RegionKey)
+      TerminalCells.Add(Edge.ToCellKey);
+  }
+  for (auto& Pair : Adjacency) Pair.Value.Sort();
+  if (TerminalCells.Contains(StartCellKey)) return 0;
+  TArray<int32> Queue = {StartCellKey};
+  TArray<int32> Distance = {0};
+  TSet<int32> Visited = {StartCellKey};
+  for (int32 Head = 0; Head < Queue.Num(); ++Head)
+  {
+    const TArray<int32>* NextCells = Adjacency.Find(Queue[Head]);
+    if (!NextCells) continue;
+    for (const int32 Next : *NextCells)
+    {
+      if (Visited.Contains(Next)) continue;
+      const int32 NextDistance = Distance[Head] + 1;
+      if (TerminalCells.Contains(Next)) return NextDistance;
+      Visited.Add(Next);
+      Queue.Add(Next);
+      Distance.Add(NextDistance);
+    }
+  }
+  return INDEX_NONE;
+}
+
+int32 AgentRemainingPlanEdgesToRegion(
+  const FCrowdDemoTargetStabilityStepSample& Step,
+  const FCrowdDemoTargetStabilityAgentSample& Agent,
+  const uint32 CohortKey, const int32 RegionKey)
+{
+  if (Agent.CohortKey != CohortKey) return INDEX_NONE;
+  if (Agent.GuidanceMode == ECrowdDemoTargetRegionGuidanceMode::Transport
+    && Agent.NextCellKey != INDEX_NONE)
+  {
+    const int32 AfterNext = RemainingPlanEdgesToRegion(
+      Step, CohortKey, Agent.NextCellKey, RegionKey);
+    return AfterNext == INDEX_NONE ? INDEX_NONE : AfterNext + 1;
+  }
+  return RemainingPlanEdgesToRegion(
+    Step, CohortKey, Agent.CurrentCellKey, RegionKey);
+}
+
+FCrowdDemoTargetStabilityCounterfactualSummary BuildCoverageCounterfactual(
+  const FCrowdDemoTargetStabilityRuntime& Runtime,
+  const uint32 CohortKey, const int32 RegionKey)
+{
+  FCrowdDemoTargetStabilityCounterfactualSummary Result;
+  Result.CohortKey = CohortKey;
+  Result.RegionKey = RegionKey;
+  if (!Runtime.bInputValid || Runtime.Steps.Num() < 2
+    || RegionKey == INDEX_NONE)
+  {
+    Result.Outcome = ECrowdDemoTargetStabilityCounterfactualOutcome::Invalid;
+    return Result;
+  }
+
+  TSet<int32> HeldTerminalAgents;
+  TSet<int32> PreviousActualTerminalAgents;
+  const FCrowdDemoTargetStabilityStepSample* PreviousStep = nullptr;
+  int32 PreviousMinimumRemainingEdges = INDEX_NONE;
+  for (const FCrowdDemoTargetStabilityStepSample& Step : Runtime.Steps)
+  {
+    const auto* Region = FindRegion(Step, CohortKey, RegionKey);
+    if (!Region) continue;
+    const bool bMissing = Region->bFeasible && Region->DesiredPopulation > 0
+      && Region->CurrentPopulation < Region->DesiredPopulation;
+    Result.BaselineMissingStepCount += bMissing ? 1 : 0;
+
+    int32 InFlightCount = 0;
+    int32 MinimumRemaining = INDEX_NONE;
+    int32 MinimumRemainingAgentId = INDEX_NONE;
+    bool bRecoveredAttachment = false;
+    for (const auto& Agent : Step.Agents)
+    {
+      if (Agent.CohortKey != CohortKey || !Agent.bSupply) continue;
+      const int32 Remaining = AgentRemainingPlanEdgesToRegion(
+        Step, Agent, CohortKey, RegionKey);
+      if (Agent.GuidanceMode == ECrowdDemoTargetRegionGuidanceMode::Transport
+        && Remaining != INDEX_NONE)
+      {
+        ++InFlightCount;
+        if (MinimumRemaining == INDEX_NONE || Remaining < MinimumRemaining
+          || (Remaining == MinimumRemaining
+            && (MinimumRemainingAgentId == INDEX_NONE
+              || Agent.AgentId < MinimumRemainingAgentId)))
+        {
+          MinimumRemaining = Remaining;
+          MinimumRemainingAgentId = Agent.AgentId;
+        }
+      }
+      if (!PreviousStep || Agent.GuidanceMode
+          == ECrowdDemoTargetRegionGuidanceMode::Transport
+        || Remaining == INDEX_NONE
+        || PreviousStep->FeasibleGraphHash == Step.FeasibleGraphHash
+        || PreviousStep->TargetRevision != Step.TargetRevision)
+        continue;
+      const auto* PreviousAgent = FindAgent(*PreviousStep, Agent.AgentId);
+      if (PreviousAgent && PreviousAgent->CohortKey == CohortKey
+        && PreviousAgent->GuidanceMode
+          == ECrowdDemoTargetRegionGuidanceMode::Transport
+        && (Agent.CurrentCellKey == PreviousAgent->CurrentCellKey
+          || Agent.CurrentCellKey == PreviousAgent->NextCellKey))
+        bRecoveredAttachment = true;
+    }
+    if (bMissing && InFlightCount > 0)
+    {
+      ++Result.AttachmentObservedInFlightStepCount;
+      Result.AttachmentRemainingEdgeCountMin =
+        Result.AttachmentRemainingEdgeCountMin == INDEX_NONE
+          ? MinimumRemaining
+          : FMath::Min(Result.AttachmentRemainingEdgeCountMin, MinimumRemaining);
+      Result.AttachmentRemainingEdgeCountMax = FMath::Max(
+        Result.AttachmentRemainingEdgeCountMax, MinimumRemaining);
+      if (PreviousMinimumRemainingEdges != INDEX_NONE)
+      {
+        if (MinimumRemaining < PreviousMinimumRemainingEdges)
+          ++Result.AttachmentRemainingEdgeDecreaseCount;
+        else if (MinimumRemaining > PreviousMinimumRemainingEdges)
+          ++Result.AttachmentRemainingEdgeIncreaseCount;
+        else
+          ++Result.AttachmentRemainingEdgeUnchangedCount;
+      }
+      PreviousMinimumRemainingEdges = MinimumRemaining;
+    }
+    else
+    {
+      PreviousMinimumRemainingEdges = INDEX_NONE;
+    }
+    if (bMissing && bRecoveredAttachment)
+      ++Result.AttachmentRecoveredGuidanceStepCount;
+    if (&Step == &Runtime.Steps.Last())
+    {
+      Result.AttachmentFinalInFlightAgentCount = InFlightCount;
+      Result.AttachmentFinalInFlightAgentId = MinimumRemainingAgentId;
+      Result.AttachmentFinalMinimumRemainingEdgeCount = MinimumRemaining;
+      if (const auto* Agent = FindAgent(Step, MinimumRemainingAgentId))
+        Result.AttachmentFinalRelativeSpeedCmps =
+          (Agent->AppliedVelocity - Agent->TargetVelocity).Size();
+      Result.bAttachmentChangesFinalGuidance = bRecoveredAttachment;
+    }
+
+    TSet<int32> CurrentActualTerminalAgents;
+    TMap<int32, int32> ActualTerminalRegionByAgent;
+    for (const auto& CandidateRegion : Step.Regions)
+      if (CandidateRegion.CohortKey == CohortKey)
+        for (const int32 AgentId : CandidateRegion.TerminalAgentIds)
+        {
+          if (const int32* Existing = ActualTerminalRegionByAgent.Find(AgentId))
+          {
+            if (*Existing != CandidateRegion.RegionKey)
+              ++Result.PopulationConservationViolationCount;
+          }
+          else ActualTerminalRegionByAgent.Add(AgentId, CandidateRegion.RegionKey);
+          if (CandidateRegion.RegionKey == RegionKey)
+            CurrentActualTerminalAgents.Add(AgentId);
+        }
+
+    for (const int32 PreviousAgentId : PreviousActualTerminalAgents)
+    {
+      if (CurrentActualTerminalAgents.Contains(PreviousAgentId)) continue;
+      const auto* Agent = FindAgent(Step, PreviousAgentId);
+      const int32* OtherRegion = ActualTerminalRegionByAgent.Find(PreviousAgentId);
+      const bool bCrossRegion = OtherRegion && *OtherRegion != RegionKey;
+      const bool bEligible = Agent && Agent->CohortKey == CohortKey
+        && Agent->CurrentRegionKey == RegionKey && Agent->RegionSurplusCount <= 0
+        && Region->bFeasible && Region->DesiredPopulation > 0 && !bCrossRegion;
+      if (bEligible)
+      {
+        HeldTerminalAgents.Add(PreviousAgentId);
+        ++Result.TerminalEligibleHoldTransitionCount;
+      }
+      else if (bCrossRegion)
+      {
+        HeldTerminalAgents.Remove(PreviousAgentId);
+        ++Result.TerminalCrossRegionRejectCount;
+      }
+    }
+    for (const int32 AgentId : CurrentActualTerminalAgents)
+      HeldTerminalAgents.Add(AgentId);
+    TArray<int32> HeldArray = HeldTerminalAgents.Array();
+    for (const int32 AgentId : HeldArray)
+    {
+      if (CurrentActualTerminalAgents.Contains(AgentId)) continue;
+      const auto* Agent = FindAgent(Step, AgentId);
+      const int32* OtherRegion = ActualTerminalRegionByAgent.Find(AgentId);
+      const bool bCrossRegion = OtherRegion && *OtherRegion != RegionKey;
+      if (!Agent || Agent->CohortKey != CohortKey
+        || Agent->CurrentRegionKey != RegionKey || Agent->RegionSurplusCount > 0
+        || !Region->bFeasible || Region->DesiredPopulation <= 0 || bCrossRegion)
+      {
+        HeldTerminalAgents.Remove(AgentId);
+        if (bCrossRegion) ++Result.TerminalCrossRegionRejectCount;
+      }
+    }
+    int32 HeldOnlyCount = 0;
+    for (const int32 AgentId : HeldTerminalAgents)
+      HeldOnlyCount += CurrentActualTerminalAgents.Contains(AgentId) ? 0 : 1;
+    const int32 VirtualPopulation = Region->CurrentPopulation + HeldOnlyCount;
+    if (bMissing && VirtualPopulation >= Region->DesiredPopulation)
+      ++Result.TerminalRecoveredCoverageStepCount;
+    if (&Step == &Runtime.Steps.Last())
+    {
+      Result.TerminalFinalHeldAgentCount = HeldOnlyCount;
+      Result.bTerminalRestoresFinalObservedCoverage = bMissing
+        && VirtualPopulation >= Region->DesiredPopulation;
+    }
+    PreviousActualTerminalAgents = MoveTemp(CurrentActualTerminalAgents);
+    PreviousStep = &Step;
+  }
+
+  const bool bAttachment = Result.bAttachmentChangesFinalGuidance;
+  const bool bTerminal = Result.bTerminalRestoresFinalObservedCoverage;
+  Result.Outcome = bAttachment && bTerminal
+    ? ECrowdDemoTargetStabilityCounterfactualOutcome::Both
+    : bAttachment
+      ? ECrowdDemoTargetStabilityCounterfactualOutcome::AttachmentGuidanceOnly
+      : bTerminal
+        ? ECrowdDemoTargetStabilityCounterfactualOutcome::TerminalRetentionOnly
+        : ECrowdDemoTargetStabilityCounterfactualOutcome::Neither;
+  uint32 Hash = FnvOffset;
+  Fold(Hash, static_cast<int32>(Result.CohortKey));
+  Fold(Hash, Result.RegionKey);
+  Fold(Hash, Result.BaselineMissingStepCount);
+  Fold(Hash, Result.AttachmentObservedInFlightStepCount);
+  Fold(Hash, Result.AttachmentRecoveredGuidanceStepCount);
+  Fold(Hash, Result.AttachmentFinalInFlightAgentCount);
+  Fold(Hash, Result.AttachmentFinalInFlightAgentId);
+  Fold(Hash, Result.AttachmentFinalMinimumRemainingEdgeCount);
+  Fold(Hash, Result.AttachmentRemainingEdgeCountMin);
+  Fold(Hash, Result.AttachmentRemainingEdgeCountMax);
+  Fold(Hash, Result.AttachmentRemainingEdgeDecreaseCount);
+  Fold(Hash, Result.AttachmentRemainingEdgeIncreaseCount);
+  Fold(Hash, Result.AttachmentRemainingEdgeUnchangedCount);
+  Fold(Hash, Q(Result.AttachmentFinalRelativeSpeedCmps));
+  Fold(Hash, Result.bAttachmentChangesFinalGuidance ? 1 : 0);
+  Fold(Hash, Result.TerminalEligibleHoldTransitionCount);
+  Fold(Hash, Result.TerminalRecoveredCoverageStepCount);
+  Fold(Hash, Result.TerminalFinalHeldAgentCount);
+  Fold(Hash, Result.TerminalCrossRegionRejectCount);
+  Fold(Hash, Result.PopulationConservationViolationCount);
+  Fold(Hash, Result.bTerminalRestoresFinalObservedCoverage ? 1 : 0);
+  Fold(Hash, static_cast<int32>(Result.Outcome));
+  Result.StableHash = Hash;
+  Result.bValid = Result.PopulationConservationViolationCount == 0;
+  if (!Result.bValid)
+    Result.Outcome = ECrowdDemoTargetStabilityCounterfactualOutcome::Invalid;
+  return Result;
+}
+
 bool IsTerminal(const FCrowdDemoTargetStabilityAgentSample& Agent)
 {
   return Agent.GuidanceMode == ECrowdDemoTargetRegionGuidanceMode::TerminalSettle
@@ -46,10 +316,13 @@ bool IsTerminal(const FCrowdDemoTargetStabilityAgentSample& Agent)
 ECrowdDemoTargetRegionCoverageLossStage ClassifyCoverageLoss(
   const FCrowdDemoTargetStabilityRegionSample& Region)
 {
-  if (!Region.bFeasible || Region.CurrentPopulation > 0)
+  // A feasible region is only part of the current coverage contract when the
+  // deterministic demand solver assigned population to it.  In heterogeneous
+  // cohorts there are commonly more feasible regions than agents, so treating
+  // every empty feasible region as a demand failure creates false gaps.
+  if (!Region.bFeasible || Region.CurrentPopulation > 0
+    || Region.DesiredPopulation <= 0)
     return ECrowdDemoTargetRegionCoverageLossStage::None;
-  if (Region.DesiredPopulation <= 0)
-    return ECrowdDemoTargetRegionCoverageLossStage::Demand;
   if (Region.PrimaryIncomingPlanQuota <= 0)
     return ECrowdDemoTargetRegionCoverageLossStage::PlanQuota;
   if (Region.PrimaryIncomingConsumedQuota <= 0
@@ -278,6 +551,7 @@ void FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(
     for (const auto& Agent : Step.Agents)
     {
       Fold(Hash, Agent.AgentId);
+      Fold(Hash, static_cast<int32>(Agent.CohortKey));
       Fold(Hash, Agent.CurrentCellKey);
       Fold(Hash, Agent.NextCellKey);
       Fold(Hash, Agent.CurrentRegionKey);
@@ -440,7 +714,9 @@ void FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(
   }
   for (const FCrowdDemoTargetStabilityRegionSample& Region : OutSummary.FinalRegions)
   {
-    if (!Region.bFeasible || Region.CurrentPopulation > 0) continue;
+    if (!Region.bFeasible || Region.CurrentPopulation > 0
+      || Region.DesiredPopulation <= 0)
+      continue;
     ++OutSummary.FinalMissingRegionCount;
     if (OutSummary.FirstMissingRegionKey == INDEX_NONE)
     {
@@ -448,6 +724,14 @@ void FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(
       OutSummary.FirstMissingCohortKey = Region.CohortKey;
       OutSummary.FirstMissingRegionStage = ClassifyCoverageLoss(Region);
     }
+  }
+  if (OutSummary.FirstMissingRegionKey != INDEX_NONE)
+  {
+    OutSummary.Counterfactual = BuildCoverageCounterfactual(
+      Runtime, OutSummary.FirstMissingCohortKey,
+      OutSummary.FirstMissingRegionKey);
+    Fold(Hash, OutSummary.Counterfactual.bValid ? 1 : 0);
+    Fold(Hash, static_cast<int32>(OutSummary.Counterfactual.StableHash));
   }
   if (Runtime.Steps.Num() < Runtime.Settings.ParticleSettlingSteps)
   {

@@ -233,13 +233,16 @@ bool FCrowdDemoTargetStabilityDiagnosticTest::RunTest(const FString& Parameters)
       FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(Runtime, Summary);
       return Summary;
     };
-    const auto Demand = BuildLoss(ECrowdDemoTargetRegionCoverageLossStage::Demand);
+    const auto Unassigned = BuildLoss(ECrowdDemoTargetRegionCoverageLossStage::Demand);
     const auto Plan = BuildLoss(ECrowdDemoTargetRegionCoverageLossStage::PlanQuota);
     const auto Guidance = BuildLoss(ECrowdDemoTargetRegionCoverageLossStage::Guidance);
     const auto Retention = BuildLoss(
       ECrowdDemoTargetRegionCoverageLossStage::TerminalRetention);
-    TestEqual(TEXT("demand loss stage"), static_cast<int32>(Demand.FirstMissingRegionStage),
-      static_cast<int32>(ECrowdDemoTargetRegionCoverageLossStage::Demand));
+    TestEqual(TEXT("an empty feasible region with zero deterministic demand is not a gap"),
+      Unassigned.FinalMissingRegionCount, 0);
+    TestEqual(TEXT("an unassigned region has no loss stage"),
+      static_cast<int32>(Unassigned.FirstMissingRegionStage),
+      static_cast<int32>(ECrowdDemoTargetRegionCoverageLossStage::None));
     TestEqual(TEXT("plan loss stage"), static_cast<int32>(Plan.FirstMissingRegionStage),
       static_cast<int32>(ECrowdDemoTargetRegionCoverageLossStage::PlanQuota));
     TestEqual(TEXT("guidance loss stage"),
@@ -304,6 +307,170 @@ bool FCrowdDemoTargetStabilityDiagnosticTest::RunTest(const FString& Parameters)
     FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(ReversedRuntime, Reversed);
     TestEqual(TEXT("region input order stable hash"), Reversed.StableHash, Summary.StableHash);
   }
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoTargetStabilityCounterfactualTest,
+  "CrowdDemo.SF.TargetStabilityCounterfactual",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoTargetStabilityCounterfactualTest::RunTest(
+  const FString& Parameters)
+{
+  auto MakeCounterfactualRuntime = []
+  {
+    FCrowdDemoTargetStabilityRuntime Runtime;
+    Runtime.Settings.ExpectedAgentCount = 1;
+    Runtime.Settings.StableWindowSteps = 8;
+    Runtime.Settings.ParticleSettlingSteps = 2;
+    return Runtime;
+  };
+  auto MakeMissingRegion = []
+  {
+    FCrowdDemoTargetStabilityRegionSample Region;
+    Region.CohortKey = 77;
+    Region.RegionKey = 13;
+    Region.bFeasible = true;
+    Region.AvailableCapacity = 1;
+    Region.DesiredPopulation = 1;
+    Region.Deficit = 1;
+    Region.PrimaryIncomingPlanQuota = 1;
+    return Region;
+  };
+  auto MakeRouteEdge = [](const int32 From, const int32 To,
+    const bool bTerminal)
+  {
+    FCrowdDemoTargetStabilityEdgeSample Edge;
+    Edge.CohortKey = 77;
+    Edge.FromCellKey = From;
+    Edge.ToCellKey = To;
+    Edge.FromRegionKey = 12;
+    Edge.ToRegionKey = bTerminal ? 13 : 12;
+    Edge.AgentQuota = 1;
+    Edge.bToTerminal = bTerminal;
+    return Edge;
+  };
+
+  auto First = MakeStep(1);
+  First.Agents.SetNum(1);
+  First.Agents[0] = MakeAgent(
+    5, 11, ECrowdDemoTargetRegionGuidanceMode::Transport);
+  First.Agents[0].CohortKey = 77;
+  First.Agents[0].CurrentCellKey = 10;
+  First.Agents[0].CurrentRegionKey = 12;
+  First.Agents[0].bSupply = true;
+  First.Regions = {MakeMissingRegion()};
+  First.Edges = {MakeRouteEdge(10, 11, false), MakeRouteEdge(11, 12, true)};
+  First.FeasibleGraphHash = 100;
+  First.InsideBandCount = 0;
+  First.CoverageCount = 0;
+  First.RequiredCoverageCount = 1;
+
+  auto Second = First;
+  Second.FixedStepIndex = 2;
+  Second.FeasibleGraphHash = 200;
+  Second.Agents[0].CurrentCellKey = 11;
+  Second.Agents[0].NextCellKey = INDEX_NONE;
+  Second.Agents[0].GuidanceMode =
+    ECrowdDemoTargetRegionGuidanceMode::Unrouted;
+  Second.Edges = {MakeRouteEdge(11, 12, true)};
+
+  auto AttachmentRuntime = MakeCounterfactualRuntime();
+  FCrowdDemoTargetStabilityDiagnosticKernel::RecordStep(First, AttachmentRuntime);
+  const auto AttachmentCheckpoint =
+    FCrowdDemoTargetStabilityDiagnosticKernel::MakeCheckpoint(AttachmentRuntime);
+  FCrowdDemoTargetStabilityDiagnosticKernel::RecordStep(Second, AttachmentRuntime);
+  FCrowdDemoTargetStabilitySummary Attachment;
+  FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(
+    AttachmentRuntime, Attachment);
+  TestTrue(TEXT("attachment counterfactual valid"), Attachment.Counterfactual.bValid);
+  TestEqual(TEXT("one observed in-flight step"),
+    Attachment.Counterfactual.AttachmentObservedInFlightStepCount, 1);
+  TestEqual(TEXT("graph transition restores one guidance step"),
+    Attachment.Counterfactual.AttachmentRecoveredGuidanceStepCount, 1);
+  TestTrue(TEXT("attachment changes final guidance"),
+    Attachment.Counterfactual.bAttachmentChangesFinalGuidance);
+  TestEqual(TEXT("attachment-only outcome"),
+    static_cast<int32>(Attachment.Counterfactual.Outcome),
+    static_cast<int32>(
+      ECrowdDemoTargetStabilityCounterfactualOutcome::AttachmentGuidanceOnly));
+
+  auto ReversedRuntime = MakeCounterfactualRuntime();
+  auto ReversedFirst = First;
+  auto ReversedSecond = Second;
+  Algo::Reverse(ReversedFirst.Regions);
+  Algo::Reverse(ReversedFirst.Edges);
+  Algo::Reverse(ReversedSecond.Regions);
+  Algo::Reverse(ReversedSecond.Edges);
+  FCrowdDemoTargetStabilityDiagnosticKernel::RecordStep(
+    ReversedFirst, ReversedRuntime);
+  FCrowdDemoTargetStabilityDiagnosticKernel::RecordStep(
+    ReversedSecond, ReversedRuntime);
+  FCrowdDemoTargetStabilitySummary Reversed;
+  FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(
+    ReversedRuntime, Reversed);
+  TestEqual(TEXT("counterfactual input order hash"),
+    Reversed.Counterfactual.StableHash,
+    Attachment.Counterfactual.StableHash);
+
+  FCrowdDemoTargetStabilityDiagnosticKernel::RestoreCheckpoint(
+    AttachmentCheckpoint, AttachmentRuntime);
+  FCrowdDemoTargetStabilityDiagnosticKernel::RecordStep(
+    Second, AttachmentRuntime);
+  FCrowdDemoTargetStabilitySummary Replayed;
+  FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(
+    AttachmentRuntime, Replayed);
+  TestEqual(TEXT("counterfactual rollback replay hash"),
+    Replayed.Counterfactual.StableHash,
+    Attachment.Counterfactual.StableHash);
+
+  auto TerminalFirst = First;
+  TerminalFirst.Agents[0].CurrentCellKey = 12;
+  TerminalFirst.Agents[0].CurrentRegionKey = 13;
+  TerminalFirst.Agents[0].NextCellKey = INDEX_NONE;
+  TerminalFirst.Agents[0].GuidanceMode =
+    ECrowdDemoTargetRegionGuidanceMode::TerminalSettle;
+  TerminalFirst.Agents[0].bTerminal = true;
+  TerminalFirst.Agents[0].bTerminalStay = true;
+  TerminalFirst.Agents[0].bSupply = false;
+  TerminalFirst.Regions[0].CurrentPopulation = 1;
+  TerminalFirst.Regions[0].Deficit = 0;
+  TerminalFirst.Regions[0].TerminalAgentIds = {5};
+  TerminalFirst.CoverageCount = 1;
+  TerminalFirst.InsideBandCount = 1;
+  auto TerminalSecond = TerminalFirst;
+  TerminalSecond.FixedStepIndex = 2;
+  TerminalSecond.FeasibleGraphHash = 200;
+  TerminalSecond.Agents[0].GuidanceMode =
+    ECrowdDemoTargetRegionGuidanceMode::Unrouted;
+  TerminalSecond.Agents[0].bTerminal = false;
+  TerminalSecond.Agents[0].bTerminalStay = false;
+  TerminalSecond.Agents[0].bSupply = true;
+  TerminalSecond.Regions[0] = MakeMissingRegion();
+  TerminalSecond.CoverageCount = 0;
+  TerminalSecond.InsideBandCount = 0;
+  auto TerminalRuntime = MakeCounterfactualRuntime();
+  FCrowdDemoTargetStabilityDiagnosticKernel::RecordStep(
+    TerminalFirst, TerminalRuntime);
+  FCrowdDemoTargetStabilityDiagnosticKernel::RecordStep(
+    TerminalSecond, TerminalRuntime);
+  FCrowdDemoTargetStabilitySummary Terminal;
+  FCrowdDemoTargetStabilityDiagnosticKernel::BuildSummary(
+    TerminalRuntime, Terminal);
+  TestTrue(TEXT("terminal counterfactual valid"), Terminal.Counterfactual.bValid);
+  TestEqual(TEXT("one eligible terminal hold"),
+    Terminal.Counterfactual.TerminalEligibleHoldTransitionCount, 1);
+  TestEqual(TEXT("terminal hold restores observed final coverage"),
+    Terminal.Counterfactual.TerminalFinalHeldAgentCount, 1);
+  TestTrue(TEXT("terminal observed coverage restored"),
+    Terminal.Counterfactual.bTerminalRestoresFinalObservedCoverage);
+  TestEqual(TEXT("terminal-only outcome"),
+    static_cast<int32>(Terminal.Counterfactual.Outcome),
+    static_cast<int32>(
+      ECrowdDemoTargetStabilityCounterfactualOutcome::TerminalRetentionOnly));
+  TestEqual(TEXT("counterfactual preserves population conservation"),
+    Terminal.Counterfactual.PopulationConservationViolationCount, 0);
   return true;
 }
 

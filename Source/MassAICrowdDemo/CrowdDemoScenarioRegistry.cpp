@@ -14,16 +14,6 @@ namespace CrowdDemoScenarioRegistry
       OutScenario = ECrowdDemoScenario::SimRoundSoftPressure;
       return true;
     }
-    if (Value.Equals(TEXT("2")) || Value.Equals(TEXT("SimRoundCrowdTraffic"), ESearchCase::IgnoreCase))
-    {
-      OutScenario = ECrowdDemoScenario::SimRoundCrowdTraffic;
-      return true;
-    }
-    if (Value.Equals(TEXT("3")) || Value.Equals(TEXT("SimRoundPursuitPositioning"), ESearchCase::IgnoreCase))
-    {
-      OutScenario = ECrowdDemoScenario::SimRoundPursuitPositioning;
-      return true;
-    }
     return false;
   }
 
@@ -31,10 +21,6 @@ namespace CrowdDemoScenarioRegistry
   {
     switch (Scenario)
     {
-    case ECrowdDemoScenario::SimRoundPursuitPositioning:
-      return TEXT("SimRoundPursuitPositioning");
-    case ECrowdDemoScenario::SimRoundCrowdTraffic:
-      return TEXT("SimRoundCrowdTraffic");
     case ECrowdDemoScenario::SimRoundSoftPressure:
       return TEXT("SimRoundSoftPressure");
     case ECrowdDemoScenario::SimRoundObstacle:
@@ -46,8 +32,23 @@ namespace CrowdDemoScenarioRegistry
   bool IsValidValue(const int32 Value)
   {
     return Value == static_cast<int32>(ECrowdDemoScenario::SimRoundObstacle)
-      || Value == static_cast<int32>(ECrowdDemoScenario::SimRoundSoftPressure)
-      || Value == static_cast<int32>(ECrowdDemoScenario::SimRoundCrowdTraffic)
-      || Value == static_cast<int32>(ECrowdDemoScenario::SimRoundPursuitPositioning);
+      || Value == static_cast<int32>(ECrowdDemoScenario::SimRoundSoftPressure);
+  }
+
+  FCrowdDemoRoundTiming ResolveRoundTiming(
+    const ECrowdDemoScenario Scenario,
+    const ECrowdDemoSoftPressureTestCase TestCase)
+  {
+    FCrowdDemoRoundTiming Timing;
+    Timing.NominalDurationSeconds = Scenario == ECrowdDemoScenario::SimRoundObstacle
+      ? 20.0f
+      : 30.0f;
+    Timing.CompletionGraceSeconds =
+      Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && (TestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving
+        || TestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTransit)
+      ? 15.0f
+      : 0.0f;
+    return Timing;
   }
 }

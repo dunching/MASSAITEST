@@ -15,17 +15,19 @@
 ## 3. 群体驱动 + 个体修正
 
 ```text
-群体调度层
+群体Guidance层
 ├── 选择 cohort/群体目标
-├── 生成 Shared Flow 与 Target-relative Navigation Cells
-├── 聚合 Region 人口、容量、缺口与供给
-├── 计算共享 Cell Edge transport quota
-└── 输出稳定、可批量消费的宏观 guidance
+├── 生成 Shared Flow 等共享导航事实
+├── 按行为选择可选的宏观策略
+│   ├── Target Region空间分布
+│   └── 未来自由游荡等群体意图
+└── 输出统一、可批量消费的Desired/Preferred guidance
 
 个体实体层
 ├── 保存 AgentId、位置、速度、尺寸和业务状态
-├── 按 AgentId 消费群体 quota/guidance
-├── 执行 Particle Soft/Hard/Environment 局部修正
+├── 按 AgentId 消费群体 guidance
+├── 执行 Local Predictive短程轨迹避让与公平让行
+├── 执行 Particle Soft/Hard/Environment最终安全修正
 ├── 保留受击、攻击、死亡等个体事件边界
 └── 提交最终 Transform/Velocity
 ```
@@ -38,13 +40,15 @@
 
 [INFERRED][HIGH] Demo 最终应证明：自由游荡和静态/动态目标追逐都由共享宏观场驱动；虫群能绕障、过通道、围绕目标自然分布，并通过局部粒子约束维持硬安全和可压缩软间距。
 
-[INFERRED][HIGH] Target 周围不使用永久 Slot 或 per-agent Region owner；宏观层只维护可行 Polar Navigation Cells、固定 Demand Regions、PlanEpoch 和 Cell Edge quota。
+[INFERRED][HIGH] Target Region Transport是“需要围绕目标进行区域分布”时使用的可选宏观策略，不是普通移动、自由游荡或窄口通行的固定必经层。
+
+[INFERRED][HIGH] 启用Target Region策略时，目标周围不使用永久 Slot 或 per-agent Region owner；该策略只维护可行 Polar Navigation Cells、固定 Demand Regions、PlanEpoch 和短期 Cell Edge quota。
 
 [INFERRED][HIGH] Navigation Cell 是可共享、可先后通过的空间区域，不是单个实体必须命中的站位点；Cell anchor 只能作为方向参考，不能被解释为要求多个实体同时占据的精确坐标。
 
 [INFERRED][HIGH] 合理落位必须同时满足“覆盖与人口分布成立”和“群体在目标参考系内稳定下来”。多个实体可以读取同一 Flow 方向或先后通过同一 Cell，但不得因持续争抢同一 anchor 而形成“靠近→Particle推开→再次靠近”的闭环振荡。
 
-[INFERRED][HIGH] Target Region Transport 负责 Region 人口需求、宏观 Cell Edge quota 与 terminal 供需；通用 Local Predictive Interaction 负责根据邻域轨迹决定当前可执行速度与必要的公平让行；Particle 只负责 Soft 压力与 Hard/Swept/Environment 最终安全。不得用加强 Particle 推力或放宽 HardDistance 掩盖上层持续发出不可执行 guidance 的问题。
+[INFERRED][HIGH] 当业务启用目标区域分布时，Target Region Transport负责Region人口需求、宏观Cell Edge quota与terminal供需；普通开放移动和窄口移动不应为了兼容该模块而建立目标Region。所有宏观策略之后都统一由Local Predictive Interaction根据邻域轨迹决定当前可执行速度与必要的公平让行，再由Particle负责Soft压力与Hard/Swept/Environment最终安全。
 
 [INFERRED][HIGH] 局部预测层不识别“窄口测试”“同目标测试”或具体地图。Navigation Cell 不是独占站位，局部并发容量必须由当前实体半径、速度、轨迹和环境共同可行域自然产生；只有共同前进不可行时才使用有限期、可回滚的通用让行顺序。
 
@@ -84,7 +88,7 @@
 
 [INFERRED][HIGH] T1 的“移除”只表示实体退出 Particle active 集合并回到可见 staging 状态，不是业务 despawn、死亡或 Mass 实体生命周期销毁；该边界不能被写成已实现真实生成/销毁系统。
 
-[COMPUTED][HIGH] T1、T3与T4已通过各自现行20实体能力合同；T2的8426结论现降级为旧口径到达/安全证据并等待稳定性V1复验。T6仍未通过，因此当前状态不能描述为T1–T6已完成。
+[COMPUTED][HIGH] T1、T3与T4已通过各自现行20实体能力合同；T2的8426结论现降级为旧口径到达/安全证据并等待稳定性V1复验。T6M已在8670关闭45秒能力门，但T5/T2稳定性V1与当前版人工审片未全部完成，因此当前状态仍不能笼统描述为T1–T6全部完成。
 
 [COMPUTED][HIGH] 8426 T2证明20实体能够从开放Shared Flow接近切换到目标相对Transport与Distance Band，并在覆盖16/16可行Region、当帧`TerminalSettle=20/20`时保持Particle硬安全、双端确定性、correction replay和20/20完整显示；当前`terminal_settled_count`没有连续低速或位置稳定窗口语义，因此8426不能单独证明最终无抖动自然落位。
 
@@ -106,6 +110,28 @@ Shared Flow / Transport决定去哪个可行区域
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
 
+## 2026-07-18 自主移动、局部修正与最终朝向
+
+[INFERRED][HIGH] 实体的“想往哪里走”和“为安全实际怎样微调”必须保持两个语义层。Flow、Target Region Transport和业务guidance产生自主Preferred；Local Predictive、Particle和Obstacle只修正可执行位置/速度，不得反向改写实体认为自己的前进方向。
+
+[INFERRED][HIGH] 视觉朝向因此采用两阶段合同：最终站位成立前朝自主Preferred，并用确定性角速度限制平滑转向；只有最终落位已经连续稳定后才朝向目标。瞬时避让侧移、推开和墙体滑动不应造成虫子身体高频左右甩头。
+
+[INFERRED][HIGH] Ranged实体取得合法外圈站位后，目标向它靠近不应触发主动后退。保持资格仍需满足群体分布合同：若该Region后来成为超额人口，应稳定释放多余实体做区域重分流；这不是“因为目标靠近而退远”，而是避免多个实体永久占用同一Region造成空缺。
+
+[COMPUTED][HIGH] T6A现已把通道与目标落位串成同一端到端能力，但两阶段指标继续分开：corridor完成证明安全穿越，inside/coverage和终态稳定证明目标周围自然落位；任何一项都不能替代另一项。
+
+## 2026-07-18 当前目标效果验收修正
+
+[COMPUTED][HIGH] T1与T2此前的双端hash/旧Flow owner误判已经修复；T5 Static/Moving也已达到20实体全部进入有效带并覆盖12/12可行Region。
+
+[COMPUTED][HIGH] 上述结果仍不能证明自然稳定落位：两次T5运行最后90步的连续Particle settled window均为0，目标相对速度p95约134cm/s。现行验收继续要求连续窗口，而不是只看最终一帧coverage。
+
+[COMPUTED][HIGH] T6 Moving的短期群体路线计划现已拥有可回滚Quota消费进度且不使用永久Region owner。严格30秒旧证据为inside20/20、coverage19/20；显式30秒名义窗口加15秒完成宽限后，8670连续两轮达到inside/coverage20/20。
+
+[INFERRED][HIGH] 测试宽限用于区分“合法路线仍在途”和“永久缺口”，不能用于掩盖速度骤降、安全失败或无路可达。稳定验收仍须同时检查实际覆盖、在途Supply、目标相对速度、位置峰峰抖动和Particle settling。
+
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
+
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
 
 ## 2026-07-17 T6M 修复后的目标效果边界
@@ -114,7 +140,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [COMPUTED][HIGH] Demo尚未证明20个异构实体都能围绕移动目标完成各自距离带落位：8487两轮均只有`17/20`进入有效距离带。因此“群体驱动 + 个体修正”的移动异构目标效果仍是不完整能力，不能由技术hash通过替代。
 
-[INFERRED][HIGH] 当前应先关闭剩余三实体的终态能力缺口，再讨论GT/WORK并行边界和旧实验路径删除；否则清理会失去可复现的失败参照，并把未通过能力误写成最终架构。
+[COMPUTED][HIGH] 该2026-07-17停止条件已由8670的30+15秒连续两轮结果解除；当前不再需要为T6M修改Transport/Particle。下一能力缺口是T5/T2连续稳定窗口和人工复验。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
 
@@ -156,7 +182,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [INFERRED][HIGH] 插件化用于降低未来接入`E:\Projects\SuperInvincibleTank_BugFix`的迁移风险；未来回原工程采用公开接口与Adapter，不默认复制整个Demo Source、Coordinator、地图或历史诊断代码。详细事实源为`GameplaySwarmSandboxAndPluginMigrationPlan.md`。
 
-[COMPUTED][HIGH] 2026-07-17 的Mass Projectile插件前置核对最初因T3生产合同缺失而停止；T3已由8455/8456完成独立验收，T4已由8460/8461关闭，但T6仍未关闭，因此仍没有创建插件、切换T8或删除旧Projectile路径。
+[COMPUTED][HIGH] 2026-07-17 的Mass Projectile插件前置核对最初因T3生产合同缺失而停止；随后T3、T4与T6M能力门已经关闭，T8实验链也已存在。插件化迁移仍受T2/T5稳定性V1、当前版完整回归及真实Mass-native Projectile边界约束，不能由T6M单项通过自动启动。
 
 ## 2026-07-17 大量远程敌人与通用命中目标
 
@@ -165,5 +191,13 @@ Shared Flow / Transport决定去哪个可行区域
 [INFERRED][HIGH] “命中”和“被命中”必须通过通用、无Actor依赖的HitFact连接：Projectile、线形、圆形和近战只生产事实；原工程Adapter负责伤害、防御、状态、击退/击飞、死亡、掉落和视觉结果。
 
 [INFERRED][HIGH] 插件化不是复制当前Demo代码，而是先纠正Projectile权威状态和接口边界，再在最小宿主、Demo和原工程三处验证。完整事实源为`MassProjectileHitFrameworkDesign.md`。
+
+## 2026-07-18 最终站位标记语义
+
+[INFERRED][HIGH] 客户端验收画面必须忠实显示算法真正拥有的空间事实。若系统存在稳定Agent→Slot分配，则可以显示精确最终位置；若系统只拥有Region人口与可行terminal cell，则只能显示范围、分区和候选cell，不能为了“看起来明确”伪造逐实体Slot。
+
+[INFERRED][HIGH] 精确Slot标记用于检查分配是否被正确执行；Region标记用于检查实体是否进入正确距离带、覆盖可行区域并自然稳定。两者都只服务验收可解释性，不参与server gameplay movement、局部避让或Particle求解。
+
+[INFERRED][HIGH] Transit与Target落位也必须保持不同完成含义：Transit回答“是否全体安全通过并稳定离开出口”，Target落位回答“是否在目标相对可行区域内覆盖并稳定”。不得再用同一point-goal或同一`goal_reached`数字替代两者。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
+#include "Mass/CrowdDemoCapabilityProfileKernel.h"
 
 struct FCrowdDemoSharedFlowField;
 
@@ -10,6 +11,7 @@ enum class ECrowdDemoTargetRegionGuidanceMode : uint8
   FarFlow,
   Transport,
   TerminalSettle,
+  EngagedHold,
   Unrouted
 };
 
@@ -33,6 +35,9 @@ struct FCrowdDemoTargetRegionTransportSettings
   int32 PlanLifetimeSteps = 15;
   float PositionQuantumCm = 1.0f;
   float VelocityQuantumCmps = 1.0f;
+  ECrowdDemoTargetDistanceResponsePolicy DistanceResponsePolicy =
+    ECrowdDemoTargetDistanceResponsePolicy::StrictBand;
+  float AcquireThenHoldReleaseHysteresisCm = 100.0f;
 };
 
 struct FCrowdDemoTargetRegionTransportAgent
@@ -45,6 +50,7 @@ struct FCrowdDemoTargetRegionTransportAgent
   float PhysicalRadiusCm = 42.0f;
   float HardSafetyGapCm = 10.0f;
   float SoftMarginCm = 17.0f;
+  bool bEngagedHold = false;
 };
 
 struct FCrowdDemoTargetPolarCell
@@ -131,6 +137,7 @@ struct FCrowdDemoTargetRegionAgentDemandState
   bool bTerminalStay = false;
   bool bSupply = false;
   bool bSourceAttached = false;
+  bool bEngagedHold = false;
 };
 
 struct FCrowdDemoTargetRegionDemandResult
@@ -180,6 +187,45 @@ struct FCrowdDemoTargetRegionFlowPlan
   bool bValid = false;
 };
 
+// A plan is an immutable, short-lived routing fact. Execution state records only
+// how that plan is being consumed; it is not a permanent region or slot owner.
+struct FCrowdDemoTargetRegionQuotaEdgeState
+{
+  int32 FromCellKey = INDEX_NONE;
+  int32 ToCellKey = INDEX_NONE;
+  int32 InitialQuota = 0;
+  int32 ConsumedQuota = 0;
+};
+
+struct FCrowdDemoTargetRegionQuotaAgentClaim
+{
+  int32 AgentId = INDEX_NONE;
+  int32 FromCellKey = INDEX_NONE;
+  int32 ToCellKey = INDEX_NONE;
+};
+
+struct FCrowdDemoTargetRegionQuotaExecutionState
+{
+  int32 PlanEpoch = 0;
+  uint32 PlanTransportHash = 0;
+  TArray<FCrowdDemoTargetRegionQuotaEdgeState> Edges;
+  TArray<FCrowdDemoTargetRegionQuotaAgentClaim> ActiveClaims;
+  int32 CompletedTransitionCount = 0;
+  uint32 ExecutionHash = 2166136261u;
+  bool bValid = false;
+};
+
+struct FCrowdDemoTargetRegionPlanReplacementSummary
+{
+  int32 PreviousClaimCount = 0;
+  int32 GeometryEligibleClaimCount = 0;
+  int32 MigratedClaimCount = 0;
+  int32 ReleasedClaimCount = 0;
+  int32 CompletedAtReplacementCount = 0;
+  uint32 ReplacementHash = 2166136261u;
+  bool bValid = false;
+};
+
 struct FCrowdDemoTargetRegionPlanValidationResult
 {
   bool bValid = false;
@@ -217,12 +263,22 @@ struct FCrowdDemoTargetRegionGuidanceSummary
   int32 FarFlowAgentCount = 0;
   int32 TransportAgentCount = 0;
   int32 TerminalSettleAgentCount = 0;
+  int32 EngagedHoldAgentCount = 0;
   int32 UnroutedAgentCount = 0;
   int32 FirstUnroutedAgentId = INDEX_NONE;
   int32 FirstUnroutedCellKey = INDEX_NONE;
   TArray<FCrowdDemoTargetRegionGuidanceConsumption> Consumption;
+  uint32 ExecutionHash = 2166136261u;
   uint32 GuidanceHash = 2166136261u;
   bool bValid = false;
+};
+
+struct FCrowdDemoTargetEngagementDecision
+{
+  bool bEngagedHold = false;
+  bool bAcquired = false;
+  bool bReleased = false;
+  bool bSuppressedRetreat = false;
 };
 
 class FCrowdDemoTargetRegionTransportKernel
@@ -234,6 +290,16 @@ public:
     const FVector2f& SharedFlowPreferredVelocity,
     const FVector2f& TargetVelocity,
     float MaxSpeedCmps);
+
+  static FCrowdDemoTargetEngagementDecision ResolveTargetEngagement(
+    ECrowdDemoTargetDistanceResponsePolicy Policy,
+    bool bWasEngaged,
+    bool bPreviousTerminalStay,
+    bool bPreviousSupply,
+    float CurrentDistanceCm,
+    float MinimumDistanceCm,
+    float MaximumDistanceCm,
+    float ReleaseHysteresisCm);
 
   static int32 ComputeEdgeSoftClearancePenaltyCm(
     const FVector2f& Start,
@@ -259,6 +325,16 @@ public:
     FCrowdDemoTargetRegionDemandResult& OutDemand,
     TConstArrayView<FCrowdDemoTargetRegionTransportAgent> ExternalAgents = {});
 
+  static void UpdateStaticDemandPopulation(
+    TConstArrayView<FCrowdDemoTargetRegionTransportAgent> Agents,
+    const FCrowdDemoTargetRegionTransportSettings& Settings,
+    const FCrowdDemoSharedFlowFieldConfig& FlowConfig,
+    const FCrowdDemoSharedFlowField* SharedFlowField,
+    const FCrowdDemoTargetPolarTopology& Topology,
+    FCrowdDemoTargetRegionDemandResult& InOutDemand,
+    TConstArrayView<FCrowdDemoTargetRegionTransportAgent> ExternalAgents = {},
+    bool bRefreshSourceAttachments = true);
+
   static void SolveTransport(
     const FCrowdDemoTargetPolarTopology& Topology,
     const FCrowdDemoTargetRegionDemandResult& Demand,
@@ -266,7 +342,20 @@ public:
     int32 PlanEpoch,
     int32 FixedStepIndex,
     int32 TargetRevision,
-    FCrowdDemoTargetRegionFlowPlan& OutPlan);
+    FCrowdDemoTargetRegionFlowPlan& OutPlan,
+    TConstArrayView<FCrowdDemoTargetRegionQuotaAgentClaim> ReservedClaims = {});
+
+  static void ReplacePlanPreservingClaims(
+    const FCrowdDemoTargetPolarTopology& Topology,
+    const FCrowdDemoTargetRegionDemandResult& Demand,
+    const FCrowdDemoTargetRegionFlowPlan& PreviousPlan,
+    const FCrowdDemoTargetRegionQuotaExecutionState& PreviousExecution,
+    int32 PlanEpoch,
+    int32 FixedStepIndex,
+    int32 TargetRevision,
+    FCrowdDemoTargetRegionFlowPlan& OutPlan,
+    FCrowdDemoTargetRegionQuotaExecutionState& OutExecution,
+    FCrowdDemoTargetRegionPlanReplacementSummary& OutSummary);
 
   static void ValidatePlanForDemand(
     const FCrowdDemoTargetPolarTopology& Topology,
@@ -274,6 +363,28 @@ public:
     const FCrowdDemoTargetRegionFlowPlan& Plan,
     int32 TargetRevision,
     FCrowdDemoTargetRegionPlanValidationResult& OutValidation);
+
+  static void InitializeQuotaExecutionState(
+    const FCrowdDemoTargetRegionFlowPlan& Plan,
+    FCrowdDemoTargetRegionQuotaExecutionState& OutState);
+
+  static void ValidateQuotaExecutionState(
+    const FCrowdDemoTargetPolarTopology& Topology,
+    const FCrowdDemoTargetRegionDemandResult& Demand,
+    const FCrowdDemoTargetRegionFlowPlan& Plan,
+    const FCrowdDemoTargetRegionQuotaExecutionState& State,
+    int32 TargetRevision,
+    FCrowdDemoTargetRegionPlanValidationResult& OutValidation);
+
+  static void BuildGuidanceWithExecution(
+    TConstArrayView<FCrowdDemoTargetRegionTransportAgent> Agents,
+    const FCrowdDemoTargetRegionTransportSettings& Settings,
+    const FCrowdDemoTargetPolarTopology& Topology,
+    const FCrowdDemoTargetRegionDemandResult& Demand,
+    const FCrowdDemoTargetRegionFlowPlan& Plan,
+    FCrowdDemoTargetRegionQuotaExecutionState& InOutExecutionState,
+    TArray<FCrowdDemoTargetRegionGuidanceResult>& OutResults,
+    FCrowdDemoTargetRegionGuidanceSummary& OutSummary);
 
   static void BuildGuidance(
     TConstArrayView<FCrowdDemoTargetRegionTransportAgent> Agents,

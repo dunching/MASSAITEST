@@ -4,6 +4,8 @@
 
 [INFERRED][HIGH] 本文件定义 T5 Target-relative Polar Region Transport 的当前权威合同；旧 Polar Density left/current/right guidance 仅为历史实验，不再是生产架构。
 
+[INFERRED][HIGH] 本模块是“围绕目标进行区域人口分布”的可选宏观Guidance Provider，不是普通群体移动、窄口通行或自由游荡的通用必经层。未启用本能力时，实体直接消费其他宏观guidance，并继续使用同一Local Predictive与Particle安全链。
+
 ## 2. 数据分层
 
 [COMPUTED][HIGH] `FCrowdDemoTargetRegionTransportKernel` 提供四个纯函数阶段：`BuildTopology`、`BuildDemand`、`SolveTransport`、`BuildGuidance`。
@@ -106,7 +108,115 @@
 
 [COMPUTED][HIGH] prepared SoA、Plan validator、RoundResult和rollback已增加Capability membership、per-cohort五类hash、routed/unrouted、coverage和population；Server/Client cohort划分不一致时判定失败。
 
-[INFERRED][HIGH] 本合同已由T6A/T6S/T6M的20实体真实尝试关卡产生部分证据；当前T6M仍失败，且所有Target终态场景仍须按`TestScenarioMatrix.md`稳定性V1复验。代码接入和旧口径inside-band均不是完整能力通过证据。
+[COMPUTED][HIGH] 本合同已由T6A/T6S/T6M的20实体真实尝试关卡产生证据；T6M现以8670的30+15秒连续两轮关闭能力门。T2/T5等Target终态场景仍须按`TestScenarioMatrix.md`稳定性V1复验，代码接入和旧口径inside-band仍不是完整能力通过证据。
+
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
+
+## 2026-07-18 AcquireThenHold资格合同
+
+[COMPUTED][HIGH] Ranged Profile可使用`AcquireThenHold`，但“进入有效距离带”本身不等于取得保持资格。只有上一boundary已由Demand判为`TerminalStay=true`且`Supply=false`的实体才可取得；因此Transport仍先完成Region人口分配，不会把多个早到实体永久冻结在同一Region。
+
+[COMPUTED][HIGH] 已取得保持的实体输出零世界自主速度，目标向其靠近并进入Minimum以内时不产生径向后退。保持在两类情况下失效：目标距离超过`Maximum+100cm`；或当前Region人口变化后该实体被稳定Demand排序判为超额Supply。后者只触发Region重分流，不修改Particle硬安全或Capability距离参数。
+
+[COMPUTED][HIGH] 8716旧资格诊断为coverage 18/20，Profile `2372223050`的Region 9人口/需求=`3/1`，Agent 4/5已是Supply但仍保持。加入Supply失效规则后，8719达到aggregate coverage=`20/20`、max Region population=`1`，Transport五类hash双端一致，Plan/Guidance unrouted与validation failure均为0。
+
+## 2026-07-18 Quota执行态实施与复测
+
+[COMPUTED][HIGH] `FCrowdDemoTargetRegionFlowPlan::EdgeFlows`现在只表示生成时的不可变短期聚合路线；`FCrowdDemoTargetRegionQuotaExecutionState`独立保存各edge的initial/consumed quota和短期active claim。
+
+[COMPUTED][HIGH] claim在实体仍位于FromCell时保持，不重复消费；进入ToCell后只消费一次，并允许该实体领取同一Plan的下一段。终端完成或Plan替换后不保留永久owner。运行中validation检查执行态与当前Supply的下一段容量，新Plan仍先经过完整flow-conservation结构验证。
+
+[COMPUTED][HIGH] 执行态已经进入prepared SoA、guidance/execution hash与SoftPressure rollback snapshot；新增`0→1→2`多edge fixture证明重复boundary不重复消费、跨cell继续下一段、rollback replay hash一致、终点claim清零。
+
+[COMPUTED][HIGH] 取消ExternalPopulationHash失效但不增加执行态的8644实验退化到inside19/coverage18，已撤回；这证明单纯放宽Plan validation不能替代消费进度模型。
+
+[COMPUTED][HIGH] 接入后的T5 Static 8653保持inside20与coverage16/16，安全/同步错误0；T6 Moving 8652也保持安全与同步门，但coverage仍为19/20。该结果反驳“只要增加剩余quota执行态就能关闭T6M”的充分归因。
+
+[COMPUTED][HIGH] 8652只证明聚合Plan rebuild为2010，未记录异构cohort的原因分解。后续8654确认移动Target的位置每步变化但`TargetRevision=1`保持不变，TargetRevision重建为0；此前把2010次重建归因于TargetRevision的结论已撤销。
+
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
+
+## 2026-07-18 Plan Lifecycle只读归因
+
+[COMPUTED][HIGH] 新增默认关闭的`-CrowdDemoTargetRegionPlanLifecycleDiagnostic`。开关在Plan激活时锁定；关闭时不保留诊断历史，且不改变正式Plan、Guidance、Particle结果或既有hash。分类和fixture选择位于纯C++ kernel，Coordinator只复制紧凑字段并序列化Server JSON。
+
+[COMPUTED][HIGH] 诊断把FeasibleGraph拆成Cell可行性/Terminal/Region映射、Edge集合和Edge成本三类hash；把Execution invalid拆成state mismatch、claim off edge、quota exceeded、Supply无可用出口和other。SoftPressure rollback保存每个cohort诊断runtime、累计器、fixture pin和hash，correction replay不会重复累计。
+
+[COMPUTED][HIGH] 原P0端口8654得到：inside-band=`20/20`、coverage=`19/20`，最终缺Profile `2729413899`的Region 3；生命周期Server/Client hash均为`3232819302`，样本6307，重建2010。原因计数为Lifetime 229、TargetRevision 0、FeasibleGraph 1559、Membership 0、DemandSatisfied 31、ExecutionInvalid 184、InitialInvalid 7，精确闭合。
+
+[COMPUTED][HIGH] 图变化计数为cost-only 1208、Cell可行性351、Edge集合351；Plan年龄p50/p95/max=`1/15/15`，提前重建1773。active/geometry eligible/new-plan eligible/dropped-still-feasible claim=`1080/1033/851/1033`。Execution invalid子类=`7/41/0/392/3`。
+
+[COMPUTED][HIGH] 唯一fixture为step 323、Profile `2729413899`、最终缺失Region 3、reason=ExecutionInvalid、condition mask=64、Plan age=11、fixture hash=`2766809658`。旧/新图三类hash完全相同，Agent 8的`77→46` claim在几何和新Plan中均可继承，但旧执行态同时报告一个Supply无可用出口。
+
+[INFERRED][HIGH] 该fixture证明至少存在“仍有效claim随重建丢失”和“剩余执行态无出口”同时发生；全轮又存在大量cost-only刷新和351次真实Topology变化。因此没有唯一单分支归因。本阶段不修改生产行为，下一版必须显式决定短Plan的成本刷新、claim迁移和剩余quota重算如何组合，而不是恢复永久Agent owner。
+
+[COMPUTED][HIGH] 证据目录：`Saved/CrowdDemo/CrowdDemo_8654_20260718_114613`；完整fixture为`target_region_plan_lifecycle_fixture.json`。
+
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
+
+## 2026-07-18 短Plan替换与claim迁移生产合同
+
+[COMPUTED][HIGH] `FeasibleGraphHash`现在只折叠Cell可行性、Terminal/Region映射和Edge集合；几何距离、软净空与径向成本仍进入Topology/Transport hash和下一Plan求解，但不再单独废弃当前15步不可变Plan。
+
+[COMPUTED][HIGH] `ReplacePlanPreservingClaims()`按AgentId稳定处理旧执行态。claim只有在Agent仍处于FromCell、仍为Supply且Topology仍包含该edge时才具备迁移资格；已到ToCell的claim在替换边界计为完成，硬失效claim释放。
+
+[COMPUTED][HIGH] 迁移claim先把一单位Supply从FromCell变换到ToCell，再在当前Demand上求剩余流，随后把固定edge quota加回新Plan。这样既保留正在执行的短段，也维持原始流量守恒；Plan与QuotaExecution在同一boundary一次替换。
+
+[COMPUTED][HIGH] 完整冻结集合若不可行，内核按稳定的AgentId降序逐个释放并重求，直到得到合法剩余流或明确失败；没有永久Agent owner，也没有在Guidance阶段部分替换。
+
+[COMPUTED][HIGH] 纯测试覆盖cost-only保持Plan有效、真实Edge删除使Plan失效、claim迁移、原子validation、输入反序hash一致、跨cell一次消费与rollback replay。Development、DebugGame、完整`CrowdDemo.SF`31/31、生命周期5/5和Transport 6/6通过。
+
+[COMPUTED][HIGH] 原P0端口8658结果：inside-band=`20/20`、coverage=`19/20`、rebuilds=`883`；原因=`238/0/351/0/51/236/7`，Plan age p50/p95/max=`5/15/15`，claim active/geometry/supply/new-plan/migrated/completed/dropped=`520/480/346/346/346/115/0`，execution invalid=`7/36/0/401/5`。相较8654，重建减少1127次，且全部346个仍为Supply的有效claim被迁移。
+
+[COMPUTED][HIGH] 8658最终缺Profile `2217961739`的Region 13。修正“到达ToCell”和“非Supply释放”口径后，不再存在有效claim丢失fixture；当前选择的最早premature fixture为step 1、reason=ExecutionInvalid、condition mask=64、Plan age=1、hash=`4171107798`，记录3个Supply无可用出口。
+
+[INFERRED][HIGH] 新证据否定“只要停止cost-only重建并迁移claim即可得到20/20”的充分归因，也否定“仍有有效claim被清空”是当前剩余原因。下一步只能把最终Region 13缺口与对应Supply无出口或最后路线进度直接关联，不得用最早step 1 fixture作事后因果，也不得恢复永久Slot、Region owner或场景专用通行规则。
+
+[COMPUTED][HIGH] 证据目录：`Saved/CrowdDemo/CrowdDemo_8658_20260718_130308`。
+
+## 2026-07-18 最终缺失Region直接fixture
+
+[COMPUTED][HIGH] fixture选择器现在只在某Region当时`feasible && deficit>0`时保留候选，优先选择该Region最后一次Supply无可用出口，其次选择最后一次确有Supply可沿Plan到达该Region的路线进度；只有不存在直接候选时才退回claim-drop或premature fixture。选择、乱序和rollback已由第6项生命周期自动化覆盖。
+
+[COMPUTED][HIGH] 原P0端口8659连续完成两轮。两轮均为inside-band=`20/20`、coverage=`19/20`，最终缺Profile `2217961739`的Region 13；生命周期hash=`2238624409`、fixture hash=`4114446767`，两轮结果一致。Particle硬安全、Transport validation、双端hash和correction rollback门通过。
+
+[COMPUTED][HIGH] fixture为step 883、selection=`FinalRegionSupplyWithoutOutgoing`、reason=`FeasibleGraphChanged`、condition mask=`68`、Plan age=`1`。Region 13可行且`current=0, desired=1, deficit=1`；Region 12为`current=2, desired=1, surplus=1`。旧、新Plan都可从当前Supply路由到Region 13，Agent 5的`168→225` claim在替换后继续存在，实际有效claim丢失为0。
+
+[COMPUTED][HIGH] 该boundary的旧执行态在当前Demand/Topology上有1个Supply无出口；新Plan随即加入`134→135→167`，并保留`168→225→226→227→228`。因此该计数描述的是旧Plan跨Topology变化时的失配，不等同于新Plan无路或quota solver失败。
+
+[COMPUTED][HIGH] 最后90步的直接覆盖诊断为Demand gap 0、Plan gap 4、Guidance gap 81、retention gap 51、进入40、离开38。现有证据把剩余问题缩到“跨图attachment/Guidance连续性”与“动态terminal保留或路线实际耗时”，但不能在两者间唯一选择。
+
+[COMPUTED][HIGH] 8659提出的两个只读反事实已经在8661完成：一是继承仍落在新图可行端点上的source attachment/短段；二是只在同Region、无surplus且无双占时冻结已满足terminal。两个反事实都没有恢复Region 13，因此没有进入对应生产修改。
+
+[COMPUTED][HIGH] 证据目录：`Saved/CrowdDemo/CrowdDemo_8659_20260718_132242`。
+
+## 2026-07-18 attachment/terminal只读反事实
+
+[COMPUTED][HIGH] Target Stability纯kernel新增观察型反事实。Agent样本显式携带CapabilityProfileKey；Plan edge按cohort稳定BFS判断多段路线是否仍到达最终缺失Region。该诊断不改Plan、QuotaExecution、Guidance、位置或速度，并复用现有Target Stability rollback和双端hash。
+
+[COMPUTED][HIGH] attachment反事实只在图变化后、同一Agent上一step为Transport、当前仍处在原current/next cell且当前Plan仍有路但Guidance中断时计为可恢复。terminal反事实只在实体仍属于同一可行Region、无surplus、未占据其他Region时保留观察membership；跨Region占用被拒绝，不允许制造虚假coverage。
+
+[COMPUTED][HIGH] 8661原P0结果：Region 13最后90步baseline missing 73步，合法多段in-flight也是73步；attachment recovered guidance=0、final changes guidance=0。terminal hold transition/recovered/final held=`0/0/0`，population violation=0，outcome=`Neither`，双端counterfactual hash=`3886489997`。
+
+[COMPUTED][HIGH] 最终Agent 5位于cell 226、next 227，Plan继续为`226→227→228`，还剩2条edge；窗口内剩余edge最小/最大=`2/9`，下降/增加/保持=`7/1/64`，最终目标相对速度=`301.496cm/s`。因此原`guidance_gap_steps=81`主要混入“下一段尚未直接进入terminal cell”的正常多段在途时间，不能单独证明Guidance失效。
+
+[INFERRED][HIGH] 现有证据不支持attachment迁移或terminal冻结生产修复。T6M下一设计对象应是测试时间合同：折叠edge几何长度、当前目标相对进度和完成时间下界，并以预声明宽限判断“正常在途”与“永久缺口”。不得用永久Region owner或直接追目标缩短测试。
+
+## 2026-07-18 T6M Round时间合同与有界移动目标
+
+[COMPUTED][HIGH] Round Plan已显式区分`NominalDurationSeconds`和`CompletionGraceSeconds`。T6M固定为30秒名义窗口加15秒完成宽限；其他SoftPressure场景保持30秒且无宽限。宽限不修改Transport、Guidance、Particle、30Hz、目标名义速度或实体速度。
+
+[COMPUTED][HIGH] 8662在旧单向目标下于step 934产生Bounds violation；8665 fixture确认目标代理中心从`-2488cm`预测到`-2491cm`，而半径100cm加HardGap 10cm要求中心不小于`-2490cm`。Mobility为0时共同Hard closure正确判定无解，因此不能把测试时间延长与无界目标轨迹混用。
+
+[COMPUTED][HIGH] T6M目标现采用通用有界反射直线运动：运动范围由FlowBounds减去目标半径、HardGap和10cm安全余量得到；前30秒轨迹与旧规则一致，触及安全边界后确定性反向。Shared Flow仍在世界坐标按当前Target anchor重建Integration，环境不随目标平移。
+
+[COMPUTED][HIGH] 8670连续两轮均为inside-band=`20/20`、aggregate coverage=`20/20`、max region population=1；每个Capability Profile的验收覆盖为`min(AgentCount, FeasibleRegionCount)`，从而不再错误要求3个实体覆盖10或16个可行Region。Plan/Guidance unrouted、Transport invalid/validation和Particle安全错误均为0。
+
+[COMPUTED][HIGH] 8671两轮Mass AgentState hash均为`1956985324`、dynamic-flow round hash均为`2219477909`，Transport topology/demand/plan/guidance/validation hash均为`3522103338/756980852/987067237/1474826255/2422635450`，生命周期hash均为`2949210181`；Server/Client逐轮一致。日志目录为`Saved/CrowdDemo/CrowdDemo_8671_20260718_143438`。
+
+[INFERRED][HIGH] 该证据关闭T6M 20实体45秒能力门，但不否定旧30秒19/20结果，也不替代T5稳定窗口、人工审片或100/500规模验收。
+
+[COMPUTED][HIGH] 证据目录：`Saved/CrowdDemo/CrowdDemo_8661_20260718_134713`。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
 
@@ -136,7 +246,7 @@
 
 [COMPUTED][HIGH] 动态Flow修复后T6M由8481的inside-band=`10/20`提升为8487的`17/20`；这是实测差值，不构成因果充分证明。三实体仍未进入各自有效距离带，可行Region coverage仍为`16`，所以Capability Cohort移动目标合同仍未通过。
 
-[INFERRED][HIGH] 下一步只能对剩余三个实体的profile、source attachment、终端Region与settle事实做只读归因。没有证据前不得修改Particle、直接追Target、增加第二guidance owner或场景专用fallback。
+[COMPUTED][HIGH] 剩余实体的profile、source attachment、终端Region与settle事实已经完成只读归因；8661进一步证明最终缺口是Agent 5仍沿合法多段路线在途。当前仍不得修改Particle、直接追Target、增加第二guidance owner或场景专用fallback。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
 

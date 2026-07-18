@@ -39,9 +39,13 @@ struct FCrowdDemoValidCorridorTransitProgress
   TSet<int32> WallPassedAgentIds;
   TSet<int32> CorridorExitedAgentIds;
   TSet<int32> CompletedAgentIds;
+  TSet<int32> FinalSettledAgentIds;
   TSet<int32> FinalDeadlockAgentIds;
   TMap<int32, int32> ConsecutiveLowSpeedStepsByAgentId;
+  TMap<int32, int32> ConsecutivePostCompletionSettledStepsByAgentId;
   TMap<int32, int32> CompletionStepByAgentId;
+  int32 GroupCompletionStep = INDEX_NONE;
+  int32 GroupSettledStep = INDEX_NONE;
   uint32 ProgressHash = 2166136261u;
 };
 
@@ -54,6 +58,8 @@ public:
   static constexpr float WallPassPlaneY = -1950.0f;
   static constexpr float CorridorExitPlaneY = -650.0f;
   static constexpr float CompletionPlaneY = 750.0f;
+  static constexpr int32 StableExitSteps = 15;
+  static constexpr float StableExitSpeedCmps = 10.0f;
 
   static FCrowdDemoSharedFlowFieldConfig MakeFlowConfig();
 
@@ -68,4 +74,10 @@ public:
     TConstArrayView<FCrowdDemoValidCorridorTransitStepAgent> Agents,
     int32 FixedStepIndex,
     FCrowdDemoValidCorridorTransitProgress& InOutProgress);
+
+  static bool ShouldHoldCompletedGroup(
+    const FCrowdDemoValidCorridorTransitProgress& Progress)
+  {
+    return Progress.CompletedAgentIds.Num() == AgentCount;
+  }
 };

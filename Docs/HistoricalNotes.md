@@ -1,5 +1,15 @@
 # 历史记录索引
 
+## 2026-07-17 SF2–SF4第一版退役清理
+
+[COMPUTED][HIGH] 正式场景入口收缩为0/1，fixed-step driver停止构造和调用SF2旧Separation/PBD、SF3 Traffic/Portal/ORCA与SF4 Position/Holding/Elastic/Joint生产processor。
+
+[COMPUTED][HIGH] 已删除8张旧地图、SF3/SF4地图生成脚本和37项SF3/SF4自动化；旧混合测试文件中的4项当前基础测试迁入`CrowdDemoCoreDeterminismTests.cpp`，旧PBD测试退出当前测试集。
+
+[COMPUTED][HIGH] 第一版清理后Development Editor、`git diff --check`和当前`CrowdDemo.SF` 26/26通过。
+
+[COMPUTED][HIGH] 旧UCLASS实现、Pipeline state、Mass fragment、metrics和纯kernel仍作为不可达编译期代码存在，留待第二版物理删除；不得将第一版描述成Source已经完全清零。
+
 [INFERRED][HIGH] Demo 的目的、最终目标效果和长期架构原则以 `DemoPurposeAndTargetEffect.md` 为稳定事实源。
 
 [COMPUTED][HIGH] 旧业务、R4–R6、PA1、SF2–SF4、Portal、ORCA、Holding、Reservation、Elastic、Joint及历史 RoundSim 只属于历史实验，不属于现行路线。

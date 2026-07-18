@@ -38,7 +38,8 @@ namespace
       && Quantize(A.NormalizedMaximumCenterDistanceCm, 1.0f)
         == Quantize(B.NormalizedMaximumCenterDistanceCm, 1.0f)
       && Quantize(A.TargetPhysicalRadiusCm, 1.0f) == Quantize(B.TargetPhysicalRadiusCm, 1.0f)
-      && Quantize(A.TargetHardSafetyGapCm, 1.0f) == Quantize(B.TargetHardSafetyGapCm, 1.0f);
+      && Quantize(A.TargetHardSafetyGapCm, 1.0f) == Quantize(B.TargetHardSafetyGapCm, 1.0f)
+      && A.TargetDistanceResponsePolicy == B.TargetDistanceResponsePolicy;
   }
 
   FCrowdDemoCapabilityProfile MakeProfile(
@@ -50,6 +51,10 @@ namespace
     Result.ProfileId = ProfileId;
     Result.ParticleProfileId = ParticleId;
     Result.TargetCapability = TargetCapability;
+    Result.TargetDistanceResponsePolicy =
+      TargetCapability == ECrowdDemoTargetDistanceCapability::Ranged
+        ? ECrowdDemoTargetDistanceResponsePolicy::AcquireThenHold
+        : ECrowdDemoTargetDistanceResponsePolicy::StrictBand;
     switch (ParticleId)
     {
     case ECrowdDemoParticleProfileId::SmallLight:
@@ -204,6 +209,7 @@ uint32 FCrowdDemoCapabilityProfileKernel::ComputeCapabilityProfileKey(
   Hash = Fold(Hash, Quantize(Profile.NormalizedMaximumCenterDistanceCm, PositionQuantumCm));
   Hash = Fold(Hash, Quantize(Profile.TargetPhysicalRadiusCm, PositionQuantumCm));
   Hash = Fold(Hash, Quantize(Profile.TargetHardSafetyGapCm, PositionQuantumCm));
+  Hash = Fold(Hash, static_cast<int32>(Profile.TargetDistanceResponsePolicy));
   return Hash == 0 ? 1u : Hash;
 }
 

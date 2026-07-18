@@ -57,6 +57,24 @@ public:
   int32 GetCrowdVisualInstanceCount() const;
   void RecordClientVisualSample(float ReplicationSampleAgeMs, float DisplayToAuthoritativeCm);
   void RecordRoundSimVisualSmoothing(float CorrectionOffsetCm, float YawOffsetDegrees, bool bSmoothingActive);
+  void RecordRoundSimVisualContinuity(
+    int32 AgentId,
+    float SubmitIntervalMs,
+    float SimDeltaCm,
+    float DisplayDeltaCm,
+    float ExpectedDisplayDeltaCm,
+    int32 CollapsedSimSteps,
+    bool bCorrectionBoundary,
+    bool bPlanChanged,
+    bool bDiscontinuity,
+    int32 PreviousPlanRevision,
+    int32 CurrentPlanRevision,
+    float PreviousSimServerTimeSeconds,
+    float CurrentSimServerTimeSeconds,
+    const FVector& PreviousDisplayLocation,
+    const FVector& CurrentDisplayLocation);
+  void RecordVisualProcessorPerformance(float Milliseconds);
+  void RecordVisualInstanceRebuild();
   void ResetClientMassEntityStates();
   void UpsertClientMassEntityState(const FCrowdDemoEntityState& State);
   void SetLocalVisualHostOnly(bool bInLocalVisualHostOnly);
@@ -103,11 +121,22 @@ private:
   TArray<FCrowdDemoEntityState> EntityStates;
   TArray<float> ServerFrameMsSamples;
   TArray<float> SolverMsSamples;
+  TArray<float> ClientFrameMsSamples;
+  TArray<float> VisualProcessorMsSamples;
   TArray<float> ReplicationSampleAgeMsSamples;
   TArray<float> DisplayToAuthoritativeCmSamples;
   TArray<float> RoundVisualCorrectionOffsetCmSamples;
   TArray<float> RoundVisualYawOffsetDegSamples;
+  TArray<float> VisualSubmitIntervalMsSamples;
+  TArray<float> VisualSimDeltaCmSamples;
+  TArray<float> VisualDisplayDeltaCmSamples;
+  TArray<float> VisualCollapsedSimStepSamples;
   int32 RoundVisualSmoothingActiveCount = 0;
+  int32 VisualCatchupSubmitCount = 0;
+  int32 VisualCatchupDiscontinuityCount = 0;
+  int32 NonCorrectionVisualDiscontinuityCount = 0;
+  int32 RoundResetVisualJumpCount = 0;
+  int32 VisualIsmRebuildCount = 0;
   TMap<uint64, FCrowdDemoProjectileVisualRuntime> ActiveProjectileVisuals;
   TMap<int32, FCrowdDemoProjectileVisualRoundCounts> ProjectileVisualRoundCounts;
   TSet<FCrowdDemoProjectileVisualEventKey> SeenProjectileVisualEvents;
@@ -120,6 +149,7 @@ private:
   void UpdateProjectileVisuals();
 
   static float ComputeP95(TArray<float> Samples);
+  static float ComputeMax(TConstArrayView<float> Samples);
   static int32 ResolveEntityCount();
   static float ResolveDurationSeconds();
 };
