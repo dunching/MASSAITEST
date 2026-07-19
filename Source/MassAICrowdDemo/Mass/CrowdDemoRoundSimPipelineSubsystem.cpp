@@ -25,6 +25,21 @@ namespace
     return Hash;
   }
 
+  uint64 MakeTargetPlanResourceKey(
+    const uint32 CapabilityProfileKey,
+    const FCrowdDemoTargetRegionFlowPlan& Plan)
+  {
+    uint32 Low = 2166136261u;
+    Low = FoldHash(Low, CapabilityProfileKey);
+    Low = FoldHash(Low, Plan.TransportHash);
+    Low = FoldHash(Low, static_cast<uint32>(Plan.PlanEpoch));
+    uint32 High = 2166136261u;
+    High = FoldHash(High, static_cast<uint32>(Plan.BuildFixedStepIndex));
+    High = FoldHash(High, static_cast<uint32>(Plan.TargetRevision));
+    High = FoldHash(High, Plan.FeasibleGraphHash);
+    return (static_cast<uint64>(High) << 32) | Low;
+  }
+
   uint32 BuildAppliedStateDifferenceMask(
     const FCrowdDemoRoundAgentState& Local,
     const FCrowdDemoRoundAgentState& Server)
@@ -396,10 +411,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   DynamicFlowIntegrationRebuildCount = 0;
   DynamicFlowRoundHash = 2166136261u;
   bDynamicFlowIntegrationCacheInvalidated = false;
-  bTargetInfluenceExecutionDiagnosticPlanEnabled = FParse::Param(
-      FCommandLine::Get(), TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic"))
-    && Packet.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
-    && Packet.Rules.TargetInfluenceSettings.bEnabled != 0;
   bTargetStabilityDiagnosticPlanEnabled = FParse::Param(
       FCommandLine::Get(), TEXT("CrowdDemoTargetStabilityDiagnostic"))
     && Packet.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
@@ -447,6 +458,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   if (Packet.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure)
   {
     SoftPressureRollbackHistory.Reset();
+    TargetRegionPlanResources.Reset();
     SoftPressureRollbackSnapshotHitCount = 0;
     SoftPressureRollbackSnapshotMissCount = 0;
     SoftPressureRollbackAgentMismatchCount = 0;
@@ -462,6 +474,9 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     LocalPredictiveRoundHash = 2166136261u;
     LocalPredictiveSampleCount = 0;
     LocalPredictiveInvalidStepCount = 0;
+    GuidanceCandidateRoundHash = 2166136261u;
+    GuidanceComposeRoundHash = 2166136261u;
+    GuidanceComposeSampleCount = 0;
     ParticleCandidateStateHash = 2166136261u;
     ParticleAppliedStateHash = 2166136261u;
     ParticleInvalidStepCount = 0;
@@ -489,18 +504,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     ValidCorridorTransitProgress = {};
     SoftPressureRouteDiagnosticRuntime = {};
     SoftPressureRouteDiagnosticSummary = {};
-    TargetApproachFact = FCrowdDemoTargetFact();
-    PreparedTargetSlotLayout = FCrowdDemoTargetSlotLayout();
-    TargetSlotLayoutSummary = FCrowdDemoTargetSlotLayoutSummary();
-    PreparedTargetApproachDecisions.Reset();
-    PreparedTargetApproachGuidance.Reset();
-    TargetApproachSummary = FCrowdDemoTargetApproachSummary();
-    TargetApproachCommitHash = 2166136261u;
-    PreparedTargetInfluenceResults.Reset();
-    TargetInfluenceSummary = FCrowdDemoTargetInfluenceSummary();
-    TargetInfluenceRoundHash = 2166136261u;
-    TargetInfluenceExecutionRuntime = {};
-    TargetInfluenceExecutionSummary = {};
+    TargetFact = FCrowdDemoTargetFact();
     TargetStabilityRuntime = {};
     TargetStabilityRuntime.Settings.ExpectedAgentCount = AgentCount;
     TargetStabilityRuntime.Settings.PositionQuantumCm =
@@ -786,6 +790,9 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.LocalPredictiveRoundHash = LocalPredictiveRoundHash;
   Snapshot.LocalPredictiveSampleCount = LocalPredictiveSampleCount;
   Snapshot.LocalPredictiveInvalidStepCount = LocalPredictiveInvalidStepCount;
+  Snapshot.GuidanceCandidateRoundHash = GuidanceCandidateRoundHash;
+  Snapshot.GuidanceComposeRoundHash = GuidanceComposeRoundHash;
+  Snapshot.GuidanceComposeSampleCount = GuidanceComposeSampleCount;
   Snapshot.ParticleCandidateSummary = LastParticleCandidateSummary;
   Snapshot.ParticleAppliedSummary = LastParticleAppliedSummary;
   Snapshot.ParticleSolverMsSampleCount = ParticleSolverMillisecondsSamples.Num();
@@ -801,36 +808,22 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.ParticlePreviousSoftErrorP95 = ParticlePreviousSoftErrorP95;
   Snapshot.bParticleConstraintRunFailure = bParticleConstraintRunFailure;
   Snapshot.ParticleFailureFixture = ParticleFailureFixture;
-  Snapshot.OpenSpawnRelaxationLayout = OpenSpawnRelaxationLayout;
   Snapshot.OpenSpawnRelaxationRuntime = OpenSpawnRelaxationRuntime;
-  Snapshot.OpenCohortMovementLayout = OpenCohortMovementLayout;
   Snapshot.OpenCohortMovementProgress = OpenCohortMovementProgress;
-  Snapshot.BidirectionalSwapLayout = BidirectionalSwapLayout;
   Snapshot.BidirectionalSwapProgress = BidirectionalSwapProgress;
-  Snapshot.ValidCorridorTransitLayout = ValidCorridorTransitLayout;
   Snapshot.ValidCorridorTransitProgress = ValidCorridorTransitProgress;
-  Snapshot.TargetFact = TargetApproachFact;
+  Snapshot.TargetFact = TargetFact;
   Snapshot.DynamicFlowAnchorCellKey = DynamicFlowAnchorCellKey;
   Snapshot.DynamicFlowIntegrationRebuildCount = DynamicFlowIntegrationRebuildCount;
   Snapshot.DynamicFlowRoundHash = DynamicFlowRoundHash;
-  Snapshot.TargetSlotLayout = PreparedTargetSlotLayout;
-  Snapshot.TargetSlotLayoutSummary = TargetSlotLayoutSummary;
-  Snapshot.TargetApproachDecisions = PreparedTargetApproachDecisions;
-  Snapshot.TargetApproachGuidance = PreparedTargetApproachGuidance;
-  Snapshot.TargetApproachSummary = TargetApproachSummary;
-  Snapshot.TargetApproachCommitHash = TargetApproachCommitHash;
-  Snapshot.TargetInfluenceResults = PreparedTargetInfluenceResults;
-  Snapshot.TargetInfluenceSummary = TargetInfluenceSummary;
-  Snapshot.TargetInfluenceRoundHash = TargetInfluenceRoundHash;
-  Snapshot.TargetRegionTopology = PreparedTargetRegionTopology;
-  Snapshot.TargetRegionTopologySummary = TargetRegionTopologySummary;
-  Snapshot.TargetRegionAgents = PreparedTargetRegionAgents;
-  Snapshot.TargetRegionDemand = PreparedTargetRegionDemand;
-  Snapshot.TargetRegionPlan = PreparedTargetRegionPlan;
+  Snapshot.TargetRegionPlanResourceKey = PreparedTargetRegionPlan.bValid
+    ? MakeTargetPlanResourceKey(0, PreparedTargetRegionPlan)
+    : 0;
+  if (PreparedTargetRegionPlan.bValid)
+    TargetRegionPlanResources.FindOrAdd(Snapshot.TargetRegionPlanResourceKey) =
+      PreparedTargetRegionPlan;
   Snapshot.TargetRegionQuotaExecution = TargetRegionQuotaExecution;
   Snapshot.TargetRegionPlanValidation = TargetRegionPlanValidation;
-  Snapshot.TargetRegionGuidance = PreparedTargetRegionGuidance;
-  Snapshot.TargetRegionGuidanceSummary = TargetRegionGuidanceSummary;
   Snapshot.TargetRegionTopologyRoundHash = TargetRegionTopologyRoundHash;
   Snapshot.TargetRegionDemandRoundHash = TargetRegionDemandRoundHash;
   Snapshot.TargetRegionTransportRoundHash = TargetRegionTransportRoundHash;
@@ -859,7 +852,41 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.TargetRegionFailureFixtureAgentId = TargetRegionFailureFixtureAgentId;
   Snapshot.TargetRegionFailureFixtureCellKey = TargetRegionFailureFixtureCellKey;
   Snapshot.TargetRegionFailureFixtureHash = TargetRegionFailureFixtureHash;
-  Snapshot.TargetRegionCapabilityCohorts = TargetRegionCapabilityCohorts;
+  Snapshot.TargetRegionCapabilityCohorts.Reset(TargetRegionCapabilityCohorts.Num());
+  for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime
+    : TargetRegionCapabilityCohorts)
+  {
+    FCrowdDemoTargetRegionCapabilityCohortRollbackState& State =
+      Snapshot.TargetRegionCapabilityCohorts.AddDefaulted_GetRef();
+    State.Cohort = Runtime.Cohort;
+    State.DemandRegionPhaseOffset = Runtime.DemandRegionPhaseOffset;
+    State.PlanResourceKey = Runtime.Plan.bValid
+      ? MakeTargetPlanResourceKey(Runtime.Cohort.CapabilityProfileKey, Runtime.Plan)
+      : 0;
+    if (Runtime.Plan.bValid)
+      TargetRegionPlanResources.FindOrAdd(State.PlanResourceKey) = Runtime.Plan;
+    State.QuotaExecution = Runtime.QuotaExecution;
+    State.LastPlanReplacement = Runtime.LastPlanReplacement;
+    State.Validation = Runtime.Validation;
+    State.TopologyRoundHash = Runtime.TopologyRoundHash;
+    State.DemandRoundHash = Runtime.DemandRoundHash;
+    State.TransportRoundHash = Runtime.TransportRoundHash;
+    State.GuidanceRoundHash = Runtime.GuidanceRoundHash;
+    State.ValidationRoundHash = Runtime.ValidationRoundHash;
+    State.PlanRebuildCount = Runtime.PlanRebuildCount;
+    State.InvalidStepCount = Runtime.InvalidStepCount;
+    State.ValidationFailureCount = Runtime.ValidationFailureCount;
+    State.GuidanceUnroutedStepCount = Runtime.GuidanceUnroutedStepCount;
+    State.LastInvalidStep = Runtime.LastInvalidStep;
+    State.SolverMsSampleCount = Runtime.SolverMillisecondsSamples.Num();
+    State.PlanLifecycle = Runtime.PlanLifecycle;
+    State.TargetEngagedHoldAgentIds = Runtime.TargetEngagedHoldAgentIds;
+    State.TargetEngagementAcquireCount = Runtime.TargetEngagementAcquireCount;
+    State.TargetEngagementReleaseCount = Runtime.TargetEngagementReleaseCount;
+    State.TargetEngagementSuppressedRetreatCount =
+      Runtime.TargetEngagementSuppressedRetreatCount;
+    State.bRoundValid = Runtime.bRoundValid;
+  }
   Snapshot.CapabilityProfileSummary = CapabilityProfileSummary;
   Snapshot.CapabilityCohortRebuildCount = CapabilityCohortRebuildCount;
   Snapshot.TargetRegionPlanLifecycleSummary = TargetRegionPlanLifecycleSummary;
@@ -877,10 +904,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
     Snapshot.RouteDiagnosticCheckpoint =
       FCrowdDemoSoftPressureRouteDiagnosticKernel::MakeCheckpoint(
         SoftPressureRouteDiagnosticRuntime);
-  if (IsTargetInfluenceExecutionDiagnosticEnabled())
-    Snapshot.TargetInfluenceExecutionCheckpoint =
-      FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::MakeCheckpoint(
-        TargetInfluenceExecutionRuntime);
   if (IsTargetStabilityDiagnosticEnabled())
     Snapshot.TargetStabilityCheckpoint =
       FCrowdDemoTargetStabilityDiagnosticKernel::MakeCheckpoint(
@@ -927,6 +950,9 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   LocalPredictiveRoundHash = Snapshot.LocalPredictiveRoundHash;
   LocalPredictiveSampleCount = Snapshot.LocalPredictiveSampleCount;
   LocalPredictiveInvalidStepCount = Snapshot.LocalPredictiveInvalidStepCount;
+  GuidanceCandidateRoundHash = Snapshot.GuidanceCandidateRoundHash;
+  GuidanceComposeRoundHash = Snapshot.GuidanceComposeRoundHash;
+  GuidanceComposeSampleCount = Snapshot.GuidanceComposeSampleCount;
   LastParticleCandidateSummary = Snapshot.ParticleCandidateSummary;
   LastParticleAppliedSummary = Snapshot.ParticleAppliedSummary;
   ParticleSolverMillisecondsSamples.SetNum(FMath::Min(
@@ -943,37 +969,36 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   ParticlePreviousSoftErrorP95 = Snapshot.ParticlePreviousSoftErrorP95;
   bParticleConstraintRunFailure = Snapshot.bParticleConstraintRunFailure;
   ParticleFailureFixture = Snapshot.ParticleFailureFixture;
-  OpenSpawnRelaxationLayout = Snapshot.OpenSpawnRelaxationLayout;
   OpenSpawnRelaxationRuntime = Snapshot.OpenSpawnRelaxationRuntime;
-  OpenCohortMovementLayout = Snapshot.OpenCohortMovementLayout;
   OpenCohortMovementProgress = Snapshot.OpenCohortMovementProgress;
-  BidirectionalSwapLayout = Snapshot.BidirectionalSwapLayout;
   BidirectionalSwapProgress = Snapshot.BidirectionalSwapProgress;
-  ValidCorridorTransitLayout = Snapshot.ValidCorridorTransitLayout;
   ValidCorridorTransitProgress = Snapshot.ValidCorridorTransitProgress;
-  TargetApproachFact = Snapshot.TargetFact;
+  TargetFact = Snapshot.TargetFact;
   DynamicFlowAnchorCellKey = Snapshot.DynamicFlowAnchorCellKey;
   DynamicFlowIntegrationRebuildCount = Snapshot.DynamicFlowIntegrationRebuildCount;
   DynamicFlowRoundHash = Snapshot.DynamicFlowRoundHash;
   bDynamicFlowIntegrationCacheInvalidated = true;
-  PreparedTargetSlotLayout = Snapshot.TargetSlotLayout;
-  TargetSlotLayoutSummary = Snapshot.TargetSlotLayoutSummary;
-  PreparedTargetApproachDecisions = Snapshot.TargetApproachDecisions;
-  PreparedTargetApproachGuidance = Snapshot.TargetApproachGuidance;
-  TargetApproachSummary = Snapshot.TargetApproachSummary;
-  TargetApproachCommitHash = Snapshot.TargetApproachCommitHash;
-  PreparedTargetInfluenceResults = Snapshot.TargetInfluenceResults;
-  TargetInfluenceSummary = Snapshot.TargetInfluenceSummary;
-  TargetInfluenceRoundHash = Snapshot.TargetInfluenceRoundHash;
-  PreparedTargetRegionTopology = Snapshot.TargetRegionTopology;
-  TargetRegionTopologySummary = Snapshot.TargetRegionTopologySummary;
-  PreparedTargetRegionAgents = Snapshot.TargetRegionAgents;
-  PreparedTargetRegionDemand = Snapshot.TargetRegionDemand;
-  PreparedTargetRegionPlan = Snapshot.TargetRegionPlan;
+  PreparedTargetRegionTopology = {};
+  TargetRegionTopologySummary = {};
+  PreparedTargetRegionAgents.Reset();
+  PreparedTargetRegionDemand = {};
+  PreparedTargetRegionPlan = {};
+  if (const FCrowdDemoTargetRegionFlowPlan* Resource =
+    TargetRegionPlanResources.Find(Snapshot.TargetRegionPlanResourceKey))
+  {
+    PreparedTargetRegionPlan = *Resource;
+  }
+  else if (Snapshot.TargetRegionPlanResourceKey != 0)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoRollbackPlanResourceMissing key=%llu step=%d"),
+      static_cast<unsigned long long>(Snapshot.TargetRegionPlanResourceKey),
+      Snapshot.FixedStepIndex);
+  }
   TargetRegionQuotaExecution = Snapshot.TargetRegionQuotaExecution;
   TargetRegionPlanValidation = Snapshot.TargetRegionPlanValidation;
-  PreparedTargetRegionGuidance = Snapshot.TargetRegionGuidance;
-  TargetRegionGuidanceSummary = Snapshot.TargetRegionGuidanceSummary;
+  PreparedTargetRegionGuidance.Reset();
+  TargetRegionGuidanceSummary = {};
   TargetRegionTopologyRoundHash = Snapshot.TargetRegionTopologyRoundHash;
   TargetRegionDemandRoundHash = Snapshot.TargetRegionDemandRoundHash;
   TargetRegionTransportRoundHash = Snapshot.TargetRegionTransportRoundHash;
@@ -1003,7 +1028,57 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   TargetRegionFailureFixtureAgentId = Snapshot.TargetRegionFailureFixtureAgentId;
   TargetRegionFailureFixtureCellKey = Snapshot.TargetRegionFailureFixtureCellKey;
   TargetRegionFailureFixtureHash = Snapshot.TargetRegionFailureFixtureHash;
-  TargetRegionCapabilityCohorts = Snapshot.TargetRegionCapabilityCohorts;
+  TMap<uint32, TArray<float>> SolverSamplesByProfile;
+  for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Existing
+    : TargetRegionCapabilityCohorts)
+  {
+    SolverSamplesByProfile.Add(
+      Existing.Cohort.CapabilityProfileKey, Existing.SolverMillisecondsSamples);
+  }
+  TargetRegionCapabilityCohorts.Reset(Snapshot.TargetRegionCapabilityCohorts.Num());
+  for (const FCrowdDemoTargetRegionCapabilityCohortRollbackState& State
+    : Snapshot.TargetRegionCapabilityCohorts)
+  {
+    FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime =
+      TargetRegionCapabilityCohorts.AddDefaulted_GetRef();
+    Runtime.Cohort = State.Cohort;
+    Runtime.DemandRegionPhaseOffset = State.DemandRegionPhaseOffset;
+    if (const FCrowdDemoTargetRegionFlowPlan* Resource =
+      TargetRegionPlanResources.Find(State.PlanResourceKey))
+      Runtime.Plan = *Resource;
+    else if (State.PlanResourceKey != 0)
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRollbackCohortPlanResourceMissing profile=%u key=%llu step=%d"),
+        State.Cohort.CapabilityProfileKey,
+        static_cast<unsigned long long>(State.PlanResourceKey),
+        Snapshot.FixedStepIndex);
+    Runtime.QuotaExecution = State.QuotaExecution;
+    Runtime.LastPlanReplacement = State.LastPlanReplacement;
+    Runtime.Validation = State.Validation;
+    Runtime.TopologyRoundHash = State.TopologyRoundHash;
+    Runtime.DemandRoundHash = State.DemandRoundHash;
+    Runtime.TransportRoundHash = State.TransportRoundHash;
+    Runtime.GuidanceRoundHash = State.GuidanceRoundHash;
+    Runtime.ValidationRoundHash = State.ValidationRoundHash;
+    Runtime.PlanRebuildCount = State.PlanRebuildCount;
+    Runtime.InvalidStepCount = State.InvalidStepCount;
+    Runtime.ValidationFailureCount = State.ValidationFailureCount;
+    Runtime.GuidanceUnroutedStepCount = State.GuidanceUnroutedStepCount;
+    Runtime.LastInvalidStep = State.LastInvalidStep;
+    if (TArray<float>* Samples = SolverSamplesByProfile.Find(
+      State.Cohort.CapabilityProfileKey))
+    {
+      Samples->SetNum(FMath::Min(Samples->Num(), State.SolverMsSampleCount));
+      Runtime.SolverMillisecondsSamples = MoveTemp(*Samples);
+    }
+    Runtime.PlanLifecycle = State.PlanLifecycle;
+    Runtime.TargetEngagedHoldAgentIds = State.TargetEngagedHoldAgentIds;
+    Runtime.TargetEngagementAcquireCount = State.TargetEngagementAcquireCount;
+    Runtime.TargetEngagementReleaseCount = State.TargetEngagementReleaseCount;
+    Runtime.TargetEngagementSuppressedRetreatCount =
+      State.TargetEngagementSuppressedRetreatCount;
+    Runtime.bRoundValid = State.bRoundValid;
+  }
   CapabilityProfileSummary = Snapshot.CapabilityProfileSummary;
   CapabilityCohortRebuildCount = Snapshot.CapabilityCohortRebuildCount;
   TargetRegionPlanLifecycleSummary = Snapshot.TargetRegionPlanLifecycleSummary;
@@ -1023,12 +1098,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
     FCrowdDemoSoftPressureRouteDiagnosticKernel::RestoreCheckpoint(
       Snapshot.RouteDiagnosticCheckpoint, SoftPressureRouteDiagnosticRuntime);
     SoftPressureRouteDiagnosticSummary = {};
-  }
-  if (IsTargetInfluenceExecutionDiagnosticEnabled())
-  {
-    FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::RestoreCheckpoint(
-      Snapshot.TargetInfluenceExecutionCheckpoint, TargetInfluenceExecutionRuntime);
-    TargetInfluenceExecutionSummary = {};
   }
   if (IsTargetStabilityDiagnosticEnabled())
   {
@@ -1064,17 +1133,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordOpenSpawnRelaxationParticleStep(
   FCrowdDemoOpenSpawnRelaxationKernel::RecordParticleStep(
     GetCurrentFixedStepIndex(), Influences, MaxActualCorrectionCm,
     SoftErrorCmP95, OpenSpawnRelaxationRuntime);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetInfluenceStep(
-  TArray<FCrowdDemoTargetInfluenceResult>&& Results,
-  const FCrowdDemoTargetInfluenceSummary& Summary)
-{
-  PreparedTargetInfluenceResults = MoveTemp(Results);
-  TargetInfluenceSummary = Summary;
-  TargetInfluenceRoundHash = FoldHash(
-    FoldHash(TargetInfluenceRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
-    Summary.StableHash);
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::SetCapabilityCohorts(
@@ -1258,29 +1316,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::PinTargetRegionFailureFixture(
 float UCrowdDemoRoundSimPipelineSubsystem::GetTargetRegionSolverMsP95() const
 {
   return Percentile(TargetRegionSolverMillisecondsSamples, 0.95f);
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsTargetInfluenceExecutionDiagnosticEnabled() const
-{
-  return bTargetInfluenceExecutionDiagnosticPlanEnabled && IsActive();
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RecordTargetInfluenceExecutionStep(
-  const TConstArrayView<FCrowdDemoTargetInfluenceExecutionSample> Samples,
-  const FCrowdDemoTargetPolarEnvironmentSummary& Environment)
-{
-  if (!IsTargetInfluenceExecutionDiagnosticEnabled()) return;
-  FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::RecordStep(
-    Samples, Environment, TargetInfluenceExecutionRuntime);
-  FCrowdDemoTargetInfluenceExecutionDiagnosticKernel::BuildSummary(
-    TargetInfluenceExecutionRuntime, TargetInfluenceExecutionSummary);
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::PinTargetInfluenceExecutionDiagnosticForRoundResult()
-{
-  if (!IsTargetInfluenceExecutionDiagnosticEnabled()) return;
-  LastCompletedTargetInfluenceExecutionRuntime = TargetInfluenceExecutionRuntime;
-  LastCompletedTargetInfluenceExecutionSummary = TargetInfluenceExecutionSummary;
 }
 
 bool UCrowdDemoRoundSimPipelineSubsystem::IsTargetStabilityDiagnosticEnabled() const
@@ -1515,6 +1550,27 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordLocalPredictiveStep(
         Summary.CandidateHash);
     }
   }
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::RecordGuidanceComposeStep(
+  TArray<FCrowdDemoComposedGuidance>&& Results)
+{
+  if (!IsActive()) return;
+  Results.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+  uint32 CandidateStepHash = 2166136261u;
+  uint32 ComposeStepHash = 2166136261u;
+  for (const FCrowdDemoComposedGuidance& Result : Results)
+  {
+    CandidateStepHash = FoldHash(CandidateStepHash, Result.CandidateSetHash);
+    ComposeStepHash = FoldHash(ComposeStepHash, Result.StableHash);
+  }
+  GuidanceCandidateRoundHash = FoldHash(
+    FoldHash(GuidanceCandidateRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    CandidateStepHash);
+  GuidanceComposeRoundHash = FoldHash(
+    FoldHash(GuidanceComposeRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex())),
+    ComposeStepHash);
+  ++GuidanceComposeSampleCount;
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordLocalPredictiveDiagnosticFrame(
@@ -1774,6 +1830,8 @@ UCrowdDemoRoundSimPipelineSubsystem::BuildRoundPerformanceMetrics() const
   Result.FixedStepPipelineMsP50 = Percentile(FixedStepPipelineMsSamples, 0.50f);
   Result.FixedStepPipelineMsP95 = Percentile(FixedStepPipelineMsSamples, 0.95f);
   Result.FixedStepPipelineMsMax = MaxSample(FixedStepPipelineMsSamples);
+  FillStage(ECrowdDemoRoundPerformanceStage::BusinessPrepare,
+    Result.BusinessPrepareStageMsP95, Result.BusinessPrepareStageMsMax);
   FillStage(ECrowdDemoRoundPerformanceStage::SharedFlow,
     Result.SharedFlowStageMsP95, Result.SharedFlowStageMsMax);
   FillStage(ECrowdDemoRoundPerformanceStage::TargetTopology,
@@ -1784,12 +1842,16 @@ UCrowdDemoRoundSimPipelineSubsystem::BuildRoundPerformanceMetrics() const
     Result.TargetPlanStageMsP95, Result.TargetPlanStageMsMax);
   FillStage(ECrowdDemoRoundPerformanceStage::TargetGuidance,
     Result.TargetGuidanceStageMsP95, Result.TargetGuidanceStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::GuidanceCompose,
+    Result.GuidanceComposeStageMsP95, Result.GuidanceComposeStageMsMax);
   FillStage(ECrowdDemoRoundPerformanceStage::LocalPredictive,
     Result.LocalPredictiveStageMsP95, Result.LocalPredictiveStageMsMax);
   FillStage(ECrowdDemoRoundPerformanceStage::Particle,
     Result.ParticleStageMsP95, Result.ParticleStageMsMax);
-  FillStage(ECrowdDemoRoundPerformanceStage::FinalizeCommit,
-    Result.FinalizeCommitStageMsP95, Result.FinalizeCommitStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::FacingFinalize,
+    Result.FacingFinalizeStageMsP95, Result.FacingFinalizeStageMsMax);
+  FillStage(ECrowdDemoRoundPerformanceStage::Commit,
+    Result.CommitStageMsP95, Result.CommitStageMsMax);
   Result.TargetTopologyBuildCount = PerformanceTargetTopologyBuildCount;
   Result.TargetTopologyCacheHitCount = PerformanceTargetTopologyCacheHitCount;
   Result.TargetDemandFullBuildCount = PerformanceTargetDemandFullBuildCount;
@@ -2087,6 +2149,11 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
       == Packet.ParticleMetrics.ParticleCandidateHash;
     const bool bAppliedHashMatch = ParticleAppliedStateHash
       == Packet.ParticleMetrics.ParticleAppliedStateHash;
+    const bool bGuidanceHashMatch = GuidanceCandidateRoundHash
+        == Packet.ParticleMetrics.GuidanceCandidateHash
+      && GuidanceComposeRoundHash == Packet.ParticleMetrics.GuidanceComposeHash
+      && GuidanceComposeSampleCount
+        == Packet.ParticleMetrics.GuidanceComposeSampleCount;
     const bool bLocalPredictiveHashMatch =
       GetRules().LocalPredictiveSettings.bEnabled == 0
       || (LocalPredictiveRoundHash == Packet.ParticleMetrics.LocalPredictiveHash
@@ -2265,89 +2332,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
         UE_LOG(LogTemp, Error,
           TEXT("CrowdDemoT6TransitCheckpoint role=client hash_mismatch=1 VIOLATION"));
     }
-    const bool bTargetFactHashMatch = TargetApproachSummary.TargetFactHash
-      == Packet.ParticleMetrics.TargetFactHash;
-    const bool bTargetApproachHashMatch = TargetApproachSummary.ApproachHash
-      == Packet.ParticleMetrics.TargetApproachHash;
-    const bool bTargetLayoutHashMatch = PreparedTargetSlotLayout.TopologyHash
-        == Packet.ParticleMetrics.TargetSlotLayoutTopologyHash
-      && PreparedTargetSlotLayout.WorldValidationHash
-        == Packet.ParticleMetrics.TargetSlotLayoutWorldHash
-      && PreparedTargetSlotLayout.FullInputHash
-        == Packet.ParticleMetrics.TargetSlotLayoutFullInputHash
-      && PreparedTargetSlotLayout.SlotLayoutRevision
-        == Packet.ParticleMetrics.TargetSlotLayoutRevision;
-    const bool bTargetScheduleHashMatch = TargetApproachSummary.ScheduleHash
-      == Packet.ParticleMetrics.TargetApproachScheduleHash;
-    const bool bTargetCommitHashMatch = TargetApproachSummary.CommitHash
-      == Packet.ParticleMetrics.TargetApproachCommitHash;
     const bool bTargetTransportEnabled =
       GetRules().TargetRegionTransportSettings.bEnabled != 0;
-    const bool bTargetInfluenceEnabled = GetRules().TargetInfluenceSettings.bEnabled != 0
-      && !bTargetTransportEnabled;
-    const bool bTargetInfluenceHashMatch = !bTargetInfluenceEnabled
-      || (TargetInfluenceSummary.bValid
-        && Packet.ParticleMetrics.bTargetInfluenceValid != 0
-        && TargetInfluenceRoundHash == Packet.ParticleMetrics.TargetInfluenceHash);
-    if (bTargetInfluenceEnabled)
-    {
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoTargetInfluenceCheckpoint role=client round_id=%d valid=%d/%d agents=%d/%d inside_band=%d/%d outside_max=%d/%d inside_min=%d/%d radial_p50=%.3f/%.3f radial_p95=%.3f/%.3f radial_max=%.3f/%.3f relative_speed_p95=%.3f/%.3f lag_p95=%.3f/%.3f angular_sectors=%d/%d angular_q15=%d/%d max_sector_population=%d/%d radial_bands=%d/%d hash=%u/%u match=%d source=MassPipeline"),
-        Packet.RoundId, TargetInfluenceSummary.bValid ? 1 : 0,
-        Packet.ParticleMetrics.bTargetInfluenceValid,
-        TargetInfluenceSummary.InfluenceAgentCount,
-        Packet.ParticleMetrics.TargetInfluenceAgentCount,
-        TargetInfluenceSummary.InsideEffectiveBandCount,
-        Packet.ParticleMetrics.TargetInsideEffectiveBandCount,
-        TargetInfluenceSummary.OutsideMaximumCount,
-        Packet.ParticleMetrics.TargetOutsideMaxCount,
-        TargetInfluenceSummary.InsideMinimumCount,
-        Packet.ParticleMetrics.TargetInsideMinCount,
-        TargetInfluenceSummary.RadialErrorCmP50,
-        Packet.ParticleMetrics.TargetRadialErrorCmP50,
-        TargetInfluenceSummary.RadialErrorCmP95,
-        Packet.ParticleMetrics.TargetRadialErrorCmP95,
-        TargetInfluenceSummary.RadialErrorCmMax,
-        Packet.ParticleMetrics.TargetRadialErrorCmMax,
-        TargetInfluenceSummary.RelativeSpeedCmpsP95,
-        Packet.ParticleMetrics.TargetRelativeSpeedCmpsP95,
-        TargetInfluenceSummary.FollowLagCmP95,
-        Packet.ParticleMetrics.TargetFollowLagCmP95,
-        TargetInfluenceSummary.OccupiedAngularSectorCount,
-        Packet.ParticleMetrics.OccupiedAngularSectorCount,
-        TargetInfluenceSummary.AngularCoverageQ15,
-        Packet.ParticleMetrics.AngularCoverageQ15,
-        TargetInfluenceSummary.MaxAngularSectorPopulation,
-        Packet.ParticleMetrics.MaxAngularSectorPopulation,
-        TargetInfluenceSummary.OccupiedRadialBandCount,
-        Packet.ParticleMetrics.OccupiedRadialBandCount,
-        TargetInfluenceRoundHash, Packet.ParticleMetrics.TargetInfluenceHash,
-        bTargetInfluenceHashMatch ? 1 : 0);
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoTargetDensityCheckpoint role=client round_id=%d field_hash=%u/%u contributing=%d/%d occupied_cells=%d/%d max_cell_population=%d/%d guided=%d/%d clockwise=%d/%d counter_clockwise=%d/%d tangential_speed_cmps_p95=%.3f/%.3f tangential_speed_cmps_max=%.3f/%.3f largest_empty_sector_run=%d/%d match=%d source=MassPipeline"),
-        Packet.RoundId, TargetInfluenceSummary.Density.FieldHash,
-        Packet.ParticleMetrics.TargetDensityFieldHash,
-        TargetInfluenceSummary.Density.ContributingAgentCount,
-        Packet.ParticleMetrics.TargetDensityContributingAgentCount,
-        TargetInfluenceSummary.Density.OccupiedCellCount,
-        Packet.ParticleMetrics.TargetDensityOccupiedCellCount,
-        TargetInfluenceSummary.Density.MaximumCellPopulation,
-        Packet.ParticleMetrics.TargetDensityMaxCellPopulation,
-        TargetInfluenceSummary.Density.DensityGuidedAgentCount,
-        Packet.ParticleMetrics.TargetDensityGuidedAgentCount,
-        TargetInfluenceSummary.Density.ClockwiseAgentCount,
-        Packet.ParticleMetrics.TargetDensityClockwiseAgentCount,
-        TargetInfluenceSummary.Density.CounterClockwiseAgentCount,
-        Packet.ParticleMetrics.TargetDensityCounterClockwiseAgentCount,
-        TargetInfluenceSummary.Density.TangentialSpeedCmpsP95,
-        Packet.ParticleMetrics.TargetDensityTangentialSpeedCmpsP95,
-        TargetInfluenceSummary.Density.MaximumTangentialSpeedCmps,
-        Packet.ParticleMetrics.TargetDensityTangentialSpeedCmpsMax,
-        TargetInfluenceSummary.Density.LargestEmptySectorRun,
-        Packet.ParticleMetrics.TargetLargestEmptySectorRun,
-        TargetInfluenceSummary.Density.FieldHash
-          == Packet.ParticleMetrics.TargetDensityFieldHash ? 1 : 0);
-    }
     if (IsTargetRegionPlanLifecycleDiagnosticEnabled())
       FinalizeTargetRegionPlanLifecycleDiagnostic();
     uint32 LocalTransportTopologyHash = TargetRegionTopologyRoundHash;
@@ -2400,9 +2386,9 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
             LocalMaximumRegionPopulation, Region.CurrentPopulation);
         }
         const FVector2f TargetLocation(
-          GetTargetApproachFact().Location.X, GetTargetApproachFact().Location.Y);
+          GetTargetFact().Location.X, GetTargetFact().Location.Y);
         const FVector2f TargetVelocity(
-          GetTargetApproachFact().Velocity.X, GetTargetApproachFact().Velocity.Y);
+          GetTargetFact().Velocity.X, GetTargetFact().Velocity.Y);
         int32 LocalDistanceBandInsideCount = 0;
         int32 LocalBelowBandCount = 0;
         int32 LocalAboveBandCount = 0;
@@ -2580,63 +2566,14 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
           bTargetPlanLifecycleMatch ? TEXT("") : TEXT(" VIOLATION"));
       }
     }
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoTargetApproachCheckpoint role=client round_id=%d local_valid=%d server_valid=%d local_hash=%u server_hash=%u agent_input_hash=%u/%u fine_kinematic_hash=%u/%u agent_config_hash=%u/%u temporal_hash=%u/%u settings_hash=%u/%u slot_input_hash=%u/%u full_input_hash=%u/%u owner_state_hash=%u/%u transition_hash=%u/%u guidance_hash=%u/%u guidance_location_hash=%u/%u guidance_velocity_hash=%u/%u ring_entered=%d/%d ring_waiting=%d/%d functional_occupied=%d/%d fill_occupied=%d/%d slot_ingress=%d/%d slot_occupied=%d/%d free_settle=%d/%d free_settled=%d/%d state_transitions=%d/%d source=MassPipeline"),
-      Packet.RoundId, TargetApproachSummary.bValid ? 1 : 0,
-      Packet.ParticleMetrics.bTargetApproachValid,
-      TargetApproachSummary.ApproachHash, Packet.ParticleMetrics.TargetApproachHash,
-      TargetApproachSummary.AgentInputHash, Packet.ParticleMetrics.TargetAgentInputHash,
-      TargetApproachSummary.AgentFineKinematicHash,
-      Packet.ParticleMetrics.TargetAgentFineKinematicHash,
-      TargetApproachSummary.AgentConfigHash, Packet.ParticleMetrics.TargetAgentConfigHash,
-      TargetApproachSummary.AgentTemporalHash, Packet.ParticleMetrics.TargetAgentTemporalHash,
-      TargetApproachSummary.SettingsHash, Packet.ParticleMetrics.TargetSettingsHash,
-      TargetApproachSummary.SlotInputHash, Packet.ParticleMetrics.TargetSlotInputHash,
-      TargetApproachSummary.FullInputHash, Packet.ParticleMetrics.TargetFullInputHash,
-      TargetApproachSummary.OwnerStateHash, Packet.ParticleMetrics.TargetOwnerStateHash,
-      TargetApproachSummary.TransitionHash, Packet.ParticleMetrics.TargetTransitionHash,
-      TargetApproachSummary.GuidanceHash, Packet.ParticleMetrics.TargetGuidanceHash,
-      TargetApproachSummary.GuidanceLocationHash,
-      Packet.ParticleMetrics.TargetGuidanceLocationHash,
-      TargetApproachSummary.GuidanceVelocityHash,
-      Packet.ParticleMetrics.TargetGuidanceVelocityHash,
-      TargetApproachSummary.RingEnteredCount, Packet.ParticleMetrics.RingEnteredCount,
-      TargetApproachSummary.RingWaitingCount, Packet.ParticleMetrics.RingWaitingCount,
-      TargetApproachSummary.FunctionalSlotOccupied,
-      Packet.ParticleMetrics.FunctionalSlotOccupied,
-      TargetApproachSummary.FillSlotOccupied, Packet.ParticleMetrics.FillSlotOccupied,
-      TargetApproachSummary.SlotIngressCount, Packet.ParticleMetrics.SlotIngressCount,
-      TargetApproachSummary.SlotOccupiedCount, Packet.ParticleMetrics.SlotOccupiedCount,
-      TargetApproachSummary.FreeSettleCount, Packet.ParticleMetrics.FreeSettleCount,
-      TargetApproachSummary.FreeSettledCount, Packet.ParticleMetrics.FreeSettledCount,
-      TargetApproachSummary.StateTransitionCount,
-      Packet.ParticleMetrics.TargetApproachStateTransitionCount);
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoTargetSlotLayout role=client round_id=%d revision=%d/%d topology_hash=%u/%u world_hash=%u/%u full_input_hash=%u/%u schedule_hash=%u/%u commit_hash=%u/%u layout_match=%d schedule_match=%d commit_match=%d source=MassPipeline"),
-      Packet.RoundId, PreparedTargetSlotLayout.SlotLayoutRevision,
-      Packet.ParticleMetrics.TargetSlotLayoutRevision,
-      PreparedTargetSlotLayout.TopologyHash,
-      Packet.ParticleMetrics.TargetSlotLayoutTopologyHash,
-      PreparedTargetSlotLayout.WorldValidationHash,
-      Packet.ParticleMetrics.TargetSlotLayoutWorldHash,
-      PreparedTargetSlotLayout.FullInputHash,
-      Packet.ParticleMetrics.TargetSlotLayoutFullInputHash,
-      TargetApproachSummary.ScheduleHash,
-      Packet.ParticleMetrics.TargetApproachScheduleHash,
-      TargetApproachSummary.CommitHash,
-      Packet.ParticleMetrics.TargetApproachCommitHash,
-      bTargetLayoutHashMatch ? 1 : 0, bTargetScheduleHashMatch ? 1 : 0,
-      bTargetCommitHashMatch ? 1 : 0);
     const bool bCrossProfileViolationMatch = GetRules().bEnableHeterogeneousProfiles == 0
       || (CrossProfileHardViolationCount
           == Packet.ParticleMetrics.CrossProfileHardViolationCount
         && CrossProfileSweptViolationCount
           == Packet.ParticleMetrics.CrossProfileSweptViolationCount);
     const bool bParticleHashMatch = bCandidateHashMatch && bAppliedHashMatch
-      && bLocalPredictiveHashMatch
-      && bTargetFactHashMatch && bTargetApproachHashMatch
-      && bTargetLayoutHashMatch && bTargetScheduleHashMatch && bTargetCommitHashMatch
-      && bTargetInfluenceHashMatch && bTargetTransportHashMatch
+      && bGuidanceHashMatch
+      && bLocalPredictiveHashMatch && bTargetTransportHashMatch
       && bTargetPlanLifecycleMatch
       && bCrossProfileViolationMatch && bRoundInitialStateMatch && bDynamicFlowMatch;
     LastCompareMetrics.ServerClientParticleHashMatch = bParticleHashMatch ? 1 : 0;
@@ -2705,25 +2642,28 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
     if (bParticleHashMatch)
     {
       UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u applied_local=%u applied_server=%u target_fact=%u target_approach=%u match=1 source=MassPipeline"),
+        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u applied_local=%u applied_server=%u match=1 source=MassPipeline"),
         Packet.RoundId, ParticleCandidateStateHash,
         Packet.ParticleMetrics.ParticleCandidateHash, ParticleAppliedStateHash,
-        Packet.ParticleMetrics.ParticleAppliedStateHash,
-        TargetApproachSummary.TargetFactHash, TargetApproachSummary.ApproachHash);
+        Packet.ParticleMetrics.ParticleAppliedStateHash);
     }
     else
     {
       UE_LOG(LogTemp, Error,
-        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u candidate_match=%d applied_local=%u applied_server=%u applied_match=%d target_fact_local=%u target_fact_server=%u target_fact_match=%d target_approach_local=%u target_approach_server=%u target_approach_match=%d match=0 source=MassPipeline VIOLATION"),
+        TEXT("CrowdDemoParticleStateHash role=client round_id=%d candidate_local=%u candidate_server=%u candidate_match=%d applied_local=%u applied_server=%u applied_match=%d match=0 source=MassPipeline VIOLATION"),
         Packet.RoundId, ParticleCandidateStateHash,
         Packet.ParticleMetrics.ParticleCandidateHash, bCandidateHashMatch ? 1 : 0,
         ParticleAppliedStateHash, Packet.ParticleMetrics.ParticleAppliedStateHash,
-        bAppliedHashMatch ? 1 : 0,
-        TargetApproachSummary.TargetFactHash, Packet.ParticleMetrics.TargetFactHash,
-        bTargetFactHashMatch ? 1 : 0,
-        TargetApproachSummary.ApproachHash, Packet.ParticleMetrics.TargetApproachHash,
-        bTargetApproachHashMatch ? 1 : 0);
+        bAppliedHashMatch ? 1 : 0);
     }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoGuidanceComposeHash role=client round_id=%d candidate=%u/%u composed=%u/%u samples=%d/%d match=%d source=MassPipeline%s"),
+      Packet.RoundId, GuidanceCandidateRoundHash,
+      Packet.ParticleMetrics.GuidanceCandidateHash, GuidanceComposeRoundHash,
+      Packet.ParticleMetrics.GuidanceComposeHash, GuidanceComposeSampleCount,
+      Packet.ParticleMetrics.GuidanceComposeSampleCount,
+      bGuidanceHashMatch ? 1 : 0,
+      bGuidanceHashMatch ? TEXT("") : TEXT(" VIOLATION"));
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoLocalPredictiveHash role=client round_id=%d local=%u server=%u samples=%d/%d invalid=%d/%d match=%d source=MassPipeline%s"),
       Packet.RoundId, LocalPredictiveRoundHash,
@@ -2925,47 +2865,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundResultComparisonAndApplied(
           static_cast<int32>(SoftPressureRouteDiagnosticSummary.SelectedBranch),
           ServerRoute.SelectedBranch);
       }
-    }
-    if (IsTargetInfluenceExecutionDiagnosticEnabled())
-    {
-      const bool bExecutionHashMatch = TargetInfluenceExecutionSummary.bValid
-        && Packet.ParticleMetrics.bTargetInfluenceExecutionDiagnosticValid != 0
-        && TargetInfluenceExecutionSummary.DiagnosticHash
-          == Packet.ParticleMetrics.TargetInfluenceExecutionDiagnosticHash;
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=client round_id=%d valid=%d/%d requested_agents=%d/%d requested_p95=%.3f/%.3f predict_p95=%.3f/%.3f applied_p95=%.3f/%.3f lost_p95=%.3f/%.3f ratio_p50=%.3f/%.3f flips=%d/%d sector_transitions=%d/%d band_transitions=%d/%d environment_opposed=%d/%d particle_opposed=%d/%d hash=%u/%u match=%d source=MassPipeline%s"),
-        Packet.RoundId, TargetInfluenceExecutionSummary.bValid ? 1 : 0,
-        Packet.ParticleMetrics.bTargetInfluenceExecutionDiagnosticValid,
-        TargetInfluenceExecutionSummary.RequestedAgentCount,
-        Packet.ParticleMetrics.TargetInfluenceExecutionRequestedAgentCount,
-        TargetInfluenceExecutionSummary.RequestedTangentialCmpsP95,
-        Packet.ParticleMetrics.TargetDensityRequestedTangentialCmpsP95,
-        TargetInfluenceExecutionSummary.MovementPredictTangentialCmpsP95,
-        Packet.ParticleMetrics.TargetDensityPredictTangentialCmpsP95,
-        TargetInfluenceExecutionSummary.AppliedTangentialCmpsP95,
-        Packet.ParticleMetrics.TargetDensityAppliedTangentialCmpsP95,
-        TargetInfluenceExecutionSummary.LostTangentialCmpsP95,
-        Packet.ParticleMetrics.TargetDensityLostTangentialCmpsP95,
-        TargetInfluenceExecutionSummary.RequestedToAppliedRatioP50,
-        Packet.ParticleMetrics.TargetDensityRequestedToAppliedRatioP50,
-        TargetInfluenceExecutionSummary.DirectionFlipCount,
-        Packet.ParticleMetrics.TargetDensityDirectionFlipCount,
-        TargetInfluenceExecutionSummary.AngularSectorTransitionCount,
-        Packet.ParticleMetrics.TargetDensityAngularSectorTransitionCount,
-        TargetInfluenceExecutionSummary.RadialBandTransitionCount,
-        Packet.ParticleMetrics.TargetDensityRadialBandTransitionCount,
-        TargetInfluenceExecutionSummary.EnvironmentOpposedAgentCount,
-        Packet.ParticleMetrics.TargetDensityEnvironmentOpposedAgentCount,
-        TargetInfluenceExecutionSummary.ParticleOpposedAgentCount,
-        Packet.ParticleMetrics.TargetDensityParticleOpposedAgentCount,
-        TargetInfluenceExecutionSummary.DiagnosticHash,
-        Packet.ParticleMetrics.TargetInfluenceExecutionDiagnosticHash,
-        bExecutionHashMatch ? 1 : 0,
-        bExecutionHashMatch ? TEXT("") : TEXT(" VIOLATION"));
-      if (!bExecutionHashMatch)
-        UE_LOG(LogTemp, Error,
-          TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=client round_id=%d match=0 VIOLATION"),
-          Packet.RoundId);
     }
     const uint32 LocalFixtureHash = ParticleFailureFixture.FixtureHash;
     const uint32 ServerFixtureHash = Packet.ParticleMetrics.ParticleFailureFixtureHash;

@@ -40,9 +40,10 @@ namespace
     TemplateData.AddFragment<FCrowdDemoRoundSimStateFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFormationFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundMoveIntentFragment>();
+    TemplateData.AddFragment<FCrowdDemoRoundGuidanceCandidatesFragment>();
+    TemplateData.AddFragment<FCrowdDemoRoundComposedGuidanceFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFacingFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundLocalVelocityFragment>();
-    TemplateData.AddFragment<FCrowdDemoTargetApproachFragment>();
     TemplateData.AddFragment<FCrowdDemoTargetCapabilityFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFlowSampleFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundProposedMovementFragment>();
@@ -628,12 +629,14 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
 
   FCrowdDemoRoundMoveIntentFragment& RoundMoveIntent = EntityManager.GetFragmentDataChecked<FCrowdDemoRoundMoveIntentFragment>(Entity);
   RoundMoveIntent = FCrowdDemoRoundMoveIntentFragment();
+  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundGuidanceCandidatesFragment>(Entity) =
+    FCrowdDemoRoundGuidanceCandidatesFragment();
+  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundComposedGuidanceFragment>(Entity) =
+    FCrowdDemoRoundComposedGuidanceFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundFacingFragment>(Entity) =
     FCrowdDemoRoundFacingFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundLocalVelocityFragment>(Entity) =
     FCrowdDemoRoundLocalVelocityFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoTargetApproachFragment>(Entity) =
-    FCrowdDemoTargetApproachFragment();
   FCrowdDemoTargetCapabilityFragment& TargetCapability =
     EntityManager.GetFragmentDataChecked<FCrowdDemoTargetCapabilityFragment>(Entity);
   // Capability is stable configuration, not replicated runtime state. Keep the

@@ -66,6 +66,7 @@ public:
     int32 CollapsedSimSteps,
     bool bCorrectionBoundary,
     bool bPlanChanged,
+    bool bTestBoundaryReset,
     bool bDiscontinuity,
     int32 PreviousPlanRevision,
     int32 CurrentPlanRevision,
@@ -136,6 +137,7 @@ private:
   int32 VisualCatchupDiscontinuityCount = 0;
   int32 NonCorrectionVisualDiscontinuityCount = 0;
   int32 RoundResetVisualJumpCount = 0;
+  int32 TestBoundaryResetVisualJumpCount = 0;
   int32 VisualIsmRebuildCount = 0;
   TMap<uint64, FCrowdDemoProjectileVisualRuntime> ActiveProjectileVisuals;
   TMap<int32, FCrowdDemoProjectileVisualRoundCounts> ProjectileVisualRoundCounts;

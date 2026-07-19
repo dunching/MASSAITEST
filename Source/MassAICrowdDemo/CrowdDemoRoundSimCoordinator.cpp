@@ -953,11 +953,13 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
       Particle.RollbackAgentMismatchCount, Particle.RollbackReplayedStepCount);
     const FCrowdDemoRoundPerformanceMetrics& Performance = Particle.Performance;
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoPerformanceCheckpoint role=server round_id=%d fixed_step_ms_p50=%.3f fixed_step_ms_p95=%.3f fixed_step_ms_max=%.3f flow_ms_p95=%.3f flow_ms_max=%.3f topology_ms_p95=%.3f topology_ms_max=%.3f demand_ms_p95=%.3f demand_ms_max=%.3f plan_ms_p95=%.3f plan_ms_max=%.3f guidance_ms_p95=%.3f guidance_ms_max=%.3f local_predictive_ms_p95=%.3f local_predictive_ms_max=%.3f particle_stage_ms_p95=%.3f particle_stage_ms_max=%.3f finalize_commit_ms_p95=%.3f finalize_commit_ms_max=%.3f topology_builds=%d topology_cache_hits=%d demand_full_builds=%d demand_population_updates=%d steps_per_game_frame_p50=%.3f steps_per_game_frame_p95=%.3f steps_per_game_frame_max=%d catchup_frame_count=%d catchup_cpu_budget_hit_count=%d catchup_cpu_budget_consecutive_max=%d max_step_limit_hit_count=%d backlog_ms_max=%.3f simulation_realtime_factor=%.3f rollback_replay_ms_p95=%.3f rollback_replay_ms_max=%.3f rollback_replay_samples=%d zero_error_rollback_replay_count=%d source=MassPipeline"),
+      TEXT("CrowdDemoPerformanceCheckpoint role=server round_id=%d fixed_step_ms_p50=%.3f fixed_step_ms_p95=%.3f fixed_step_ms_max=%.3f business_prepare_ms_p95=%.3f business_prepare_ms_max=%.3f flow_ms_p95=%.3f flow_ms_max=%.3f topology_ms_p95=%.3f topology_ms_max=%.3f demand_ms_p95=%.3f demand_ms_max=%.3f plan_ms_p95=%.3f plan_ms_max=%.3f guidance_ms_p95=%.3f guidance_ms_max=%.3f guidance_compose_ms_p95=%.3f guidance_compose_ms_max=%.3f local_predictive_ms_p95=%.3f local_predictive_ms_max=%.3f particle_stage_ms_p95=%.3f particle_stage_ms_max=%.3f facing_finalize_ms_p95=%.3f facing_finalize_ms_max=%.3f commit_ms_p95=%.3f commit_ms_max=%.3f topology_builds=%d topology_cache_hits=%d demand_full_builds=%d demand_population_updates=%d steps_per_game_frame_p50=%.3f steps_per_game_frame_p95=%.3f steps_per_game_frame_max=%d catchup_frame_count=%d catchup_cpu_budget_hit_count=%d catchup_cpu_budget_consecutive_max=%d max_step_limit_hit_count=%d backlog_ms_max=%.3f simulation_realtime_factor=%.3f rollback_replay_ms_p95=%.3f rollback_replay_ms_max=%.3f rollback_replay_samples=%d zero_error_rollback_replay_count=%d source=MassPipeline"),
       RoundResultPacket.RoundId,
       Performance.FixedStepPipelineMsP50,
       Performance.FixedStepPipelineMsP95,
       Performance.FixedStepPipelineMsMax,
+      Performance.BusinessPrepareStageMsP95,
+      Performance.BusinessPrepareStageMsMax,
       Performance.SharedFlowStageMsP95,
       Performance.SharedFlowStageMsMax,
       Performance.TargetTopologyStageMsP95,
@@ -968,12 +970,16 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
       Performance.TargetPlanStageMsMax,
       Performance.TargetGuidanceStageMsP95,
       Performance.TargetGuidanceStageMsMax,
+      Performance.GuidanceComposeStageMsP95,
+      Performance.GuidanceComposeStageMsMax,
       Performance.LocalPredictiveStageMsP95,
       Performance.LocalPredictiveStageMsMax,
       Performance.ParticleStageMsP95,
       Performance.ParticleStageMsMax,
-      Performance.FinalizeCommitStageMsP95,
-      Performance.FinalizeCommitStageMsMax,
+      Performance.FacingFinalizeStageMsP95,
+      Performance.FacingFinalizeStageMsMax,
+      Performance.CommitStageMsP95,
+      Performance.CommitStageMsMax,
       Performance.TargetTopologyBuildCount,
       Performance.TargetTopologyCacheHitCount,
       Performance.TargetDemandFullBuildCount,
@@ -1128,162 +1134,6 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
         Particle.T6TransitLastFixedStep, Particle.T6TransitCompletionStepMax,
         Particle.T6TransitGroupCompletionStep,
         Particle.T6TransitGroupSettledStep);
-    }
-    if (Pipeline->GetRules().TargetInfluenceSettings.bEnabled != 0
-      && Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0)
-    {
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoTargetInfluenceCheckpoint role=server round_id=%d valid=%d agents=%d inside_band=%d outside_max=%d inside_min=%d radial_error_cm_p50=%.3f radial_error_cm_p95=%.3f radial_error_cm_max=%.3f relative_speed_cmps_p95=%.3f follow_lag_cm_p95=%.3f occupied_angular_sector_count=%d angular_coverage_q15=%d max_angular_sector_population=%d occupied_radial_band_count=%d target_influence_hash=%u source=MassPipeline"),
-        RoundResultPacket.RoundId, Particle.bTargetInfluenceValid,
-        Particle.TargetInfluenceAgentCount, Particle.TargetInsideEffectiveBandCount,
-        Particle.TargetOutsideMaxCount, Particle.TargetInsideMinCount,
-        Particle.TargetRadialErrorCmP50, Particle.TargetRadialErrorCmP95,
-        Particle.TargetRadialErrorCmMax, Particle.TargetRelativeSpeedCmpsP95,
-        Particle.TargetFollowLagCmP95, Particle.OccupiedAngularSectorCount,
-        Particle.AngularCoverageQ15, Particle.MaxAngularSectorPopulation,
-        Particle.OccupiedRadialBandCount, Particle.TargetInfluenceHash);
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoTargetDensityCheckpoint role=server round_id=%d field_hash=%u contributing=%d occupied_cells=%d max_cell_population=%d guided=%d clockwise=%d counter_clockwise=%d tangential_speed_cmps_p95=%.3f tangential_speed_cmps_max=%.3f occupied_angular_sectors=%d max_angular_sector_population=%d largest_empty_sector_run=%d source=MassPipeline"),
-        RoundResultPacket.RoundId, Particle.TargetDensityFieldHash,
-        Particle.TargetDensityContributingAgentCount,
-        Particle.TargetDensityOccupiedCellCount,
-        Particle.TargetDensityMaxCellPopulation,
-        Particle.TargetDensityGuidedAgentCount,
-        Particle.TargetDensityClockwiseAgentCount,
-        Particle.TargetDensityCounterClockwiseAgentCount,
-        Particle.TargetDensityTangentialSpeedCmpsP95,
-        Particle.TargetDensityTangentialSpeedCmpsMax,
-        Particle.OccupiedAngularSectorCount,
-        Particle.MaxAngularSectorPopulation,
-        Particle.TargetLargestEmptySectorRun);
-      if (Pipeline->IsTargetInfluenceExecutionDiagnosticEnabled())
-      {
-        const auto& Diagnostic =
-          Pipeline->GetLastCompletedTargetInfluenceExecutionSummary();
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=server round_id=%d valid=%d samples=%d requested_agents=%d below_threshold=%d requested_p50=%.3f requested_p95=%.3f requested_max=%.3f predict_p50=%.3f predict_p95=%.3f predict_max=%.3f applied_p50=%.3f applied_p95=%.3f applied_max=%.3f ratio_p50=%.3f ratio_p95=%.3f lost_p50=%.3f lost_p95=%.3f lost_max=%.3f flip_agents=%d flips=%d sector_transitions=%d band_transitions=%d environment_opposed=%d particle_opposed=%d occupied_feasible=%d occupied_infeasible=%d feasible_unoccupied=%d largest_empty_feasible_run=%d flow_bounds_infeasible=%d obstacle_infeasible=%d hash=%u source=MassPipeline"),
-          RoundResultPacket.RoundId, Diagnostic.bValid ? 1 : 0,
-          Diagnostic.ValidSampleCount, Diagnostic.RequestedAgentCount,
-          Diagnostic.RequestedBelowThresholdSampleCount,
-          Diagnostic.RequestedTangentialCmpsP50,
-          Diagnostic.RequestedTangentialCmpsP95,
-          Diagnostic.RequestedTangentialCmpsMax,
-          Diagnostic.MovementPredictTangentialCmpsP50,
-          Diagnostic.MovementPredictTangentialCmpsP95,
-          Diagnostic.MovementPredictTangentialCmpsMax,
-          Diagnostic.AppliedTangentialCmpsP50,
-          Diagnostic.AppliedTangentialCmpsP95,
-          Diagnostic.AppliedTangentialCmpsMax,
-          Diagnostic.RequestedToAppliedRatioP50,
-          Diagnostic.RequestedToAppliedRatioP95,
-          Diagnostic.LostTangentialCmpsP50,
-          Diagnostic.LostTangentialCmpsP95,
-          Diagnostic.LostTangentialCmpsMax,
-          Diagnostic.DirectionFlipAgentCount, Diagnostic.DirectionFlipCount,
-          Diagnostic.AngularSectorTransitionCount,
-          Diagnostic.RadialBandTransitionCount,
-          Diagnostic.EnvironmentOpposedAgentCount,
-          Diagnostic.ParticleOpposedAgentCount,
-          Diagnostic.Environment.OccupiedFeasibleSectorCount,
-          Diagnostic.Environment.OccupiedInfeasiblePolarCellCount,
-          Diagnostic.Environment.FeasibleButUnoccupiedSectorCount,
-          Diagnostic.Environment.LargestEmptyFeasibleSectorRun,
-          Diagnostic.Environment.FlowBoundsInfeasibleCellCount,
-          Diagnostic.Environment.ObstacleInfeasibleCellCount,
-          Diagnostic.DiagnosticHash);
-        if (!Diagnostic.bValid || Diagnostic.ValidSampleCount <= 0
-          || Diagnostic.RequestedAgentCount <= 0)
-        {
-          UE_LOG(LogTemp, Error,
-            TEXT("CrowdDemoTargetInfluenceExecutionDiagnostic role=server round_id=%d valid=%d samples=%d requested_agents=%d zero_sample_or_request=1 VIOLATION"),
-            RoundResultPacket.RoundId, Diagnostic.bValid ? 1 : 0,
-            Diagnostic.ValidSampleCount, Diagnostic.RequestedAgentCount);
-        }
-
-        FString OutputPath;
-        const bool bHasOutputPath = FParse::Value(FCommandLine::Get(),
-          TEXT("CrowdDemoTargetInfluenceExecutionDiagnosticOutput="), OutputPath);
-        bool bWritten = false;
-        if (bHasOutputPath && !OutputPath.IsEmpty())
-        {
-          FString Json = FString::Printf(
-            TEXT("{\n  \"contract_version\":1,\n  \"round_id\":%d,\n  \"valid\":%s,\n  \"diagnostic_hash\":%u,\n  \"requested_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"predict_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"applied_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"lost_tangential_cmps\":{\"p50\":%.3f,\"p95\":%.3f,\"max\":%.3f},\n  \"requested_to_applied_ratio\":{\"p50\":%.6f,\"p95\":%.6f},\n  \"direction_flips\":%d,\n  \"sector_transitions\":%d,\n  \"radial_band_transitions\":%d,\n  \"environment_opposed_agents\":%d,\n  \"particle_opposed_agents\":%d,\n"),
-            RoundResultPacket.RoundId, Diagnostic.bValid ? TEXT("true") : TEXT("false"),
-            Diagnostic.DiagnosticHash,
-            Diagnostic.RequestedTangentialCmpsP50, Diagnostic.RequestedTangentialCmpsP95,
-            Diagnostic.RequestedTangentialCmpsMax,
-            Diagnostic.MovementPredictTangentialCmpsP50,
-            Diagnostic.MovementPredictTangentialCmpsP95,
-            Diagnostic.MovementPredictTangentialCmpsMax,
-            Diagnostic.AppliedTangentialCmpsP50, Diagnostic.AppliedTangentialCmpsP95,
-            Diagnostic.AppliedTangentialCmpsMax,
-            Diagnostic.LostTangentialCmpsP50, Diagnostic.LostTangentialCmpsP95,
-            Diagnostic.LostTangentialCmpsMax,
-            Diagnostic.RequestedToAppliedRatioP50,
-            Diagnostic.RequestedToAppliedRatioP95,
-            Diagnostic.DirectionFlipCount, Diagnostic.AngularSectorTransitionCount,
-            Diagnostic.RadialBandTransitionCount,
-            Diagnostic.EnvironmentOpposedAgentCount,
-            Diagnostic.ParticleOpposedAgentCount);
-          Json += TEXT("  \"feasible_sectors_by_radial_band\":[");
-          for (int32 Index = 0;
-            Index < Diagnostic.Environment.FeasibleSectorCountByRadialBand.Num(); ++Index)
-          {
-            Json += FString::FromInt(
-              Diagnostic.Environment.FeasibleSectorCountByRadialBand[Index]);
-            if (Index + 1 < Diagnostic.Environment.FeasibleSectorCountByRadialBand.Num())
-              Json += TEXT(",");
-          }
-          Json += TEXT("],\n  \"agents\":[\n");
-          const auto& Runtime =
-            Pipeline->GetLastCompletedTargetInfluenceExecutionRuntime();
-          for (int32 Index = 0; Index < Runtime.Agents.Num(); ++Index)
-          {
-            const auto& Agent = Runtime.Agents[Index];
-            const double Ratio = Agent.RequestedTangentialCmpsQ > 0
-              ? static_cast<double>(Agent.AppliedSameDirectionCmpsQ)
-                / static_cast<double>(Agent.RequestedTangentialCmpsQ) : 0.0;
-            Json += FString::Printf(
-              TEXT("    {\"agent_id\":%d,\"samples\":%d,\"requested_samples\":%d,\"requested_sum_q\":%lld,\"predict_sum_q\":%lld,\"applied_same_direction_sum_q\":%lld,\"lost_sum_q\":%lld,\"requested_to_applied_ratio\":%.6f,\"environment_opposed_sum_q\":%lld,\"particle_opposed_sum_q\":%lld,\"direction_flips\":%d,\"sector_transitions\":%d,\"band_transitions\":%d,\"last_band\":%d,\"last_sector\":%d,\"last_direction\":%d,\"last_weights\":[%d,%d,%d],\"last_cell_feasible\":%s}%s\n"),
-              Agent.AgentId, Agent.ValidSampleCount, Agent.RequestedSampleCount,
-              Agent.RequestedTangentialCmpsQ, Agent.PredictedTangentialCmpsQ,
-              Agent.AppliedSameDirectionCmpsQ, Agent.LostTangentialCmpsQ, Ratio,
-              Agent.EnvironmentOpposedCmpsQ, Agent.ParticleOpposedCmpsQ,
-              Agent.DirectionFlipCount, Agent.AngularSectorTransitionCount,
-              Agent.RadialBandTransitionCount, Agent.LastRadialBand,
-              Agent.LastAngularSector, Agent.LastDirectionSign,
-              Agent.LastLeftWeight, Agent.LastCurrentWeight, Agent.LastRightWeight,
-              Agent.bLastCellFeasible ? TEXT("true") : TEXT("false"),
-              Index + 1 < Runtime.Agents.Num() ? TEXT(",") : TEXT(""));
-          }
-          Json += TEXT("  ],\n  \"environment_cells\":[\n");
-          for (int32 Index = 0; Index < Diagnostic.Environment.Cells.Num(); ++Index)
-          {
-            const auto& Cell = Diagnostic.Environment.Cells[Index];
-            Json += FString::Printf(
-              TEXT("    {\"band\":%d,\"sector\":%d,\"feasible\":%s,\"occupied\":%s,\"flow_bounds_blocked\":%s,\"obstacle_blocked\":%s}%s\n"),
-              Cell.RadialBandIndex, Cell.AngularSectorIndex,
-              Cell.bFeasible ? TEXT("true") : TEXT("false"),
-              Cell.bOccupied ? TEXT("true") : TEXT("false"),
-              Cell.bFlowBoundsBlocked ? TEXT("true") : TEXT("false"),
-              Cell.bObstacleBlocked ? TEXT("true") : TEXT("false"),
-              Index + 1 < Diagnostic.Environment.Cells.Num() ? TEXT(",") : TEXT(""));
-          }
-          Json += TEXT("  ]\n}\n");
-          IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-          PlatformFile.CreateDirectoryTree(*FPaths::GetPath(OutputPath));
-          bWritten = FFileHelper::SaveStringToFile(Json, *OutputPath,
-            FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
-        }
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoTargetInfluenceExecutionDiagnosticFile role=server round_id=%d output_path=%d written=%d hash=%u source=MassPipeline"),
-          RoundResultPacket.RoundId, bHasOutputPath ? 1 : 0, bWritten ? 1 : 0,
-          Diagnostic.DiagnosticHash);
-        if (!bHasOutputPath || !bWritten)
-          UE_LOG(LogTemp, Error,
-            TEXT("CrowdDemoTargetInfluenceExecutionDiagnosticFile role=server round_id=%d write_failed=1 VIOLATION"),
-            RoundResultPacket.RoundId);
-      }
     }
     if (Pipeline->GetRules().TargetRegionTransportSettings.bEnabled != 0)
     {
@@ -1441,35 +1291,6 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
         }
       }
     }
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoTargetApproachCheckpoint role=server round_id=%d valid=%d target_fact_hash=%u target_approach_hash=%u agent_input_hash=%u fine_kinematic_hash=%u agent_config_hash=%u temporal_hash=%u settings_hash=%u slot_input_hash=%u full_input_hash=%u owner_state_hash=%u transition_hash=%u guidance_hash=%u guidance_location_hash=%u guidance_velocity_hash=%u ring_entered=%d ring_waiting=%d functional_capacity=%d functional_occupied=%d fill_capacity=%d fill_occupied=%d slot_ingress=%d slot_occupied=%d free_settle=%d free_settled=%d duplicate_owner=%d invalid_owner=%d state_transitions=%d source=MassPipeline"),
-      RoundResultPacket.RoundId, Particle.bTargetApproachValid,
-      Particle.TargetFactHash, Particle.TargetApproachHash,
-      Particle.TargetAgentInputHash, Particle.TargetAgentFineKinematicHash,
-      Particle.TargetAgentConfigHash, Particle.TargetAgentTemporalHash,
-      Particle.TargetSettingsHash, Particle.TargetSlotInputHash,
-      Particle.TargetFullInputHash, Particle.TargetOwnerStateHash,
-      Particle.TargetTransitionHash, Particle.TargetGuidanceHash,
-      Particle.TargetGuidanceLocationHash, Particle.TargetGuidanceVelocityHash,
-      Particle.RingEnteredCount, Particle.RingWaitingCount,
-      Particle.FunctionalSlotCapacity, Particle.FunctionalSlotOccupied,
-      Particle.FillSlotCapacity, Particle.FillSlotOccupied,
-      Particle.SlotIngressCount, Particle.SlotOccupiedCount,
-      Particle.FreeSettleCount, Particle.FreeSettledCount,
-      Particle.DuplicateSlotOwnerCount, Particle.InvalidSlotOwnerCount,
-      Particle.TargetApproachStateTransitionCount);
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoTargetSlotLayout role=server round_id=%d revision=%d topology_hash=%u world_hash=%u full_input_hash=%u candidates=%d functional=%d fill=%d rejected_target=%d rejected_pair=%d rejected_obstacle=%d rejected_bounds=%d rejected_unreachable=%d rejected_ingress=%d schedule_hash=%u commit_hash=%u owner_release=%d owner_reused=%d owner_conflict=%d revision_mismatch=%d source=MassPipeline"),
-      RoundResultPacket.RoundId, Particle.TargetSlotLayoutRevision,
-      Particle.TargetSlotLayoutTopologyHash, Particle.TargetSlotLayoutWorldHash,
-      Particle.TargetSlotLayoutFullInputHash, Particle.SlotLayoutCandidateCount,
-      Particle.SlotLayoutFunctionalCount, Particle.SlotLayoutFillCount,
-      Particle.SlotRejectedTargetClearanceCount, Particle.SlotRejectedPairSpacingCount,
-      Particle.SlotRejectedObstacleCount, Particle.SlotRejectedBoundsCount,
-      Particle.SlotRejectedUnreachableCount, Particle.SlotRejectedIngressSegmentCount,
-      Particle.TargetApproachScheduleHash, Particle.TargetApproachCommitHash,
-      Particle.SlotOwnerReleaseCount, Particle.SlotOwnerReusedCount,
-      Particle.SlotOwnerConflictCount, Particle.SlotLayoutRevisionMismatchCount);
     const FCrowdDemoSharedFlowMetrics& FlowV2 = RoundResultPacket.SharedFlowMetrics;
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoFlowV2Metrics role=server round_id=%d agent_state_hash=%u anchors=%d connections=%d safe_intervals=%d internal_edges=%d directed_edges=%d center_invalid_connected=%d source_attachment_success=%d goal_attachments=%d navigation_unreachable_samples=%d navigation_v2_hash=%u source=MassPipeline"),
@@ -1741,29 +1562,14 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
       || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetStatic
       || CompactRules.SoftPressureTestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving)
     {
-      CompactRules.TargetApproachSettings.bEnabled = 0;
-      CompactRules.TargetInfluenceSettings.bEnabled = 1;
-      CompactRules.TargetInfluenceSettings.DefaultMinimumCombatCenterDistanceCm = 100.0f;
-      CompactRules.TargetInfluenceSettings.DefaultMaximumCombatCenterDistanceCm = 850.0f;
-      CompactRules.TargetInfluenceSettings.InfluenceBlendWidthCm = 300.0f;
-      CompactRules.TargetInfluenceSettings.RadialGainPerSecond = 2.0f;
-      CompactRules.TargetInfluenceSettings.MaxRadialSpeedCmps = 300.0f;
-      CompactRules.TargetInfluenceSettings.TargetPhysicalRadiusCm =
-        CompactRules.TargetApproachSettings.TargetPhysicalRadiusCm;
-      CompactRules.TargetInfluenceSettings.TargetHardSafetyGapCm =
-        CompactRules.TargetApproachSettings.TargetHardSafetyGapCm;
-      CompactRules.TargetInfluenceSettings.TargetSoftMarginCm =
-        CompactRules.TargetApproachSettings.TargetSoftMarginCm;
-      CompactRules.TargetInfluenceSettings.PositionQuantumCm =
-        CompactRules.TargetApproachSettings.PositionQuantumCm;
-      CompactRules.TargetInfluenceSettings.VelocityQuantumCmps =
-        CompactRules.TargetApproachSettings.VelocityQuantumCmps;
-      CompactRules.TargetInfluenceSettings.AngularSectorCount = 16;
-      CompactRules.TargetInfluenceSettings.RadialBandWidthCm = 100.0f;
-      CompactRules.TargetInfluenceSettings.DensitySmoothingPassCount = 1;
-      CompactRules.TargetInfluenceSettings.DensityMinimumDifference = 1;
-      CompactRules.TargetInfluenceSettings.DensitySpeedPerExcessAgentCmps = 20.0f;
-      CompactRules.TargetInfluenceSettings.MaximumDensityTangentialSpeedCmps = 120.0f;
+      CompactRules.TargetDistanceBandSettings.bEnabled = 1;
+      CompactRules.TargetDistanceBandSettings.DefaultMinimumCombatCenterDistanceCm = 100.0f;
+      CompactRules.TargetDistanceBandSettings.DefaultMaximumCombatCenterDistanceCm = 850.0f;
+      CompactRules.TargetDistanceBandSettings.InfluenceBlendWidthCm = 300.0f;
+      CompactRules.TargetDistanceBandSettings.RadialGainPerSecond = 2.0f;
+      CompactRules.TargetDistanceBandSettings.MaxRadialSpeedCmps = 300.0f;
+      CompactRules.TargetDistanceBandSettings.AngularSectorCount = 16;
+      CompactRules.TargetDistanceBandSettings.RadialBandWidthCm = 100.0f;
       CompactRules.TargetRegionTransportSettings.bEnabled = 1;
       CompactRules.TargetRegionTransportSettings.RadialBandWidthCm = 100.0f;
       CompactRules.TargetRegionTransportSettings.TransportSpeedCmps = 300.0f;
@@ -1781,8 +1587,8 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
         == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving)
       {
         const float TargetHardClearanceCm =
-          CompactRules.TargetInfluenceSettings.TargetPhysicalRadiusCm
-          + CompactRules.TargetInfluenceSettings.TargetHardSafetyGapCm;
+          CompactRules.TargetDistanceBandSettings.TargetPhysicalRadiusCm
+          + CompactRules.TargetDistanceBandSettings.TargetHardSafetyGapCm;
         const float MotionSafetyInsetCm = TargetHardClearanceCm + 10.0f;
         CompactRules.TargetMotion.bReflectAtMotionBounds = 1;
         CompactRules.TargetMotion.MotionBoundsMin = FVector(
@@ -1796,34 +1602,6 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
       }
       CompactRules.TargetMotion.InitialYawDegrees = 0.0f;
       CompactRules.TargetMotion.YawRateDegreesPerSecond = 0.0f;
-      CompactRules.TargetSlotLayoutSettings.SourceRevision = 1;
-      CompactRules.TargetSlotLayoutSettings.TargetHardSafetyGapCm =
-        CompactRules.TargetApproachSettings.TargetHardSafetyGapCm;
-      CompactRules.TargetSlotLayoutSettings.PositionQuantumCm =
-        CompactRules.TargetApproachSettings.PositionQuantumCm;
-      CompactRules.TargetSlotLayoutSettings.AngleQuantumDegrees = 0.01f;
-      FCrowdDemoTargetSlotBandRule& Functional =
-        CompactRules.TargetSlotLayoutSettings.Bands.AddDefaulted_GetRef();
-      Functional.BandId = 1;
-      Functional.bFunctional = 1;
-      Functional.Capacity = 4;
-      Functional.PreferredSurfaceDistanceCm = 160.0f;
-      Functional.MinimumCenterDistanceCm = 260.0f;
-      Functional.MaximumCenterDistanceCm = 260.0f;
-      Functional.StartAngleDegrees = 0.0f;
-      Functional.RequiredCapabilityMask = 1u;
-      Functional.StablePriorityBase = 0;
-      FCrowdDemoTargetSlotBandRule& Fill =
-        CompactRules.TargetSlotLayoutSettings.Bands.AddDefaulted_GetRef();
-      Fill.BandId = 2;
-      Fill.bFunctional = 0;
-      Fill.Capacity = 4;
-      Fill.PreferredSurfaceDistanceCm = 280.0f;
-      Fill.MinimumCenterDistanceCm = 380.0f;
-      Fill.MaximumCenterDistanceCm = 380.0f;
-      Fill.StartAngleDegrees = 45.0f;
-      Fill.RequiredCapabilityMask = 0u;
-      Fill.StablePriorityBase = 100;
     }
   }
   return CompactRules;

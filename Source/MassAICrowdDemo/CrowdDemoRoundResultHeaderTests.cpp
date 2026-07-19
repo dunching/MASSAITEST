@@ -26,7 +26,6 @@ bool FCrowdDemoRoundResultHeaderNetSerializeTest::RunTest(const FString& Paramet
   Source.SharedFlowMetrics.SharedFlowFieldBuildHash = 267519150u;
   Source.ParticleMetrics.ParticleCandidateHash = 0x85ebca6bu;
   Source.ParticleMetrics.ParticleAppliedStateHash = 0xc2b2ae35u;
-  Source.ParticleMetrics.TargetFeasibleSectorCountByRadialBand = {1, 3, 5, 7, 9, 11};
   for (int32 Index = 0; Index < 7; ++Index)
   {
     FCrowdDemoCapabilityProfileMetrics& Profile =
@@ -72,7 +71,6 @@ bool FCrowdDemoRoundResultHeaderNetSerializeTest::RunTest(const FString& Paramet
   FCrowdDemoRoundResultHeader Combat = Source;
   Combat.PayloadKind = 2;
   Combat.ParticleMetrics.CapabilityProfiles.Reset();
-  Combat.ParticleMetrics.TargetFeasibleSectorCountByRadialBand.Reset();
   Combat.ProjectileMetrics.bValid = 1;
   Combat.ProjectileMetrics.ProjectileSpawnedCount = 50;
   Combat.ProjectileMetrics.ProjectileImpactedCount = 50;

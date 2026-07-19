@@ -15,10 +15,10 @@ param(
   [bool]$RequireClientReady = $true,
   [switch]$ParticleConstraintDiagnostic,
   [switch]$SoftPressureRouteDiagnostic,
-  [switch]$TargetInfluenceExecutionDiagnostic,
   [switch]$TargetStabilityDiagnostic,
   [switch]$TargetRegionTransportDiagnostic,
   [switch]$TargetRegionPlanLifecycleDiagnostic,
+  [switch]$DrawTargetAcceptanceMarkers,
   [switch]$RequireParticleCorrectionReplay,
   [switch]$RequirePerformanceGate,
   [double]$MaxFixedStepP95Ms = 33.333,
@@ -60,9 +60,6 @@ if ($RequireParticleCorrectionReplay) {
 if ($SoftPressureRouteDiagnostic) {
   $CommonArgs = "$CommonArgs -CrowdDemoSoftPressureRouteDiagnostic"
 }
-if ($TargetInfluenceExecutionDiagnostic) {
-  $CommonArgs = "$CommonArgs -CrowdDemoTargetInfluenceExecutionDiagnostic"
-}
 if ($TargetStabilityDiagnostic) {
   $CommonArgs = "$CommonArgs -CrowdDemoTargetStabilityDiagnostic"
 }
@@ -71,6 +68,9 @@ if ($TargetRegionTransportDiagnostic) {
 }
 if ($TargetRegionPlanLifecycleDiagnostic) {
   $CommonArgs = "$CommonArgs -CrowdDemoTargetRegionPlanLifecycleDiagnostic"
+}
+if ($DrawTargetAcceptanceMarkers) {
+  $CommonArgs = "$CommonArgs -CrowdDemoDrawTargetAcceptanceMarkers"
 }
 if ($InitialAliveCount -ge 0) {
   $CommonArgs = "$CommonArgs -CrowdDemoInitialAliveCount=$InitialAliveCount"
@@ -83,10 +83,6 @@ $ServerDiagnosticArgs = ""
 if ($ParticleConstraintDiagnostic) {
   $ParticleFixturePath = Join-Path $LogDir "particle_constraint_failure_fixture.json"
   $ServerDiagnosticArgs = "$ServerDiagnosticArgs -CrowdDemoParticleFixtureOutput=`"$ParticleFixturePath`""
-}
-if ($TargetInfluenceExecutionDiagnostic) {
-  $TargetExecutionDiagnosticPath = Join-Path $LogDir "target_influence_execution_diagnostic.json"
-  $ServerDiagnosticArgs = "$ServerDiagnosticArgs -CrowdDemoTargetInfluenceExecutionDiagnosticOutput=`"$TargetExecutionDiagnosticPath`""
 }
 if ($TargetStabilityDiagnostic) {
   $LocalPredictiveFixturePath = Join-Path $LogDir "local_predictive_component_fixture.json"

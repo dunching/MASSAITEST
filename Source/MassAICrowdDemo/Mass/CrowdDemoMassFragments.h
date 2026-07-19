@@ -4,7 +4,7 @@
 #include "MassEntityTypes.h"
 #include "CrowdDemoTypes.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
-#include "Mass/CrowdDemoTargetApproachKernel.h"
+#include "Mass/CrowdDemoGuidanceComposeKernel.h"
 #include "CrowdDemoMassFragments.generated.h"
 
 USTRUCT()
@@ -222,6 +222,24 @@ struct FCrowdDemoRoundMoveIntentFragment : public FMassFragment
 };
 
 USTRUCT()
+struct FCrowdDemoRoundGuidanceCandidatesFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  FCrowdDemoGuidanceCandidate SharedFlow;
+  FCrowdDemoGuidanceCandidate TargetRegion;
+  FCrowdDemoGuidanceCandidate BusinessOverride;
+};
+
+USTRUCT()
+struct FCrowdDemoRoundComposedGuidanceFragment : public FMassFragment
+{
+  GENERATED_BODY()
+
+  FCrowdDemoComposedGuidance Value;
+};
+
+USTRUCT()
 struct FCrowdDemoRoundFacingFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -230,23 +248,6 @@ struct FCrowdDemoRoundFacingFragment : public FMassFragment
   UPROPERTY(Transient) int32 ConsecutiveFinalSettleSteps = 0;
   UPROPERTY(Transient) bool bFinalPositionSettled = false;
   UPROPERTY(Transient) bool bFacingTarget = false;
-};
-
-USTRUCT()
-struct FCrowdDemoTargetApproachFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  ECrowdDemoTargetApproachState State = ECrowdDemoTargetApproachState::Approach;
-
-  UPROPERTY(Transient) int32 TargetId = INDEX_NONE;
-  UPROPERTY(Transient) int32 TargetRevision = INDEX_NONE;
-  UPROPERTY(Transient) int32 SlotLayoutRevision = INDEX_NONE;
-  UPROPERTY(Transient) int32 AssignedSlotId = INDEX_NONE;
-  UPROPERTY(Transient) int32 RingEnterFixedStep = INDEX_NONE;
-  UPROPERTY(Transient) int32 StateEnterFixedStep = 0;
-  UPROPERTY(Transient) int32 StableSettleSteps = 0;
-  UPROPERTY(Transient) int32 StateRevision = 0;
 };
 
 USTRUCT()
@@ -530,6 +531,13 @@ struct FCrowdDemoClientVisualOffsetFragment : public FMassFragment
 
   UPROPERTY(Transient)
   int32 LastSubmittedPlanRevision = 0;
+
+  // T1 keeps every Mass entity alive and moves inactive participants between
+  // its staging and active fixture layouts at explicit test boundaries.  This
+  // bit lets the client visual path classify that authored reset separately
+  // from an ordinary movement discontinuity.
+  UPROPERTY(Transient)
+  bool bLastSubmittedOpenSpawnParticleActive = false;
 
   UPROPERTY(Transient)
   FVector InterpolationFromLocation = FVector::ZeroVector;

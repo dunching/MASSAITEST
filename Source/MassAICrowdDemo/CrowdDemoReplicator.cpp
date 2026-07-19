@@ -228,6 +228,7 @@ void ACrowdDemoReplicator::RecordRoundSimVisualContinuity(
   const int32 CollapsedSimSteps,
   const bool bCorrectionBoundary,
   const bool bPlanChanged,
+  const bool bTestBoundaryReset,
   const bool bDiscontinuity,
   const int32 PreviousPlanRevision,
   const int32 CurrentPlanRevision,
@@ -242,9 +243,11 @@ void ACrowdDemoReplicator::RecordRoundSimVisualContinuity(
   VisualCollapsedSimStepSamples.Add(static_cast<float>(FMath::Max(0, CollapsedSimSteps)));
   if (CollapsedSimSteps > 1) ++VisualCatchupSubmitCount;
   if (bDiscontinuity && !bCorrectionBoundary && !bPlanChanged
+    && !bTestBoundaryReset
     && CollapsedSimSteps > 1)
     ++VisualCatchupDiscontinuityCount;
   if (bDiscontinuity && !bCorrectionBoundary && !bPlanChanged
+    && !bTestBoundaryReset
     && CollapsedSimSteps <= 1)
   {
     ++NonCorrectionVisualDiscontinuityCount;
@@ -262,6 +265,8 @@ void ACrowdDemoReplicator::RecordRoundSimVisualContinuity(
   }
   if (bDiscontinuity && bPlanChanged)
     ++RoundResetVisualJumpCount;
+  if (bDiscontinuity && bTestBoundaryReset)
+    ++TestBoundaryResetVisualJumpCount;
 }
 
 void ACrowdDemoReplicator::RecordVisualInstanceRebuild()
@@ -494,7 +499,7 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
   if (!bServer)
   {
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoVisualPerformance role=client client_frame_ms_p95=%.3f client_frame_ms_max=%.3f visual_processor_ms_p95=%.3f visual_processor_ms_max=%.3f submit_interval_ms_p95=%.3f submit_interval_ms_max=%.3f sim_delta_cm_p95=%.3f sim_delta_cm_max=%.3f display_delta_cm_p95=%.3f display_delta_cm_max=%.3f collapsed_steps_p95=%.3f collapsed_steps_max=%d catchup_submit_count=%d catchup_discontinuity_count=%d non_correction_discontinuity_count=%d round_reset_jump_count=%d ism_rebuild_count=%d source=MassClientVisual"),
+      TEXT("CrowdDemoVisualPerformance role=client client_frame_ms_p95=%.3f client_frame_ms_max=%.3f visual_processor_ms_p95=%.3f visual_processor_ms_max=%.3f submit_interval_ms_p95=%.3f submit_interval_ms_max=%.3f sim_delta_cm_p95=%.3f sim_delta_cm_max=%.3f display_delta_cm_p95=%.3f display_delta_cm_max=%.3f collapsed_steps_p95=%.3f collapsed_steps_max=%d catchup_submit_count=%d catchup_discontinuity_count=%d non_correction_discontinuity_count=%d round_reset_jump_count=%d test_boundary_reset_jump_count=%d ism_rebuild_count=%d source=MassClientVisual"),
       Metrics.ClientFrameMsP95, Metrics.ClientFrameMsMax,
       Metrics.VisualProcessorMsP95, Metrics.VisualProcessorMsMax,
       Metrics.VisualSubmitIntervalMsP95, Metrics.VisualSubmitIntervalMsMax,
@@ -503,7 +508,8 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
       Metrics.VisualCollapsedSimStepsP95, Metrics.VisualCollapsedSimStepsMax,
       Metrics.VisualCatchupSubmitCount, Metrics.VisualCatchupDiscontinuityCount,
       Metrics.NonCorrectionVisualDiscontinuityCount,
-      Metrics.RoundResetVisualJumpCount, Metrics.VisualIsmRebuildCount);
+      Metrics.RoundResetVisualJumpCount, Metrics.TestBoundaryResetVisualJumpCount,
+      Metrics.VisualIsmRebuildCount);
   }
 
   if (Metrics.FlowFieldRevision > 0)
@@ -556,6 +562,7 @@ FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
   Metrics.VisualCatchupDiscontinuityCount = VisualCatchupDiscontinuityCount;
   Metrics.NonCorrectionVisualDiscontinuityCount = NonCorrectionVisualDiscontinuityCount;
   Metrics.RoundResetVisualJumpCount = RoundResetVisualJumpCount;
+  Metrics.TestBoundaryResetVisualJumpCount = TestBoundaryResetVisualJumpCount;
   Metrics.VisualIsmRebuildCount = VisualIsmRebuildCount;
   Metrics.ReplicationSampleAgeMsP95 = ComputeP95(ReplicationSampleAgeMsSamples);
   Metrics.DisplayToAuthoritativeCmP95 = ComputeP95(DisplayToAuthoritativeCmSamples);

@@ -6,7 +6,7 @@
 #include "Misc/AutomationTest.h"
 #include "Mass/CrowdDemoRoundInitialStateKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
-#include "Mass/CrowdDemoTargetApproachKernel.h"
+#include "Mass/CrowdDemoTargetFactKernel.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoRoundStableInitialStateTest,
@@ -75,7 +75,7 @@ bool FCrowdDemoReflectedTargetMotionTest::RunTest(const FString& Parameters)
   const FVector2f Maximum(2480.0f, 2180.0f);
   const auto Build = [&](const int32 Step)
   {
-    return FCrowdDemoTargetApproachKernel::BuildReflectedLinearMotionFact(
+    return FCrowdDemoTargetFactKernel::BuildReflectedLinearMotionFact(
       1, 1, Step, Initial, Velocity, Minimum, Maximum,
       0.0f, 0.0f, 100.0f, FixedStepSeconds, 1.0f, 1.0f);
   };

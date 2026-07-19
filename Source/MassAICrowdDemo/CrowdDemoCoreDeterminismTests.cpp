@@ -204,10 +204,6 @@ bool FCrowdDemoRoundCheckpointTransportTest::RunTest(const FString& Parameters)
     FCrowdDemoRoundAgentState& State = Frame.AgentStates.AddDefaulted_GetRef();
     State.AgentId = 1000 + Index;
     State.Location = FVector(Index * 2.0f, -Index * 3.0f, 60.0f);
-    State.TargetApproach.bValid = 1;
-    State.TargetApproach.State = static_cast<uint8>(Index % 4);
-    State.TargetApproach.TargetRevision = 23;
-    State.TargetApproach.AssignedSlotId = Index % 3 == 0 ? 200 + Index : INDEX_NONE;
   }
   Frame.AgentCount = Frame.AgentStates.Num();
 
@@ -227,8 +223,6 @@ bool FCrowdDemoRoundCheckpointTransportTest::RunTest(const FString& Parameters)
   for (int32 Index = 0; Index < Assembled.Num(); ++Index)
   {
     TestEqual(TEXT("stable assembled id"), Assembled[Index].AgentId, 1000 + Index);
-    TestEqual(TEXT("target approach state survives assembly"),
-      Assembled[Index].TargetApproach.State, static_cast<uint8>(Index % 4));
   }
   TArray<FCrowdDemoCorrectionFrameChunk> Missing = Chunks;
   Missing.RemoveAll([](const FCrowdDemoCorrectionFrameChunk& Chunk)

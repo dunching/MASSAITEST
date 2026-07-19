@@ -8,6 +8,8 @@
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "HAL/PlatformTime.h"
 #include "MassExecutionContext.h"
 
@@ -55,83 +57,65 @@ namespace
       return;
     }
     const FCrowdDemoRoundRules& Rules = Pipeline.GetRules();
-    const FCrowdDemoTargetFact& Target = Pipeline.GetTargetApproachFact();
+    const FCrowdDemoTargetFact& Target = Pipeline.GetTargetFact();
     if (Target.TargetId == INDEX_NONE)
     {
       return;
     }
     const FVector TargetCenter(Target.Location.X, Target.Location.Y, 65.0f);
 
-    // Exact markers are drawn only for a real per-agent slot contract. Region
-    // transport deliberately has no permanent agent position ownership.
-    if (Rules.TargetApproachSettings.bEnabled != 0)
-    {
-      const FCrowdDemoTargetSlotLayout& Layout = Pipeline.GetPreparedTargetSlotLayout();
-      if (!Layout.bValid)
-      {
-        return;
-      }
-      TSet<int32> AssignedSlotIds;
-      for (const FCrowdDemoTargetApproachResult& Result
-        : Pipeline.GetPreparedTargetApproachResults())
-      {
-        if (Result.AssignedSlotId != INDEX_NONE)
-        {
-          AssignedSlotIds.Add(Result.AssignedSlotId);
-        }
-      }
-      for (const FCrowdDemoTargetSlotSpec& Slot : Layout.Slots)
-      {
-        const FVector Position = TargetCenter
-          + FVector(Slot.TargetRelativeOffset.X, Slot.TargetRelativeOffset.Y, 0.0f);
-        const FColor Color = AssignedSlotIds.Contains(Slot.SlotId)
-          ? FColor::Green
-          : Slot.Kind == ECrowdDemoTargetSlotKind::Functional
-            ? FColor::Yellow : FColor::Cyan;
-        DrawDebugSphere(&World, Position, 22.0f, 12, Color, false,
-          TargetMarkerLifetimeSeconds, 0, 2.0f);
-        DrawDebugLine(&World, Position - FVector(28.0f, 0.0f, 0.0f),
-          Position + FVector(28.0f, 0.0f, 0.0f), Color, false,
-          TargetMarkerLifetimeSeconds, 0, 2.0f);
-        DrawDebugLine(&World, Position - FVector(0.0f, 28.0f, 0.0f),
-          Position + FVector(0.0f, 28.0f, 0.0f), Color, false,
-          TargetMarkerLifetimeSeconds, 0, 2.0f);
-      }
-      return;
-    }
-
     if (Rules.TargetRegionTransportSettings.bEnabled == 0)
     {
       return;
     }
-    const float MinimumDistance = Rules.TargetInfluenceSettings.TargetPhysicalRadiusCm
-      + Rules.TargetInfluenceSettings.TargetHardSafetyGapCm;
-    const float MaximumDistance = Rules.TargetInfluenceSettings.DefaultMaximumCombatCenterDistanceCm;
-    DrawCircleXY(World, TargetCenter, MinimumDistance, FColor::Red);
-    DrawCircleXY(World, TargetCenter, MaximumDistance, FColor::Green, 96);
     const int32 RegionCount = FMath::Max(
       1, Rules.TargetRegionTransportSettings.DemandRegionCount);
-    for (int32 Region = 0; Region < RegionCount; ++Region)
+    const auto DrawBand = [&](const float MinimumDistance,
+      const float MaximumDistance, const FColor& Color,
+      const TConstArrayView<FCrowdDemoTargetPolarCell> Cells)
     {
-      const float Angle = 2.0f * PI * static_cast<float>(Region)
-        / static_cast<float>(RegionCount);
-      const FVector Direction(FMath::Cos(Angle), FMath::Sin(Angle), 0.0f);
-      DrawDebugLine(&World,
-        TargetCenter + Direction * MinimumDistance,
-        TargetCenter + Direction * MaximumDistance,
-        FColor(80, 180, 255), false, TargetMarkerLifetimeSeconds, 0, 1.0f);
-    }
-    for (const FCrowdDemoTargetPolarCell& Cell
-      : Pipeline.GetPreparedTargetRegionTopology().Cells)
-    {
-      if (!Cell.bFeasible || !Cell.bTerminal)
+      DrawCircleXY(World, TargetCenter, MinimumDistance, Color);
+      DrawCircleXY(World, TargetCenter, MaximumDistance, Color, 96);
+      for (int32 Region = 0; Region < RegionCount; ++Region)
       {
-        continue;
+        const float Angle = 2.0f * PI * static_cast<float>(Region)
+          / static_cast<float>(RegionCount);
+        const FVector Direction(FMath::Cos(Angle), FMath::Sin(Angle), 0.0f);
+        DrawDebugLine(&World,
+          TargetCenter + Direction * MinimumDistance,
+          TargetCenter + Direction * MaximumDistance,
+          Color, false, TargetMarkerLifetimeSeconds, 0, 1.0f);
       }
-      DrawDebugPoint(&World,
-        FVector(Cell.WorldAnchorCm.X, Cell.WorldAnchorCm.Y, 68.0f),
-        7.0f, FColor::Cyan, false, TargetMarkerLifetimeSeconds, 0);
+      for (const FCrowdDemoTargetPolarCell& Cell : Cells)
+      {
+        if (!Cell.bFeasible || !Cell.bTerminal) continue;
+        DrawDebugPoint(&World,
+          FVector(Cell.WorldAnchorCm.X, Cell.WorldAnchorCm.Y, 68.0f),
+          7.0f, Color, false, TargetMarkerLifetimeSeconds, 0);
+      }
+    };
+
+    const TArray<FCrowdDemoTargetRegionCapabilityCohortRuntime>& Cohorts =
+      Pipeline.GetCapabilityCohorts();
+    if (Rules.bEnableHeterogeneousProfiles != 0 && Cohorts.Num() > 0)
+    {
+      static const FColor Colors[] = {
+        FColor::Cyan, FColor::Green, FColor::Yellow, FColor::Magenta,
+        FColor(255, 128, 32), FColor(64, 160, 255), FColor(180, 100, 255)};
+      for (int32 Index = 0; Index < Cohorts.Num(); ++Index)
+      {
+        const FCrowdDemoTargetRegionCapabilityCohortRuntime& Cohort = Cohorts[Index];
+        DrawBand(Cohort.Cohort.Profile.NormalizedMinimumCenterDistanceCm,
+          Cohort.Cohort.Profile.NormalizedMaximumCenterDistanceCm,
+          Colors[Index % UE_ARRAY_COUNT(Colors)], Cohort.Topology.Cells);
+      }
+      return;
     }
+    DrawBand(
+      Rules.TargetDistanceBandSettings.TargetPhysicalRadiusCm
+        + Rules.TargetDistanceBandSettings.TargetHardSafetyGapCm,
+      Rules.TargetDistanceBandSettings.DefaultMaximumCombatCenterDistanceCm,
+      FColor::Cyan, Pipeline.GetPreparedTargetRegionTopology().Cells);
   }
 
   FTransform MakeInstanceTransform(
@@ -222,6 +206,7 @@ void UCrowdDemoClientVisualMassProcessor::ConfigureQueries(
 {
   EntityQuery.AddRequirement<FCrowdDemoClientAuthorityFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoOpenSpawnRelaxationFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoClientVisualOffsetFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
 }
@@ -289,6 +274,8 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
       ChunkContext.GetFragmentView<FCrowdDemoClientAuthorityFragment>();
     const TConstArrayView<FCrowdDemoRoundSimStateFragment> SimStates =
       ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
+    const TConstArrayView<FCrowdDemoOpenSpawnRelaxationFragment> OpenSpawnStates =
+      ChunkContext.GetFragmentView<FCrowdDemoOpenSpawnRelaxationFragment>();
     const TArrayView<FCrowdDemoClientVisualOffsetFragment> VisualOffsets =
       ChunkContext.GetMutableFragmentView<FCrowdDemoClientVisualOffsetFragment>();
 
@@ -311,6 +298,10 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         && AppliedCorrectionRevision > Offset.LastRoundSimCorrectionRevision;
       const bool bPlanChanged = bWasDisplayInitialized
         && SimState.PlanRevision != Offset.LastSubmittedPlanRevision;
+      const bool bTestBoundaryReset = bWasDisplayInitialized
+        && Pipeline->IsOpenSpawnRelaxation()
+        && OpenSpawnStates[It].bParticleActive
+          != Offset.bLastSubmittedOpenSpawnParticleActive;
       if (!Offset.bDisplayInitialized)
       {
         Offset.DisplayLocation = SimState.Location;
@@ -351,7 +342,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         const bool bNewSimSnapshot = SimDeltaSeconds > KINDA_SMALL_NUMBER || bPlanChanged;
         if (bNewSimSnapshot)
         {
-          if (bPlanChanged)
+          if (bPlanChanged || bTestBoundaryReset)
           {
             InterpolatedLocation = SimState.Location;
             InterpolatedYaw = SimState.YawDegrees;
@@ -427,6 +418,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
           CollapsedSimSteps,
           bCorrectionBoundary,
           bPlanChanged,
+          bTestBoundaryReset,
           DisplayDeltaCm > ExpectedDisplayDeltaCm,
           Offset.LastSubmittedPlanRevision,
           SimState.PlanRevision,
@@ -440,6 +432,8 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
       Offset.LastSubmittedSimServerTimeSeconds = SimState.SimulatedServerTimeSeconds;
       Offset.LastSubmittedWorldSeconds = World->GetTimeSeconds();
       Offset.LastSubmittedPlanRevision = SimState.PlanRevision;
+      Offset.bLastSubmittedOpenSpawnParticleActive =
+        OpenSpawnStates[It].bParticleActive;
 
       const bool bSmoothingActive = Offset.RoundSimDisplayOffset.Size2D() > 0.5f
         || FMath::Abs(Offset.RoundSimYawOffsetDegrees) > 0.5f;
@@ -551,8 +545,12 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   Instances->MarkRenderStateDirty();
   HitFlashInstances->MarkRenderStateDirty();
   const double NowSeconds = World->GetTimeSeconds();
-  if (LastTargetMarkerDrawSeconds < 0.0
+  static const bool bDrawTargetAcceptanceMarkers = FParse::Param(
+    FCommandLine::Get(), TEXT("CrowdDemoDrawTargetAcceptanceMarkers"));
+  if (bDrawTargetAcceptanceMarkers
+    && (LastTargetMarkerDrawSeconds < 0.0
     || NowSeconds - LastTargetMarkerDrawSeconds >= TargetMarkerRedrawSeconds)
+    )
   {
     LastTargetMarkerDrawSeconds = NowSeconds;
     DrawTargetAcceptanceMarkers(*World, *Pipeline);

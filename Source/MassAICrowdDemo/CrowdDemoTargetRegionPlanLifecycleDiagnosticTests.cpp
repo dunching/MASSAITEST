@@ -3,7 +3,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "Mass/CrowdDemoTargetApproachKernel.h"
+#include "Mass/CrowdDemoTargetFactKernel.h"
 #include "Mass/CrowdDemoTargetRegionPlanLifecycleDiagnosticKernel.h"
 
 namespace
@@ -309,10 +309,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCrowdDemoMovingTargetRevisionContractTest::RunTest(const FString& Parameters)
 {
-  const auto A = FCrowdDemoTargetApproachKernel::BuildLinearMotionFact(
+  const auto A = FCrowdDemoTargetFactKernel::BuildLinearMotionFact(
     1, 9, 10, FVector2f::ZeroVector, FVector2f(80.0f, 0.0f),
     0.0f, 0.0f, 100.0f, 1.0f / 30.0f, 1.0f, 1.0f);
-  const auto B = FCrowdDemoTargetApproachKernel::BuildLinearMotionFact(
+  const auto B = FCrowdDemoTargetFactKernel::BuildLinearMotionFact(
     1, 9, 11, FVector2f::ZeroVector, FVector2f(80.0f, 0.0f),
     0.0f, 0.0f, 100.0f, 1.0f / 30.0f, 1.0f, 1.0f);
   TestFalse(TEXT("location changes"), A.Location.Equals(B.Location, 0.001f));

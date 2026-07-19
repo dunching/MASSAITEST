@@ -835,7 +835,14 @@ void FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
       && FMath::Abs(Constraint.Normal.Z) <= ConstraintEpsilonCm
       && Constraint.CoefficientScale > 0.0f;
     bStructurallyValid &= bIndicesValid && bNumericValid;
-    bHasPositiveResidual |= Constraint.InitialDeficitCm > ConstraintEpsilonCm;
+    if (bIndicesValid && bNumericValid)
+    {
+      const float Scale = FMath::Max(0.0001f, Constraint.CoefficientScale);
+      const float Lhs = Scale * Dot2D(InOutPositions[AgentAIndex], Constraint.Normal)
+        - (Constraint.MaxAgentId != INDEX_NONE
+          ? Scale * Dot2D(InOutPositions[AgentBIndex], Constraint.Normal) : 0.0f);
+      bHasPositiveResidual |= Constraint.Threshold - Lhs > ConstraintEpsilonCm;
+    }
   }
   if (!bStructurallyValid)
   {

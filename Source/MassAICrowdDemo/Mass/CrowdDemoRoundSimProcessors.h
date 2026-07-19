@@ -112,55 +112,6 @@ protected:
 private: FMassEntityQuery EntityQuery;
 };
 
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundTargetSlotLayoutPrepareProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public: UCrowdDemoRoundTargetSlotLayoutPrepareProcessor();
-  virtual bool ShouldAllowQueryBasedPruning(bool bRuntimeMode = true) const override { return false; }
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundTargetApproachScheduleProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundTargetApproachScheduleProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundTargetApproachCommitProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public: UCrowdDemoRoundTargetApproachCommitProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundTargetApproachGuidanceProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundTargetApproachGuidanceProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
 
 
 
@@ -213,6 +164,19 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundReactiveMotionIntentComposeProcessor : 
   GENERATED_BODY()
 public:
   UCrowdDemoRoundReactiveMotionIntentComposeProcessor();
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private:
+  FMassEntityQuery EntityQuery;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundGuidanceComposeProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public:
+  UCrowdDemoRoundGuidanceComposeProcessor();
 protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
@@ -372,6 +336,7 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundRangedCombatProcessor> RangedCombatProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundHitResponseBoundaryApplyProcessor> HitResponseBoundaryApplyProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundReactiveMotionIntentComposeProcessor> ReactiveMotionIntentComposeProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundGuidanceComposeProcessor> GuidanceComposeProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundVisualStateResolveProcessor> VisualStateResolveProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPlanApplyProcessor> PlanApplyProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundOpenSpawnRelaxationPhasePrepareProcessor> OpenSpawnRelaxationPhasePrepareProcessor;
@@ -381,10 +346,6 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionPopulationBuildProcessor> TargetRegionPopulationBuildProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionTransportSolveProcessor> TargetRegionTransportSolveProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionGuidanceProcessor> TargetRegionGuidanceProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetSlotLayoutPrepareProcessor> TargetSlotLayoutPrepareProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetApproachScheduleProcessor> TargetApproachScheduleProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetApproachCommitProcessor> TargetApproachCommitProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetApproachGuidanceProcessor> TargetApproachGuidanceProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundFlowPreferredVelocityProcessor> FlowPreferredVelocityProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundLocalPredictiveInteractionProcessor> LocalPredictiveInteractionProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundMovementPredictProcessor> MovementPredictProcessor;

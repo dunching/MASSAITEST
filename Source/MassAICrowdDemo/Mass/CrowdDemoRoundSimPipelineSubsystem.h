@@ -13,13 +13,10 @@
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoSoftPressureRouteDiagnosticKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
-#include "Mass/CrowdDemoTargetApproachKernel.h"
-#include "Mass/CrowdDemoTargetInfluenceKernel.h"
-#include "Mass/CrowdDemoTargetInfluenceExecutionDiagnosticKernel.h"
+#include "Mass/CrowdDemoTargetFactKernel.h"
 #include "Mass/CrowdDemoTargetRegionTransportKernel.h"
 #include "Mass/CrowdDemoTargetRegionPlanLifecycleDiagnosticKernel.h"
 #include "Mass/CrowdDemoTargetStabilityDiagnosticKernel.h"
-#include "Mass/CrowdDemoTargetSlotLayoutKernel.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CrowdDemoRoundSimPipelineSubsystem.generated.h"
 
@@ -34,14 +31,17 @@ struct FCrowdDemoRoundFlowAgentSample
 
 enum class ECrowdDemoRoundPerformanceStage : uint8
 {
+  BusinessPrepare,
   SharedFlow,
   TargetTopology,
   TargetDemand,
   TargetPlan,
   TargetGuidance,
+  GuidanceCompose,
   LocalPredictive,
   Particle,
-  FinalizeCommit,
+  FacingFinalize,
+  Commit,
   Count
 };
 
@@ -58,8 +58,9 @@ struct FCrowdDemoSoftPressureRollbackAgentState
   int32 PlanRevision = 0;
   bool bInitialized = false;
   FCrowdDemoRoundFlowSampleFragment FlowSample;
+  FCrowdDemoRoundGuidanceCandidatesFragment GuidanceCandidates;
+  FCrowdDemoRoundComposedGuidanceFragment ComposedGuidance;
   FCrowdDemoRoundFacingFragment Facing;
-  FCrowdDemoTargetApproachFragment TargetApproach;
   FCrowdDemoOpenSpawnRelaxationFragment OpenSpawnRelaxation;
   FCrowdDemoCombatNetState Combat;
 };
@@ -103,6 +104,33 @@ struct FCrowdDemoTargetRegionCapabilityCohortRuntime
   bool bRoundValid = true;
 };
 
+struct FCrowdDemoTargetRegionCapabilityCohortRollbackState
+{
+  FCrowdDemoCapabilityCohort Cohort;
+  int32 DemandRegionPhaseOffset = 0;
+  uint64 PlanResourceKey = 0;
+  FCrowdDemoTargetRegionQuotaExecutionState QuotaExecution;
+  FCrowdDemoTargetRegionPlanReplacementSummary LastPlanReplacement;
+  FCrowdDemoTargetRegionPlanValidationResult Validation;
+  uint32 TopologyRoundHash = 2166136261u;
+  uint32 DemandRoundHash = 2166136261u;
+  uint32 TransportRoundHash = 2166136261u;
+  uint32 GuidanceRoundHash = 2166136261u;
+  uint32 ValidationRoundHash = 2166136261u;
+  int32 PlanRebuildCount = 0;
+  int32 InvalidStepCount = 0;
+  int32 ValidationFailureCount = 0;
+  int32 GuidanceUnroutedStepCount = 0;
+  int32 LastInvalidStep = INDEX_NONE;
+  int32 SolverMsSampleCount = 0;
+  FCrowdDemoTargetRegionPlanLifecycleRuntime PlanLifecycle;
+  TSet<int32> TargetEngagedHoldAgentIds;
+  int32 TargetEngagementAcquireCount = 0;
+  int32 TargetEngagementReleaseCount = 0;
+  int32 TargetEngagementSuppressedRetreatCount = 0;
+  bool bRoundValid = true;
+};
+
 struct FCrowdDemoSoftPressureRollbackSnapshot
 {
   int32 FixedStepIndex = INDEX_NONE;
@@ -112,6 +140,9 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   FCrowdDemoLocalPredictiveSummary LocalPredictiveSummary;
   uint32 LocalPredictiveRoundHash = 2166136261u;
   int32 LocalPredictiveSampleCount = 0;
+  uint32 GuidanceCandidateRoundHash = 2166136261u;
+  uint32 GuidanceComposeRoundHash = 2166136261u;
+  int32 GuidanceComposeSampleCount = 0;
   int32 LocalPredictiveInvalidStepCount = 0;
   FCrowdDemoParticleConstraintSummary ParticleCandidateSummary;
   FCrowdDemoParticleConstraintSummary ParticleAppliedSummary;
@@ -128,39 +159,19 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   float ParticlePreviousSoftErrorP95 = -1.0f;
   bool bParticleConstraintRunFailure = false;
   FCrowdDemoParticleFailureFixture ParticleFailureFixture;
-  FCrowdDemoOpenSpawnRelaxationLayout OpenSpawnRelaxationLayout;
   FCrowdDemoOpenSpawnRelaxationRuntime OpenSpawnRelaxationRuntime;
-  FCrowdDemoOpenCohortMovementLayout OpenCohortMovementLayout;
   FCrowdDemoOpenCohortMovementProgress OpenCohortMovementProgress;
-  FCrowdDemoBidirectionalSwapLayout BidirectionalSwapLayout;
   FCrowdDemoBidirectionalSwapProgress BidirectionalSwapProgress;
-  FCrowdDemoValidCorridorTransitLayout ValidCorridorTransitLayout;
   FCrowdDemoValidCorridorTransitProgress ValidCorridorTransitProgress;
   FCrowdDemoSoftPressureRouteDiagnosticCheckpoint RouteDiagnosticCheckpoint;
-  FCrowdDemoTargetInfluenceExecutionCheckpoint TargetInfluenceExecutionCheckpoint;
   FCrowdDemoTargetStabilityCheckpoint TargetStabilityCheckpoint;
   FCrowdDemoTargetFact TargetFact;
   int32 DynamicFlowAnchorCellKey = INDEX_NONE;
   int32 DynamicFlowIntegrationRebuildCount = 0;
   uint32 DynamicFlowRoundHash = 2166136261u;
-  FCrowdDemoTargetSlotLayout TargetSlotLayout;
-  FCrowdDemoTargetSlotLayoutSummary TargetSlotLayoutSummary;
-  TArray<FCrowdDemoTargetApproachResult> TargetApproachDecisions;
-  TArray<FCrowdDemoTargetApproachResult> TargetApproachGuidance;
-  FCrowdDemoTargetApproachSummary TargetApproachSummary;
-  uint32 TargetApproachCommitHash = 2166136261u;
-  TArray<FCrowdDemoTargetInfluenceResult> TargetInfluenceResults;
-  FCrowdDemoTargetInfluenceSummary TargetInfluenceSummary;
-  uint32 TargetInfluenceRoundHash = 2166136261u;
-  FCrowdDemoTargetPolarTopology TargetRegionTopology;
-  FCrowdDemoTargetPolarTopologySummary TargetRegionTopologySummary;
-  TArray<FCrowdDemoTargetRegionTransportAgent> TargetRegionAgents;
-  FCrowdDemoTargetRegionDemandResult TargetRegionDemand;
-  FCrowdDemoTargetRegionFlowPlan TargetRegionPlan;
+  uint64 TargetRegionPlanResourceKey = 0;
   FCrowdDemoTargetRegionQuotaExecutionState TargetRegionQuotaExecution;
   FCrowdDemoTargetRegionPlanValidationResult TargetRegionPlanValidation;
-  TArray<FCrowdDemoTargetRegionGuidanceResult> TargetRegionGuidance;
-  FCrowdDemoTargetRegionGuidanceSummary TargetRegionGuidanceSummary;
   uint32 TargetRegionTopologyRoundHash = 2166136261u;
   uint32 TargetRegionDemandRoundHash = 2166136261u;
   uint32 TargetRegionTransportRoundHash = 2166136261u;
@@ -189,7 +200,7 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   int32 TargetRegionFailureFixtureAgentId = INDEX_NONE;
   int32 TargetRegionFailureFixtureCellKey = INDEX_NONE;
   uint32 TargetRegionFailureFixtureHash = 0;
-  TArray<FCrowdDemoTargetRegionCapabilityCohortRuntime> TargetRegionCapabilityCohorts;
+  TArray<FCrowdDemoTargetRegionCapabilityCohortRollbackState> TargetRegionCapabilityCohorts;
   FCrowdDemoCapabilityProfileSummary CapabilityProfileSummary;
   int32 CapabilityCohortRebuildCount = 0;
   FCrowdDemoTargetRegionPlanLifecycleSummary TargetRegionPlanLifecycleSummary;
@@ -300,6 +311,10 @@ public:
   int32 GetLocalPredictiveSampleCount() const { return LocalPredictiveSampleCount; }
   int32 GetLocalPredictiveInvalidStepCount() const
   { return LocalPredictiveInvalidStepCount; }
+  uint32 GetGuidanceCandidateRoundHash() const { return GuidanceCandidateRoundHash; }
+  uint32 GetGuidanceComposeRoundHash() const { return GuidanceComposeRoundHash; }
+  int32 GetGuidanceComposeSampleCount() const { return GuidanceComposeSampleCount; }
+  void RecordGuidanceComposeStep(TArray<FCrowdDemoComposedGuidance>&& Results);
   void RecordLocalPredictiveStep(
     TArray<FCrowdDemoLocalPredictiveResult>&& Results,
     TArray<FCrowdDemoLocalPredictiveGrantState>&& GrantStates,
@@ -379,52 +394,8 @@ public:
   { return SoftPressureRouteDiagnosticSummary; }
   bool HasFlowGoalReached(int32 AgentId) const
   { return FlowGoalReachedAgentIds.Contains(AgentId); }
-  FCrowdDemoTargetFact& GetTargetApproachFact() { return TargetApproachFact; }
-  const FCrowdDemoTargetFact& GetTargetApproachFact() const { return TargetApproachFact; }
-  FCrowdDemoTargetSlotLayout& GetPreparedTargetSlotLayout() { return PreparedTargetSlotLayout; }
-  const FCrowdDemoTargetSlotLayout& GetPreparedTargetSlotLayout() const
-  { return PreparedTargetSlotLayout; }
-  FCrowdDemoTargetSlotLayoutSummary& GetTargetSlotLayoutSummary()
-  { return TargetSlotLayoutSummary; }
-  const FCrowdDemoTargetSlotLayoutSummary& GetTargetSlotLayoutSummary() const
-  { return TargetSlotLayoutSummary; }
-  TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachResults()
-  { return PreparedTargetApproachDecisions; }
-  const TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachResults() const
-  { return PreparedTargetApproachDecisions; }
-  TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachGuidance()
-  { return PreparedTargetApproachGuidance; }
-  const TArray<FCrowdDemoTargetApproachResult>& GetPreparedTargetApproachGuidance() const
-  { return PreparedTargetApproachGuidance; }
-  const FCrowdDemoTargetApproachSummary& GetTargetApproachSummary() const
-  { return TargetApproachSummary; }
-  void SetTargetApproachSummary(const FCrowdDemoTargetApproachSummary& Summary)
-  { TargetApproachSummary = Summary; }
-  uint32 GetTargetApproachCommitHash() const { return TargetApproachCommitHash; }
-  void SetTargetApproachCommitHash(uint32 Hash) { TargetApproachCommitHash = Hash; }
-  TArray<FCrowdDemoTargetInfluenceResult>& GetPreparedTargetInfluenceResults()
-  { return PreparedTargetInfluenceResults; }
-  const TArray<FCrowdDemoTargetInfluenceResult>& GetPreparedTargetInfluenceResults() const
-  { return PreparedTargetInfluenceResults; }
-  const FCrowdDemoTargetInfluenceSummary& GetTargetInfluenceSummary() const
-  { return TargetInfluenceSummary; }
-  uint32 GetTargetInfluenceRoundHash() const { return TargetInfluenceRoundHash; }
-  void RecordTargetInfluenceStep(
-    TArray<FCrowdDemoTargetInfluenceResult>&& Results,
-    const FCrowdDemoTargetInfluenceSummary& Summary);
-  bool IsTargetInfluenceExecutionDiagnosticEnabled() const;
-  void RecordTargetInfluenceExecutionStep(
-    TConstArrayView<FCrowdDemoTargetInfluenceExecutionSample> Samples,
-    const FCrowdDemoTargetPolarEnvironmentSummary& Environment);
-  const FCrowdDemoTargetInfluenceExecutionRuntime& GetTargetInfluenceExecutionRuntime() const
-  { return TargetInfluenceExecutionRuntime; }
-  const FCrowdDemoTargetInfluenceExecutionSummary& GetTargetInfluenceExecutionSummary() const
-  { return TargetInfluenceExecutionSummary; }
-  void PinTargetInfluenceExecutionDiagnosticForRoundResult();
-  const FCrowdDemoTargetInfluenceExecutionRuntime& GetLastCompletedTargetInfluenceExecutionRuntime() const
-  { return LastCompletedTargetInfluenceExecutionRuntime; }
-  const FCrowdDemoTargetInfluenceExecutionSummary& GetLastCompletedTargetInfluenceExecutionSummary() const
-  { return LastCompletedTargetInfluenceExecutionSummary; }
+  FCrowdDemoTargetFact& GetTargetFact() { return TargetFact; }
+  const FCrowdDemoTargetFact& GetTargetFact() const { return TargetFact; }
   bool IsTargetStabilityDiagnosticEnabled() const;
   void RecordTargetStabilityStep(const FCrowdDemoTargetStabilityStepSample& Step);
   void FinalizeTargetStabilityDiagnostic();
@@ -702,21 +673,7 @@ private:
   int32 DynamicFlowIntegrationRebuildCount = 0;
   uint32 DynamicFlowRoundHash = 2166136261u;
   bool bDynamicFlowIntegrationCacheInvalidated = false;
-  FCrowdDemoTargetFact TargetApproachFact;
-  FCrowdDemoTargetSlotLayout PreparedTargetSlotLayout;
-  FCrowdDemoTargetSlotLayoutSummary TargetSlotLayoutSummary;
-  TArray<FCrowdDemoTargetApproachResult> PreparedTargetApproachDecisions;
-  TArray<FCrowdDemoTargetApproachResult> PreparedTargetApproachGuidance;
-  FCrowdDemoTargetApproachSummary TargetApproachSummary;
-  uint32 TargetApproachCommitHash = 2166136261u;
-  TArray<FCrowdDemoTargetInfluenceResult> PreparedTargetInfluenceResults;
-  FCrowdDemoTargetInfluenceSummary TargetInfluenceSummary;
-  uint32 TargetInfluenceRoundHash = 2166136261u;
-  FCrowdDemoTargetInfluenceExecutionRuntime TargetInfluenceExecutionRuntime;
-  FCrowdDemoTargetInfluenceExecutionSummary TargetInfluenceExecutionSummary;
-  FCrowdDemoTargetInfluenceExecutionRuntime LastCompletedTargetInfluenceExecutionRuntime;
-  FCrowdDemoTargetInfluenceExecutionSummary LastCompletedTargetInfluenceExecutionSummary;
-  bool bTargetInfluenceExecutionDiagnosticPlanEnabled = false;
+  FCrowdDemoTargetFact TargetFact;
   bool bTargetStabilityDiagnosticPlanEnabled = false;
   bool bTargetRegionPlanLifecycleDiagnosticPlanEnabled = false;
   FCrowdDemoTargetStabilityRuntime TargetStabilityRuntime;
@@ -764,6 +721,7 @@ private:
   FCrowdDemoTargetRegionPlanLifecycleSummary TargetRegionPlanLifecycleSummary;
   FCrowdDemoTargetRegionPlanLifecycleFixture TargetRegionPlanLifecycleFixture;
   TMap<int32, FCrowdDemoSoftPressureRollbackSnapshot> SoftPressureRollbackHistory;
+  TMap<uint64, FCrowdDemoTargetRegionFlowPlan> TargetRegionPlanResources;
   int32 SoftPressureRollbackSnapshotHitCount = 0;
   int32 SoftPressureRollbackSnapshotMissCount = 0;
   int32 SoftPressureRollbackAgentMismatchCount = 0;
@@ -786,6 +744,9 @@ private:
   uint32 LocalPredictiveRoundHash = 2166136261u;
   int32 LocalPredictiveSampleCount = 0;
   int32 LocalPredictiveInvalidStepCount = 0;
+  uint32 GuidanceCandidateRoundHash = 2166136261u;
+  uint32 GuidanceComposeRoundHash = 2166136261u;
+  int32 GuidanceComposeSampleCount = 0;
   TArray<float> ParticleSolverMillisecondsSamples;
   TArray<float> RoundPerformanceStageMsSamples[
     static_cast<uint8>(ECrowdDemoRoundPerformanceStage::Count)];
