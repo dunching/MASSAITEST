@@ -1334,7 +1334,7 @@ struct FCrowdDemoRoundResultHeader
 {
   GENERATED_BODY()
 
-  static constexpr uint8 CurrentContractVersion = 1;
+  static constexpr uint8 CurrentContractVersion = 2;
   static constexpr int32 MaximumSerializedBytes = 2048;
 
   UPROPERTY() uint8 ContractVersion = CurrentContractVersion;
@@ -1532,6 +1532,32 @@ struct FCrowdDemoSummaryMetrics
   float SnapshotBuildMsP95 = -1.0f;
   float ClientFrameMsP95 = -1.0f;
   float ClientFrameMsMax = -1.0f;
+  float ClientGameThreadMsP95 = -1.0f;
+  float ClientGameThreadMsMax = -1.0f;
+  float ClientRenderThreadMsP95 = -1.0f;
+  float ClientRenderThreadMsMax = -1.0f;
+  float ClientGpuFrameMsP95 = -1.0f;
+  float ClientGpuFrameMsMax = -1.0f;
+  float ClientGameThreadWaitMsP95 = -1.0f;
+  float ClientRhiThreadMsP95 = -1.0f;
+  float ClientSwapBufferMsP95 = -1.0f;
+  int32 ClientGameBoundHitchCount = 0;
+  int32 ClientRenderBoundHitchCount = 0;
+  int32 ClientGpuBoundHitchCount = 0;
+  int32 ClientUnattributedHitchCount = 0;
+  int32 ClientShaderCompilingFrameCount = 0;
+  int32 ClientShaderJobsMax = 0;
+  int32 ClientAsyncLoadingFrameCount = 0;
+  int32 ClientVisualAssetCompilingFrameCount = 0;
+  int32 ClientVisualPsoPrecacheFrameCount = 0;
+  float ClientWarmupSeconds = 0.0f;
+  float ClientWarmupFrameMsP95 = -1.0f;
+  float ClientWarmupFrameMsMax = -1.0f;
+  int32 ClientWarmupShaderCompilingFrameCount = 0;
+  int32 ClientWarmupShaderJobsMax = 0;
+  int32 ClientWarmupAsyncLoadingFrameCount = 0;
+  int32 ClientWarmupVisualAssetCompilingFrameCount = 0;
+  int32 ClientWarmupVisualPsoPrecacheFrameCount = 0;
   float VisualProcessorMsP95 = -1.0f;
   float VisualProcessorMsMax = -1.0f;
   float VisualSubmitIntervalMsP95 = -1.0f;

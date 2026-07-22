@@ -33,6 +33,22 @@ protected:
 };
 
 UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundBoundaryGatherProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public:
+  UCrowdDemoRoundBoundaryGatherProcessor();
+protected:
+  virtual void ConfigureQueries(
+    const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(
+    FMassEntityManager& EntityManager,
+    FMassExecutionContext& Context) override;
+private:
+  FMassEntityQuery EntityQuery;
+};
+
+UCLASS()
 class MASSAICROWDDEMO_API UCrowdDemoRoundOpenSpawnRelaxationPhasePrepareProcessor : public UMassProcessor
 {
   GENERATED_BODY()
@@ -274,6 +290,20 @@ protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 private:
+  FMassEntityQuery ValidationQuery;
+  FMassEntityQuery ApplyQuery;
+};
+
+UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoRoundPostFinalizeMetricsProcessor : public UMassProcessor
+{
+  GENERATED_BODY()
+public:
+  UCrowdDemoRoundPostFinalizeMetricsProcessor();
+protected:
+  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
+  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+private:
   FMassEntityQuery EntityQuery;
 };
 
@@ -339,6 +369,7 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundGuidanceComposeProcessor> GuidanceComposeProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundVisualStateResolveProcessor> VisualStateResolveProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPlanApplyProcessor> PlanApplyProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundBoundaryGatherProcessor> BoundaryGatherProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundOpenSpawnRelaxationPhasePrepareProcessor> OpenSpawnRelaxationPhasePrepareProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundSharedFlowFieldBuildProcessor> SharedFlowFieldBuildProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetFactApplyProcessor> TargetFactApplyProcessor;
@@ -353,6 +384,7 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundObstacleConstraintProcessor> ObstacleConstraintProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundFacingResolveProcessor> FacingResolveProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundMovementFinalizeProcessor> MovementFinalizeProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPostFinalizeMetricsProcessor> PostFinalizeMetricsProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundAuthorityCommitProcessor> AuthorityCommitProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundClientPredictionCommitProcessor> ClientPredictionCommitProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundCheckpointPublisherProcessor> CheckpointPublisherProcessor;

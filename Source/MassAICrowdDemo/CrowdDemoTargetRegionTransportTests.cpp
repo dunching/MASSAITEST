@@ -94,6 +94,7 @@ bool FCrowdDemoTargetRegionAcquireThenHoldTest::RunTest(const FString& Parameter
     Settings, FlowConfig, Topology, TopologySummary);
   FCrowdDemoTargetRegionTransportAgent Agent = MakeAgent(10, 0, 650.0f);
   Agent.bEngagedHold = true;
+  Settings.TargetVelocity = Agent.Location.GetSafeNormal() * 80.0f;
   FCrowdDemoTargetRegionDemandResult Demand;
   FCrowdDemoTargetRegionTransportKernel::BuildDemand(
     {Agent}, Settings, FlowConfig, nullptr, Topology, Demand);
@@ -119,6 +120,21 @@ bool FCrowdDemoTargetRegionAcquireThenHoldTest::RunTest(const FString& Parameter
     Guidance[0].Mode, ECrowdDemoTargetRegionGuidanceMode::EngagedHold);
   TestTrue(TEXT("target approach does not create proactive retreat"),
     Guidance[0].DesiredVelocity.IsNearlyZero());
+
+  const FVector2f Receding =
+    FCrowdDemoTargetRegionTransportKernel::ComposeEngagedHoldVelocity(
+      Agent.Location, Settings.TargetLocation,
+      -Agent.Location.GetSafeNormal() * 80.0f, Agent.MaxSpeedCmps);
+  TestTrue(TEXT("engaged hold follows a receding target"),
+    Receding.Equals(-Agent.Location.GetSafeNormal() * 80.0f, 0.01f));
+  const FVector2f Tangent(-Agent.Location.GetSafeNormal().Y,
+    Agent.Location.GetSafeNormal().X);
+  const FVector2f Tangential =
+    FCrowdDemoTargetRegionTransportKernel::ComposeEngagedHoldVelocity(
+      Agent.Location, Settings.TargetLocation, Tangent * 80.0f,
+      Agent.MaxSpeedCmps);
+  TestTrue(TEXT("engaged hold preserves tangential target motion"),
+    Tangential.Equals(Tangent * 80.0f, 0.01f));
   return true;
 }
 

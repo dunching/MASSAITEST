@@ -124,7 +124,7 @@ struct FCrowdDemoLocalPredictiveResult
 };
 ```
 
-[INFERRED][HIGH] Mass processor 输入继续读取现有 `FCrowdDemoRoundMoveIntentFragment::DesiredVelocity`，但不得覆写它；新增 `FCrowdDemoRoundLocalVelocityFragment` 保存局部速度结果，使宏观请求、局部选择和 Particle 最终结果可以分别归因。
+[COMPUTED][HIGH] 当前Mass processor读取Runtime identity/state/properties/composed guidance镜像，不覆写宏观自主速度；Runtime与Demo各保存一份可重建的local-velocity结果，使宏观请求、局部选择和Particle最终结果可以分别归因。Demo local-velocity仍是MovementPredict当前消费者，Runtime movement commit尚未启用。
 
 [INFERRED][HIGH] 跨 step 最小状态只保存在 PipelineSubsystem 的 prepared SoA/rollback 中，包括每实体 `BlockedAgeSteps`、最近有效 grant epoch 和必要的短期 component key；不得制造永久业务 owner fragment。
 
@@ -221,9 +221,11 @@ RoundPlanApply
 
 [COMPUTED][HIGH] 已新增 `CrowdDemoVelocityHalfPlaneKernel.*`、`CrowdDemoLocalPredictiveInteractionKernel.*`、`FCrowdDemoRoundLocalVelocityFragment`、Mass processor、prepared SoA、RoundResult hash/metrics 和 correction rollback。
 
+[COMPUTED][HIGH] 插件阶段2已将Velocity Half-Plane与Local Predictive机械提取为无Demo命名的`MassCrowdCore`原生纯内核；阶段3已将正式processor切换到`FCrowdMassLocalPredictiveWork`调用Core。Demo旧kernel只保留等价与历史fixture测试，8518六实体fixture验证旧/Core/Runtime WORK的pair、grant、result、summary和hash一致。
+
 [COMPUTED][HIGH] 联合求解使用固定 64 次稳定 component sweep，并对独立候选与共同可行基线做确定性最大安全 Q15 插值；新增跨 component 冲突会单调加入 pair 集并触发重新合并，直到固定点或明确 invalid。1cm/s 量化安全裕量进入 pair 几何与最终联合复验。
 
-[COMPUTED][HIGH] Development Editor与完整 `CrowdDemo.SF` 63/63通过；LocalPredictive 定向自动化6/6通过。
+[COMPUTED][HIGH] 最新迁移验证为Development、DebugGame、`CrowdDemo` 102/102、`MassCrowd` 11/11及LocalPredictive定向7/7通过；尚未以迁移后版本重跑地图或人工审片。
 
 [COMPUTED][HIGH] T3运行8507达到两侧center/completed=`10/10,10/10`、deadlock=0、LocalPredictive samples=`901/901`、invalid=`0/0`、hash=`1161166200`双端一致，Particle四类安全违规为0。
 

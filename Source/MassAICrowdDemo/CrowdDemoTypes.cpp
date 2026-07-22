@@ -10,17 +10,25 @@ constexpr uint8 SoftPressurePayload = 1;
 constexpr uint8 CombatPayload = 2;
 
 bool SerializePayloadToRaw(
-  FCrowdDemoRoundResultHeader& Header, TArray<uint8>& OutRaw)
+  const FCrowdDemoRoundResultHeader& Header, TArray<uint8>& OutRaw)
 {
+  // Performance samples are server-local evidence. They are logged at the
+  // result boundary and never participate in client determinism comparison.
+  // Keeping them out of the replicated payload prevents high-entropy timing
+  // data from consuming the fixed 2048-byte header budget.
+  FCrowdDemoSharedFlowMetrics ReplicatedSharedFlowMetrics = Header.SharedFlowMetrics;
+  FCrowdDemoParticleMetrics ReplicatedParticleMetrics = Header.ParticleMetrics;
+  FCrowdDemoProjectileMetrics ReplicatedProjectileMetrics = Header.ProjectileMetrics;
+  ReplicatedParticleMetrics.Performance = {};
   FMemoryWriter Writer(OutRaw, true);
   FCrowdDemoSharedFlowMetrics::StaticStruct()->SerializeBin(
-    Writer, &Header.SharedFlowMetrics);
+    Writer, &ReplicatedSharedFlowMetrics);
   FCrowdDemoParticleMetrics::StaticStruct()->SerializeBin(
-    Writer, &Header.ParticleMetrics);
+    Writer, &ReplicatedParticleMetrics);
   if (Header.PayloadKind == CombatPayload)
   {
     FCrowdDemoProjectileMetrics::StaticStruct()->SerializeBin(
-      Writer, &Header.ProjectileMetrics);
+      Writer, &ReplicatedProjectileMetrics);
   }
   Writer.Close();
   return !Writer.IsError();

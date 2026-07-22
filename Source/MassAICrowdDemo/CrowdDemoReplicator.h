@@ -118,11 +118,21 @@ private:
   bool bVisualMaterialLoaded = false;
   bool bVatRuntimeMeshLoaded = false;
   bool bLocalVisualHostOnly = false;
+  bool bClientPerformanceWindowStarted = false;
+  int32 ClientPerformanceRoundId = 0;
+  double ClientPerformanceRoundStartWorldSeconds = 0.0;
 
   TArray<FCrowdDemoEntityState> EntityStates;
   TArray<float> ServerFrameMsSamples;
   TArray<float> SolverMsSamples;
   TArray<float> ClientFrameMsSamples;
+  TArray<float> ClientGameThreadMsSamples;
+  TArray<float> ClientRenderThreadMsSamples;
+  TArray<float> ClientGpuFrameMsSamples;
+  TArray<float> ClientGameThreadWaitMsSamples;
+  TArray<float> ClientRhiThreadMsSamples;
+  TArray<float> ClientSwapBufferMsSamples;
+  TArray<float> ClientWarmupFrameMsSamples;
   TArray<float> VisualProcessorMsSamples;
   TArray<float> ReplicationSampleAgeMsSamples;
   TArray<float> DisplayToAuthoritativeCmSamples;
@@ -139,6 +149,20 @@ private:
   int32 RoundResetVisualJumpCount = 0;
   int32 TestBoundaryResetVisualJumpCount = 0;
   int32 VisualIsmRebuildCount = 0;
+  int32 ClientGameBoundHitchCount = 0;
+  int32 ClientRenderBoundHitchCount = 0;
+  int32 ClientGpuBoundHitchCount = 0;
+  int32 ClientUnattributedHitchCount = 0;
+  int32 ClientShaderCompilingFrameCount = 0;
+  int32 ClientShaderJobsMax = 0;
+  int32 ClientAsyncLoadingFrameCount = 0;
+  int32 ClientVisualAssetCompilingFrameCount = 0;
+  int32 ClientVisualPsoPrecacheFrameCount = 0;
+  int32 ClientWarmupShaderCompilingFrameCount = 0;
+  int32 ClientWarmupShaderJobsMax = 0;
+  int32 ClientWarmupAsyncLoadingFrameCount = 0;
+  int32 ClientWarmupVisualAssetCompilingFrameCount = 0;
+  int32 ClientWarmupVisualPsoPrecacheFrameCount = 0;
   TMap<uint64, FCrowdDemoProjectileVisualRuntime> ActiveProjectileVisuals;
   TMap<int32, FCrowdDemoProjectileVisualRoundCounts> ProjectileVisualRoundCounts;
   TSet<FCrowdDemoProjectileVisualEventKey> SeenProjectileVisualEvents;
@@ -149,6 +173,8 @@ private:
   void LogSummaryIfReady();
   FCrowdDemoSummaryMetrics BuildSummaryMetrics() const;
   void UpdateProjectileVisuals();
+  void UpdateClientPerformanceWindow(float DeltaSeconds);
+  void RecordClientFramePhaseSample(float DeltaSeconds, bool bWarmup);
 
   static float ComputeP95(TArray<float> Samples);
   static float ComputeMax(TConstArrayView<float> Samples);

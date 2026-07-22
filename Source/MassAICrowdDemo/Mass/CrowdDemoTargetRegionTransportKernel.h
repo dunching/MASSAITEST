@@ -291,6 +291,16 @@ public:
     const FVector2f& TargetVelocity,
     float MaxSpeedCmps);
 
+  // Acquire-then-hold is one-sided in target-relative space: an engaged agent
+  // does not retreat when the target approaches it, but it still follows
+  // tangential target motion and target motion that would otherwise increase
+  // their separation.
+  static FVector2f ComposeEngagedHoldVelocity(
+    const FVector2f& AgentLocation,
+    const FVector2f& TargetLocation,
+    const FVector2f& TargetVelocity,
+    float MaxSpeedCmps);
+
   static FCrowdDemoTargetEngagementDecision ResolveTargetEngagement(
     ECrowdDemoTargetDistanceResponsePolicy Policy,
     bool bWasEngaged,

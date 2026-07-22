@@ -26,6 +26,18 @@ bool FCrowdDemoRoundResultHeaderNetSerializeTest::RunTest(const FString& Paramet
   Source.SharedFlowMetrics.SharedFlowFieldBuildHash = 267519150u;
   Source.ParticleMetrics.ParticleCandidateHash = 0x85ebca6bu;
   Source.ParticleMetrics.ParticleAppliedStateHash = 0xc2b2ae35u;
+  Source.ParticleMetrics.Performance.FixedStepPipelineMsP50 = 8.501f;
+  Source.ParticleMetrics.Performance.FixedStepPipelineMsP95 = 12.055f;
+  Source.ParticleMetrics.Performance.FixedStepPipelineMsMax = 35.411f;
+  Source.ParticleMetrics.Performance.TargetTopologyStageMsP95 = 7.016f;
+  Source.ParticleMetrics.Performance.TargetTopologyStageMsMax = 11.587f;
+  Source.ParticleMetrics.Performance.LocalPredictiveStageMsP95 = 1.568f;
+  Source.ParticleMetrics.Performance.ParticleStageMsP95 = 1.987f;
+  Source.ParticleMetrics.Performance.TargetTopologyBuildCount = 9457;
+  Source.ParticleMetrics.Performance.TargetDemandFullBuildCount = 9457;
+  Source.ParticleMetrics.Performance.CatchupFrameCount = 65;
+  Source.ParticleMetrics.Performance.FixedStepBacklogMsMax = 43.453f;
+  Source.ParticleMetrics.Performance.SimulationRealtimeFactor = 1.0f;
   for (int32 Index = 0; Index < 7; ++Index)
   {
     FCrowdDemoCapabilityProfileMetrics& Profile =
@@ -65,6 +77,8 @@ bool FCrowdDemoRoundResultHeaderNetSerializeTest::RunTest(const FString& Paramet
     Source.ParticleMetrics.ParticleCandidateHash);
   TestEqual(TEXT("capability profile count round-trips"),
     Restored.ParticleMetrics.CapabilityProfiles.Num(), 7);
+  TestEqual(TEXT("server-local performance is omitted from result payload"),
+    Restored.ParticleMetrics.Performance.FixedStepPipelineMsP95, -1.0f);
   TestEqual(TEXT("soft-pressure payload does not carry projectile metrics"),
     Restored.ProjectileMetrics.EventHash, 2166136261u);
 

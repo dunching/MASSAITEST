@@ -375,6 +375,35 @@ FVector2f FCrowdDemoTargetRegionTransportKernel::ComposeTargetAdvectedFarFlowVel
     : Combined;
 }
 
+FVector2f FCrowdDemoTargetRegionTransportKernel::ComposeEngagedHoldVelocity(
+  const FVector2f& AgentLocation,
+  const FVector2f& TargetLocation,
+  const FVector2f& TargetVelocity,
+  const float MaxSpeedCmps)
+{
+  if (!FMath::IsFinite(AgentLocation.X) || !FMath::IsFinite(AgentLocation.Y)
+    || !FMath::IsFinite(TargetLocation.X) || !FMath::IsFinite(TargetLocation.Y)
+    || !FMath::IsFinite(TargetVelocity.X) || !FMath::IsFinite(TargetVelocity.Y)
+    || !FMath::IsFinite(MaxSpeedCmps) || MaxSpeedCmps <= 0.0f)
+  {
+    return FVector2f::ZeroVector;
+  }
+
+  const FVector2f TargetToAgent = AgentLocation - TargetLocation;
+  const FVector2f Normal = TargetToAgent.GetSafeNormal();
+  if (Normal.IsNearlyZero())
+    return FVector2f::ZeroVector;
+
+  // Positive radial target speed means the target is moving toward the agent.
+  // Remove only that component, so Hold never generates proactive retreat.
+  const float ApproachingRadialCmps = FMath::Max(
+    0.0f, FVector2f::DotProduct(TargetVelocity, Normal));
+  FVector2f Result = TargetVelocity - Normal * ApproachingRadialCmps;
+  if (Result.SizeSquared() > FMath::Square(MaxSpeedCmps))
+    Result = Result.GetSafeNormal() * MaxSpeedCmps;
+  return Result;
+}
+
 FCrowdDemoTargetEngagementDecision
 FCrowdDemoTargetRegionTransportKernel::ResolveTargetEngagement(
   const ECrowdDemoTargetDistanceResponsePolicy Policy,
@@ -1920,11 +1949,12 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
       }
       else if (State->bEngagedHold)
       {
-        // Acquire-then-hold is world-space hold. A target moving toward a
-        // ranged agent must not cause proactive retreat; Particle remains the
-        // only writer allowed to move it for hard local safety.
+        // Suppress only proactive radial retreat. Tangential target motion and
+        // target motion that would otherwise open the range remain followable.
         Result.Mode = ECrowdDemoTargetRegionGuidanceMode::EngagedHold;
-        Result.DesiredVelocity = FVector2f::ZeroVector;
+        Result.DesiredVelocity = ComposeEngagedHoldVelocity(
+          Agent.Location, Settings.TargetLocation, Settings.TargetVelocity,
+          Agent.MaxSpeedCmps);
         ++OutSummary.EngagedHoldAgentCount;
       }
       else if (State->bTerminalStay)

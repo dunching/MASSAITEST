@@ -1,6 +1,8 @@
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
+#include "Mass/CrowdDemoMassCrowdRuntimeAdapter.h"
+#include "Async/Async.h"
 
 namespace
 {
@@ -250,6 +252,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::MarkBootstrapApplied(const int32 Agent
   RoundResetCount = 0;
   RoundTransitionOrderViolationCount = 0;
   DynamicFlowAnchorCellKey = INDEX_NONE;
+  RuntimeSharedFlowResource.DynamicAnchorCellKey = INDEX_NONE;
+  RuntimeSharedFlowResource.IntegrationRebuildCount = 0;
   DynamicFlowIntegrationRebuildCount = 0;
   DynamicFlowRoundHash = 2166136261u;
   bDynamicFlowIntegrationCacheInvalidated = false;
@@ -381,6 +385,17 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   }
   ActivePlan = Packet;
   bPlanActive = true;
+  BoundarySnapshot = {};
+  BoundaryFormationFacts.Reset();
+  PreparedRuntimeSharedFlowOutputs.Reset();
+  PreparedTargetRegionGuidanceCandidates.Reset();
+  PreparedBusinessGuidanceCandidates.Reset();
+  PreparedRuntimeComposedGuidance.Reset();
+  PreparedRuntimePredictedMovements.Reset();
+  PreparedRuntimeParticleResults.Reset();
+  PreparedRuntimeFinalKinematics.Reset();
+  PreparedRuntimeFacingResults.Reset();
+  PreparedFacingRollbackFacts.Reset();
   for (TArray<float>& Samples : RoundPerformanceStageMsSamples)
   {
     Samples.Reset();
@@ -408,6 +423,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   RoundResetCount = 0;
   RoundTransitionOrderViolationCount = 0;
   DynamicFlowAnchorCellKey = INDEX_NONE;
+  RuntimeSharedFlowResource.DynamicAnchorCellKey = INDEX_NONE;
+  RuntimeSharedFlowResource.IntegrationRebuildCount = 0;
   DynamicFlowIntegrationRebuildCount = 0;
   DynamicFlowRoundHash = 2166136261u;
   bDynamicFlowIntegrationCacheInvalidated = false;
@@ -576,23 +593,22 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
 bool UCrowdDemoRoundSimPipelineSubsystem::EnsureSharedFlowField(
   const FCrowdDemoSharedFlowFieldConfig& Config)
 {
-  const bool bNeedsRebuild = !SharedFlowField.IsValid()
-    || SharedFlowField.Config.Revision != Config.Revision
-    || SharedFlowField.Config.ConnectivityContractVersion != Config.ConnectivityContractVersion
-    || !FMath::IsNearlyEqual(
-      SharedFlowField.Config.CellSizeCm, Config.CellSizeCm, 0.001f)
-    || !FMath::IsNearlyEqual(
-      SharedFlowField.Config.AgentInflateCm, Config.AgentInflateCm, 0.001f)
-    || !FVector(SharedFlowField.Config.BoundsMin).Equals(FVector(Config.BoundsMin), 0.01f)
-    || !FVector(SharedFlowField.Config.BoundsMax).Equals(FVector(Config.BoundsMax), 0.01f)
-    || !FVector(SharedFlowField.Config.GoalLocation).Equals(FVector(Config.GoalLocation), 0.01f);
-  if (bNeedsRebuild)
-  {
-    if (!FCrowdDemoSharedFlowFieldKernel::Build(Config, SharedFlowField))
+  FCrowdMassSharedFlowBuildInput Input;
+  Input.Config = FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreFlowConfig(Config);
+  FCrowdMassSharedFlowResource* Resource = &RuntimeSharedFlowResource;
+  TFuture<FCrowdMassSharedFlowBuildOutput> Future = Async(
+    EAsyncExecution::ThreadPool,
+    [Input = MoveTemp(Input), Resource]() mutable
     {
-      return false;
-    }
-    ++SharedFlowFieldRebuildCount;
+      return FCrowdMassSharedFlowWork::EnsureResource(Input, *Resource);
+    });
+  const FCrowdMassSharedFlowBuildOutput Output = Future.Get();
+  if (!Output.bValid) return false;
+  if (Output.bFieldRebuilt)
+  {
+    SharedFlowField = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowField(
+      RuntimeSharedFlowResource.Field);
+    SharedFlowFieldRebuildCount = RuntimeSharedFlowResource.FieldRebuildCount;
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoSharedFlowField: role=%s revision=%d hash=%u rebuild_count=%d cells=%d blocked=%d goal_cell=%d"),
       GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),
@@ -603,6 +619,12 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureSharedFlowField(
       SharedFlowField.BlockedCellCount,
       SharedFlowField.GoalCellIndex);
   }
+  else if (!SharedFlowField.IsValid()
+    || SharedFlowField.BuildHash != RuntimeSharedFlowResource.Field.BuildHash)
+  {
+    SharedFlowField = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowField(
+      RuntimeSharedFlowResource.Field);
+  }
   LastCompareMetrics.FlowFieldRevision = SharedFlowField.Config.Revision;
   LastCompareMetrics.FlowFieldBuildHash = SharedFlowField.BuildHash;
   LastCompareMetrics.FlowFieldRebuildCount = SharedFlowFieldRebuildCount;
@@ -610,57 +632,78 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureSharedFlowField(
   return SharedFlowField.IsValid();
 }
 
+bool UCrowdDemoRoundSimPipelineSubsystem::PublishBoundarySnapshot(
+  FCrowdMassBoundarySnapshot&& Snapshot,
+  TArray<FCrowdDemoRoundBoundaryFormationFact>&& FormationFacts)
+{
+  if (!Snapshot.bValid
+    || Snapshot.FixedStepIndex != GetCurrentFixedStepIndex()
+    || Snapshot.PlanRevision != GetCurrentPlanRevision()
+    || Snapshot.Agents.Num() != FormationFacts.Num())
+    return false;
+  FormationFacts.Sort([](const auto& A, const auto& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
+  for (int32 Index = 0; Index < Snapshot.Agents.Num(); ++Index)
+    if (FormationFacts[Index].AgentId
+      != Snapshot.Agents[Index].Identity.AgentId)
+      return false;
+  BoundarySnapshot = MoveTemp(Snapshot);
+  MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
+  BoundaryFormationFacts = MoveTemp(FormationFacts);
+  PreparedRuntimeSharedFlowOutputs.Reset();
+  PreparedTargetRegionGuidanceCandidates.Reset();
+  PreparedBusinessGuidanceCandidates.Reset();
+  PreparedRuntimeComposedGuidance.Reset();
+  PreparedRuntimePredictedMovements.Reset();
+  PreparedRuntimeParticleResults.Reset();
+  PreparedRuntimeFinalKinematics.Reset();
+  PreparedRuntimeFacingResults.Reset();
+  PreparedFacingRollbackFacts.Reset();
+  return true;
+}
+
+const FCrowdDemoRoundBoundaryFormationFact*
+UCrowdDemoRoundSimPipelineSubsystem::FindBoundaryFormationFact(
+  const int32 AgentId) const
+{
+  return BoundaryFormationFacts.FindByPredicate(
+    [AgentId](const FCrowdDemoRoundBoundaryFormationFact& Value)
+    {
+      return Value.AgentId == AgentId;
+    });
+}
+
 bool UCrowdDemoRoundSimPipelineSubsystem::EnsureDynamicSharedFlowField(
   const FCrowdDemoSharedFlowFieldConfig& Config,
   const FVector& TargetLocation)
 {
-  auto ObstaclesMatch = [](const TArray<FCrowdDemoSharedFlowObstacleSpec>& A,
-      const TArray<FCrowdDemoSharedFlowObstacleSpec>& B)
-  {
-    if (A.Num() != B.Num()) return false;
-    for (int32 Index = 0; Index < A.Num(); ++Index)
+  FCrowdMassSharedFlowBuildInput Input;
+  Input.Config = FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreFlowConfig(Config);
+  Input.TargetLocation = TargetLocation;
+  Input.bDynamicTarget = true;
+  Input.bForceIntegrationRefresh = bDynamicFlowIntegrationCacheInvalidated;
+  FCrowdMassSharedFlowResource* Resource = &RuntimeSharedFlowResource;
+  TFuture<FCrowdMassSharedFlowBuildOutput> Future = Async(
+    EAsyncExecution::ThreadPool,
+    [Input = MoveTemp(Input), Resource]() mutable
     {
-      if (A[Index].ObstacleId != B[Index].ObstacleId
-        || !FVector(A[Index].Center).Equals(FVector(B[Index].Center), 0.01f)
-        || !FVector(A[Index].Extent).Equals(FVector(B[Index].Extent), 0.01f))
-        return false;
-    }
-    return true;
-  };
-  const bool bTopologyMismatch = !SharedFlowField.IsValid()
-    || SharedFlowField.Config.Revision != Config.Revision
-    || SharedFlowField.Config.ConnectivityContractVersion != Config.ConnectivityContractVersion
-    || !FMath::IsNearlyEqual(SharedFlowField.Config.CellSizeCm, Config.CellSizeCm, 0.001f)
-    || !FMath::IsNearlyEqual(SharedFlowField.Config.AgentInflateCm, Config.AgentInflateCm, 0.001f)
-    || !FVector(SharedFlowField.Config.BoundsMin).Equals(FVector(Config.BoundsMin), 0.01f)
-    || !FVector(SharedFlowField.Config.BoundsMax).Equals(FVector(Config.BoundsMax), 0.01f)
-    || !ObstaclesMatch(SharedFlowField.Config.ObstacleSpecs, Config.ObstacleSpecs);
-  if (bTopologyMismatch)
+      return FCrowdMassSharedFlowWork::EnsureResource(Input, *Resource);
+    });
+  const FCrowdMassSharedFlowBuildOutput Output = Future.Get();
+  if (!Output.bValid) return false;
+  DynamicFlowAnchorCellKey = Output.DynamicAnchorCellKey;
+  SharedFlowFieldRebuildCount = RuntimeSharedFlowResource.FieldRebuildCount;
+  DynamicFlowIntegrationRebuildCount =
+    RuntimeSharedFlowResource.IntegrationRebuildCount;
+  bDynamicFlowIntegrationCacheInvalidated = false;
+  if (Output.bFieldRebuilt || Output.bIntegrationRebuilt
+    || !SharedFlowField.IsValid()
+    || SharedFlowField.BuildHash != RuntimeSharedFlowResource.Field.BuildHash)
   {
-    if (!FCrowdDemoSharedFlowFieldKernel::Build(Config, SharedFlowField)) return false;
-    ++SharedFlowFieldRebuildCount;
-    DynamicFlowAnchorCellKey = INDEX_NONE;
-  }
-
-  int32 AnchorCellKey = INDEX_NONE;
-  FVector AnchorLocation = FVector::ZeroVector;
-  if (!FCrowdDemoSharedFlowFieldKernel::ResolveGoalAnchor(
-      SharedFlowField, TargetLocation, AnchorCellKey, AnchorLocation))
-  {
-    return false;
-  }
-  const bool bSemanticAnchorChange = AnchorCellKey != DynamicFlowAnchorCellKey;
-  if (bSemanticAnchorChange || bDynamicFlowIntegrationCacheInvalidated)
-  {
-    if (!FCrowdDemoSharedFlowFieldKernel::BuildIntegrationForAnchor(
-        AnchorCellKey, AnchorLocation, SharedFlowField))
-    {
-      return false;
-    }
-    DynamicFlowAnchorCellKey = AnchorCellKey;
-    if (bSemanticAnchorChange)
-      ++DynamicFlowIntegrationRebuildCount;
-    bDynamicFlowIntegrationCacheInvalidated = false;
+    SharedFlowField = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowField(
+      RuntimeSharedFlowResource.Field);
   }
 
   auto Fold = [](uint32 Hash, const uint32 Value)
@@ -690,17 +733,34 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureBidirectionalSwapFlowFields()
   {
     const FCrowdDemoSharedFlowFieldConfig Config =
       FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(CohortId);
+    FCrowdMassSharedFlowBuildInput Input;
+    Input.Config = FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreFlowConfig(Config);
+    FCrowdMassSharedFlowResource& Resource =
+      RuntimeBidirectionalSwapFlowResources[CohortId];
+    TFuture<FCrowdMassSharedFlowBuildOutput> Future = Async(
+      EAsyncExecution::ThreadPool,
+      [Input = MoveTemp(Input), ResourcePtr = &Resource]() mutable
+      {
+        return FCrowdMassSharedFlowWork::EnsureResource(Input, *ResourcePtr);
+      });
+    const FCrowdMassSharedFlowBuildOutput Output = Future.Get();
+    bAllValid &= Output.bValid;
     FCrowdDemoSharedFlowField& Field = BidirectionalSwapFlowFields[CohortId];
-    if (!Field.IsValid()
-      || Field.Config.Revision != Config.Revision
-      || !FVector(Field.Config.BoundsMin).Equals(FVector(Config.BoundsMin), 0.01f)
-      || !FVector(Field.Config.BoundsMax).Equals(FVector(Config.BoundsMax), 0.01f)
-      || !FVector(Field.Config.GoalLocation).Equals(FVector(Config.GoalLocation), 0.01f))
-    {
-      bAllValid &= FCrowdDemoSharedFlowFieldKernel::Build(Config, Field);
-    }
+    if (Output.bValid && (Output.bFieldRebuilt || !Field.IsValid()
+      || Field.BuildHash != Resource.Field.BuildHash))
+      Field = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowField(Resource.Field);
   }
   return bAllValid;
+}
+
+const FCrowdSharedFlowField*
+UCrowdDemoRoundSimPipelineSubsystem::FindRuntimeBidirectionalSwapFlowField(
+  const int32 FormationIndex) const
+{
+  const int32 CohortId =
+    FCrowdDemoBidirectionalSwapKernel::CohortIdForFormationIndex(FormationIndex);
+  return CohortId >= 0 && CohortId < RuntimeBidirectionalSwapFlowResources.Num()
+    ? &RuntimeBidirectionalSwapFlowResources[CohortId].Field : nullptr;
 }
 
 const FCrowdDemoSharedFlowField*
@@ -975,7 +1035,11 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   ValidCorridorTransitProgress = Snapshot.ValidCorridorTransitProgress;
   TargetFact = Snapshot.TargetFact;
   DynamicFlowAnchorCellKey = Snapshot.DynamicFlowAnchorCellKey;
+  RuntimeSharedFlowResource.DynamicAnchorCellKey =
+    Snapshot.DynamicFlowAnchorCellKey;
   DynamicFlowIntegrationRebuildCount = Snapshot.DynamicFlowIntegrationRebuildCount;
+  RuntimeSharedFlowResource.IntegrationRebuildCount =
+    Snapshot.DynamicFlowIntegrationRebuildCount;
   DynamicFlowRoundHash = Snapshot.DynamicFlowRoundHash;
   bDynamicFlowIntegrationCacheInvalidated = true;
   PreparedTargetRegionTopology = {};

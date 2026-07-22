@@ -4,13 +4,18 @@
 #include "CrowdDemoRoundSimCoordinator.h"
 #include "Mass/CrowdDemoMassReplication.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
+#include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DynamicRHI.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
+#include "RenderTimer.h"
+#include "ShaderCompiler.h"
+#include "UObject/UObjectGlobals.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -141,7 +146,7 @@ void ACrowdDemoReplicator::Tick(const float DeltaSeconds)
   }
   else if (GetWorld() && GetWorld()->GetNetMode() != NM_DedicatedServer)
   {
-    ClientFrameMsSamples.Add(DeltaSeconds * 1000.0f);
+    UpdateClientPerformanceWindow(DeltaSeconds);
   }
 
   if (GetWorld() && GetWorld()->GetNetMode() != NM_DedicatedServer)
@@ -150,6 +155,114 @@ void ACrowdDemoReplicator::Tick(const float DeltaSeconds)
   }
 
   LogSummaryIfReady();
+}
+
+void ACrowdDemoReplicator::UpdateClientPerformanceWindow(const float DeltaSeconds)
+{
+  UWorld* World = GetWorld();
+  if (!World || World->GetNetMode() == NM_DedicatedServer)
+  {
+    return;
+  }
+  UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
+    World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>();
+  const int32 ActiveRoundId = Pipeline ? Pipeline->GetCurrentRoundId() : 0;
+  if (!bClientPerformanceWindowStarted && ActiveRoundId <= 0)
+  {
+    RecordClientFramePhaseSample(DeltaSeconds, true);
+    return;
+  }
+  if (!bClientPerformanceWindowStarted)
+  {
+    bClientPerformanceWindowStarted = true;
+    ClientPerformanceRoundId = ActiveRoundId;
+    ClientPerformanceRoundStartWorldSeconds = World->GetTimeSeconds();
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoClientPerformanceWindow role=client stage=begin round_id=%d warmup_seconds=%.3f warmup_frame_ms_p95=%.3f warmup_frame_ms_max=%.3f shader_frames=%d shader_jobs_max=%d async_loading_frames=%d visual_asset_compiling_frames=%d pso_precache_frames=%d source=MassClientBubble"),
+      ClientPerformanceRoundId,
+      static_cast<float>(ClientPerformanceRoundStartWorldSeconds - StartedSeconds),
+      ComputeP95(ClientWarmupFrameMsSamples),
+      ComputeMax(ClientWarmupFrameMsSamples),
+      ClientWarmupShaderCompilingFrameCount,
+      ClientWarmupShaderJobsMax,
+      ClientWarmupAsyncLoadingFrameCount,
+      ClientWarmupVisualAssetCompilingFrameCount,
+      ClientWarmupVisualPsoPrecacheFrameCount);
+  }
+  if (!bClientSummaryLogged && ActiveRoundId == ClientPerformanceRoundId)
+  {
+    RecordClientFramePhaseSample(DeltaSeconds, false);
+  }
+}
+
+void ACrowdDemoReplicator::RecordClientFramePhaseSample(
+  const float DeltaSeconds, const bool bWarmup)
+{
+  const float FrameMilliseconds = FMath::Max(0.0f, DeltaSeconds * 1000.0f);
+  const int32 ShaderJobs = GShaderCompilingManager
+    ? GShaderCompilingManager->GetNumRemainingJobs()
+    : 0;
+  const bool bShaderCompiling = ShaderJobs > 0;
+  const bool bAsyncLoading = IsAsyncLoading() || GetNumAsyncPackages() > 0;
+  const bool bVisualAssetCompiling =
+    (CrowdInstances && CrowdInstances->IsCompiling())
+    || (CrowdHitFlashInstances && CrowdHitFlashInstances->IsCompiling())
+    || (ProjectileInstances && ProjectileInstances->IsCompiling())
+    || (ProjectileImpactInstances && ProjectileImpactInstances->IsCompiling());
+  const bool bVisualPsoPrecaching =
+    (CrowdInstances && CrowdInstances->IsPSOPrecaching())
+    || (CrowdHitFlashInstances && CrowdHitFlashInstances->IsPSOPrecaching())
+    || (ProjectileInstances && ProjectileInstances->IsPSOPrecaching())
+    || (ProjectileImpactInstances && ProjectileImpactInstances->IsPSOPrecaching());
+  if (bWarmup)
+  {
+    ClientWarmupFrameMsSamples.Add(FrameMilliseconds);
+    ClientWarmupShaderCompilingFrameCount += bShaderCompiling ? 1 : 0;
+    ClientWarmupShaderJobsMax = FMath::Max(ClientWarmupShaderJobsMax, ShaderJobs);
+    ClientWarmupAsyncLoadingFrameCount += bAsyncLoading ? 1 : 0;
+    ClientWarmupVisualAssetCompilingFrameCount += bVisualAssetCompiling ? 1 : 0;
+    ClientWarmupVisualPsoPrecacheFrameCount += bVisualPsoPrecaching ? 1 : 0;
+    return;
+  }
+
+  const float GameThreadMilliseconds = FPlatformTime::ToMilliseconds(GGameThreadTime);
+  const float RenderThreadMilliseconds = FPlatformTime::ToMilliseconds(GRenderThreadTime);
+  const float GpuFrameMilliseconds = FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles());
+  ClientFrameMsSamples.Add(FrameMilliseconds);
+  ClientGameThreadMsSamples.Add(GameThreadMilliseconds);
+  ClientRenderThreadMsSamples.Add(RenderThreadMilliseconds);
+  ClientGpuFrameMsSamples.Add(GpuFrameMilliseconds);
+  ClientGameThreadWaitMsSamples.Add(FPlatformTime::ToMilliseconds(GGameThreadWaitTime));
+  ClientRhiThreadMsSamples.Add(FPlatformTime::ToMilliseconds(GRHIThreadTime));
+  ClientSwapBufferMsSamples.Add(FPlatformTime::ToMilliseconds(GSwapBufferTime));
+  ClientShaderCompilingFrameCount += bShaderCompiling ? 1 : 0;
+  ClientShaderJobsMax = FMath::Max(ClientShaderJobsMax, ShaderJobs);
+  ClientAsyncLoadingFrameCount += bAsyncLoading ? 1 : 0;
+  ClientVisualAssetCompilingFrameCount += bVisualAssetCompiling ? 1 : 0;
+  ClientVisualPsoPrecacheFrameCount += bVisualPsoPrecaching ? 1 : 0;
+
+  if (FrameMilliseconds > 33.333f)
+  {
+    const float LargestMeasuredPhase = FMath::Max3(
+      GameThreadMilliseconds, RenderThreadMilliseconds, GpuFrameMilliseconds);
+    if (LargestMeasuredPhase < FrameMilliseconds * 0.5f)
+    {
+      ++ClientUnattributedHitchCount;
+    }
+    else if (GpuFrameMilliseconds >= GameThreadMilliseconds
+      && GpuFrameMilliseconds >= RenderThreadMilliseconds)
+    {
+      ++ClientGpuBoundHitchCount;
+    }
+    else if (RenderThreadMilliseconds >= GameThreadMilliseconds)
+    {
+      ++ClientRenderBoundHitchCount;
+    }
+    else
+    {
+      ++ClientGameBoundHitchCount;
+    }
+  }
 }
 
 void ACrowdDemoReplicator::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -462,12 +575,24 @@ FCrowdDemoEntityState& ACrowdDemoReplicator::FindOrAddEntityState(const int32 Id
 void ACrowdDemoReplicator::LogSummaryIfReady()
 {
   const UWorld* World = GetWorld();
-  if (!World || World->GetTimeSeconds() - StartedSeconds < DurationSeconds)
+  if (!World)
   {
     return;
   }
 
   const bool bServer = HasAuthority() && !bLocalVisualHostOnly;
+  if (bServer)
+  {
+    if (World->GetTimeSeconds() - StartedSeconds < DurationSeconds)
+    {
+      return;
+    }
+  }
+  else if (!bClientPerformanceWindowStarted
+    || World->GetTimeSeconds() - ClientPerformanceRoundStartWorldSeconds < DurationSeconds)
+  {
+    return;
+  }
   if ((bServer && bServerSummaryLogged) || (!bServer && bClientSummaryLogged))
   {
     return;
@@ -510,6 +635,27 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
       Metrics.NonCorrectionVisualDiscontinuityCount,
       Metrics.RoundResetVisualJumpCount, Metrics.TestBoundaryResetVisualJumpCount,
       Metrics.VisualIsmRebuildCount);
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoClientFramePhases role=client round_id=%d game_ms_p95=%.3f game_ms_max=%.3f render_ms_p95=%.3f render_ms_max=%.3f gpu_ms_p95=%.3f gpu_ms_max=%.3f game_wait_ms_p95=%.3f rhi_ms_p95=%.3f swap_ms_p95=%.3f game_bound_hitches=%d render_bound_hitches=%d gpu_bound_hitches=%d unattributed_hitches=%d shader_frames=%d shader_jobs_max=%d async_loading_frames=%d visual_asset_compiling_frames=%d pso_precache_frames=%d warmup_seconds=%.3f warmup_frame_ms_p95=%.3f warmup_frame_ms_max=%.3f warmup_shader_frames=%d warmup_shader_jobs_max=%d warmup_async_loading_frames=%d warmup_visual_asset_compiling_frames=%d warmup_pso_precache_frames=%d source=MassClientBubble"),
+      ClientPerformanceRoundId,
+      Metrics.ClientGameThreadMsP95, Metrics.ClientGameThreadMsMax,
+      Metrics.ClientRenderThreadMsP95, Metrics.ClientRenderThreadMsMax,
+      Metrics.ClientGpuFrameMsP95, Metrics.ClientGpuFrameMsMax,
+      Metrics.ClientGameThreadWaitMsP95, Metrics.ClientRhiThreadMsP95,
+      Metrics.ClientSwapBufferMsP95,
+      Metrics.ClientGameBoundHitchCount, Metrics.ClientRenderBoundHitchCount,
+      Metrics.ClientGpuBoundHitchCount, Metrics.ClientUnattributedHitchCount,
+      Metrics.ClientShaderCompilingFrameCount, Metrics.ClientShaderJobsMax,
+      Metrics.ClientAsyncLoadingFrameCount,
+      Metrics.ClientVisualAssetCompilingFrameCount,
+      Metrics.ClientVisualPsoPrecacheFrameCount,
+      Metrics.ClientWarmupSeconds, Metrics.ClientWarmupFrameMsP95,
+      Metrics.ClientWarmupFrameMsMax,
+      Metrics.ClientWarmupShaderCompilingFrameCount,
+      Metrics.ClientWarmupShaderJobsMax,
+      Metrics.ClientWarmupAsyncLoadingFrameCount,
+      Metrics.ClientWarmupVisualAssetCompilingFrameCount,
+      Metrics.ClientWarmupVisualPsoPrecacheFrameCount);
   }
 
   if (Metrics.FlowFieldRevision > 0)
@@ -547,6 +693,36 @@ FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
   Metrics.SnapshotBuildMsP95 = Metrics.CrowdSolverMsP95;
   Metrics.ClientFrameMsP95 = ComputeP95(ClientFrameMsSamples);
   Metrics.ClientFrameMsMax = ComputeMax(ClientFrameMsSamples);
+  Metrics.ClientGameThreadMsP95 = ComputeP95(ClientGameThreadMsSamples);
+  Metrics.ClientGameThreadMsMax = ComputeMax(ClientGameThreadMsSamples);
+  Metrics.ClientRenderThreadMsP95 = ComputeP95(ClientRenderThreadMsSamples);
+  Metrics.ClientRenderThreadMsMax = ComputeMax(ClientRenderThreadMsSamples);
+  Metrics.ClientGpuFrameMsP95 = ComputeP95(ClientGpuFrameMsSamples);
+  Metrics.ClientGpuFrameMsMax = ComputeMax(ClientGpuFrameMsSamples);
+  Metrics.ClientGameThreadWaitMsP95 = ComputeP95(ClientGameThreadWaitMsSamples);
+  Metrics.ClientRhiThreadMsP95 = ComputeP95(ClientRhiThreadMsSamples);
+  Metrics.ClientSwapBufferMsP95 = ComputeP95(ClientSwapBufferMsSamples);
+  Metrics.ClientGameBoundHitchCount = ClientGameBoundHitchCount;
+  Metrics.ClientRenderBoundHitchCount = ClientRenderBoundHitchCount;
+  Metrics.ClientGpuBoundHitchCount = ClientGpuBoundHitchCount;
+  Metrics.ClientUnattributedHitchCount = ClientUnattributedHitchCount;
+  Metrics.ClientShaderCompilingFrameCount = ClientShaderCompilingFrameCount;
+  Metrics.ClientShaderJobsMax = ClientShaderJobsMax;
+  Metrics.ClientAsyncLoadingFrameCount = ClientAsyncLoadingFrameCount;
+  Metrics.ClientVisualAssetCompilingFrameCount = ClientVisualAssetCompilingFrameCount;
+  Metrics.ClientVisualPsoPrecacheFrameCount = ClientVisualPsoPrecacheFrameCount;
+  Metrics.ClientWarmupSeconds = bClientPerformanceWindowStarted
+    ? static_cast<float>(ClientPerformanceRoundStartWorldSeconds - StartedSeconds)
+    : 0.0f;
+  Metrics.ClientWarmupFrameMsP95 = ComputeP95(ClientWarmupFrameMsSamples);
+  Metrics.ClientWarmupFrameMsMax = ComputeMax(ClientWarmupFrameMsSamples);
+  Metrics.ClientWarmupShaderCompilingFrameCount = ClientWarmupShaderCompilingFrameCount;
+  Metrics.ClientWarmupShaderJobsMax = ClientWarmupShaderJobsMax;
+  Metrics.ClientWarmupAsyncLoadingFrameCount = ClientWarmupAsyncLoadingFrameCount;
+  Metrics.ClientWarmupVisualAssetCompilingFrameCount =
+    ClientWarmupVisualAssetCompilingFrameCount;
+  Metrics.ClientWarmupVisualPsoPrecacheFrameCount =
+    ClientWarmupVisualPsoPrecacheFrameCount;
   Metrics.VisualProcessorMsP95 = ComputeP95(VisualProcessorMsSamples);
   Metrics.VisualProcessorMsMax = ComputeMax(VisualProcessorMsSamples);
   Metrics.VisualSubmitIntervalMsP95 = ComputeP95(VisualSubmitIntervalMsSamples);

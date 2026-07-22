@@ -9,15 +9,15 @@
 | T3 | 开放双向交换 | [COMPUTED][HIGH] 10/10完成，deadlock=0 | [COMPUTED][HIGH] 2.938ms | [INFERRED][HIGH] 当前版人工审片待补 |
 | T4 | 障碍走廊与汇入 | [COMPUTED][HIGH] wall/corridor/completed/settled=20 | [COMPUTED][HIGH] 3.376ms | [INFERRED][HIGH] 当前版人工审片待补 |
 | T5S | 静态目标Region分布与稳定落位 | [COMPUTED][HIGH] inside20、coverage16/16；收敛后性能/技术门通过 | [COMPUTED][HIGH] 5.362ms | [INFERRED][HIGH] 当前版人工审片待补 |
-| T5M | 移动目标Region分布 | [COMPUTED][HIGH] 历史技术门通过；本次架构基线未重跑 | [COMPUTED][HIGH] 待收敛后重测 | [INFERRED][HIGH] 稳定追随审片待补 |
+| T5M | 移动目标Region分布 | [COMPUTED][HIGH] 8785安全/同步/Transport通过；稳定诊断valid=1、merge/chatter=0 | [COMPUTED][HIGH] 6.196ms；client Game/Render/GPU=4.234/5.536/5.073ms | [INFERRED][HIGH] 移动追随审片待补；不宣称静态settled |
 | T6A | 异构走廊后按能力自然落位 | [COMPUTED][HIGH] corridor/completed/inside/coverage=20，7 profiles通过 | [COMPUTED][HIGH] 3.114ms | [INFERRED][HIGH] Region标记与朝向审片待补 |
-| T6S/T6M | 异构静态/移动目标 | [COMPUTED][HIGH] T6S七类profile技术门通过；T6M未重跑 | [COMPUTED][HIGH] T6S 4.261ms / T6M待测 | [INFERRED][HIGH] 当前版人工审片待补 |
-| T7 | VAT、受击、击退、死亡 | [COMPUTED][HIGH] 自动化与双端技术门通过；冷启动性能不稳定未关闭 | [COMPUTED][HIGH] 热复跑1.739ms；首次client frame p95 112.235ms | [INFERRED][HIGH] 当前版人工审片待补 |
+| T6S/T6M | 异构静态/移动目标 | [COMPUTED][HIGH] T6S通过；T6M 8790 Round末inside/coverage=20/20，AcquireThenHold资格保持合同技术放行；90步最低18/17保留为过程诊断 | [COMPUTED][HIGH] T6S 4.261ms / T6M 12.137ms；client phases 10.332/6.852/5.802ms | [INFERRED][HIGH] 当前版人工审片待补 |
+| T7 | VAT、受击、击退、死亡 | [COMPUTED][HIGH] 新阶段证据下8781/8783连续普通运行通过；历史8777失败未唯一归因 | [COMPUTED][HIGH] fixed-step约1.95–2.12ms；client frame p95 6.016/5.820ms | [INFERRED][HIGH] 当前版人工审片待补 |
 | T8 | 远程攻击、Projectile、swept hit | [COMPUTED][HIGH] spawn/impact/damage=50，duplicate=0 | [COMPUTED][HIGH] 1.598ms | [INFERRED][HIGH] 当前版人工审片待补 |
 
 ## 公共门
 
-[COMPUTED][HIGH] 本次完成的收敛后运行均无Fatal、Assertion、Ensure、`LogWindows: Error`或VIOLATION；RoundResult header/chunks/queue/boundary链完整，双端correction误差为0。T5M/T6M尚未重跑。
+[COMPUTED][HIGH] 8790无Fatal、Assertion、Ensure、`LogWindows: Error`、VIOLATION或Native NetSerialize Warning，双端correction误差为0；T6M按AcquireThenHold资格保持合同技术放行，18/17严格窗口只保留为过程诊断。
 
 [INFERRED][HIGH] 性能门要求fixed-step/client frame p95≤33.333ms、visual p95≤16.667ms、realtime≥0.95、step-limit hit=0；启动max、Round reset、catch-up和steady discontinuity必须单列。
 

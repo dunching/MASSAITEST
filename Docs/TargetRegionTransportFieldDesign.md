@@ -6,6 +6,8 @@
 
 [INFERRED][HIGH] 本模块是“围绕目标进行区域人口分布”的可选宏观Guidance Provider，不是普通群体移动、窄口通行或自由游荡的通用必经层。未启用本能力时，实体直接消费其他宏观guidance，并继续使用同一Local Predictive与Particle安全链。
 
+[COMPUTED][HIGH] 纯算法现已提取到`MassCrowdCore`的`FCrowdTargetRegionTransportKernel`；迁移保护期内Demo生产仍使用独立`FCrowdDemoTargetRegionTransportKernel`。两者的Topology、Demand、Plan、validation、quota execution、Guidance和claim replacement结果/hash已由独立fixture验证一致，Mass processors尚未迁移。
+
 ## 2. 数据分层
 
 [COMPUTED][HIGH] `FCrowdDemoTargetRegionTransportKernel` 提供四个纯函数阶段：`BuildTopology`、`BuildDemand`、`SolveTransport`、`BuildGuidance`。
@@ -113,6 +115,14 @@
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
 
 ## 2026-07-18 AcquireThenHold资格合同
+
+[COMPUTED][HIGH] 2026-07-19修正：`AcquireThenHold`不是永久世界坐标零速。目标向实体靠近的径向分量被抑制，避免远程实体主动后退；目标切向运动以及目标远离时会扩大距离的分量继续被跟随。该规则只依赖目标相对几何和速度，不依赖T6、AgentId或Region特判。
+
+[COMPUTED][HIGH] 8790证明该修正可把T6M Round末inside/coverage恢复为20/20，但最后90步最低仍为18/17；因此它关闭了“全量零速Hold造成不必要漂移”的实现偏差，没有关闭移动目标持续Region稳定性。
+
+[COMPUTED][HIGH] 用户随后确认：AcquireThenHold的验收目标不是让已接战实体随移动目标持续重排极区，而是首次取得正确Terminal后，在交互资格有效期间保持既有选择；资格失效后才重新进入追逐/Transport。基于该合同，8790的18/17窗口值降为诊断，Round末20/20与安全/同步/性能共同构成T6M技术放行证据。
+
+[COMPUTED][HIGH] 当前资格失效由`ResolveTargetEngagement()`实现为：旧Region成为Supply、DistanceResponsePolicy不再是AcquireThenHold，或距离超过`MaximumCenterDistance + AcquireThenHoldReleaseHysteresis`。Demo尚未覆盖目标Actor销毁或业务Target引用失效；该项属于未来业务事件合同，不得由距离释放自动外推。
 
 [COMPUTED][HIGH] Ranged Profile可使用`AcquireThenHold`，但“进入有效距离带”本身不等于取得保持资格。只有上一boundary已由Demand判为`TerminalStay=true`且`Supply=false`的实体才可取得；因此Transport仍先完成Region人口分配，不会把多个早到实体永久冻结在同一Region。
 

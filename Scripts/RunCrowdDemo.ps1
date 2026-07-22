@@ -26,6 +26,7 @@ param(
   [double]$MaxClientFrameP95Ms = 33.333,
   [double]$MaxVisualProcessorP95Ms = 16.667,
   [double]$MaxCollapsedStepsP95 = 1.0,
+  [string]$ClientExtraArgs = "",
   [switch]$NoClient
 )
 
@@ -105,7 +106,7 @@ $ClientProcess = $null
 try {
   if (!$NoClient) {
     Start-Sleep -Seconds $ServerWarmupSeconds
-    $ClientArgs = "`"$ProjectPath`" 127.0.0.1:$Port -game -RenderOffScreen -ResX=1280 -ResY=720 -log -AbsLog=`"$ClientLog`" $CommonArgs"
+    $ClientArgs = "`"$ProjectPath`" 127.0.0.1:$Port -game -RenderOffScreen -ResX=1280 -ResY=720 -log -AbsLog=`"$ClientLog`" $CommonArgs $ClientExtraArgs"
     Write-Host "[CrowdDemo] Starting client: $ClientArgs"
     $ClientProcess = Start-Process -FilePath $EditorPath -ArgumentList $ClientArgs -PassThru -WindowStyle Hidden
     if ($RequirePerformanceGate) {
@@ -200,8 +201,19 @@ if ($RequirePerformanceGate) {
     }
     else {
       $VisualPerformance = ConvertFrom-CrowdDemoMetricLine $VisualPerformanceMatch.Line
+      $FramePhaseMatch = Select-String -Path $ClientLog -Pattern "CrowdDemoClientFramePhases role=client" | Select-Object -Last 1
+      if (!$FramePhaseMatch) {
+        $Failures.Add("client frame phase checkpoint missing")
+      }
+      else {
+        $FramePhases = ConvertFrom-CrowdDemoMetricLine $FramePhaseMatch.Line
+        Write-Host "[CrowdDemo] Client phases: game=$($FramePhases.game_ms_p95)ms render=$($FramePhases.render_ms_p95)ms gpu=$($FramePhases.gpu_ms_p95)ms shader_frames=$($FramePhases.shader_frames) async_frames=$($FramePhases.async_loading_frames)"
+      }
       if ([double]$VisualPerformance.client_frame_ms_p95 -gt $MaxClientFrameP95Ms) {
-        $Failures.Add("client_frame_ms_p95=$($VisualPerformance.client_frame_ms_p95)>$MaxClientFrameP95Ms")
+        $PhaseSuffix = if ($FramePhaseMatch) {
+          " game=$($FramePhases.game_ms_p95) render=$($FramePhases.render_ms_p95) gpu=$($FramePhases.gpu_ms_p95) shader_frames=$($FramePhases.shader_frames) async_frames=$($FramePhases.async_loading_frames)"
+        } else { "" }
+        $Failures.Add("client_frame_ms_p95=$($VisualPerformance.client_frame_ms_p95)>$MaxClientFrameP95Ms$PhaseSuffix")
       }
       if ([double]$VisualPerformance.visual_processor_ms_p95 -gt $MaxVisualProcessorP95Ms) {
         $Failures.Add("visual_processor_ms_p95=$($VisualPerformance.visual_processor_ms_p95)>$MaxVisualProcessorP95Ms")

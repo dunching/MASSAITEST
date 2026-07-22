@@ -13,6 +13,10 @@
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoSoftPressureRouteDiagnosticKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
+#include "MassCrowdSharedFlowWork.h"
+#include "MassCrowdMovementPredictWork.h"
+#include "MassCrowdMovementFinalizeWork.h"
+#include "MassCrowdRuntimeBridge.h"
 #include "Mass/CrowdDemoTargetFactKernel.h"
 #include "Mass/CrowdDemoTargetRegionTransportKernel.h"
 #include "Mass/CrowdDemoTargetRegionPlanLifecycleDiagnosticKernel.h"
@@ -222,6 +226,19 @@ struct FCrowdDemoPreparedSteeringGuidance
   FVector2f DesiredVelocity = FVector2f::ZeroVector;
 };
 
+struct FCrowdDemoRoundBoundaryFormationFact
+{
+  int32 AgentId = INDEX_NONE;
+  int32 FormationIndex = INDEX_NONE;
+  float RadiusCm = 42.0f;
+};
+
+struct FCrowdDemoPreparedFacingRollbackFact
+{
+  int32 AgentId = INDEX_NONE;
+  FCrowdDemoRoundFacingFragment Facing;
+};
+
 
 struct FCrowdDemoRoundErrorSeries
 {
@@ -271,6 +288,81 @@ public:
   int32 GetCurrentPlanRevision() const { return ActivePlan.Revision; }
   const FCrowdDemoRoundPlanPacket& GetActivePlan() const { return ActivePlan; }
   const FCrowdDemoRoundRules& GetRules() const { return ActivePlan.Rules; }
+  bool PublishBoundarySnapshot(
+    FCrowdMassBoundarySnapshot&& Snapshot,
+    TArray<FCrowdDemoRoundBoundaryFormationFact>&& FormationFacts);
+  const FCrowdMassBoundarySnapshot& GetBoundarySnapshot() const
+  { return BoundarySnapshot; }
+  const FCrowdDemoRoundBoundaryFormationFact* FindBoundaryFormationFact(
+    int32 AgentId) const;
+  const TArray<FCrowdDemoRoundBoundaryFormationFact>&
+    GetBoundaryFormationFacts() const
+  { return BoundaryFormationFacts; }
+  bool IsBoundarySnapshotCurrent() const
+  {
+    return BoundarySnapshot.bValid
+      && BoundarySnapshot.FixedStepIndex == GetCurrentFixedStepIndex()
+      && BoundarySnapshot.PlanRevision == GetCurrentPlanRevision();
+  }
+  void MarkMovementFinalizeApplied()
+  { MovementFinalizeAppliedFixedStepIndex = GetCurrentFixedStepIndex(); }
+  bool IsMovementFinalizeAppliedCurrent() const
+  {
+    return IsBoundarySnapshotCurrent()
+      && MovementFinalizeAppliedFixedStepIndex == GetCurrentFixedStepIndex();
+  }
+  void SetPreparedRuntimeSharedFlowOutputs(
+    TArray<FCrowdMassSharedFlowAgentOutput>&& Values)
+  { PreparedRuntimeSharedFlowOutputs = MoveTemp(Values); }
+  const TArray<FCrowdMassSharedFlowAgentOutput>&
+    GetPreparedRuntimeSharedFlowOutputs() const
+  { return PreparedRuntimeSharedFlowOutputs; }
+  void SetPreparedTargetRegionGuidanceCandidates(
+    TArray<FCrowdGuidanceCandidate>&& Values)
+  { PreparedTargetRegionGuidanceCandidates = MoveTemp(Values); }
+  const TArray<FCrowdGuidanceCandidate>&
+    GetPreparedTargetRegionGuidanceCandidates() const
+  { return PreparedTargetRegionGuidanceCandidates; }
+  void SetPreparedBusinessGuidanceCandidates(
+    TArray<FCrowdGuidanceCandidate>&& Values)
+  { PreparedBusinessGuidanceCandidates = MoveTemp(Values); }
+  const TArray<FCrowdGuidanceCandidate>&
+    GetPreparedBusinessGuidanceCandidates() const
+  { return PreparedBusinessGuidanceCandidates; }
+  void SetPreparedRuntimeComposedGuidance(
+    TArray<FCrowdComposedGuidance>&& Values)
+  { PreparedRuntimeComposedGuidance = MoveTemp(Values); }
+  const TArray<FCrowdComposedGuidance>&
+    GetPreparedRuntimeComposedGuidance() const
+  { return PreparedRuntimeComposedGuidance; }
+  void SetPreparedRuntimePredictedMovements(
+    TArray<FCrowdMassPredictedMovement>&& Values)
+  { PreparedRuntimePredictedMovements = MoveTemp(Values); }
+  const TArray<FCrowdMassPredictedMovement>&
+    GetPreparedRuntimePredictedMovements() const
+  { return PreparedRuntimePredictedMovements; }
+  void SetPreparedRuntimeParticleResults(
+    TArray<FCrowdParticleConstraintResult>&& Values)
+  { PreparedRuntimeParticleResults = MoveTemp(Values); }
+  const TArray<FCrowdParticleConstraintResult>&
+    GetPreparedRuntimeParticleResults() const
+  { return PreparedRuntimeParticleResults; }
+  void SetPreparedRuntimeFinalKinematics(
+    TArray<FCrowdMassFinalKinematicState>&& Values)
+  { PreparedRuntimeFinalKinematics = MoveTemp(Values); }
+  const TArray<FCrowdMassFinalKinematicState>&
+    GetPreparedRuntimeFinalKinematics() const
+  { return PreparedRuntimeFinalKinematics; }
+  void SetPreparedRuntimeFacingResults(TArray<FCrowdFacingResult>&& Values)
+  { PreparedRuntimeFacingResults = MoveTemp(Values); }
+  const TArray<FCrowdFacingResult>& GetPreparedRuntimeFacingResults() const
+  { return PreparedRuntimeFacingResults; }
+  void SetPreparedFacingRollbackFacts(
+    TArray<FCrowdDemoPreparedFacingRollbackFact>&& Values)
+  { PreparedFacingRollbackFacts = MoveTemp(Values); }
+  const TArray<FCrowdDemoPreparedFacingRollbackFact>&
+    GetPreparedFacingRollbackFacts() const
+  { return PreparedFacingRollbackFacts; }
   bool IsRangedProjectileCombat() const
   {
     return IsActive()
@@ -485,6 +577,8 @@ public:
     const FCrowdDemoSharedFlowFieldConfig& Config,
     const FVector& TargetLocation);
   const FCrowdDemoSharedFlowField& GetSharedFlowField() const { return SharedFlowField; }
+  const FCrowdSharedFlowField& GetRuntimeSharedFlowField() const
+  { return RuntimeSharedFlowResource.Field; }
   int32 GetDynamicFlowAnchorCellKey() const { return DynamicFlowAnchorCellKey; }
   int32 GetDynamicFlowIntegrationRebuildCount() const
   { return DynamicFlowIntegrationRebuildCount; }
@@ -546,6 +640,8 @@ public:
   }
   bool EnsureBidirectionalSwapFlowFields();
   const FCrowdDemoSharedFlowField* FindBidirectionalSwapFlowField(
+    int32 FormationIndex) const;
+  const FCrowdSharedFlowField* FindRuntimeBidirectionalSwapFlowField(
     int32 FormationIndex) const;
   void RecordBidirectionalSwapStep(
     TConstArrayView<FCrowdDemoBidirectionalSwapStepAgent> Agents)
@@ -663,12 +759,25 @@ private:
   FCrowdDemoRoundCompareMetrics LastCompareMetrics;
   FCrowdDemoRoundCompareMetrics LastCompletedRoundMetrics;
   FCrowdDemoCorrectionFrameMetrics LastCorrectionMetrics;
+  FCrowdMassBoundarySnapshot BoundarySnapshot;
+  int32 MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
+  TArray<FCrowdDemoRoundBoundaryFormationFact> BoundaryFormationFacts;
+  TArray<FCrowdMassSharedFlowAgentOutput> PreparedRuntimeSharedFlowOutputs;
+  TArray<FCrowdGuidanceCandidate> PreparedTargetRegionGuidanceCandidates;
+  TArray<FCrowdGuidanceCandidate> PreparedBusinessGuidanceCandidates;
+  TArray<FCrowdComposedGuidance> PreparedRuntimeComposedGuidance;
+  TArray<FCrowdMassPredictedMovement> PreparedRuntimePredictedMovements;
+  TArray<FCrowdParticleConstraintResult> PreparedRuntimeParticleResults;
+  TArray<FCrowdMassFinalKinematicState> PreparedRuntimeFinalKinematics;
+  TArray<FCrowdFacingResult> PreparedRuntimeFacingResults;
+  TArray<FCrowdDemoPreparedFacingRollbackFact> PreparedFacingRollbackFacts;
   TArray<FCrowdDemoProjectileState> PreparedProjectiles;
   TArray<FCrowdDemoHitFact> PendingProjectileHitFacts;
   TArray<FCrowdDemoProjectileVisualEvent> OutgoingProjectileVisualEvents;
   FCrowdDemoProjectileMetrics ProjectileMetrics;
   TMap<int32, int32> FormationIndexByAgentId;
   FCrowdDemoSharedFlowField SharedFlowField;
+  FCrowdMassSharedFlowResource RuntimeSharedFlowResource;
   int32 DynamicFlowAnchorCellKey = INDEX_NONE;
   int32 DynamicFlowIntegrationRebuildCount = 0;
   uint32 DynamicFlowRoundHash = 2166136261u;
@@ -780,6 +889,8 @@ private:
   FCrowdDemoBidirectionalSwapLayout BidirectionalSwapLayout;
   FCrowdDemoBidirectionalSwapProgress BidirectionalSwapProgress;
   TStaticArray<FCrowdDemoSharedFlowField, 2> BidirectionalSwapFlowFields;
+  TStaticArray<FCrowdMassSharedFlowResource, 2>
+    RuntimeBidirectionalSwapFlowResources;
   FCrowdDemoValidCorridorTransitLayout ValidCorridorTransitLayout;
   FCrowdDemoValidCorridorTransitProgress ValidCorridorTransitProgress;
   int32 CrossProfileHardViolationCount = 0;

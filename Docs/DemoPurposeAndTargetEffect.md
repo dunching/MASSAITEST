@@ -2,6 +2,8 @@
 
 ## 1. 文档职责
 
+[COMPUTED][HIGH] Demo的最终产品角色已明确为`MassCrowdSimulation`插件的测试宿主；插件模块边界、公共API与迁移顺序以`MassCrowdSimulationPluginArchitecture.md`为准。Demo保留T1–T8、地图、Round、指标、Lighting和人工审片，不作为可复用插件本体。
+
 [INFERRED][HIGH] 本文件是 Demo 目的、最终目标效果与长期架构原则的稳定事实源；`CurrentArchitecture.md` 描述当前实现，`PhasePlan.md` 描述当前任务，`FeatureChecklist.md` 描述验收状态。
 
 ## 2. Demo 来源与目的

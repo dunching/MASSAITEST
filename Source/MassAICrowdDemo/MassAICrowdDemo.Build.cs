@@ -23,6 +23,7 @@ public class MassAICrowdDemo : ModuleRules
       "MassEntity",
       "MassLOD",
       "MassMovement",
+      "MassCrowdCore",
       "MassReplication",
       "MassSpawner",
       "NetCore"
@@ -31,10 +32,13 @@ public class MassAICrowdDemo : ModuleRules
     PrivateDependencyModuleNames.AddRange(new[]
     {
       "MassAIBehavior",
+      "MassCrowdRuntime",
       "MassNavigation",
       "MassReplication",
       "MassSimulation",
-      "NavigationSystem"
+      "NavigationSystem",
+      "RenderCore",
+      "RHI"
     });
   }
 }

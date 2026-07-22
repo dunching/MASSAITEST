@@ -5,6 +5,7 @@
 #include "Mass/CrowdDemoClientVisualMassProcessor.h"
 #include "Mass/CrowdDemoRoundSimProcessors.h"
 #include "Mass/CrowdDemoProjectileKernel.h"
+#include "MassCrowdRuntimeFragments.h"
 #include "MassCommonFragments.h"
 #include "MassEntityTemplate.h"
 #include "MassEntityTemplateRegistry.h"
@@ -29,6 +30,16 @@ namespace
   {
     TemplateData.SetTemplateName(TEXT("CrowdDemoMassReplicatedAgent"));
     TemplateData.AddTag<FCrowdDemoMassAgentTag>();
+    TemplateData.AddTag<FCrowdMassAgentTag>();
+    TemplateData.AddFragment<FCrowdMassAgentFragment>();
+    TemplateData.AddFragment<FCrowdMassSimulationStateFragment>();
+    TemplateData.AddFragment<FCrowdMassPropertiesFragment>();
+    TemplateData.AddFragment<FCrowdMassGuidanceCandidatesFragment>();
+    TemplateData.AddFragment<FCrowdMassComposedGuidanceFragment>();
+    TemplateData.AddFragment<FCrowdMassLocalVelocityFragment>();
+    TemplateData.AddFragment<FCrowdMassParticleConstraintFragment>();
+    TemplateData.AddFragment<FCrowdMassFacingFragment>();
+    TemplateData.AddFragment<FCrowdMassMovementOutputFragment>();
     TemplateData.AddFragment<FCrowdDemoMassIdentityFragment>();
     TemplateData.AddFragment<FCrowdDemoMassStatsFragment>();
     TemplateData.AddFragment<FCrowdDemoBusinessStateFragment>();
