@@ -16,9 +16,9 @@
 - [x] [COMPUTED][HIGH] Particle Safety已提取为`MassCrowdCore`原生纯内核；8372完整20实体的各安全阶段、最终结果、candidate hash及applied几何hash与Demo旧实现一致，Combat RoundSim hash未迁入Core。
 - [x] [COMPUTED][HIGH] Facing已提取为`MassCrowdCore`原生纯内核；稳定排序、转速限制、移动自主朝向、最终落位后朝目标、保持当前Yaw和角度跨界均与Demo旧实现一致。
 - [x] [COMPUTED][HIGH] `MassCrowdRuntime`第一段已建立：Base Movement trait/fragments、Capability分批Gather、稳定Merge、全量Lifecycle预验证和Commit适配，并通过最小Mass World测试。
-- [x] [COMPUTED][HIGH] Demo template已并行加入Base Movement plugin fragments；正式Guidance Compose改由Runtime WORK调用Core kernel，完整结果校验后仍经唯一Demo Intent写回，旧Demo WORK kernel退出生产调用。
-- [x] [COMPUTED][HIGH] 正式Local Predictive改由Runtime WORK消费Runtime composed镜像并调用Core kernel；完整结果校验后同步更新Runtime/Demo local-velocity，旧Demo kernel退出生产调用。
-- [x] [COMPUTED][HIGH] 正式MovementPredict消费统一snapshot、prepared composed/local结果；Particle继续消费prepared预测结果与snapshot属性并调用Core kernel。Solve和applied-state复验均在WORK内完成，完整结果校验后同步更新Runtime/Demo particle结果。
+- [x] [COMPUTED][HIGH] Demo template以Base Movement plugin fragments作为中间运动权威；正式Guidance Compose由Runtime WORK调用Core kernel，旧Demo Intent/Guidance/Composed fragments与Demo WORK生产调用已删除。
+- [x] [COMPUTED][HIGH] 正式Local Predictive由Runtime WORK消费prepared composed并调用Core kernel；完整结果校验后发布Runtime local-velocity与prepared结果，旧Demo local-velocity fragment和Demo kernel生产调用已删除。
+- [x] [COMPUTED][HIGH] 正式MovementPredict消费统一snapshot、prepared composed/local结果；Particle继续消费prepared预测结果与snapshot属性并调用Core kernel。Solve和applied-state复验均在WORK内完成，完整结果校验后发布Runtime particle与prepared结果，旧Demo particle fragment已删除。
 - [x] [COMPUTED][HIGH] 最终Movement由Runtime WORK按Capability分批生成、Bridge全局稳定Merge并在全量AgentId/Lifecycle预验证后提交；Authority/Client Commit已改为消费Runtime MovementOutput，Demo RoundSim保留checkpoint/指标兼容镜像。
 
 - [x] [COMPUTED][HIGH] 删除TargetApproach、TargetSlotLayout、旧Polar Density及其生产/测试兼容面。
@@ -27,7 +27,7 @@
 - [x] [COMPUTED][HIGH] 异构Target调试标记按Capability Profile绘制；性能阶段拆为11个准确阶段。
 - [x] [COMPUTED][HIGH] Guidance Compose、Local Predictive、Particle进入不可变POD WORK线程。
 - [x] [COMPUTED][HIGH] 修正T1测试boundary reset与普通视觉不连续混算；普通不连续现为0。
-- [x] [COMPUTED][HIGH] Development、DebugGame、当前102/102项`CrowdDemo`自动化及12/12项`MassCrowd`插件自动化通过。
+- [x] [COMPUTED][HIGH] Development、DebugGame（均使用`-DisableUnity`）、当前105/105项`CrowdDemo`自动化及13/13项`MassCrowd`插件自动化通过；默认Unity Development的插件旧`.cpp`辅助函数重名债务未在本切片处理。
 
 ## 当前失败与下一步
 
@@ -37,10 +37,10 @@
 4. [x] [COMPUTED][HIGH] 8788证明延长到60秒不能恢复能力；8789证明具备继承资格的634个claim全部迁移且无仍可行claim丢失。
 5. [x] [COMPUTED][HIGH] `EngagedHold`由全量世界坐标零速收敛为单向目标跟随；8790 Round末inside/coverage=`20/20`且全部技术与性能门通过。
 6. [x] [COMPUTED][HIGH] 用户确认AcquireThenHold实体在交互资格有效期间不需要持续重排Region；8790最后90步的`18/20`、`17/20`与settled window=0降为过程诊断，T6M按Round末20/20、安全、同步和性能门技术放行。
-7. [x] [COMPUTED][HIGH] Guidance Compose纯内核与生产段迁移完成；Runtime WORK的provider选择、结果/hash及旧/Core等价fixture通过，Demo MoveIntent唯一写入语义保持不变。
+7. [x] [COMPUTED][HIGH] Guidance Compose纯内核与生产段迁移完成；Runtime WORK的provider选择、结果/hash及旧/Core等价fixture通过；迁移期Demo MoveIntent已在第十一切片删除。
 8. [x] [COMPUTED][HIGH] Local Predictive纯内核与生产段迁移完成；Runtime WORK的Half-Plane/8518 fixture及旧/Core等价fixture通过，Demo grant/diagnostic/rollback存储语义保持不变。
 9. [x] [COMPUTED][HIGH] Particle Safety纯内核与生产段迁移完成；Runtime WORK的pair/result/candidate/applied hash、输入乱序和8372旧/Core等价fixture通过，Demo指标/fixture/rollback兼容消费保持不变。
-10. [x] [COMPUTED][HIGH] Facing纯内核与生产段迁移完成；Runtime WORK消费Runtime state/composed/particle并调用Core，完整结果校验后同步发布Runtime/Demo facing，最终Movement只消费Runtime结果。
+10. [x] [COMPUTED][HIGH] Facing纯内核与生产段迁移完成；Runtime WORK消费Runtime state/composed/particle并调用Core，完整结果校验后发布Runtime Facing及prepared rollback fact；旧Demo facing已删除，最终Movement只消费Runtime结果。
 11. [x] [COMPUTED][HIGH] `MassCrowdRuntime`最小fragment/trait与Gather/Merge/Commit合同完成；Demo适配器等价测试通过。
 12. [x] [COMPUTED][HIGH] Demo Base Movement plugin fragments单向镜像与Guidance Compose单段生产切换完成；Runtime镜像由当前Demo事实重建，不加入rollback副本，未增加第二个Movement writer。
 13. [x] [COMPUTED][HIGH] Local Predictive生产段已迁移到Runtime WORK；Runtime local-velocity镜像与Demo兼容fragment同时发布，该切片未改变当时的Particle、MovementFinalize及Authority/Client Commit。
@@ -58,7 +58,10 @@
 25. [x] [COMPUTED][HIGH] post-finalize已删除Formation、Composed Guidance、Particle Properties和未使用Particle Constraint读取；FormationIndex/checkpoint Radius来自boundary formation facts，Composed Guidance来自prepared Runtime结果。8697暴露的异构Radius语义替代错误已由8698 correction replay闭合。
 26. [x] [COMPUTED][HIGH] post-finalize的FlowSample改由prepared Runtime Shared Flow输出重建，Obstacle penetration改由boundary起点与Finalize终点直接复验；移除两个fragment读取。8703异构T6 correction与8704 SF1 golden hash通过。
 27. [x] [COMPUTED][HIGH] post-finalize的GuidanceCandidates由snapshot与三类prepared overlay稳定重建，Facing连续settle与最终资格由Facing阶段发布精确rollback fact；两个fragment读取均已删除。8705异构T6 correction与8706 SF1 golden hash通过。
-28. [ ] [INFERRED][HIGH] 下一步分类T1 OpenSpawn及Combat/Visual事实：rollback必需状态进入可恢复业务快照，纯指标进入独立诊断快照；Identity与最终RoundSim state保留为实际提交状态采样输入，当前额外只读查询仍不能描述为完整单次Mass读取。
+28. [x] [COMPUTED][HIGH] T1与Combat/Visual PostFinalize职责拆分完成：OpenSpawn唯一runtime生成prepared boundary facts并删除per-agent fragment；VisualStateResolve完成最终Combat事实；rollback snapshot以movement/combat双完成门进入replay-ready；PostFinalize只读取Identity和最终RoundSim。8707/8708/8709/8710与8714 smoke未出现安全、同步或完整性回退。
+29. [x] [COMPUTED][HIGH] 兼容镜像物理删除完成：六个Demo迁移fragment、Mass模板注册、spawn初始化、processor读写、派生rollback副本及旧Gather适配入口已删除；真正承担阶段/诊断语义的ProposedMovement、FlowSample与ObstacleConstraint保留。Development、DebugGame、105/105 CrowdDemo、12/12 MassCrowd及T1/T2/T6/T8/SF1回归通过。
+30. [x] [COMPUTED][HIGH] 相邻WORK任务合并完成：`FCrowdMassMovementPipelineWork`在一个ThreadPool任务内严格顺序执行Compose→Local Predictive→MovementPredict；GT一次准备snapshot/overlay/Reactive/T1不可变事实，并在完整AgentId集合验证后一次发布Runtime composed/local、prepared结果和ProposedMovement。旧三个processor实现已物理删除。
+31. [ ] [INFERRED][HIGH] 下一切片只继续收敛剩余GT阶段接缝与派生状态发布；完整boundary单次Mass读取和按能力archetype仍未完成，暂不进入100/500。
 
 ## 保护与停止门
 

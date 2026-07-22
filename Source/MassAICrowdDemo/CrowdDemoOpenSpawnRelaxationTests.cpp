@@ -197,4 +197,73 @@ bool FCrowdDemoOpenSpawnRelaxationPropagationTest::RunTest(const FString& Parame
   return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoOpenSpawnPreparedBoundaryFactsTest,
+  "CrowdDemo.SoftPressure.T1.PreparedBoundaryFacts",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoOpenSpawnPreparedBoundaryFactsTest::RunTest(const FString& Parameters)
+{
+  const auto Layout = FCrowdDemoOpenSpawnRelaxationKernel::BuildLayout(MakeInputs());
+  auto Runtime = FCrowdDemoOpenSpawnRelaxationKernel::InitializeRuntime(Layout);
+  FCrowdDemoOpenSpawnRelaxationKernel::PrepareBoundary(0, Layout, Runtime);
+
+  TArray<int32> AgentIds;
+  for (const auto& Agent : Runtime.Agents) AgentIds.Add(Agent.AgentId);
+  TArray<int32> ReversedIds = AgentIds;
+  Algo::Reverse(ReversedIds);
+  TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> Facts;
+  TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> ReversedFacts;
+  TestTrue(TEXT("prepared facts build"),
+    FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+      0, AgentIds, Runtime, Facts));
+  TestTrue(TEXT("reversed expected input builds"),
+    FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+      0, ReversedIds, Runtime, ReversedFacts));
+  TestEqual(TEXT("stable fact count"), Facts.Num(), ReversedFacts.Num());
+  for (int32 Index = 0; Index < Facts.Num(); ++Index)
+  {
+    TestEqual(FString::Printf(TEXT("stable AgentId %d"), Index),
+      Facts[Index].AgentId, ReversedFacts[Index].AgentId);
+    TestEqual(FString::Printf(TEXT("stable participation %d"), Index),
+      Facts[Index].bParticleActive, ReversedFacts[Index].bParticleActive);
+    TestEqual(FString::Printf(TEXT("stable pending reset %d"), Index),
+      Facts[Index].bPendingBoundaryReset,
+      ReversedFacts[Index].bPendingBoundaryReset);
+  }
+
+  TArray<int32> DuplicateIds = AgentIds;
+  DuplicateIds.Last() = DuplicateIds[0];
+  TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> InvalidFacts;
+  TestFalse(TEXT("duplicate expected AgentId rejected"),
+    FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+      0, DuplicateIds, Runtime, InvalidFacts));
+  TArray<int32> MissingIds = AgentIds;
+  MissingIds.Pop();
+  TestFalse(TEXT("missing expected Agent rejected"),
+    FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+      0, MissingIds, Runtime, InvalidFacts));
+  TestFalse(TEXT("stale boundary facts rejected"),
+    FCrowdDemoOpenSpawnRelaxationKernel::ValidatePreparedBoundaryFacts(
+      1, AgentIds, Facts));
+
+  TArray<int32> PendingResetIds;
+  for (const auto& Fact : Facts)
+    if (Fact.bPendingBoundaryReset) PendingResetIds.Add(Fact.AgentId);
+  TestTrue(TEXT("first pending reset consume succeeds"),
+    FCrowdDemoOpenSpawnRelaxationKernel::ConsumePendingBoundaryResets(
+      PendingResetIds, Runtime));
+  TestFalse(TEXT("pending reset cannot be consumed twice"),
+    FCrowdDemoOpenSpawnRelaxationKernel::ConsumePendingBoundaryResets(
+      PendingResetIds, Runtime));
+
+  TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> RestoredFacts;
+  TestTrue(TEXT("restored runtime deterministically rebuilds facts"),
+    FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+      0, AgentIds, Runtime, RestoredFacts));
+  for (const auto& Fact : RestoredFacts)
+    TestFalse(TEXT("consumed reset remains cleared"), Fact.bPendingBoundaryReset);
+  return true;
+}
+
 #endif

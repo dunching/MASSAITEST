@@ -1,6 +1,9 @@
 #include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 
 #include "Mass/CrowdDemoCombatStateKernel.h"
+#include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -221,6 +224,186 @@ bool FCrowdDemoCombatVatShowcaseMotionTest::RunTest(const FString& Parameters)
   TestFalse(TEXT("invalid settings rejected"),
     FCrowdDemoCombatStateKernel::BuildVatShowcaseMotion(
       4, 0, Anchor, Anchor, InvalidSettings).bValid);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoCombatRollbackCompletionGateTest,
+  "CrowdDemo.Combat.Rollback.CompletionGate",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoCombatRollbackCompletionGateTest::RunTest(
+  const FString& Parameters)
+{
+  auto* Pipeline = NewObject<UCrowdDemoRoundSimPipelineSubsystem>();
+  FCrowdDemoRoundPlanPacket Plan;
+  Plan.bValid = 1;
+  Plan.RoundId = 1;
+  Plan.Revision = 1;
+  Plan.Rules.Scenario = ECrowdDemoScenario::SimRoundSoftPressure;
+  Plan.Rules.FixedStepSeconds = 1.0f / 30.0f;
+  Pipeline->ActivatePlan(Plan, 2, false);
+
+  FCrowdMassBoundarySnapshot Boundary;
+  Boundary.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
+  Boundary.PlanRevision = Pipeline->GetCurrentPlanRevision();
+  Boundary.bValid = true;
+  TArray<FCrowdDemoRoundBoundaryFormationFact> FormationFacts;
+  for (const int32 AgentId : {10, 20})
+  {
+    FCrowdMassBoundaryAgentRecord& Agent = Boundary.Agents.AddDefaulted_GetRef();
+    Agent.Identity.AgentId = AgentId;
+    Agent.Identity.LifecycleSerial = 1;
+    FCrowdDemoRoundBoundaryFormationFact& Formation =
+      FormationFacts.AddDefaulted_GetRef();
+    Formation.AgentId = AgentId;
+  }
+  TestTrue(TEXT("boundary snapshot accepted"),
+    Pipeline->PublishBoundarySnapshot(MoveTemp(Boundary), MoveTemp(FormationFacts)));
+
+  TArray<FCrowdDemoSoftPressureRollbackAgentState> MovementFacts;
+  for (const int32 AgentId : {10, 20})
+  {
+    FCrowdDemoSoftPressureRollbackAgentState& Agent =
+      MovementFacts.AddDefaulted_GetRef();
+    Agent.AgentId = AgentId;
+    Agent.LifecycleSerial = 1;
+  }
+  const int32 Step = Pipeline->GetCurrentFixedStepIndex();
+  Pipeline->RecordSoftPressureRollbackSnapshot(Step, MoveTemp(MovementFacts));
+  const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+    Pipeline->FindSoftPressureRollbackSnapshot(Step);
+  TestNotNull(TEXT("movement snapshot exists"), Snapshot);
+  TestTrue(TEXT("movement facts complete"),
+    Snapshot && Snapshot->bMovementFactsComplete);
+  TestFalse(TEXT("incomplete snapshot is not replayable"),
+    Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+
+  TArray<FCrowdDemoPreparedCombatRollbackFact> MissingFacts;
+  MissingFacts.AddDefaulted_GetRef().AgentId = 10;
+  TestFalse(TEXT("missing combat fact rejected"),
+    Pipeline->CompleteSoftPressureRollbackCombatState(Step, MissingFacts));
+  TArray<FCrowdDemoPreparedCombatRollbackFact> DuplicateFacts;
+  DuplicateFacts.AddDefaulted_GetRef().AgentId = 10;
+  DuplicateFacts.AddDefaulted_GetRef().AgentId = 10;
+  TestFalse(TEXT("duplicate combat fact rejected"),
+    Pipeline->CompleteSoftPressureRollbackCombatState(Step, DuplicateFacts));
+  TArray<FCrowdDemoPreparedCombatRollbackFact> WrongFacts;
+  WrongFacts.AddDefaulted_GetRef().AgentId = 10;
+  WrongFacts.AddDefaulted_GetRef().AgentId = 30;
+  TestFalse(TEXT("wrong combat AgentId rejected"),
+    Pipeline->CompleteSoftPressureRollbackCombatState(Step, WrongFacts));
+
+  TArray<FCrowdDemoPreparedCombatRollbackFact> CombatFacts;
+  FCrowdDemoPreparedCombatRollbackFact& Agent20 = CombatFacts.AddDefaulted_GetRef();
+  Agent20.AgentId = 20;
+  Agent20.Combat.Health = 80.0f;
+  Agent20.Combat.VisualState = ECrowdDemoVisualState::HitReact;
+  FCrowdDemoPreparedCombatRollbackFact& Agent10 = CombatFacts.AddDefaulted_GetRef();
+  Agent10.AgentId = 10;
+  Agent10.Combat.Health = 90.0f;
+  Agent10.Combat.VisualState = ECrowdDemoVisualState::Attack;
+  TestTrue(TEXT("reverse-order final combat facts accepted"),
+    Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
+  TestTrue(TEXT("complete snapshot is replayable"),
+    Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+  Snapshot = Pipeline->FindSoftPressureRollbackSnapshot(Step);
+  TestEqual(TEXT("Agent 10 final visual state stored"),
+    Snapshot->Agents[0].Combat.VisualState, ECrowdDemoVisualState::Attack);
+  TestEqual(TEXT("Agent 20 final health stored"),
+    Snapshot->Agents[1].Combat.Health, 80.0f);
+  TestFalse(TEXT("duplicate completion rejected"),
+    Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoPostFinalizeMinimalQueryStructureTest,
+  "CrowdDemo.Architecture.PostFinalizeMinimalQuery",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
+  const FString& Parameters)
+{
+  FString ProcessorSource;
+  const FString ProcessorPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp"));
+  TestTrue(TEXT("processor source is readable"),
+    FFileHelper::LoadFileToString(ProcessorSource, *ProcessorPath));
+
+  const FString ConfigureMarker =
+    TEXT("void UCrowdDemoRoundPostFinalizeMetricsProcessor::ConfigureQueries");
+  const FString ExecuteMarker =
+    TEXT("void UCrowdDemoRoundPostFinalizeMetricsProcessor::Execute");
+  const int32 ConfigureStart = ProcessorSource.Find(ConfigureMarker);
+  const int32 ExecuteStart = ProcessorSource.Find(ExecuteMarker, ESearchCase::CaseSensitive,
+    ESearchDir::FromStart, ConfigureStart + ConfigureMarker.Len());
+  TestTrue(TEXT("post-finalize configure block found"),
+    ConfigureStart != INDEX_NONE && ExecuteStart > ConfigureStart);
+  if (ConfigureStart == INDEX_NONE || ExecuteStart <= ConfigureStart)
+  {
+    return false;
+  }
+
+  const FString ConfigureBlock = ProcessorSource.Mid(
+    ConfigureStart, ExecuteStart - ConfigureStart);
+  TestTrue(TEXT("post-finalize reads identity"),
+    ConfigureBlock.Contains(TEXT("FCrowdDemoMassIdentityFragment")));
+  TestTrue(TEXT("post-finalize reads final RoundSim state"),
+    ConfigureBlock.Contains(TEXT("FCrowdDemoRoundSimStateFragment")));
+
+  const TCHAR* ForbiddenRequirements[] = {
+    TEXT("FCrowdDemoOpenSpawnRelaxationFragment"),
+    TEXT("FCrowdDemoMassStatsFragment"),
+    TEXT("FCrowdDemoBusinessStateFragment"),
+    TEXT("FCrowdDemoRangedAttackFragment"),
+    TEXT("FCrowdDemoReactiveMotionFragment"),
+    TEXT("FCrowdDemoHitFlashFragment"),
+    TEXT("FCrowdDemoMassVisualFragment")
+  };
+  for (const TCHAR* Forbidden : ForbiddenRequirements)
+  {
+    TestFalse(FString::Printf(TEXT("post-finalize excludes %s"), Forbidden),
+      ConfigureBlock.Contains(Forbidden));
+  }
+
+  FString FragmentHeader;
+  const FString FragmentPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoMassFragments.h"));
+  TestTrue(TEXT("fragment header is readable"),
+    FFileHelper::LoadFileToString(FragmentHeader, *FragmentPath));
+  TestFalse(TEXT("OpenSpawn fragment is physically deleted"),
+    FragmentHeader.Contains(TEXT("FCrowdDemoOpenSpawnRelaxationFragment")));
+
+  const TCHAR* DeletedCompatibilityFragments[] = {
+    TEXT("FCrowdDemoRoundMoveIntentFragment"),
+    TEXT("FCrowdDemoRoundGuidanceCandidatesFragment"),
+    TEXT("FCrowdDemoRoundComposedGuidanceFragment"),
+    TEXT("FCrowdDemoRoundLocalVelocityFragment"),
+    TEXT("FCrowdDemoRoundParticleConstraintFragment"),
+    TEXT("FCrowdDemoRoundFacingFragment")
+  };
+  for (const TCHAR* DeletedFragment : DeletedCompatibilityFragments)
+  {
+    TestFalse(FString::Printf(TEXT("compatibility fragment %s is physically deleted"),
+      DeletedFragment), FragmentHeader.Contains(DeletedFragment));
+    TestFalse(FString::Printf(TEXT("processor source does not use %s"),
+      DeletedFragment), ProcessorSource.Contains(DeletedFragment));
+  }
+
+  FString MassSubsystemSource;
+  const FString MassSubsystemPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoMassSubsystem.cpp"));
+  TestTrue(TEXT("Mass subsystem source is readable"),
+    FFileHelper::LoadFileToString(MassSubsystemSource, *MassSubsystemPath));
+  for (const TCHAR* DeletedFragment : DeletedCompatibilityFragments)
+  {
+    TestFalse(FString::Printf(TEXT("Mass template excludes %s"), DeletedFragment),
+      MassSubsystemSource.Contains(DeletedFragment));
+  }
   return true;
 }
 

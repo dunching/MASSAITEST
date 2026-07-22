@@ -396,6 +396,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   PreparedRuntimeFinalKinematics.Reset();
   PreparedRuntimeFacingResults.Reset();
   PreparedFacingRollbackFacts.Reset();
+  PreparedOpenSpawnBoundaryFacts.Reset();
+  PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
   for (TArray<float>& Samples : RoundPerformanceStageMsSamples)
   {
     Samples.Reset();
@@ -661,6 +663,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PublishBoundarySnapshot(
   PreparedRuntimeFinalKinematics.Reset();
   PreparedRuntimeFacingResults.Reset();
   PreparedFacingRollbackFacts.Reset();
+  PreparedOpenSpawnBoundaryFacts.Reset();
+  PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
   return true;
 }
 
@@ -843,7 +847,20 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   FCrowdDemoSoftPressureRollbackSnapshot& Snapshot =
     SoftPressureRollbackHistory.FindOrAdd(FixedStepIndex);
   Snapshot.FixedStepIndex = FixedStepIndex;
+  Snapshot.bMovementFactsComplete = false;
+  Snapshot.bCombatFactsComplete = false;
+  Snapshot.bSnapshotReadyForReplay = false;
   Snapshot.Agents = MoveTemp(Agents);
+  bool bAgentSetValid = Snapshot.Agents.Num() == BoundarySnapshot.Agents.Num();
+  for (int32 Index = 0; Index < Snapshot.Agents.Num(); ++Index)
+  {
+    bAgentSetValid &= Snapshot.Agents[Index].AgentId != INDEX_NONE
+      && Snapshot.Agents[Index].AgentId
+        == BoundarySnapshot.Agents[Index].Identity.AgentId
+      && (Index == 0
+        || Snapshot.Agents[Index - 1].AgentId < Snapshot.Agents[Index].AgentId);
+  }
+  Snapshot.bMovementFactsComplete = bAgentSetValid;
   Snapshot.LocalPredictiveResults = PreparedLocalPredictiveResults;
   Snapshot.LocalPredictiveGrantStates = LocalPredictiveGrantStates;
   Snapshot.LocalPredictiveSummary = LastLocalPredictiveSummary;
@@ -973,14 +990,16 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
 
 bool UCrowdDemoRoundSimPipelineSubsystem::CompleteSoftPressureRollbackCombatState(
   const int32 FixedStepIndex,
-  const TConstArrayView<FCrowdDemoSoftPressureRollbackCombatState> CombatStates)
+  const TConstArrayView<FCrowdDemoPreparedCombatRollbackFact> CombatStates)
 {
   FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
     SoftPressureRollbackHistory.Find(FixedStepIndex);
-  if (!Snapshot || Snapshot->Agents.Num() != CombatStates.Num())
+  if (!Snapshot || !Snapshot->bMovementFactsComplete
+    || Snapshot->bCombatFactsComplete || Snapshot->bSnapshotReadyForReplay
+    || Snapshot->Agents.Num() != CombatStates.Num())
     return false;
 
-  TArray<FCrowdDemoSoftPressureRollbackCombatState> SortedStates(CombatStates);
+  TArray<FCrowdDemoPreparedCombatRollbackFact> SortedStates(CombatStates);
   SortedStates.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
   for (int32 Index = 0; Index < SortedStates.Num(); ++Index)
   {
@@ -991,6 +1010,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::CompleteSoftPressureRollbackCombatStat
   }
   for (int32 Index = 0; Index < SortedStates.Num(); ++Index)
     Snapshot->Agents[Index].Combat = SortedStates[Index].Combat;
+  Snapshot->bCombatFactsComplete = true;
+  Snapshot->bSnapshotReadyForReplay = true;
   return true;
 }
 
@@ -999,6 +1020,15 @@ UCrowdDemoRoundSimPipelineSubsystem::FindSoftPressureRollbackSnapshot(
   const int32 FixedStepIndex) const
 {
   return SoftPressureRollbackHistory.Find(FixedStepIndex);
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::IsSoftPressureRollbackSnapshotReadyForReplay(
+  const int32 FixedStepIndex) const
+{
+  const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+    SoftPressureRollbackHistory.Find(FixedStepIndex);
+  return Snapshot && Snapshot->bMovementFactsComplete
+    && Snapshot->bCombatFactsComplete && Snapshot->bSnapshotReadyForReplay;
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
@@ -1030,6 +1060,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   bParticleConstraintRunFailure = Snapshot.bParticleConstraintRunFailure;
   ParticleFailureFixture = Snapshot.ParticleFailureFixture;
   OpenSpawnRelaxationRuntime = Snapshot.OpenSpawnRelaxationRuntime;
+  PreparedOpenSpawnBoundaryFacts.Reset();
+  PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
   OpenCohortMovementProgress = Snapshot.OpenCohortMovementProgress;
   BidirectionalSwapProgress = Snapshot.BidirectionalSwapProgress;
   ValidCorridorTransitProgress = Snapshot.ValidCorridorTransitProgress;
@@ -1179,12 +1211,52 @@ void UCrowdDemoRoundSimPipelineSubsystem::InitializeOpenSpawnRelaxation(
     FCrowdDemoOpenSpawnRelaxationKernel::InitializeRuntime(Layout);
 }
 
-void UCrowdDemoRoundSimPipelineSubsystem::PrepareOpenSpawnRelaxationBoundary()
+bool UCrowdDemoRoundSimPipelineSubsystem::PrepareOpenSpawnRelaxationBoundary()
 {
   if (!IsOpenSpawnRelaxation())
-    return;
+    return false;
   FCrowdDemoOpenSpawnRelaxationKernel::PrepareBoundary(
     GetCurrentFixedStepIndex(), OpenSpawnRelaxationLayout, OpenSpawnRelaxationRuntime);
+  TArray<int32> ExpectedAgentIds;
+  ExpectedAgentIds.Reserve(BoundarySnapshot.Agents.Num());
+  for (const FCrowdMassBoundaryAgentRecord& Agent : BoundarySnapshot.Agents)
+    ExpectedAgentIds.Add(Agent.Identity.AgentId);
+  if (!FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+      GetCurrentFixedStepIndex(), ExpectedAgentIds, OpenSpawnRelaxationRuntime,
+      PreparedOpenSpawnBoundaryFacts))
+  {
+    PreparedOpenSpawnBoundaryFacts.Reset();
+    PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
+    return false;
+  }
+  PreparedOpenSpawnBoundaryFixedStepIndex = GetCurrentFixedStepIndex();
+  return true;
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeOpenSpawnBoundaryResets(
+  const TConstArrayView<int32> AgentIds)
+{
+  if (!ArePreparedOpenSpawnBoundaryFactsCurrent()) return false;
+  for (const int32 AgentId : AgentIds)
+  {
+    const FCrowdDemoPreparedOpenSpawnBoundaryFact* Fact =
+      FindPreparedOpenSpawnBoundaryFact(AgentId);
+    if (!Fact || !Fact->bPendingBoundaryReset) return false;
+  }
+  return FCrowdDemoOpenSpawnRelaxationKernel::ConsumePendingBoundaryResets(
+    AgentIds, OpenSpawnRelaxationRuntime);
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::ArePreparedOpenSpawnBoundaryFactsCurrent() const
+{
+  if (!IsOpenSpawnRelaxation()) return true;
+  if (PreparedOpenSpawnBoundaryFixedStepIndex != GetCurrentFixedStepIndex()) return false;
+  TArray<int32> ExpectedAgentIds;
+  ExpectedAgentIds.Reserve(BoundarySnapshot.Agents.Num());
+  for (const FCrowdMassBoundaryAgentRecord& Agent : BoundarySnapshot.Agents)
+    ExpectedAgentIds.Add(Agent.Identity.AgentId);
+  return FCrowdDemoOpenSpawnRelaxationKernel::ValidatePreparedBoundaryFacts(
+    GetCurrentFixedStepIndex(), ExpectedAgentIds, PreparedOpenSpawnBoundaryFacts);
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordOpenSpawnRelaxationParticleStep(

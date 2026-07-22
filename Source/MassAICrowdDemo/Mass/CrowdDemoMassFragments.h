@@ -201,56 +201,6 @@ struct FCrowdDemoRoundFormationFragment : public FMassFragment
 };
 
 USTRUCT()
-struct FCrowdDemoRoundMoveIntentFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient)
-  FVector PreferredDirection = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector DesiredLocation = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector DesiredVelocity = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  float DesiredYawDegrees = 0.0f;
-
-  UPROPERTY(Transient)
-  int32 PlanRevision = 0;
-};
-
-USTRUCT()
-struct FCrowdDemoRoundGuidanceCandidatesFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  FCrowdDemoGuidanceCandidate SharedFlow;
-  FCrowdDemoGuidanceCandidate TargetRegion;
-  FCrowdDemoGuidanceCandidate BusinessOverride;
-};
-
-USTRUCT()
-struct FCrowdDemoRoundComposedGuidanceFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  FCrowdDemoComposedGuidance Value;
-};
-
-USTRUCT()
-struct FCrowdDemoRoundFacingFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) float ResolvedYawDegrees = 0.0f;
-  UPROPERTY(Transient) int32 ConsecutiveFinalSettleSteps = 0;
-  UPROPERTY(Transient) bool bFinalPositionSettled = false;
-  UPROPERTY(Transient) bool bFacingTarget = false;
-};
-
-USTRUCT()
 struct FCrowdDemoTargetCapabilityFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -296,24 +246,6 @@ struct FCrowdDemoRoundFlowSampleFragment : public FMassFragment
 };
 
 USTRUCT()
-struct FCrowdDemoRoundLocalVelocityFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) FVector Velocity = FVector::ZeroVector;
-  UPROPERTY(Transient) int32 NeighborCount = 0;
-  UPROPERTY(Transient) int32 ConstraintCount = 0;
-  UPROPERTY(Transient) int32 BlockedAgeSteps = 0;
-  UPROPERTY(Transient) uint32 ComponentKey = 0;
-  UPROPERTY(Transient) int32 GrantEpoch = 0;
-  UPROPERTY(Transient) int32 PlanRevision = 0;
-  UPROPERTY(Transient) bool bAdjusted = false;
-  UPROPERTY(Transient) bool bGranted = false;
-  UPROPERTY(Transient) bool bYielding = false;
-  UPROPERTY(Transient) bool bValid = false;
-};
-
-USTRUCT()
 struct FCrowdDemoRoundProposedMovementFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -350,49 +282,6 @@ struct FCrowdDemoParticlePropertiesFragment : public FMassFragment
 
   UPROPERTY(Transient)
   float Mobility = 1.0f;
-};
-
-// Test-only participation state for T1 OpenSpawnRelaxation. This is not an
-// entity lifecycle or gameplay spawn contract: all Mass entities remain alive
-// and visible while inactive particles stay in the staging area.
-USTRUCT()
-struct FCrowdDemoOpenSpawnRelaxationFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient)
-  int32 FormationIndex = INDEX_NONE;
-
-  UPROPERTY(Transient)
-  bool bParticleActive = false;
-
-  UPROPERTY(Transient)
-  bool bPendingBoundaryReset = false;
-
-  UPROPERTY(Transient)
-  FVector BoundaryResetLocation = FVector::ZeroVector;
-};
-
-USTRUCT()
-struct FCrowdDemoRoundParticleConstraintFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient)
-  FVector CorrectedLocation = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector CorrectedVelocity = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector RealizedCorrection = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  int32 FirstInfluencedIteration = INDEX_NONE;
-
-  UPROPERTY(Transient)
-  bool bValid = false;
-
 };
 
 USTRUCT()

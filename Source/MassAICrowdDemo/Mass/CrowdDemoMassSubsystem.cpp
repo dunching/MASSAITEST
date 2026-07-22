@@ -50,17 +50,10 @@ namespace
     TemplateData.AddFragment<FCrowdDemoMassMovementFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundSimStateFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFormationFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundMoveIntentFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundGuidanceCandidatesFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundComposedGuidanceFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundFacingFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundLocalVelocityFragment>();
     TemplateData.AddFragment<FCrowdDemoTargetCapabilityFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFlowSampleFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundProposedMovementFragment>();
     TemplateData.AddFragment<FCrowdDemoParticlePropertiesFragment>();
-    TemplateData.AddFragment<FCrowdDemoOpenSpawnRelaxationFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundParticleConstraintFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundObstacleConstraintFragment>();
     TemplateData.AddFragment<FCrowdDemoMassVisualFragment>();
     TemplateData.AddFragment<FCrowdDemoClientAuthorityFragment>();
@@ -638,16 +631,6 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   RoundFormation.RadiusCm = Movement.ContactRadiusCm;
   RoundFormation.bInitialized = false;
 
-  FCrowdDemoRoundMoveIntentFragment& RoundMoveIntent = EntityManager.GetFragmentDataChecked<FCrowdDemoRoundMoveIntentFragment>(Entity);
-  RoundMoveIntent = FCrowdDemoRoundMoveIntentFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundGuidanceCandidatesFragment>(Entity) =
-    FCrowdDemoRoundGuidanceCandidatesFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundComposedGuidanceFragment>(Entity) =
-    FCrowdDemoRoundComposedGuidanceFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundFacingFragment>(Entity) =
-    FCrowdDemoRoundFacingFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundLocalVelocityFragment>(Entity) =
-    FCrowdDemoRoundLocalVelocityFragment();
   FCrowdDemoTargetCapabilityFragment& TargetCapability =
     EntityManager.GetFragmentDataChecked<FCrowdDemoTargetCapabilityFragment>(Entity);
   // Capability is stable configuration, not replicated runtime state. Keep the
@@ -664,8 +647,6 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   ParticleProperties.HardSafetyGapCm = DefaultParticleProfile.HardSafetyGapCm;
   ParticleProperties.SoftMarginCm = DefaultParticleProfile.SoftMarginCm;
   ParticleProperties.Mobility = DefaultParticleProfile.Mobility;
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundParticleConstraintFragment>(Entity) =
-    FCrowdDemoRoundParticleConstraintFragment();
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundObstacleConstraintFragment>(Entity) = FCrowdDemoRoundObstacleConstraintFragment();
 
 

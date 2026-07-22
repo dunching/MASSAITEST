@@ -22,14 +22,6 @@ public:
     const FCrowdDemoParticlePropertiesFragment& Particle,
     FCrowdMassBoundaryAgentRecord& OutRecord);
 
-  static bool BuildGatherRecord(
-    const FCrowdDemoMassIdentityFragment& Identity,
-    const FCrowdDemoRoundSimStateFragment& State,
-    const FCrowdDemoMassMovementFragment& Movement,
-    const FCrowdDemoParticlePropertiesFragment& Particle,
-    const FCrowdDemoRoundGuidanceCandidatesFragment& Guidance,
-    FCrowdMassGatherRecord& OutRecord);
-
   static FCrowdMassCommitTarget BuildCommitTarget(
     const FCrowdDemoMassIdentityFragment& Identity);
 

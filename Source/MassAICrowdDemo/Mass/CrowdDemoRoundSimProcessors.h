@@ -57,8 +57,6 @@ public:
 protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 UCLASS()
@@ -188,16 +186,19 @@ private:
 };
 
 UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundGuidanceComposeProcessor : public UMassProcessor
+class MASSAICROWDDEMO_API UCrowdDemoRoundMovementWorkProcessor : public UMassProcessor
 {
   GENERATED_BODY()
 public:
-  UCrowdDemoRoundGuidanceComposeProcessor();
+  UCrowdDemoRoundMovementWorkProcessor();
+  float GetLastGuidanceWorkMilliseconds() const
+  { return LastGuidanceWorkMilliseconds; }
 protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 private:
   FMassEntityQuery EntityQuery;
+  float LastGuidanceWorkMilliseconds = 0.0f;
 };
 
 UCLASS()
@@ -206,32 +207,6 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundVisualStateResolveProcessor : public UM
   GENERATED_BODY()
 public:
   UCrowdDemoRoundVisualStateResolveProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundLocalPredictiveInteractionProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundLocalPredictiveInteractionProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundMovementPredictProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundMovementPredictProcessor();
 protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
@@ -366,7 +341,7 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundRangedCombatProcessor> RangedCombatProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundHitResponseBoundaryApplyProcessor> HitResponseBoundaryApplyProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundReactiveMotionIntentComposeProcessor> ReactiveMotionIntentComposeProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundGuidanceComposeProcessor> GuidanceComposeProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundMovementWorkProcessor> MovementWorkProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundVisualStateResolveProcessor> VisualStateResolveProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPlanApplyProcessor> PlanApplyProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundBoundaryGatherProcessor> BoundaryGatherProcessor;
@@ -378,8 +353,6 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionTransportSolveProcessor> TargetRegionTransportSolveProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundTargetRegionGuidanceProcessor> TargetRegionGuidanceProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundFlowPreferredVelocityProcessor> FlowPreferredVelocityProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundLocalPredictiveInteractionProcessor> LocalPredictiveInteractionProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundMovementPredictProcessor> MovementPredictProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundParticleConstraintProcessor> ParticleConstraintProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundObstacleConstraintProcessor> ObstacleConstraintProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundFacingResolveProcessor> FacingResolveProcessor;

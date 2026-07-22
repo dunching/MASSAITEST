@@ -124,7 +124,7 @@ struct FCrowdDemoLocalPredictiveResult
 };
 ```
 
-[COMPUTED][HIGH] 当前Mass processor读取Runtime identity/state/properties/composed guidance镜像，不覆写宏观自主速度；Runtime与Demo各保存一份可重建的local-velocity结果，使宏观请求、局部选择和Particle最终结果可以分别归因。Demo local-velocity仍是MovementPredict当前消费者，Runtime movement commit尚未启用。
+[COMPUTED][HIGH] 当前Mass processor从Runtime boundary snapshot与prepared composed guidance构造输入，不覆写宏观自主速度；Runtime local-velocity是Mass阶段权威结果，PipelineSubsystem保存同一结果的稳定prepared SoA供MovementPredict、诊断和rollback重放消费。旧Demo local-velocity兼容fragment已物理删除，最终Runtime movement commit已经启用。
 
 [INFERRED][HIGH] 跨 step 最小状态只保存在 PipelineSubsystem 的 prepared SoA/rollback 中，包括每实体 `BlockedAgeSteps`、最近有效 grant epoch 和必要的短期 component key；不得制造永久业务 owner fragment。
 
@@ -199,7 +199,7 @@ RoundPlanApply
 
 ## 9. Pipeline、Hash、Rollback 与指标
 
-[COMPUTED][HIGH] PipelineSubsystem 保存排序后的 results、grant state、round hash、样本与 invalid 计数；processor 只准备 Mass 数据、调用纯 kernel，并一次发布完整 `FCrowdDemoRoundLocalVelocityFragment` 结果。
+[COMPUTED][HIGH] PipelineSubsystem保存排序后的results、grant state、round hash、样本与invalid计数；processor只准备Mass数据、调用纯kernel，并一次发布Runtime local-velocity fragment与同源prepared SoA，不再发布第二份Demo兼容fragment。
 
 [COMPUTED][HIGH] SoftPressure rollback snapshot 已原子保存局部结果、grant state、summary、round hash、样本与 invalid 计数，并按既有 correction boundary 语义恢复后重放。
 
@@ -219,7 +219,7 @@ RoundPlanApply
 
 ## 11. 当前实现与验证停止点
 
-[COMPUTED][HIGH] 已新增 `CrowdDemoVelocityHalfPlaneKernel.*`、`CrowdDemoLocalPredictiveInteractionKernel.*`、`FCrowdDemoRoundLocalVelocityFragment`、Mass processor、prepared SoA、RoundResult hash/metrics 和 correction rollback。
+[COMPUTED][HIGH] 已新增并保留Velocity Half-Plane/Local Predictive纯内核、Mass processor、Runtime local-velocity fragment、prepared SoA、RoundResult hash/metrics和correction rollback；迁移期间的`FCrowdDemoRoundLocalVelocityFragment`已在Runtime生产切换后物理删除。
 
 [COMPUTED][HIGH] 插件阶段2已将Velocity Half-Plane与Local Predictive机械提取为无Demo命名的`MassCrowdCore`原生纯内核；阶段3已将正式processor切换到`FCrowdMassLocalPredictiveWork`调用Core。Demo旧kernel只保留等价与历史fixture测试，8518六实体fixture验证旧/Core/Runtime WORK的pair、grant、result、summary和hash一致。
 
@@ -248,6 +248,8 @@ RoundPlanApply
 [COMPUTED][HIGH] 8518六实体fixture证明存在明显优于共同平移的联合安全解：在94cm硬门、1cm/s量化和同一环境合同下，Agent 5/19的前向速度均可超过200cm/s。原9.22cm/s不是几何容量下界，而是独立half-plane针对冻结邻居求解后形成的局部最优。
 
 [COMPUTED][HIGH] 生产kernel已增加无场景语义的`JointPreferredRecovery`：以完整component的Preferred速度为目标，按稳定candidate pair顺序对时间域最近距离约束做固定64轮联合投影，每轮同时执行速度圆和环境投影；最终量化结果只有在完整Pair/Obstacle/Bounds复验安全、component总平方目标误差下降且grant实体进展不回退时才原子替换旧安全解。它不设置最低速度、不绕过位置量化，也不读取T5、Region或Agent身份。
+
+[COMPUTED][HIGH] 当前生产调度不再为Compose、Local Predictive和MovementPredict分别创建ThreadPool任务。`FCrowdMassMovementPipelineWork`在一个不可变POD任务内先得到Composed自主速度，再以它构造Local Predictive输入，最后把Local结果交给MovementPredict；三个算法及其hash未合并为单一黑盒，只有任务调度和GT发布边界被合并。
 
 [COMPUTED][HIGH] 8521原P0 Static单轮达到inside-band=`20/20`、Region coverage=`16/16`、sub-quantum supply=`0`；最终90步Target-relative speed与position peak-to-peak p95/max均为0，terminal chatter、merge blocked和Particle安全违规均为0。LocalPredictive samples=`901/901`、invalid=`0/0`且双端hash一致。
 

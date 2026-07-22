@@ -62,14 +62,11 @@ struct FCrowdDemoSoftPressureRollbackAgentState
   int32 PlanRevision = 0;
   bool bInitialized = false;
   FCrowdDemoRoundFlowSampleFragment FlowSample;
-  FCrowdDemoRoundGuidanceCandidatesFragment GuidanceCandidates;
-  FCrowdDemoRoundComposedGuidanceFragment ComposedGuidance;
-  FCrowdDemoRoundFacingFragment Facing;
-  FCrowdDemoOpenSpawnRelaxationFragment OpenSpawnRelaxation;
+  FCrowdMassFacingFragment Facing;
   FCrowdDemoCombatNetState Combat;
 };
 
-struct FCrowdDemoSoftPressureRollbackCombatState
+struct FCrowdDemoPreparedCombatRollbackFact
 {
   int32 AgentId = INDEX_NONE;
   FCrowdDemoCombatNetState Combat;
@@ -138,6 +135,9 @@ struct FCrowdDemoTargetRegionCapabilityCohortRollbackState
 struct FCrowdDemoSoftPressureRollbackSnapshot
 {
   int32 FixedStepIndex = INDEX_NONE;
+  bool bMovementFactsComplete = false;
+  bool bCombatFactsComplete = false;
+  bool bSnapshotReadyForReplay = false;
   TArray<FCrowdDemoSoftPressureRollbackAgentState> Agents;
   TArray<FCrowdDemoLocalPredictiveResult> LocalPredictiveResults;
   TArray<FCrowdDemoLocalPredictiveGrantState> LocalPredictiveGrantStates;
@@ -236,7 +236,7 @@ struct FCrowdDemoRoundBoundaryFormationFact
 struct FCrowdDemoPreparedFacingRollbackFact
 {
   int32 AgentId = INDEX_NONE;
-  FCrowdDemoRoundFacingFragment Facing;
+  FCrowdMassFacingFragment Facing;
 };
 
 
@@ -594,9 +594,10 @@ public:
     int32 FixedStepIndex, TArray<FCrowdDemoSoftPressureRollbackAgentState>&& Agents);
   bool CompleteSoftPressureRollbackCombatState(
     int32 FixedStepIndex,
-    TConstArrayView<FCrowdDemoSoftPressureRollbackCombatState> CombatStates);
+    TConstArrayView<FCrowdDemoPreparedCombatRollbackFact> CombatStates);
   const FCrowdDemoSoftPressureRollbackSnapshot* FindSoftPressureRollbackSnapshot(
     int32 FixedStepIndex) const;
+  bool IsSoftPressureRollbackSnapshotReadyForReplay(int32 FixedStepIndex) const;
   void RestoreSoftPressureRuntime(const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot);
   void RecordSoftPressureRollbackOutcome(bool bHit, bool bAgentMismatch, int32 ReplayedSteps);
   bool IsOpenSpawnRelaxation() const
@@ -698,7 +699,18 @@ public:
   const FCrowdDemoValidCorridorTransitProgress& GetValidCorridorTransitProgress() const
   { return ValidCorridorTransitProgress; }
   void InitializeOpenSpawnRelaxation(const FCrowdDemoOpenSpawnRelaxationLayout& Layout);
-  void PrepareOpenSpawnRelaxationBoundary();
+  bool PrepareOpenSpawnRelaxationBoundary();
+  bool ConsumeOpenSpawnBoundaryResets(TConstArrayView<int32> AgentIds);
+  bool ArePreparedOpenSpawnBoundaryFactsCurrent() const;
+  const TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact>&
+    GetPreparedOpenSpawnBoundaryFacts() const
+  { return PreparedOpenSpawnBoundaryFacts; }
+  const FCrowdDemoPreparedOpenSpawnBoundaryFact* FindPreparedOpenSpawnBoundaryFact(
+    int32 AgentId) const
+  {
+    return PreparedOpenSpawnBoundaryFacts.FindByPredicate(
+      [AgentId](const auto& Fact) { return Fact.AgentId == AgentId; });
+  }
   void RecordOpenSpawnRelaxationParticleStep(
     TConstArrayView<FCrowdDemoParticleSoftPairInfluence> Influences,
     float MaxActualCorrectionCm,
@@ -771,6 +783,8 @@ private:
   TArray<FCrowdMassFinalKinematicState> PreparedRuntimeFinalKinematics;
   TArray<FCrowdFacingResult> PreparedRuntimeFacingResults;
   TArray<FCrowdDemoPreparedFacingRollbackFact> PreparedFacingRollbackFacts;
+  TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> PreparedOpenSpawnBoundaryFacts;
+  int32 PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
   TArray<FCrowdDemoProjectileState> PreparedProjectiles;
   TArray<FCrowdDemoHitFact> PendingProjectileHitFacts;
   TArray<FCrowdDemoProjectileVisualEvent> OutgoingProjectileVisualEvents;

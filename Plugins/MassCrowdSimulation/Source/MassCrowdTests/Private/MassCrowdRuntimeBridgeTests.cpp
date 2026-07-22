@@ -12,6 +12,7 @@
 #include "MassCrowdGuidanceWork.h"
 #include "MassCrowdLocalPredictiveWork.h"
 #include "MassCrowdMovementFinalizeWork.h"
+#include "MassCrowdMovementPipelineWork.h"
 #include "MassCrowdMovementPredictWork.h"
 #include "MassCrowdParticleWork.h"
 #include "MassCrowdRuntimeBridge.h"
@@ -580,6 +581,122 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
   FinalizeInput.Records.Add(DuplicateFinalizeRecord);
   TestFalse(TEXT("Runtime movement finalize rejects duplicate agent"),
     FCrowdMassMovementFinalizeWork::BuildCommitPlan(FinalizeInput).bCompleted);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdRuntimeMovementPipelineWorkTest,
+  "MassCrowd.Runtime.MovementPipelineWork",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdRuntimeMovementPipelineWorkTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdMassMovementPipelineWorkInput CombinedInput;
+  CombinedInput.Guidance.FixedStepIndex = 21;
+  CombinedInput.Guidance.PlanRevision = 3;
+  CombinedInput.Guidance.Records = {
+    MakeRecord(3, 0), MakeRecord(1, 0), MakeRecord(2, 0)};
+  CombinedInput.Environment = FCrowdSharedFlowFieldKernel::MakeSf1Config(1);
+  CombinedInput.LocalPredictiveSettings.FixedStepSeconds = 1.0f / 30.0f;
+  CombinedInput.LocalPredictiveSettings.TimeHorizonSeconds = 1.25f;
+  CombinedInput.LocalPredictiveSettings.SpatialCellSizeCm = 600.0f;
+  CombinedInput.LocalPredictiveSettings.VelocityQuantumCmps = 1.0f;
+  CombinedInput.LocalPredictiveSettings.ConstraintEpsilonCmps = 0.1f;
+  CombinedInput.FixedStepSeconds = 1.0f / 30.0f;
+  CombinedInput.bRunLocalPredictive = true;
+  for (const FCrowdMassGatherRecord& Record : CombinedInput.Guidance.Records)
+  {
+    FCrowdMassMovementPipelineAgentOverlay& Overlay =
+      CombinedInput.AgentOverlays.AddDefaulted_GetRef();
+    Overlay.AgentId = Record.Identity.AgentId;
+    Overlay.MaximumSpeedCmps = 300.0f;
+    Overlay.PreviousBlockedAgeSteps = Record.Identity.AgentId;
+  }
+
+  const FCrowdMassMovementPipelineWorkOutput CombinedForward =
+    FCrowdMassMovementPipelineWork::Run(CombinedInput);
+  TestTrue(TEXT("combined movement WORK completes"),
+    CombinedForward.bCompleted);
+
+  FCrowdMassGuidanceWorkInput GuidanceInput = CombinedInput.Guidance;
+  const FCrowdMassGuidanceWorkOutput GuidanceLegacy =
+    FCrowdMassGuidanceWork::Compose(GuidanceInput);
+  FCrowdMassLocalPredictiveWorkInput LocalInput;
+  LocalInput.FixedStepIndex = GuidanceInput.FixedStepIndex;
+  LocalInput.PlanRevision = GuidanceInput.PlanRevision;
+  LocalInput.Environment = CombinedInput.Environment;
+  LocalInput.Settings = CombinedInput.LocalPredictiveSettings;
+  TArray<FCrowdMassGatherRecord> SortedRecords = GuidanceInput.Records;
+  SortedRecords.Sort([](const auto& A, const auto& B)
+  {
+    return A.Identity.AgentId < B.Identity.AgentId;
+  });
+  TArray<FCrowdMassMovementPipelineAgentOverlay> SortedOverlays =
+    CombinedInput.AgentOverlays;
+  SortedOverlays.Sort([](const auto& A, const auto& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
+  for (int32 Index = 0; Index < SortedRecords.Num(); ++Index)
+  {
+    const FCrowdMassGatherRecord& Record = SortedRecords[Index];
+    const FCrowdComposedGuidance& Composed =
+      GuidanceLegacy.ComposedGuidance[Index];
+    FCrowdLocalPredictiveAgent& Agent =
+      LocalInput.Agents.AddDefaulted_GetRef();
+    Agent.AgentId = Record.Identity.AgentId;
+    Agent.Position = FVector2f(Record.State.Position.X, Record.State.Position.Y);
+    Agent.Velocity = FVector2f(Record.State.Velocity.X, Record.State.Velocity.Y);
+    Agent.PreferredVelocity = FVector2f(
+      Composed.AutonomousPreferredVelocity.X,
+      Composed.AutonomousPreferredVelocity.Y);
+    Agent.PhysicalRadiusCm = Record.Properties.PhysicalRadiusCm;
+    Agent.HardSafetyGapCm = Record.Properties.HardSafetyGapCm;
+    Agent.MaxSpeedCmps = SortedOverlays[Index].MaximumSpeedCmps;
+    Agent.BlockedAgeSteps = SortedOverlays[Index].PreviousBlockedAgeSteps;
+  }
+  const FCrowdMassLocalPredictiveWorkOutput LocalLegacy =
+    FCrowdMassLocalPredictiveWork::Solve(LocalInput);
+  FCrowdMassMovementPredictWorkInput PredictInput;
+  PredictInput.FixedStepIndex = GuidanceInput.FixedStepIndex;
+  PredictInput.PlanRevision = GuidanceInput.PlanRevision;
+  PredictInput.FixedStepSeconds = CombinedInput.FixedStepSeconds;
+  for (int32 Index = 0; Index < SortedRecords.Num(); ++Index)
+  {
+    FCrowdMassMovementPredictAgent& Agent =
+      PredictInput.Agents.AddDefaulted_GetRef();
+    Agent.AgentId = SortedRecords[Index].Identity.AgentId;
+    Agent.StartPosition = SortedRecords[Index].State.Position;
+    Agent.AutonomousPreferredVelocity =
+      GuidanceLegacy.ComposedGuidance[Index].AutonomousPreferredVelocity;
+    Agent.LocalVelocity = FVector(
+      LocalLegacy.Results[Index].Velocity.X,
+      LocalLegacy.Results[Index].Velocity.Y, 0.0f);
+    Agent.MaximumSpeedCmps = SortedOverlays[Index].MaximumSpeedCmps;
+    Agent.bUseLocalVelocity = true;
+    Agent.bLocalVelocityValid = LocalLegacy.Results[Index].bValid;
+  }
+  const FCrowdMassMovementPredictWorkOutput PredictLegacy =
+    FCrowdMassMovementPredictWork::Predict(PredictInput);
+  TestEqual(TEXT("compose hash unchanged by task merge"),
+    CombinedForward.Guidance.StableHash, GuidanceLegacy.StableHash);
+  TestEqual(TEXT("local hash unchanged by task merge"),
+    CombinedForward.LocalPredictive.StableHash, LocalLegacy.StableHash);
+  TestEqual(TEXT("predict hash unchanged by task merge"),
+    CombinedForward.MovementPredict.StableHash, PredictLegacy.StableHash);
+
+  Algo::Reverse(CombinedInput.Guidance.Records);
+  Algo::Reverse(CombinedInput.AgentOverlays);
+  const FCrowdMassMovementPipelineWorkOutput CombinedReverse =
+    FCrowdMassMovementPipelineWork::Run(CombinedInput);
+  TestEqual(TEXT("combined movement WORK input order stable"),
+    CombinedReverse.StableHash, CombinedForward.StableHash);
+  const FCrowdMassMovementPipelineAgentOverlay DuplicateOverlay =
+    CombinedInput.AgentOverlays[0];
+  CombinedInput.AgentOverlays.Add(DuplicateOverlay);
+  TestFalse(TEXT("combined movement WORK rejects duplicate overlay"),
+    FCrowdMassMovementPipelineWork::Run(CombinedInput).bCompleted);
   return true;
 }
 

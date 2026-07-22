@@ -483,3 +483,101 @@ void FCrowdDemoOpenSpawnRelaxationKernel::RebuildHashes(
   Runtime.PhaseHash = Fold(Runtime.PhaseHash, static_cast<int32>(Runtime.ParticipationHash));
   Runtime.PhaseHash = Fold(Runtime.PhaseHash, static_cast<int32>(Runtime.PropagationHash));
 }
+
+bool FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+  const int32 FixedStepIndex,
+  const TConstArrayView<int32> ExpectedAgentIds,
+  const FCrowdDemoOpenSpawnRelaxationRuntime& Runtime,
+  TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact>& OutFacts)
+{
+  OutFacts.Reset();
+  if (!Runtime.bValid || FixedStepIndex < 0
+    || Runtime.Agents.Num() != ExpectedAgentIds.Num())
+    return false;
+
+  TArray<int32> SortedExpected(ExpectedAgentIds);
+  SortedExpected.Sort();
+  for (int32 Index = 0; Index < SortedExpected.Num(); ++Index)
+    if (SortedExpected[Index] == INDEX_NONE
+      || (Index > 0 && SortedExpected[Index - 1] == SortedExpected[Index]))
+      return false;
+
+  TArray<FCrowdDemoOpenSpawnRelaxationAgentState> SortedAgents = Runtime.Agents;
+  SortedAgents.Sort([](const auto& A, const auto& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
+  for (int32 Index = 0; Index < SortedAgents.Num(); ++Index)
+  {
+    const FCrowdDemoOpenSpawnRelaxationAgentState& Agent = SortedAgents[Index];
+    if (Agent.AgentId == INDEX_NONE || Agent.AgentId != SortedExpected[Index]
+      || (Index > 0 && SortedAgents[Index - 1].AgentId == Agent.AgentId))
+    {
+      OutFacts.Reset();
+      return false;
+    }
+    FCrowdDemoPreparedOpenSpawnBoundaryFact& Fact = OutFacts.AddDefaulted_GetRef();
+    Fact.AgentId = Agent.AgentId;
+    Fact.FormationIndex = Agent.FormationIndex;
+    Fact.FixedStepIndex = FixedStepIndex;
+    Fact.bParticleActive = Agent.bParticleActive;
+    Fact.bPendingBoundaryReset = Agent.bPendingBoundaryReset;
+    Fact.BoundaryResetLocation = Agent.BoundaryResetLocation;
+  }
+  return ValidatePreparedBoundaryFacts(FixedStepIndex, ExpectedAgentIds, OutFacts);
+}
+
+bool FCrowdDemoOpenSpawnRelaxationKernel::ValidatePreparedBoundaryFacts(
+  const int32 FixedStepIndex,
+  const TConstArrayView<int32> ExpectedAgentIds,
+  const TConstArrayView<FCrowdDemoPreparedOpenSpawnBoundaryFact> Facts)
+{
+  if (FixedStepIndex < 0 || ExpectedAgentIds.Num() != Facts.Num()) return false;
+
+  TArray<int32> SortedExpected(ExpectedAgentIds);
+  SortedExpected.Sort();
+  for (int32 Index = 0; Index < SortedExpected.Num(); ++Index)
+  {
+    if (SortedExpected[Index] == INDEX_NONE
+      || (Index > 0 && SortedExpected[Index - 1] == SortedExpected[Index]))
+      return false;
+  }
+
+  TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> SortedFacts(Facts);
+  SortedFacts.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+  for (int32 Index = 0; Index < SortedFacts.Num(); ++Index)
+  {
+    if (SortedFacts[Index].AgentId != SortedExpected[Index]
+      || SortedFacts[Index].FixedStepIndex != FixedStepIndex
+      || (Index > 0 && SortedFacts[Index - 1].AgentId == SortedFacts[Index].AgentId))
+      return false;
+  }
+  return true;
+}
+
+bool FCrowdDemoOpenSpawnRelaxationKernel::ConsumePendingBoundaryResets(
+  const TConstArrayView<int32> AgentIds,
+  FCrowdDemoOpenSpawnRelaxationRuntime& Runtime)
+{
+  if (!Runtime.bValid) return false;
+  TArray<int32> SortedIds(AgentIds);
+  SortedIds.Sort();
+  for (int32 Index = 0; Index < SortedIds.Num(); ++Index)
+  {
+    if (SortedIds[Index] == INDEX_NONE
+      || (Index > 0 && SortedIds[Index - 1] == SortedIds[Index]))
+      return false;
+    const FCrowdDemoOpenSpawnRelaxationAgentState* Agent =
+      Runtime.Agents.FindByPredicate([&](const auto& Value)
+      {
+        return Value.AgentId == SortedIds[Index];
+      });
+    if (!Agent || !Agent->bPendingBoundaryReset) return false;
+  }
+  for (const int32 AgentId : SortedIds)
+    Runtime.Agents.FindByPredicate([&](const auto& Value)
+    {
+      return Value.AgentId == AgentId;
+    })->bPendingBoundaryReset = false;
+  return true;
+}

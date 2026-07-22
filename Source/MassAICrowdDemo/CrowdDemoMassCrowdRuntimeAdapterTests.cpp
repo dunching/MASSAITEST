@@ -35,19 +35,32 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   Particle.SoftMarginCm = 19.0f;
   Particle.Mobility = 0.75f;
   Particle.CapabilityProfileKey = 0x12345678u;
-  FCrowdDemoRoundGuidanceCandidatesFragment Guidance;
-  Guidance.SharedFlow = FCrowdDemoGuidanceComposeKernel::BuildCandidate(
+  FCrowdDemoGuidanceCandidate SharedFlow =
+    FCrowdDemoGuidanceComposeKernel::BuildCandidate(
     Identity.Id, ECrowdDemoGuidanceProvider::SharedFlow, 5,
     FVector(300.0f, 0.0f, 0.0f), State.Location, 0.0f, true);
-  Guidance.TargetRegion = FCrowdDemoGuidanceComposeKernel::BuildCandidate(
+  FCrowdDemoGuidanceCandidate TargetRegion =
+    FCrowdDemoGuidanceComposeKernel::BuildCandidate(
     Identity.Id, ECrowdDemoGuidanceProvider::TargetRegion, 5,
     FVector(0.0f, 200.0f, 0.0f), FVector(500.0f, 500.0f, 60.0f),
     90.0f, true);
+  const FCrowdDemoGuidanceCandidate BusinessOverride;
 
+  FCrowdMassBoundaryAgentRecord Boundary;
+  TestTrue(TEXT("Demo base facts adapt to Runtime boundary record"),
+    FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
+      Identity, State, Movement, Particle, Boundary));
   FCrowdMassGatherRecord Gathered;
-  TestTrue(TEXT("Demo fragments adapt to Runtime gather record"),
-    FCrowdDemoMassCrowdRuntimeAdapter::BuildGatherRecord(
-      Identity, State, Movement, Particle, Guidance, Gathered));
+  Gathered.Identity = Boundary.Identity;
+  Gathered.State = Boundary.State;
+  Gathered.Properties = Boundary.Properties;
+  Gathered.Guidance.SharedFlow =
+    FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreGuidanceCandidate(SharedFlow);
+  Gathered.Guidance.TargetRegion =
+    FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreGuidanceCandidate(TargetRegion);
+  Gathered.Guidance.BusinessOverride =
+    FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreGuidanceCandidate(
+      BusinessOverride);
   TestEqual(TEXT("identity preserved"), Gathered.Identity.AgentId, Identity.Id);
   TestEqual(TEXT("lifecycle preserved"),
     Gathered.Identity.LifecycleSerial, Identity.LifecycleSerial);
@@ -64,10 +77,10 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
     Gathered.Properties.Mobility, Particle.Mobility);
   TestEqual(TEXT("candidate hash preserved"),
     Gathered.Guidance.TargetRegion.StableHash,
-    Guidance.TargetRegion.StableHash);
+    TargetRegion.StableHash);
 
   const FCrowdDemoGuidanceCandidate LegacyCandidates[] = {
-    Guidance.SharedFlow, Guidance.TargetRegion, Guidance.BusinessOverride};
+    SharedFlow, TargetRegion, BusinessOverride};
   const FCrowdGuidanceCandidate CoreCandidates[] = {
     Gathered.Guidance.SharedFlow,
     Gathered.Guidance.TargetRegion,
@@ -108,9 +121,8 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   LegacyWorkAgent.PlanRevision = 5;
   LegacyWorkAgent.StopLocation = State.Location;
   LegacyWorkAgent.StopYawDegrees = State.YawDegrees;
-  LegacyWorkAgent.SharedFlow = Guidance.SharedFlow;
-  LegacyWorkAgent.TargetRegion = Guidance.TargetRegion;
-  LegacyWorkAgent.BusinessOverride = Guidance.BusinessOverride;
+  LegacyWorkAgent.SharedFlow = SharedFlow;
+  LegacyWorkAgent.TargetRegion = TargetRegion;
   FCrowdMassGuidanceWorkInput RuntimeWorkInput;
   RuntimeWorkInput.FixedStepIndex = LegacyWorkInput.FixedStepIndex;
   RuntimeWorkInput.PlanRevision = 5;
@@ -130,14 +142,20 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   const FVector OriginalGatherPosition = Gathered.State.Position;
   const uint32 OriginalGuidanceHash = Gathered.Guidance.TargetRegion.StableHash;
   State.Location += FVector(10.0f, -20.0f, 0.0f);
-  Guidance.TargetRegion = FCrowdDemoGuidanceComposeKernel::BuildCandidate(
+  TargetRegion = FCrowdDemoGuidanceComposeKernel::BuildCandidate(
     Identity.Id, ECrowdDemoGuidanceProvider::TargetRegion, 5,
     FVector(-100.0f, 180.0f, 0.0f), FVector(420.0f, 540.0f, 60.0f),
     110.0f, true);
+  FCrowdMassBoundaryAgentRecord RebuiltBoundary;
+  TestTrue(TEXT("Runtime boundary rebuilds from current Demo facts"),
+    FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
+      Identity, State, Movement, Particle, RebuiltBoundary));
   FCrowdMassGatherRecord RebuiltGather;
-  TestTrue(TEXT("derived Runtime mirror rebuilds from current Demo facts"),
-    FCrowdDemoMassCrowdRuntimeAdapter::BuildGatherRecord(
-      Identity, State, Movement, Particle, Guidance, RebuiltGather));
+  RebuiltGather.Identity = RebuiltBoundary.Identity;
+  RebuiltGather.State = RebuiltBoundary.State;
+  RebuiltGather.Properties = RebuiltBoundary.Properties;
+  RebuiltGather.Guidance.TargetRegion =
+    FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreGuidanceCandidate(TargetRegion);
   TestFalse(TEXT("rebuilt mirror does not retain stale position"),
     RebuiltGather.State.Position.Equals(OriginalGatherPosition));
   TestNotEqual(TEXT("rebuilt mirror does not retain stale guidance"),

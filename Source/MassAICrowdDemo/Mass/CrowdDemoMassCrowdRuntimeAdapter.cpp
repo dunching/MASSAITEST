@@ -173,28 +173,6 @@ bool FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
   return true;
 }
 
-bool FCrowdDemoMassCrowdRuntimeAdapter::BuildGatherRecord(
-  const FCrowdDemoMassIdentityFragment& Identity,
-  const FCrowdDemoRoundSimStateFragment& State,
-  const FCrowdDemoMassMovementFragment& Movement,
-  const FCrowdDemoParticlePropertiesFragment& Particle,
-  const FCrowdDemoRoundGuidanceCandidatesFragment& Guidance,
-  FCrowdMassGatherRecord& OutRecord)
-{
-  OutRecord = {};
-  FCrowdMassBoundaryAgentRecord Base;
-  if (!BuildBoundaryAgentRecord(Identity, State, Movement, Particle, Base))
-    return false;
-  OutRecord.Identity = Base.Identity;
-  OutRecord.State = Base.State;
-  OutRecord.Properties = Base.Properties;
-  OutRecord.Guidance.SharedFlow = ToCoreCandidate(Guidance.SharedFlow);
-  OutRecord.Guidance.TargetRegion = ToCoreCandidate(Guidance.TargetRegion);
-  OutRecord.Guidance.BusinessOverride = ToCoreCandidate(
-    Guidance.BusinessOverride);
-  return true;
-}
-
 FCrowdMassCommitTarget FCrowdDemoMassCrowdRuntimeAdapter::BuildCommitTarget(
   const FCrowdDemoMassIdentityFragment& Identity)
 {

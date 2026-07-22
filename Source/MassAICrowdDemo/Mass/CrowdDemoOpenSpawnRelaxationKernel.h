@@ -49,6 +49,18 @@ struct FCrowdDemoOpenSpawnRelaxationAgentState
   FVector BoundaryResetLocation = FVector::ZeroVector;
 };
 
+// Immutable, single-boundary view of the T1 runtime. Movement stages consume
+// this POD rather than reconstructing execution state from Mass fragments.
+struct FCrowdDemoPreparedOpenSpawnBoundaryFact
+{
+  int32 AgentId = INDEX_NONE;
+  int32 FormationIndex = INDEX_NONE;
+  int32 FixedStepIndex = INDEX_NONE;
+  bool bParticleActive = false;
+  bool bPendingBoundaryReset = false;
+  FVector BoundaryResetLocation = FVector::ZeroVector;
+};
+
 struct FCrowdDemoOpenSpawnRelaxationEdge
 {
   int32 MinAgentId = INDEX_NONE;
@@ -116,4 +128,19 @@ public:
     FCrowdDemoOpenSpawnRelaxationRuntime& Runtime);
 
   static void RebuildHashes(FCrowdDemoOpenSpawnRelaxationRuntime& Runtime);
+
+  static bool BuildPreparedBoundaryFacts(
+    int32 FixedStepIndex,
+    TConstArrayView<int32> ExpectedAgentIds,
+    const FCrowdDemoOpenSpawnRelaxationRuntime& Runtime,
+    TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact>& OutFacts);
+
+  static bool ValidatePreparedBoundaryFacts(
+    int32 FixedStepIndex,
+    TConstArrayView<int32> ExpectedAgentIds,
+    TConstArrayView<FCrowdDemoPreparedOpenSpawnBoundaryFact> Facts);
+
+  static bool ConsumePendingBoundaryResets(
+    TConstArrayView<int32> AgentIds,
+    FCrowdDemoOpenSpawnRelaxationRuntime& Runtime);
 };

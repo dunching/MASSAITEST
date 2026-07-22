@@ -205,8 +205,8 @@ void UCrowdDemoClientVisualMassProcessor::ConfigureQueries(
   const TSharedRef<FMassEntityManager>& EntityManager)
 {
   EntityQuery.AddRequirement<FCrowdDemoClientAuthorityFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadOnly);
-  EntityQuery.AddRequirement<FCrowdDemoOpenSpawnRelaxationFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoClientVisualOffsetFragment>(EMassFragmentAccess::ReadWrite);
   EntityQuery.AddTagRequirement<FCrowdDemoMassAgentTag>(EMassFragmentPresence::All);
 }
@@ -267,15 +267,22 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   int32 VatPlaybackCount = 0;
   int32 ActiveHitFlashCount = 0;
   int32 VisualStateCounts[FCrowdDemoVatPlaybackKernel::ClipCount] = {};
+  TMap<int32, bool> OpenSpawnParticleActiveByAgentId;
+  if (Pipeline->IsOpenSpawnRelaxation())
+  {
+    for (const FCrowdDemoOpenSpawnRelaxationAgentState& Agent
+      : Pipeline->GetOpenSpawnRelaxationRuntime().Agents)
+      OpenSpawnParticleActiveByAgentId.Add(Agent.AgentId, Agent.bParticleActive);
+  }
 
   EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
   {
     const TConstArrayView<FCrowdDemoClientAuthorityFragment> Authorities =
       ChunkContext.GetFragmentView<FCrowdDemoClientAuthorityFragment>();
+    const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities =
+      ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
     const TConstArrayView<FCrowdDemoRoundSimStateFragment> SimStates =
       ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
-    const TConstArrayView<FCrowdDemoOpenSpawnRelaxationFragment> OpenSpawnStates =
-      ChunkContext.GetFragmentView<FCrowdDemoOpenSpawnRelaxationFragment>();
     const TArrayView<FCrowdDemoClientVisualOffsetFragment> VisualOffsets =
       ChunkContext.GetMutableFragmentView<FCrowdDemoClientVisualOffsetFragment>();
 
@@ -298,9 +305,11 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         && AppliedCorrectionRevision > Offset.LastRoundSimCorrectionRevision;
       const bool bPlanChanged = bWasDisplayInitialized
         && SimState.PlanRevision != Offset.LastSubmittedPlanRevision;
+      const bool bOpenSpawnParticleActive =
+        OpenSpawnParticleActiveByAgentId.FindRef(Identities[It].Id);
       const bool bTestBoundaryReset = bWasDisplayInitialized
         && Pipeline->IsOpenSpawnRelaxation()
-        && OpenSpawnStates[It].bParticleActive
+        && bOpenSpawnParticleActive
           != Offset.bLastSubmittedOpenSpawnParticleActive;
       if (!Offset.bDisplayInitialized)
       {
@@ -433,7 +442,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
       Offset.LastSubmittedWorldSeconds = World->GetTimeSeconds();
       Offset.LastSubmittedPlanRevision = SimState.PlanRevision;
       Offset.bLastSubmittedOpenSpawnParticleActive =
-        OpenSpawnStates[It].bParticleActive;
+        bOpenSpawnParticleActive;
 
       const bool bSmoothingActive = Offset.RoundSimDisplayOffset.Size2D() > 0.5f
         || FMath::Abs(Offset.RoundSimYawOffsetDegrees) > 0.5f;

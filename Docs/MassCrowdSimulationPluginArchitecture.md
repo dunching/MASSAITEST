@@ -131,17 +131,17 @@ MassAICrowdDemo → 插件公共接口与可选模块
 
 [COMPUTED][HIGH] 插件原生Gather/Merge/Commit测试和带真实`FMassEntityManager`的最小Mass World测试2/2通过；Demo适配器旧/Core候选、状态、Composed Guidance与Commit等价测试1/1通过。Development、DebugGame、102/102项`CrowdDemo`及11/11项`MassCrowd`自动化通过。
 
-[COMPUTED][HIGH] Demo生产模板现并行持有上述plugin fragments。每个fixed-step先从当前Demo身份、RoundSim状态、Movement属性和Particle属性构建稳定Runtime基础snapshot；Flow、Target Region和Business随后发布三类不可变Guidance overlay。Runtime Bridge稳定合并snapshot与overlay并拒绝缺失Shared Flow、重复provider/Agent及revision错误。Runtime镜像、overlay与基础snapshot均属于可重建派生状态，不进入权威rollback snapshot。
+[COMPUTED][HIGH] Demo生产模板持有plugin fragments作为中间运动权威。每个fixed-step先从当前Demo身份、RoundSim状态、Movement属性和Particle属性构建稳定Runtime基础snapshot；Flow、Target Region和Business随后发布三类不可变Guidance overlay。Runtime Bridge稳定合并snapshot与overlay并拒绝缺失Shared Flow、重复provider/Agent及revision错误。六个曾与Runtime逐阶段重复的Demo运动fragment已删除；overlay与基础snapshot仍属于可重建派生状态，不进入权威rollback snapshot。
 
-[COMPUTED][HIGH] 正式`Guidance Compose`已切换到`FCrowdMassGuidanceWork`：WORK线程只消费稳定POD并调用Core Compose，GT在完整AgentId/result集合验证通过后一次写入Runtime composed镜像、Demo composed和现有唯一MoveIntent。旧`FCrowdDemoRoundWorkKernel::ComposeGuidance`已无生产调用者，仅保留迁移等价测试。
+[COMPUTED][HIGH] 正式`Guidance Compose`已切换到`FCrowdMassGuidanceWork`：WORK线程只消费稳定POD并调用Core Compose，GT在完整AgentId/result集合验证通过后一次写入Runtime composed与同源prepared SoA，不再写Demo composed或MoveIntent。旧`FCrowdDemoRoundWorkKernel::ComposeGuidance`已无生产调用者，仅保留迁移等价测试。
 
-[COMPUTED][HIGH] 正式`Local Predictive`已切换到`FCrowdMassLocalPredictiveWork`：它直接消费同一boundary snapshot与prepared Core composed结果，调用Core局部预测kernel，并在完整AgentId/result集合校验后一次更新Runtime local-velocity镜像和既有Demo local-velocity。旧Demo kernel已无生产调用者，只保留旧/Core等价及历史fixture测试。
+[COMPUTED][HIGH] 正式`Local Predictive`已切换到`FCrowdMassLocalPredictiveWork`：它直接消费同一boundary snapshot与prepared Core composed结果，调用Core局部预测kernel，并在完整AgentId/result集合校验后一次更新Runtime local-velocity与prepared结果。旧Demo local-velocity fragment已删除；旧Demo kernel无生产调用者，只保留旧/Core等价及历史fixture测试。
 
 [COMPUTED][HIGH] 正式`MovementPredict`已切换到`FCrowdMassMovementPredictWork`：它消费boundary snapshot、prepared composed与local-velocity结果，稳定处理自主/局部速度、T1 boundary freeze、业务垂直运动和Particle active事实，并发布prepared预测位置。
 
-[COMPUTED][HIGH] 正式`Particle Safety`已切换到`FCrowdMassParticleWork`：它消费boundary snapshot与prepared MovementPredict结果，在同一WORK内执行Core Solve及applied-state安全复验，并输出candidate/applied summary与hash。GT完整校验结果集合后同步发布Runtime particle镜像和Demo兼容fragment。
+[COMPUTED][HIGH] 正式`Particle Safety`已切换到`FCrowdMassParticleWork`：它消费boundary snapshot与prepared MovementPredict结果，在同一WORK内执行Core Solve及applied-state安全复验，并输出candidate/applied summary与hash。GT完整校验结果集合后发布Runtime particle与prepared结果，旧Demo particle兼容fragment已删除。
 
-[COMPUTED][HIGH] 正式`Facing`已切换到`FCrowdMassFacingWork`：Runtime WORK消费boundary snapshot、prepared composed与particle结果并调用Core Facing。连续settled计数暂由Demo rollback兼容状态在GT准备；结果集合完整后同步发布Runtime/Demo facing，Movement Finalize不再读取Demo facing作为最终Yaw来源。
+[COMPUTED][HIGH] 正式`Facing`已切换到`FCrowdMassFacingWork`：Runtime WORK消费boundary snapshot、prepared composed与particle结果并调用Core Facing。连续settled计数由Runtime Facing持有并进入精确rollback fact；结果集合完整后只发布Runtime facing与prepared事实，旧Demo facing fragment已删除。
 
 [COMPUTED][HIGH] 正式`Shared Flow`已切换到`FCrowdMassSharedFlowWork`：Runtime resource持有Core field、动态anchor与T3双cohort field，构建和每Agent Preferred均在线程池执行。Demo field/sample只由Core结果转换得到，服务尚未迁移的Transport、指标和rollback消费者；生产Build/Preferred不再调用Demo Shared Flow kernel。
 
@@ -173,6 +173,12 @@ MassAICrowdDemo → 插件公共接口与可选模块
 
 [COMPUTED][HIGH] 阶段4第九切片删除post-finalize对GuidanceCandidates和Facing fragment的读取：Runtime Bridge从boundary snapshot与三类prepared overlay重建完整Guidance rollback记录；Facing阶段在结果发布时同时生成包含连续settle计数与最终资格的精确rollback fact。8705异构T6保持rollback=`80/0/0`、inside/coverage=`20/20`及安全/同步门，8706 SF1保持golden Flow hash。
 
-[INFERRED][HIGH] 下一切片审计剩余T1 OpenSpawn和Combat/Visual业务事实，分别归入可恢复业务快照或独立诊断快照；Identity与最终RoundSim state仍是实际提交状态采样的必要输入。只有必要状态读取、全部派生输入和最终写回均被收敛后，才可宣称完整`GT Gather → Core WORK → Stable Merge → GT Commit`成立。
+[COMPUTED][HIGH] 阶段4第十切片将T1 OpenSpawn收敛为Demo Pipeline唯一runtime与稳定prepared boundary facts，删除per-agent OpenSpawn fragment；Combat/Visual最终rollback事实由VisualStateResolve补齐，movement/combat双完成门控制replay/checkpoint。PostFinalize当前只读取Identity与最终RoundSim，未把T1、Combat或Visual合同下沉到MassCrowdCore通用运动POD。Development、DebugGame（`-DisableUnity`）、`MassCrowd` 12/12、`CrowdDemo` 105/105及T1/T6/T7/T8双端回归通过；默认Unity Development仍有插件旧`.cpp`辅助函数重名债务。
+
+[COMPUTED][HIGH] 阶段4第十一切片物理删除Demo的MoveIntent、GuidanceCandidates、ComposedGuidance、LocalVelocity、ParticleConstraint与Facing六个迁移fragment及其Mass模板、processor、rollback和旧Gather适配路径。Runtime fragments现在是这些中间阶段的唯一Mass权威；Demo仅保留RoundSim最终checkpoint状态及具有独立阶段/诊断语义的ProposedMovement、FlowSample、ObstacleConstraint。Development、DebugGame、105/105 CrowdDemo、12/12 MassCrowd及T1/T2/T6/T8/SF1回归通过。
+
+[COMPUTED][HIGH] 阶段4第十二切片新增Runtime `FCrowdMassMovementPipelineWork`，把Guidance Compose、Local Predictive和MovementPredict收敛到一个不可变POD任务。Demo GT只在任务前准备场景overlay与T1/Reactive边界事实，任务后对完整结果集执行一次原子发布；旧三个动态processor实现已删除。插件等价测试逐项比较合并前后三个stage hash，并覆盖输入反序及重复overlay拒绝。
+
+[INFERRED][HIGH] 下一切片继续收敛Particle、Facing、Finalize周围剩余GT接缝。只有必要状态读取、全部派生输入和最终写回进一步收敛后，才可宣称完整`GT Gather → Core WORK → Stable Merge → GT Commit`成立；当前不得进入archetype拆分或100/500。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
