@@ -6,6 +6,20 @@
 
 [INFERRED][HIGH] 本文件是 Demo 目的、最终目标效果与长期架构原则的稳定事实源；`CurrentArchitecture.md` 描述当前实现，`PhasePlan.md` 描述当前任务，`FeatureChecklist.md` 描述验收状态。
 
+[INFERRED][HIGH] 生产运行、行为组合、持续生命周期与复制的长期合同以`MassCrowdUnifiedRuntimeAndReplicationContract.md`为唯一事实源。Demo 的最终角色是生产插件的验收宿主：使用同一 Runtime、Networking 和 Presentation，只增加 Scenario 输入、固定 Round 窗口、readiness、hash、fixture、故障注入、VIOLATION 与人工审片设施。
+
+[INFERRED][HIGH] Demo 不得维护一套“当前先测、以后再换掉”的运行或复制协议。当前 `RoundBootstrapPacket`、`RoundPlan`、`RoundResult` 和固定 Agent 集合只属于实现现状；它们必须适配未来通用 Relevant Snapshot/Delta 合同，不能成为插件最终产品 API。
+
+[INFERRED][HIGH] 最终产品目标是通用持续 Agent population，不是持续敌群专用系统。敌方追逐、友方搬运和中立游荡只是 Capability、Behavior、Objective 与关系策略的不同配置，所有实体复用同一 Movement、Avoidance、Particle、Replication 与 Presentation 路径。
+
+## 1.1 当前能力与未来目标
+
+[COMPUTED][HIGH] 当前能力包括固定 Agent 集合的 Round 验收、Core/Runtime 通用运动链、Demo correction/checkpoint chunks、Target Region、Combat HitFact 与 Demo ISM/VAT 表现。
+
+[COMPUTED][HIGH] 当前已具备生产 Snapshot、bounded lifecycle batches、持续 spawn/despawn、死亡移除、Lifecycle 槽位复用、membership增量、统一Behavior、owner-only late join、空间RelevantSet、公共Presentation和20实体continuous混合Sandbox；真实移动视区enter/exit验收、独立NavFlow与FriendlyLogistics产品场景仍缺失。
+
+[INFERRED][HIGH] 未来能力必须以 Faction、Capability、Active Behavior 与 Cohort 分离为前提：Faction 只表达关系/权限/目标过滤；Capability 表达能做什么；Active Behavior 表达当前做什么；Cohort 由共享 Objective、NavigationLayer、MovementProfile、CapabilityProfile 与宏观策略形成，不等同于阵营。
+
 ## 2. Demo 来源与目的
 
 [KNOWN][HIGH] 本 Demo 基于 `E:\Projects\SuperInvincibleTank_BugFix` 中已有 MassAI 实验、代码和设计文档形成独立验证工程。
@@ -64,7 +78,7 @@
 
 ## 5. 典型场景事实源
 
-[INFERRED][HIGH] T1开放生成、T2开放群体移动、T3双向交换、T4有效通道、T5静态/移动Target和T6异构共享区域必须各有独立真实尝试关卡；场景package、输入矩阵和三级验收以`TestScenarioMatrix.md`为准。
+[INFERRED][HIGH] T1测试参与集切换与压力传播、T2开放群体移动、T3双向交换、T4有效通道、T5静态/移动Target和T6异构共享区域必须各有独立真实尝试关卡；T1不验收真实spawn/despawn。场景package、输入矩阵和三级验收以`TestScenarioMatrix.md`为准。
 
 [INFERRED][HIGH] 典型场景的终态合同必须匹配测试目的：T2在开放移动后使用Target Region Transport极坐标运输和Distance Band自然落位；T5/T6S/T6M使用目标相对Region站位；T3使用两侧宽交换区，T4/T6A使用通道出口平面。除非场景专门验证点目标，不得把“全体进入140cm圆”作为通用群体完成门。
 
@@ -178,7 +192,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [INFERRED][HIGH] Demo长期目标增加一个独立的类游戏虫群Sandbox：玩家控制Pawn移动，地图持续生成受上限约束的敌群，群体按玩家和世界事实共享目标与导航结果，玩家通过fixed-step命令释放线形或圆形伤害，并由统一HitFact驱动伤害、HitFlash、击退、击飞、落地、死亡和群体membership变化。
 
-[INFERRED][HIGH] 该Sandbox必须补充基于静态烘焙NavMesh的稳定分层Surface Graph与共享Flow，验证坡道、桥上桥下、高台、多路线和不可通行落差；当前XY Shared Flow/Particle结果不能外推为高低差能力已经成立。
+[COMPUTED][HIGH] 阶段I已补充基于静态烘焙NavMesh的稳定分层Surface Graph与共享Flow，并在真实地图验证坡道、桥上桥下、高台、多路线、窄桥和不可通行落差。[INFERRED][HIGH] 该独立导航probe不能外推为continuous lifecycle、Behavior、Combat、Logistics与Presentation已经完成混合运行。
 
 [INFERRED][HIGH] 新目标具有强制前置顺序：先使T1-T8独立Small测试大致全部通过并关闭已知硬失败，再提取不依赖Demo地图、Round脚本和固定资产路径的插件，完成独立宿主与Demo双重回归，最后才实施T9/T10综合业务场景。
 
@@ -201,5 +215,31 @@ Shared Flow / Transport决定去哪个可行区域
 [INFERRED][HIGH] 精确Slot标记用于检查分配是否被正确执行；Region标记用于检查实体是否进入正确距离带、覆盖可行区域并自然稳定。两者都只服务验收可解释性，不参与server gameplay movement、局部避让或Particle求解。
 
 [INFERRED][HIGH] Transit与Target落位也必须保持不同完成含义：Transit回答“是否全体安全通过并稳定离开出口”，Target落位回答“是否在目标相对可行区域内覆盖并稳定”。不得再用同一point-goal或同一`goal_reached`数字替代两者。
+
+## 2026-07-22 阶段 G 持续生命周期基线
+
+[COMPUTED][HIGH] Demo现有地图已提供独立`-CrowdDemoContinuousLifecycle`入口：固定Round agent数为0，10个真实Mass entity逐步增长到20硬上限，再持续执行membership迁移、Death/BusinessRecycle despawn和同槽位高LifecycleSerial respawn；T1 active/inactive没有被复用为生命周期。
+
+[COMPUTED][HIGH] 8777双端运行中，序列12把slot 2 serial 1按Death销毁，序列13以serial 2重生；客户端普通/HitFlash ISM按StableEntityRef增量Add/Remove/Update，检查点active/visible=`20/20`，序列18双端entity-set hash=`14341810777549134372`一致，stale reject=0且无VIOLATION。[INFERRED][HIGH] 这只建立持续生命周期基线，不等同于H的统一Behavior或J的混合Sandbox已完成。
+
+## 2026-07-23 阶段 H 统一 Behavior 基线
+
+[COMPUTED][HIGH] Runtime已用同一provider/transition合同表达Wander、MoveTo、Pursue、HaulPickup、HaulDeliver、Attack、Guard和Flee，并统一输出Target、Objective、MovementProfile、InteractionIntent与BusinessCommitRequest。Demo Logistics与Combat只作为宿主adapter；Faction值变化不会授予缺失Capability。
+
+[COMPUTED][HIGH] Cargo pickup/deliver、真实Demo HitFact伤害、HitEventId幂等提交及rollback replay不重复伤害/业务提交均通过自动化。[INFERRED][HIGH] H没有把这些行为接入G持续场景；该组合只在I导航完成后的J混合Sandbox中验收。
+
+## 2026-07-23 阶段 I 分层导航基线
+
+[COMPUTED][HIGH] Core稳定Surface Graph与Shared Flow、Runtime静态Recast提取器及`CrowdDemo_NavSurfaceGraphVerticalSmall`已形成同一生产导航路径；8800运行提取98 nodes、234 directed edges、4 layers和13个桥上桥下XY overlap，76条可达坡边与8/8目标marker可达，不可通行drop保持隔离。
+
+[COMPUTED][HIGH] Development/DebugGame `-DisableUnity`、定向3/3、MassCrowd 27/27与CrowdDemo 112/112通过，视觉证据保存于`Saved/StageI_NavSurfaceGraph_Visual.png`。[COMPUTED][HIGH] 后续J已在20实体持续场景中证明导航层、业务切换、生命周期、同步与视觉共同成立。
+
+## 2026-07-23 阶段 J 混合行为 Sandbox
+
+[COMPUTED][HIGH] 独立`-CrowdDemoMixedSandbox`入口不创建固定Round agents；20个真实Mass实体同时消费LifecycleWorld、统一Behavior provider、Cargo/Combat commit ledger、Recast Surface Graph/Shared Flow和客户端增量ISM。行为转换来自距离、Cargo carrier、Health与当前目标事实，不使用固定事件表驱动业务结果。
+
+[COMPUTED][HIGH] 8804 step600达到active/visible=`20/20`、行为切换29、pickup/delivery=`4/1`、Combat quantity=`500`、commit/duplicate=`25/25`、spawn/despawn=`3/3`、membership=7、同层最小间距=`71.51cm`；Server fixed-step p95=`0.863ms`、Client frame p95=`4.851ms`，双端entity/membership hash一致且无VIOLATION。视觉证据为`Saved/StageJ_MixedSandbox_Visual.png`。
+
+[INFERRED][HIGH] 该结果只关闭J的20实体混合路径，不能外推为K的100/500规模或L原工程迁移已通过。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

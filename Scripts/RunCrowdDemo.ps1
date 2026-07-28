@@ -21,6 +21,12 @@ param(
   [switch]$DrawTargetAcceptanceMarkers,
   [switch]$RequireParticleCorrectionReplay,
   [switch]$RequirePerformanceGate,
+  [switch]$ContinuousLifecycle,
+  [double]$ContinuousStartDelaySeconds = 5.0,
+  [switch]$NavSurfaceGraph,
+  [switch]$NavFlowProductSmall,
+  [switch]$FriendlyLogisticsSmall,
+  [switch]$MixedSandbox,
   [double]$MaxFixedStepP95Ms = 33.333,
   [double]$MinSimulationRealtimeFactor = 0.95,
   [double]$MaxClientFrameP95Ms = 33.333,
@@ -52,6 +58,21 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $ServerLog = Join-Path $LogDir "server.log"
 $ClientLog = Join-Path $LogDir "client.log"
 $CommonArgs = "-CrowdDemoEntityCount=$EntityCount -CrowdDemoScenario=$Scenario -CrowdDemoDurationSeconds=$DurationSeconds -unattended -NoSound"
+if ($ContinuousLifecycle) {
+  $CommonArgs = "$CommonArgs -CrowdDemoContinuousLifecycle -CrowdDemoContinuousStartDelay=$ContinuousStartDelaySeconds"
+}
+if ($NavSurfaceGraph) {
+  $CommonArgs = "$CommonArgs -CrowdDemoNavSurfaceGraph"
+}
+if ($NavFlowProductSmall) {
+  $CommonArgs = "$CommonArgs -CrowdDemoNavFlowProductSmall"
+}
+if ($FriendlyLogisticsSmall) {
+  $CommonArgs = "$CommonArgs -CrowdDemoFriendlyLogisticsSmall"
+}
+if ($MixedSandbox) {
+  $CommonArgs = "$CommonArgs -CrowdDemoMixedSandbox"
+}
 if ($RequireClientReady -and !$NoClient) {
   $CommonArgs = "$CommonArgs -CrowdDemoRequireClientReady -CrowdDemoReadyLeadSeconds=3 -CrowdDemoReadyTimeoutSeconds=60"
 }
@@ -166,6 +187,129 @@ if (Test-Path -LiteralPath $ServerLog) {
 }
 if (Test-Path -LiteralPath $ClientLog) {
   Select-String -Path $ClientLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoCorrectionFrame" -SimpleMatch | Select-Object -Last 20
+}
+
+if ($MixedSandbox) {
+  $ServerPass = Select-String -Path $ServerLog -Pattern "PASS CrowdDemoMixedSandbox role=server" | Select-Object -Last 1
+  $ClientPass = if ($NoClient) { $true } else {
+    Select-String -Path $ClientLog -Pattern "PASS CrowdDemoMixedSandbox role=client" | Select-Object -Last 1
+  }
+  $MixedViolations = @($ServerLog, $ClientLog) | Where-Object { Test-Path -LiteralPath $_ } |
+    ForEach-Object {
+      Select-String -Path $_ -Pattern 'Fatal error|Assertion failed|Ensure condition failed|LogWindows: Error|(?-i:\bVIOLATION\b)'
+    }
+  if (!$ServerPass -or !$ClientPass -or $MixedViolations.Count -gt 0) {
+    throw "CrowdDemo mixed sandbox gate failed: server_pass=$([bool]$ServerPass) client_pass=$([bool]$ClientPass) violations=$($MixedViolations.Count)"
+  }
+  Write-Host "[CrowdDemo] Mixed sandbox gate passed"
+}
+
+if ($ContinuousLifecycle) {
+  $ServerCheckpoint = Select-String -Path $ServerLog -Pattern "CrowdDemoContinuousLifecycleCheckpoint role=server" |
+    Select-Object -Last 1
+  $ClientCheckpoint = if ($NoClient) { $null } else {
+    Select-String -Path $ClientLog -Pattern "CrowdDemoContinuousLifecycleCheckpoint role=client" |
+      Select-Object -Last 1
+  }
+  $ServerOperations = @(Select-String -Path $ServerLog -Pattern "CrowdDemoContinuousLifecycle role=server stage=operation")
+  $ClientOperations = if ($NoClient) { @() } else {
+    @(Select-String -Path $ClientLog -Pattern "CrowdDemoContinuousLifecycle role=client stage=operation")
+  }
+  $ServerOperation = $ServerOperations | Select-Object -Last 1
+  $ClientOperation = $ClientOperations | Select-Object -Last 1
+  $ContinuousViolations = @($ServerLog, $ClientLog) | Where-Object { Test-Path -LiteralPath $_ } |
+    ForEach-Object {
+      Select-String -Path $_ -Pattern 'Fatal error|Assertion failed|Ensure condition failed|LogWindows: Error|(?-i:\bVIOLATION\b)'
+    }
+  $ServerReady = $ServerCheckpoint -and $ServerOperation -and
+    $ServerCheckpoint.Line -match 'max_population=20' -and
+    $ServerCheckpoint.Line -match 'stale_reject=0' -and
+    $ServerOperation.Line -match 'active=(19|20)'
+  $ClientCheckpointActive = if ($ClientCheckpoint -and
+    $ClientCheckpoint.Line -match 'active=(\d+)') { $Matches[1] } else { "" }
+  $ClientReady = $NoClient -or ($ClientCheckpoint -and
+    $ClientOperation -and
+    $ClientCheckpointActive -ne "" -and
+    $ClientCheckpoint.Line -match "visible=$ClientCheckpointActive" -and
+    $ClientOperation.Line -match 'active=(19|20)' -and
+    $ClientCheckpoint.Line -match 'stale_reject=0')
+  $MatchedSequence = ""
+  $MatchedHash = ""
+  if (!$NoClient) {
+    foreach ($ClientLine in ($ClientOperations | Select-Object -Last 32)) {
+      if ($ClientLine.Line -match 'sequence=(\d+).+hash=(\d+)') {
+        $CandidateSequence = $Matches[1]
+        $CandidateHash = $Matches[2]
+        $ServerMatch = $ServerOperations | Where-Object {
+          $_.Line -match "sequence=$CandidateSequence\b" -and
+          $_.Line -match "hash=$CandidateHash\b"
+        } | Select-Object -Last 1
+        if ($ServerMatch) {
+          $MatchedSequence = $CandidateSequence
+          $MatchedHash = $CandidateHash
+        }
+      }
+    }
+  }
+  $HashReady = $NoClient -or ($MatchedSequence -ne "" -and $MatchedHash -ne "")
+  if (!$ServerReady -or !$ClientReady -or !$HashReady -or $ContinuousViolations.Count -gt 0) {
+    throw "CrowdDemo continuous lifecycle gate failed: server=$([bool]$ServerReady) client=$([bool]$ClientReady) hash=$([bool]$HashReady) violations=$($ContinuousViolations.Count)"
+  }
+  Write-Host "[CrowdDemo] Continuous lifecycle gate passed: sequence=$MatchedSequence entity_set_hash=$MatchedHash"
+}
+
+if ($NavFlowProductSmall) {
+  $ProductPass = Select-String -Path $ServerLog `
+    -Pattern "PASS CrowdDemoNavSurfaceGraph stage=validation.*product_small=1" |
+    Select-Object -Last 1
+  $BoundaryPass = Select-String -Path $ServerLog `
+    -Pattern "CrowdDemoBoundaryTransaction step=" |
+    Select-Object -Last 1
+  $ProductViolations = @($ServerLog, $ClientLog) |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    ForEach-Object {
+      Select-String -Path $_ `
+        -Pattern 'Fatal error|Assertion failed|Ensure condition failed|LogWindows: Error|(?-i:\bVIOLATION\b)'
+    }
+  if (!$ProductPass -or !$BoundaryPass -or $ProductViolations.Count -gt 0) {
+    throw "CrowdDemo NavFlowProductSmall gate failed: product=$([bool]$ProductPass) boundary=$([bool]$BoundaryPass) violations=$($ProductViolations.Count)"
+  }
+  Write-Host "[CrowdDemo] NavFlowProductSmall gate passed"
+}
+
+if ($FriendlyLogisticsSmall) {
+  $ServerPass = Select-String -Path $ServerLog `
+    -Pattern "PASS CrowdDemoFriendlyLogistics role=server" |
+    Select-Object -Last 1
+  $ClientPass = if ($NoClient) { $true } else {
+    Select-String -Path $ClientLog `
+      -Pattern "PASS CrowdDemoFriendlyLogistics role=client" |
+      Select-Object -Last 1
+  }
+  $FriendlyViolations = @($ServerLog, $ClientLog) |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    ForEach-Object {
+      Select-String -Path $_ `
+        -Pattern 'Fatal error|Assertion failed|Ensure condition failed|LogWindows: Error|(?-i:\bVIOLATION\b)'
+  }
+  $HashMatch = $NoClient
+  $CargoVisualReady = $NoClient
+  if ((!$NoClient) -and $ServerPass -and $ClientPass -and
+    ($ServerPass.Line -match 'state_hash=(\d+)')) {
+    $ServerHash = $Matches[1]
+    $HashMatch = $ClientPass.Line -match "state_hash=$ServerHash\b"
+    $CargoVisualReady =
+      $ClientPass.Line -match 'cargo_attach=([1-9]\d*)' -and
+      $ClientPass.Line -match 'cargo_detach=([1-9]\d*)' -and
+      $ClientPass.Line -match 'cargo_visible=0' -and
+      $ClientPass.Line -match 'presentation_instances=20'
+  }
+  if ((!$ServerPass) -or (!$ClientPass) -or (!$HashMatch) -or
+    (!$CargoVisualReady) -or
+    ($FriendlyViolations.Count -gt 0)) {
+    throw "CrowdDemo FriendlyLogisticsSmall gate failed: server=$([bool]$ServerPass) client=$([bool]$ClientPass) hash=$HashMatch cargo_visual=$CargoVisualReady violations=$($FriendlyViolations.Count)"
+  }
+  Write-Host "[CrowdDemo] FriendlyLogisticsSmall gate passed"
 }
 
 function ConvertFrom-CrowdDemoMetricLine([string]$Line) {

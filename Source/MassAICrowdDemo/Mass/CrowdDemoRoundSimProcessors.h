@@ -6,6 +6,7 @@
 #include "CrowdDemoTypes.h"
 #include "CrowdDemoRoundSimProcessors.generated.h"
 
+class UCrowdDemoRoundSimPipelineSubsystem;
 
 UCLASS()
 class MASSAICROWDDEMO_API UCrowdDemoRoundPlanApplyProcessor : public UMassProcessor
@@ -121,9 +122,7 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundTargetRegionGuidanceProcessor : public 
   GENERATED_BODY()
 public: UCrowdDemoRoundTargetRegionGuidanceProcessor();
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private: FMassEntityQuery EntityQuery;
 };
 
 
@@ -147,37 +146,11 @@ private: FMassEntityQuery EntityQuery;
 
 
 UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundHitResponseBoundaryApplyProcessor : public UMassProcessor
+class MASSAICROWDDEMO_API UCrowdDemoRoundCombatBoundaryProcessor : public UMassProcessor
 {
   GENERATED_BODY()
 public:
-  UCrowdDemoRoundHitResponseBoundaryApplyProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundRangedCombatProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundRangedCombatProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundReactiveMotionIntentComposeProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundReactiveMotionIntentComposeProcessor();
+  UCrowdDemoRoundCombatBoundaryProcessor();
 protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
@@ -194,24 +167,9 @@ public:
   float GetLastGuidanceWorkMilliseconds() const
   { return LastGuidanceWorkMilliseconds; }
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 private:
-  FMassEntityQuery EntityQuery;
   float LastGuidanceWorkMilliseconds = 0.0f;
-};
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundVisualStateResolveProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundVisualStateResolveProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 UCLASS()
@@ -221,10 +179,7 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundParticleConstraintProcessor : public UM
 public:
   UCrowdDemoRoundParticleConstraintProcessor();
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 UCLASS()
@@ -234,39 +189,23 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundObstacleConstraintProcessor : public UM
 public:
   UCrowdDemoRoundObstacleConstraintProcessor();
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundFacingResolveProcessor : public UMassProcessor
+class MASSAICROWDDEMO_API UCrowdDemoRoundFacingFinalizeProcessor : public UMassProcessor
 {
   GENERATED_BODY()
 public:
-  UCrowdDemoRoundFacingResolveProcessor();
+  UCrowdDemoRoundFacingFinalizeProcessor();
 protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 private:
+  bool ApplyPreparedCommit(
+    UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
+    FMassExecutionContext& Context);
   FMassEntityQuery EntityQuery;
-};
-
-
-
-UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundMovementFinalizeProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundMovementFinalizeProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery ValidationQuery;
-  FMassEntityQuery ApplyQuery;
 };
 
 UCLASS()
@@ -276,10 +215,7 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundPostFinalizeMetricsProcessor : public U
 public:
   UCrowdDemoRoundPostFinalizeMetricsProcessor();
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 
@@ -294,10 +230,7 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundAuthorityCommitProcessor : public UMass
 public:
   UCrowdDemoRoundAuthorityCommitProcessor();
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 UCLASS()
@@ -307,10 +240,7 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundClientPredictionCommitProcessor : publi
 public:
   UCrowdDemoRoundClientPredictionCommitProcessor();
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 UCLASS()
@@ -320,10 +250,7 @@ class MASSAICROWDDEMO_API UCrowdDemoRoundCheckpointPublisherProcessor : public U
 public:
   UCrowdDemoRoundCheckpointPublisherProcessor();
 protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
 };
 
 UCLASS()
@@ -338,11 +265,8 @@ protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 private:
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundRangedCombatProcessor> RangedCombatProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundHitResponseBoundaryApplyProcessor> HitResponseBoundaryApplyProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundReactiveMotionIntentComposeProcessor> ReactiveMotionIntentComposeProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundCombatBoundaryProcessor> CombatBoundaryProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundMovementWorkProcessor> MovementWorkProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundVisualStateResolveProcessor> VisualStateResolveProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPlanApplyProcessor> PlanApplyProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundBoundaryGatherProcessor> BoundaryGatherProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundOpenSpawnRelaxationPhasePrepareProcessor> OpenSpawnRelaxationPhasePrepareProcessor;
@@ -355,8 +279,7 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundFlowPreferredVelocityProcessor> FlowPreferredVelocityProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundParticleConstraintProcessor> ParticleConstraintProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundObstacleConstraintProcessor> ObstacleConstraintProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundFacingResolveProcessor> FacingResolveProcessor;
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundMovementFinalizeProcessor> MovementFinalizeProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundFacingFinalizeProcessor> FacingFinalizeProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPostFinalizeMetricsProcessor> PostFinalizeMetricsProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundAuthorityCommitProcessor> AuthorityCommitProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundClientPredictionCommitProcessor> ClientPredictionCommitProcessor;

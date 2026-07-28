@@ -13,7 +13,8 @@ public class MassCrowdRuntime : ModuleRules
       "Engine",
       "MassCrowdCore",
       "MassEntity",
-      "MassSpawner"
+      "MassSpawner",
+      "NavigationSystem"
     });
   }
 }

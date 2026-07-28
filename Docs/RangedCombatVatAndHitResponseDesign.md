@@ -89,8 +89,8 @@ TargetAcquire/Validate
 → ProjectileHitFactBuild
 → HitResponseResolve
 → ProjectileFinalize/Destroy
-→ VisualStateResolve
-→ Authority/VisualEventCommit
+→ FacingFinalize（同一次原子写回提交Movement与Combat/Visual）
+→ Authority/VisualEventCommit（无Mass查询，仅消费最终记录/事件）
 ```
 
 [INFERRED][HIGH] windup 开始时锁定 `TargetAgentId + TargetLifecycleSerial` 和目标位置；发射请求按 `(FixedStepIndex, SourceAgentId, FireSequence)` 稳定排序，同一 windup 只能生成一个请求。
@@ -222,5 +222,13 @@ HitFlashProfileKey
 [INFERRED][HIGH] 详细POD合同、WORK/GT边界、插件模块、迁移顺序和规模门以`MassProjectileHitFrameworkDesign.md`为准；本文件继续作为T7/T8现有业务与视觉证据事实源。
 
 [COMPUTED][HIGH] 2026-07-17插件生产前置核对没有改变T8基线。T3双向交换已在8455/8456完成修复与验收，T4有效通道已在8460/8461关闭；当前仅T6异构前置门仍未关闭。因此尚未创建插件或切换T8，当前数组权威、32实体镜像pool、全Agent扫描、单调HitEventId去重和Reliable视觉事件仍是待替换旧边界。
+
+## 14. 宿主Combat boundary transaction（2026-07-22）
+
+[COMPUTED][HIGH] RangedCombat、HitResponse与ReactiveMotion已从三个独立processor收敛为唯一Demo宿主Combat事务。事务先一次采集完整、稳定排序的Agent业务事实，再严格执行Attack/Projectile→Hit resolve→Reactive advance，最后一次性写回Stats/Business/Attack/Reactive/HitFlash/Visual和ReactiveStep；任一完整性校验失败时不允许部分提交。
+
+[COMPUTED][HIGH] 原跨processor `PendingProjectileHitFacts`桥与三个旧processor实现已删除。T7的确定性测试HitFacts与T8的Projectile HitFacts现在都在同一事务内部进入统一Resolve路径；Projectile轨迹权威仍是Pipeline数组，Mass projectile pool仍只是表现镜像，本切片没有把它伪装为插件Core能力。
+
+[COMPUTED][HIGH] 8755 T7技术回归为20 agents/20 visible、fixed-step p95=`2.452ms`；8756 T8得到spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client attack/projectile/event hash一致为`2730049702/4215166500/4204062592`，fixed-step p95=`2.247ms`。本切片没有重录T7/T8人工视频，也不外推移动目标、100/500或entity-native projectile能力。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

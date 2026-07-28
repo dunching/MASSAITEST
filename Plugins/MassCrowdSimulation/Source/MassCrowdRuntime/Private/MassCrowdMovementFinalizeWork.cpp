@@ -35,6 +35,11 @@ namespace
   uint32 BuildMovementHash(const FCrowdMassMovementFinalizeRecord& Record)
   {
     uint32 Hash = Fold(FnvOffset, 1u);
+    Hash = Fold(Hash, Record.EntityRef.ProviderId);
+    Hash = Fold(Hash, static_cast<uint32>(Record.EntityRef.StableEntityId));
+    Hash = Fold(Hash, static_cast<uint32>(
+      Record.EntityRef.StableEntityId >> 32));
+    Hash = Fold(Hash, Record.EntityRef.LifecycleSerial);
     Hash = FoldInt(Hash, Record.AgentId);
     Hash = Fold(Hash, Record.LifecycleSerial);
     Hash = Fold(Hash, Record.CapabilityProfileKey);
@@ -81,7 +86,8 @@ bool FCrowdMassMovementFinalizeWork::BuildInputFromPrepared(
     const FCrowdMassFinalKinematicState& Kinematic = SortedKinematics[Index];
     const FCrowdFacingResult& Facing = SortedFacings[Index];
     if (Agent.Identity.AgentId == INDEX_NONE
-      || Agent.Identity.LifecycleSerial <= 0
+      || !Agent.AgentFacts.IsWellFormed()
+      || Agent.Identity.GetStableEntityRef() != Agent.AgentFacts.StableEntityRef
       || Kinematic.AgentId != Agent.Identity.AgentId || !Kinematic.bValid
       || Facing.AgentId != Agent.Identity.AgentId
       || !IsFiniteVector(Kinematic.Position)
@@ -94,14 +100,17 @@ bool FCrowdMassMovementFinalizeWork::BuildInputFromPrepared(
     }
     FCrowdMassMovementFinalizeRecord& Record =
       OutInput.Records.AddDefaulted_GetRef();
+    Record.EntityRef = Agent.AgentFacts.StableEntityRef;
     Record.AgentId = Agent.Identity.AgentId;
-    Record.LifecycleSerial = static_cast<uint32>(
-      Agent.Identity.LifecycleSerial);
+    Record.LifecycleSerial = Record.EntityRef.LifecycleSerial;
     Record.CapabilityProfileKey = Agent.Properties.CapabilityProfileKey;
     Record.Position = Kinematic.Position;
     Record.Velocity = Kinematic.Velocity;
     Record.YawDegrees = Facing.ResolvedYawDegrees;
-    OutTargets.Add({Record.AgentId, Record.LifecycleSerial});
+    FCrowdMassCommitTarget& Target = OutTargets.AddDefaulted_GetRef();
+    Target.EntityRef = Record.EntityRef;
+    Target.AgentId = Record.AgentId;
+    Target.LifecycleSerial = Record.LifecycleSerial;
   }
   return true;
 }
@@ -120,21 +129,23 @@ FCrowdMassMovementFinalizeWork::BuildCommitPlan(
   {
     if (A.CapabilityProfileKey != B.CapabilityProfileKey)
       return A.CapabilityProfileKey < B.CapabilityProfileKey;
-    return A.AgentId < B.AgentId;
+    return A.EntityRef < B.EntityRef;
   });
 
   TArray<FCrowdMassWorkBatchOutput> Batches;
-  TArray<int32> SeenAgentIds;
-  SeenAgentIds.Reserve(Records.Num());
+  TArray<FCrowdStableEntityRef> SeenEntityRefs;
+  SeenEntityRefs.Reserve(Records.Num());
   for (const FCrowdMassMovementFinalizeRecord& Record : Records)
-    SeenAgentIds.Add(Record.AgentId);
-  SeenAgentIds.Sort();
-  for (int32 Index = 1; Index < SeenAgentIds.Num(); ++Index)
-    if (SeenAgentIds[Index] == SeenAgentIds[Index - 1])
+    SeenEntityRefs.Add(Record.EntityRef);
+  SeenEntityRefs.Sort();
+  for (int32 Index = 1; Index < SeenEntityRefs.Num(); ++Index)
+    if (SeenEntityRefs[Index] == SeenEntityRefs[Index - 1])
       return Output;
   for (const FCrowdMassMovementFinalizeRecord& Record : Records)
   {
-    if (Record.AgentId == INDEX_NONE || Record.LifecycleSerial == 0
+    if (!Record.EntityRef.IsValid()
+      || Record.AgentId == INDEX_NONE
+      || Record.LifecycleSerial != Record.EntityRef.LifecycleSerial
       || !IsFiniteVector(Record.Position)
       || !IsFiniteVector(Record.Velocity)
       || !FMath::IsFinite(Record.YawDegrees))
@@ -162,6 +173,7 @@ FCrowdMassMovementFinalizeWork::BuildCommitPlan(
     Movement.YawDegrees = Record.YawDegrees;
     Movement.StableHash = BuildMovementHash(Record);
     Movement.bValid = true;
+    Batch->EntityRefs.Add(Record.EntityRef);
   }
 
   for (FCrowdMassWorkBatchOutput& Batch : Batches)
@@ -183,7 +195,8 @@ FCrowdMassMovementFinalizeWork::BuildCommitPlan(
   uint32 Hash = Fold(FnvOffset, 1u);
   Hash = FoldInt(Hash, Input.FixedStepIndex);
   Hash = FoldInt(Hash, Input.PlanRevision);
-  Hash = Fold(Hash, Output.CommitPlan.StableHash);
+  Hash = Fold(Hash, static_cast<uint32>(Output.CommitPlan.StableHash));
+  Hash = Fold(Hash, static_cast<uint32>(Output.CommitPlan.StableHash >> 32));
   Output.StableHash = Hash;
   Output.bCompleted = true;
   return Output;

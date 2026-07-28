@@ -53,6 +53,7 @@ public:
   virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
   UInstancedStaticMeshComponent* GetCrowdInstancesForClientVisuals() const;
   UInstancedStaticMeshComponent* GetCrowdHitFlashInstancesForClientVisuals() const;
+  UInstancedStaticMeshComponent* GetCargoInstancesForClientVisuals() const;
   void ClearCrowdVisualInstances();
   int32 GetCrowdVisualInstanceCount() const;
   void RecordClientVisualSample(float ReplicationSampleAgeMs, float DisplayToAuthoritativeCm);
@@ -98,6 +99,9 @@ protected:
 
   UPROPERTY(VisibleAnywhere)
   TObjectPtr<UInstancedStaticMeshComponent> CrowdHitFlashInstances;
+
+  UPROPERTY(VisibleAnywhere)
+  TObjectPtr<UInstancedStaticMeshComponent> CargoInstances;
 
   UPROPERTY(VisibleAnywhere)
   TObjectPtr<UInstancedStaticMeshComponent> ProjectileInstances;

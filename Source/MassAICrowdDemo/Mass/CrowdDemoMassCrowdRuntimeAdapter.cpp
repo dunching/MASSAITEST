@@ -131,13 +131,24 @@ namespace
 
 bool FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
   const FCrowdDemoMassIdentityFragment& Identity,
+  const FCrowdMassAgentFragment& RuntimeIdentity,
+  const FCrowdMassBehaviorFragment& RuntimeBehavior,
   const FCrowdDemoRoundSimStateFragment& State,
   const FCrowdDemoMassMovementFragment& Movement,
   const FCrowdDemoParticlePropertiesFragment& Particle,
   FCrowdMassBoundaryAgentRecord& OutRecord)
 {
   OutRecord = {};
+  const FCrowdStableEntityRef EntityRef = RuntimeIdentity.GetStableEntityRef();
+  const FCrowdAgentFacts AgentFacts =
+    RuntimeBehavior.GetAgentFacts(RuntimeIdentity);
   if (Identity.Id == INDEX_NONE || Identity.LifecycleSerial <= 0
+    || RuntimeIdentity.AgentId != Identity.Id
+    || !EntityRef.IsValid()
+    || EntityRef.LifecycleSerial
+      != static_cast<uint32>(Identity.LifecycleSerial)
+    || !AgentFacts.IsWellFormed()
+    || AgentFacts.StableEntityRef != EntityRef
     || !State.bInitialized
     || !FMath::IsFinite(State.Location.X)
     || !FMath::IsFinite(State.Location.Y)
@@ -157,8 +168,8 @@ bool FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
     || Particle.Mobility < 0.0f
     || Movement.MaxSpeedCmPerSecond < 0.0f)
     return false;
-  OutRecord.Identity.AgentId = Identity.Id;
-  OutRecord.Identity.LifecycleSerial = Identity.LifecycleSerial;
+  OutRecord.Identity = RuntimeIdentity;
+  OutRecord.AgentFacts = AgentFacts;
   OutRecord.State.Position = State.Location;
   OutRecord.State.Velocity = State.Velocity;
   OutRecord.State.YawDegrees = State.YawDegrees;
@@ -174,9 +185,11 @@ bool FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
 }
 
 FCrowdMassCommitTarget FCrowdDemoMassCrowdRuntimeAdapter::BuildCommitTarget(
-  const FCrowdDemoMassIdentityFragment& Identity)
+  const FCrowdDemoMassIdentityFragment& Identity,
+  const FCrowdMassAgentFragment& RuntimeIdentity)
 {
   FCrowdMassCommitTarget Target;
+  Target.EntityRef = RuntimeIdentity.GetStableEntityRef();
   Target.AgentId = Identity.Id;
   Target.LifecycleSerial = static_cast<uint32>(Identity.LifecycleSerial);
   return Target;
@@ -678,45 +691,6 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreLocalPredictiveSettings(
   return Target;
 }
 
-bool FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreLocalPredictiveAgent(
-  const FCrowdMassAgentFragment& Identity,
-  const FCrowdMassSimulationStateFragment& State,
-  const FCrowdMassPropertiesFragment& Properties,
-  const FCrowdMassComposedGuidanceFragment& Composed,
-  const float MaximumSpeedCmps,
-  const int32 BlockedAgeSteps,
-  FCrowdLocalPredictiveAgent& OutAgent)
-{
-  OutAgent = {};
-  if (Identity.AgentId == INDEX_NONE || Identity.LifecycleSerial <= 0
-    || !State.bInitialized || !Composed.Value.bValid
-    || Composed.Value.AgentId != Identity.AgentId
-    || Composed.Value.PlanRevision != State.PlanRevision
-    || !FMath::IsFinite(State.Position.X)
-    || !FMath::IsFinite(State.Position.Y)
-    || !FMath::IsFinite(State.Velocity.X)
-    || !FMath::IsFinite(State.Velocity.Y)
-    || !FMath::IsFinite(Composed.Value.AutonomousPreferredVelocity.X)
-    || !FMath::IsFinite(Composed.Value.AutonomousPreferredVelocity.Y)
-    || !FMath::IsFinite(Properties.PhysicalRadiusCm)
-    || !FMath::IsFinite(Properties.HardSafetyGapCm)
-    || !FMath::IsFinite(MaximumSpeedCmps)
-    || Properties.PhysicalRadiusCm <= 0.0f
-    || Properties.HardSafetyGapCm < 0.0f || MaximumSpeedCmps < 0.0f)
-    return false;
-  OutAgent.AgentId = Identity.AgentId;
-  OutAgent.Position = FVector2f(State.Position.X, State.Position.Y);
-  OutAgent.Velocity = FVector2f(State.Velocity.X, State.Velocity.Y);
-  OutAgent.PreferredVelocity = FVector2f(
-    Composed.Value.AutonomousPreferredVelocity.X,
-    Composed.Value.AutonomousPreferredVelocity.Y);
-  OutAgent.PhysicalRadiusCm = Properties.PhysicalRadiusCm;
-  OutAgent.HardSafetyGapCm = Properties.HardSafetyGapCm;
-  OutAgent.MaxSpeedCmps = MaximumSpeedCmps;
-  OutAgent.BlockedAgeSteps = FMath::Max(0, BlockedAgeSteps);
-  return true;
-}
-
 FCrowdLocalPredictiveGrantState
 FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreLocalPredictiveGrant(
   const FCrowdDemoLocalPredictiveGrantState& Source)
@@ -1040,10 +1014,13 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoComposedGuidance(
 bool FCrowdDemoMassCrowdRuntimeAdapter::ApplyCommitRecord(
   const FCrowdMassCommitRecord& Record,
   const FCrowdDemoMassIdentityFragment& Identity,
+  const FCrowdMassAgentFragment& RuntimeIdentity,
   FCrowdDemoRoundSimStateFragment& InOutState)
 {
-  const FCrowdMassCommitTarget Target = BuildCommitTarget(Identity);
+  const FCrowdMassCommitTarget Target =
+    BuildCommitTarget(Identity, RuntimeIdentity);
   if (!Record.Movement.bValid
+    || Record.EntityRef != Target.EntityRef
     || Record.Movement.AgentId != Target.AgentId
     || Record.Movement.LifecycleSerial != Target.LifecycleSerial)
     return false;

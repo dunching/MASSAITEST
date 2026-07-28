@@ -12,6 +12,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Net/UnrealNetwork.h"
 #include "RenderTimer.h"
 #include "ShaderCompiler.h"
@@ -48,6 +49,12 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   CrowdHitFlashInstances->SetMobility(EComponentMobility::Movable);
   CrowdHitFlashInstances->NumCustomDataFloats = 3;
 
+  CargoInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(
+    TEXT("CargoInstances"));
+  CargoInstances->SetupAttachment(SceneRoot);
+  CargoInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  CargoInstances->SetMobility(EComponentMobility::Movable);
+
   ProjectileInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ProjectileInstances"));
   ProjectileInstances->SetupAttachment(SceneRoot);
   ProjectileInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -69,6 +76,7 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   if (CubeMesh.Succeeded())
   {
     PreviewFloor->SetStaticMesh(CubeMesh.Object);
+    CargoInstances->SetStaticMesh(CubeMesh.Object);
   }
 
   static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
@@ -91,6 +99,7 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   if (BasicShapeMaterial.Succeeded())
   {
     PreviewFloor->SetMaterial(0, BasicShapeMaterial.Object);
+    CargoInstances->SetMaterial(0, BasicShapeMaterial.Object);
     ProjectileInstances->SetMaterial(0, BasicShapeMaterial.Object);
     ProjectileImpactInstances->SetMaterial(0, BasicShapeMaterial.Object);
   }
@@ -114,6 +123,42 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
 void ACrowdDemoReplicator::BeginPlay()
 {
   Super::BeginPlay();
+
+  if (FParse::Param(
+      FCommandLine::Get(), TEXT("CrowdDemoFriendlyLogisticsSmall"))
+    && GetNetMode() != NM_DedicatedServer)
+  {
+    UStaticMesh* CarrierMesh = LoadObject<UStaticMesh>(
+      nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+    UMaterialInterface* CarrierMaterial = LoadObject<UMaterialInterface>(
+      nullptr,
+      TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+    if (CarrierMesh && CrowdInstances && CrowdHitFlashInstances)
+    {
+      CrowdInstances->SetStaticMesh(CarrierMesh);
+      CrowdHitFlashInstances->SetStaticMesh(CarrierMesh);
+    }
+    if (CarrierMaterial && CrowdInstances && CrowdHitFlashInstances)
+    {
+      CrowdInstances->SetMaterial(0, CarrierMaterial);
+      CrowdHitFlashInstances->SetMaterial(0, CarrierMaterial);
+      if (UMaterialInstanceDynamic* DynamicCarrier =
+        CrowdInstances->CreateDynamicMaterialInstance(0))
+      {
+        DynamicCarrier->SetVectorParameterValue(
+          TEXT("Color"), FLinearColor(0.02f, 0.16f, 0.8f, 1.0f));
+      }
+    }
+  }
+  if (CargoInstances && GetNetMode() != NM_DedicatedServer)
+  {
+    if (UMaterialInstanceDynamic* CargoMaterial =
+      CargoInstances->CreateDynamicMaterialInstance(0))
+    {
+      CargoMaterial->SetVectorParameterValue(
+        TEXT("Color"), FLinearColor(1.0f, 0.12f, 0.01f, 1.0f));
+    }
+  }
 
   EntityCount = ResolveEntityCount();
   DurationSeconds = ResolveDurationSeconds();
@@ -279,6 +324,12 @@ UInstancedStaticMeshComponent* ACrowdDemoReplicator::GetCrowdInstancesForClientV
 UInstancedStaticMeshComponent* ACrowdDemoReplicator::GetCrowdHitFlashInstancesForClientVisuals() const
 {
   return CrowdHitFlashInstances;
+}
+
+UInstancedStaticMeshComponent*
+ACrowdDemoReplicator::GetCargoInstancesForClientVisuals() const
+{
+  return CargoInstances;
 }
 
 void ACrowdDemoReplicator::ClearCrowdVisualInstances()

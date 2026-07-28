@@ -115,16 +115,6 @@ struct FCrowdDemoReactiveMotionFragment : public FMassFragment
 };
 
 USTRUCT()
-struct FCrowdDemoReactiveMotionStepFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) bool bActive = false;
-  UPROPERTY(Transient) float ProposedZ = 0.0f;
-  UPROPERTY(Transient) float VerticalVelocityCmps = 0.0f;
-};
-
-USTRUCT()
 struct FCrowdDemoHitFlashFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -201,17 +191,6 @@ struct FCrowdDemoRoundFormationFragment : public FMassFragment
 };
 
 USTRUCT()
-struct FCrowdDemoTargetCapabilityFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient) uint32 CapabilityMask = 1u;
-  UPROPERTY(Transient) float MinimumFunctionalDistanceCm = 0.0f;
-  UPROPERTY(Transient) float MaximumFunctionalDistanceCm = 5000.0f;
-  UPROPERTY(Transient) int32 StableBusinessPriority = 0;
-};
-
-USTRUCT()
 struct FCrowdDemoRoundFlowSampleFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -246,21 +225,6 @@ struct FCrowdDemoRoundFlowSampleFragment : public FMassFragment
 };
 
 USTRUCT()
-struct FCrowdDemoRoundProposedMovementFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient)
-  FVector StartLocation = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector ProposedLocation = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector ProposedVelocity = FVector::ZeroVector;
-};
-
-USTRUCT()
 struct FCrowdDemoParticlePropertiesFragment : public FMassFragment
 {
   GENERATED_BODY()
@@ -283,29 +247,6 @@ struct FCrowdDemoParticlePropertiesFragment : public FMassFragment
   UPROPERTY(Transient)
   float Mobility = 1.0f;
 };
-
-USTRUCT()
-struct FCrowdDemoRoundObstacleConstraintFragment : public FMassFragment
-{
-  GENERATED_BODY()
-
-  UPROPERTY(Transient)
-  FVector ConstrainedLocation = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  FVector ConstrainedVelocity = FVector::ZeroVector;
-
-  UPROPERTY(Transient)
-  bool bHitObstacle = false;
-
-  UPROPERTY(Transient)
-  bool bPenetrating = false;
-
-  bool bHitFlowBounds = false;
-  float FlowBoundsReprojectDeltaCm = 0.0f;
-};
-
-
 
 USTRUCT()
 struct FCrowdDemoMassVisualFragment : public FMassFragment

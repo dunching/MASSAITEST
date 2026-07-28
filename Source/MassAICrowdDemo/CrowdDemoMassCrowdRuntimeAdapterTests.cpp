@@ -20,6 +20,17 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   FCrowdDemoMassIdentityFragment Identity;
   Identity.Id = 8;
   Identity.LifecycleSerial = 17;
+  FCrowdMassAgentFragment RuntimeIdentity;
+  RuntimeIdentity.AgentId = Identity.Id;
+  RuntimeIdentity.SetStableEntityRef({
+    1u, static_cast<uint64>(Identity.Id) + 1u,
+    static_cast<uint32>(Identity.LifecycleSerial)});
+  FCrowdAgentFacts RuntimeFacts;
+  RuntimeFacts.StableEntityRef = RuntimeIdentity.GetStableEntityRef();
+  RuntimeFacts.CapabilitySet.Add(ECrowdCapability::Move);
+  RuntimeFacts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+  FCrowdMassBehaviorFragment RuntimeBehavior;
+  RuntimeBehavior.SetAgentFacts(RuntimeFacts);
   FCrowdDemoRoundSimStateFragment State;
   State.Location = FVector(123.0f, 456.0f, 60.0f);
   State.Velocity = FVector(70.0f, 80.0f, 0.0f);
@@ -49,9 +60,11 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   FCrowdMassBoundaryAgentRecord Boundary;
   TestTrue(TEXT("Demo base facts adapt to Runtime boundary record"),
     FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
-      Identity, State, Movement, Particle, Boundary));
+      Identity, RuntimeIdentity, RuntimeBehavior,
+      State, Movement, Particle, Boundary));
   FCrowdMassGatherRecord Gathered;
   Gathered.Identity = Boundary.Identity;
+  Gathered.AgentFacts = Boundary.AgentFacts;
   Gathered.State = Boundary.State;
   Gathered.Properties = Boundary.Properties;
   Gathered.Guidance.SharedFlow =
@@ -149,9 +162,11 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   FCrowdMassBoundaryAgentRecord RebuiltBoundary;
   TestTrue(TEXT("Runtime boundary rebuilds from current Demo facts"),
     FCrowdDemoMassCrowdRuntimeAdapter::BuildBoundaryAgentRecord(
-      Identity, State, Movement, Particle, RebuiltBoundary));
+      Identity, RuntimeIdentity, RuntimeBehavior,
+      State, Movement, Particle, RebuiltBoundary));
   FCrowdMassGatherRecord RebuiltGather;
   RebuiltGather.Identity = RebuiltBoundary.Identity;
+  RebuiltGather.AgentFacts = RebuiltBoundary.AgentFacts;
   RebuiltGather.State = RebuiltBoundary.State;
   RebuiltGather.Properties = RebuiltBoundary.Properties;
   RebuiltGather.Guidance.TargetRegion =
@@ -162,6 +177,7 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
     RebuiltGather.Guidance.TargetRegion.StableHash, OriginalGuidanceHash);
 
   FCrowdMassCommitRecord Commit;
+  Commit.EntityRef = RuntimeIdentity.GetStableEntityRef();
   Commit.CapabilityProfileKey = Particle.CapabilityProfileKey;
   Commit.PlanRevision = 6;
   Commit.Movement.AgentId = Identity.Id;
@@ -173,7 +189,7 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   const float OriginalServerTime = State.SimulatedServerTimeSeconds;
   TestTrue(TEXT("valid commit adapts back to Demo state"),
     FCrowdDemoMassCrowdRuntimeAdapter::ApplyCommitRecord(
-      Commit, Identity, State));
+      Commit, Identity, RuntimeIdentity, State));
   TestTrue(TEXT("commit position applied"),
     State.Location.Equals(Commit.Movement.Position));
   TestEqual(TEXT("commit revision applied"), State.PlanRevision, 6);
@@ -185,7 +201,7 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   const FVector BeforeRejectedCommit = State.Location;
   TestFalse(TEXT("lifecycle mismatch rejects adapter commit"),
     FCrowdDemoMassCrowdRuntimeAdapter::ApplyCommitRecord(
-      Commit, WrongIdentity, State));
+      Commit, WrongIdentity, RuntimeIdentity, State));
   TestTrue(TEXT("rejected commit does not partially write"),
     State.Location.Equals(BeforeRejectedCommit));
   return true;

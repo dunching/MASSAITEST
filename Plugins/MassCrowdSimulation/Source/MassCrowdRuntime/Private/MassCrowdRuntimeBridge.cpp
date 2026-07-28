@@ -4,6 +4,8 @@ namespace
 {
   constexpr uint32 FnvOffset = 2166136261u;
   constexpr uint32 FnvPrime = 16777619u;
+  constexpr uint64 FnvOffset64 = 14695981039346656037ull;
+  constexpr uint64 FnvPrime64 = 1099511628211ull;
 
   uint32 Fold(uint32 Hash, const uint32 Value)
   {
@@ -23,6 +25,47 @@ namespace
   uint32 FoldFloat(uint32 Hash, const float Value, const float Scale = 100.0f)
   {
     return FoldInt(Hash, FMath::RoundToInt(Value * Scale));
+  }
+
+  uint64 Fold64(uint64 Hash, const uint64 Value)
+  {
+    for (int32 Byte = 0; Byte < 8; ++Byte)
+    {
+      Hash ^= static_cast<uint8>((Value >> (Byte * 8)) & 0xffull);
+      Hash *= FnvPrime64;
+    }
+    return Hash;
+  }
+
+  uint64 FoldInt64(uint64 Hash, const int32 Value)
+  {
+    return Fold64(Hash, static_cast<uint32>(Value));
+  }
+
+  uint64 FoldFloat64(
+    uint64 Hash, const float Value, const float Scale = 100.0f)
+  {
+    return FoldInt64(Hash, FMath::RoundToInt(Value * Scale));
+  }
+
+  uint64 FoldRef64(uint64 Hash, const FCrowdStableEntityRef& Ref)
+  {
+    Hash = Fold64(Hash, Ref.ProviderId);
+    Hash = Fold64(Hash, Ref.StableEntityId);
+    return Fold64(Hash, Ref.LifecycleSerial);
+  }
+
+  uint64 FoldFacts64(uint64 Hash, const FCrowdAgentFacts& Facts)
+  {
+    Hash = FoldRef64(Hash, Facts.StableEntityRef);
+    Hash = Fold64(Hash, Facts.FactionKey);
+    Hash = Fold64(Hash, Facts.CapabilitySet.Bits);
+    Hash = Fold64(Hash, static_cast<uint8>(Facts.ActiveBehavior));
+    Hash = FoldRef64(Hash, Facts.BusinessTaskRef);
+    Hash = FoldRef64(Hash, Facts.TargetRef);
+    Hash = Fold64(Hash, Facts.MovementProfileKey);
+    Hash = Fold64(Hash, Facts.PresentationProfileKey);
+    return Fold64(Hash, Facts.RuntimeState);
   }
 
   bool IsFiniteVector(const FVector& Value)
@@ -50,7 +93,9 @@ namespace
   bool IsValidBoundaryRecord(const FCrowdMassBoundaryAgentRecord& Record)
   {
     return Record.Identity.AgentId != INDEX_NONE
-      && Record.Identity.LifecycleSerial > 0
+      && Record.Identity.GetStableEntityRef().IsValid()
+      && Record.AgentFacts.IsWellFormed()
+      && Record.Identity.GetStableEntityRef() == Record.AgentFacts.StableEntityRef
       && Record.State.bInitialized
       && IsFiniteVector(Record.State.Position)
       && IsFiniteVector(Record.State.Velocity)
@@ -81,37 +126,41 @@ void FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
   OutSnapshot.Agents = TArray<FCrowdMassBoundaryAgentRecord>(RecordView);
   OutSnapshot.Agents.Sort([](const auto& A, const auto& B)
   {
-    return A.Identity.AgentId < B.Identity.AgentId;
+    return A.AgentFacts.StableEntityRef < B.AgentFacts.StableEntityRef;
   });
-  uint32 Hash = Fold(FnvOffset, 1u);
-  Hash = FoldInt(Hash, FixedStepIndex);
-  Hash = FoldInt(Hash, PlanRevision);
-  int32 PreviousAgentId = INDEX_NONE;
+  uint64 Hash = Fold64(FnvOffset64, 2u);
+  Hash = FoldInt64(Hash, FixedStepIndex);
+  Hash = FoldInt64(Hash, PlanRevision);
+  FCrowdStableEntityRef PreviousRef;
+  TSet<int32> SeenAgentIds;
   for (const FCrowdMassBoundaryAgentRecord& Record : OutSnapshot.Agents)
   {
     if (!IsValidBoundaryRecord(Record)
-      || Record.Identity.AgentId <= PreviousAgentId)
+      || (!PreviousRef.IsUnset()
+        && !(PreviousRef < Record.AgentFacts.StableEntityRef))
+      || SeenAgentIds.Contains(Record.Identity.AgentId))
     {
       OutSnapshot = {};
       return;
     }
-    PreviousAgentId = Record.Identity.AgentId;
-    Hash = FoldInt(Hash, Record.Identity.AgentId);
-    Hash = FoldInt(Hash, Record.Identity.LifecycleSerial);
-    Hash = FoldFloat(Hash, static_cast<float>(Record.State.Position.X));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.State.Position.Y));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.State.Position.Z));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.State.Velocity.X));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.State.Velocity.Y));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.State.Velocity.Z));
-    Hash = FoldFloat(Hash, Record.State.YawDegrees);
-    Hash = FoldInt(Hash, Record.State.PlanRevision);
-    Hash = FoldFloat(Hash, Record.Properties.PhysicalRadiusCm);
-    Hash = FoldFloat(Hash, Record.Properties.HardSafetyGapCm);
-    Hash = FoldFloat(Hash, Record.Properties.SoftMarginCm);
-    Hash = FoldFloat(Hash, Record.Properties.Mobility);
-    Hash = FoldFloat(Hash, Record.Properties.MaximumSpeedCmps);
-    Hash = Fold(Hash, Record.Properties.CapabilityProfileKey);
+    PreviousRef = Record.AgentFacts.StableEntityRef;
+    SeenAgentIds.Add(Record.Identity.AgentId);
+    Hash = FoldFacts64(Hash, Record.AgentFacts);
+    Hash = FoldInt64(Hash, Record.Identity.AgentId);
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.State.Position.X));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.State.Position.Y));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.State.Position.Z));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.State.Velocity.X));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.State.Velocity.Y));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.State.Velocity.Z));
+    Hash = FoldFloat64(Hash, Record.State.YawDegrees);
+    Hash = FoldInt64(Hash, Record.State.PlanRevision);
+    Hash = FoldFloat64(Hash, Record.Properties.PhysicalRadiusCm);
+    Hash = FoldFloat64(Hash, Record.Properties.HardSafetyGapCm);
+    Hash = FoldFloat64(Hash, Record.Properties.SoftMarginCm);
+    Hash = FoldFloat64(Hash, Record.Properties.Mobility);
+    Hash = FoldFloat64(Hash, Record.Properties.MaximumSpeedCmps);
+    Hash = Fold64(Hash, Record.Properties.CapabilityProfileKey);
   }
   OutSnapshot.StableHash = Hash;
   OutSnapshot.bValid = true;
@@ -185,6 +234,7 @@ bool FCrowdMassRuntimeBridge::BuildGuidanceRecords(
     }
     FCrowdMassGatherRecord& Record = OutRecords.AddDefaulted_GetRef();
     Record.Identity = Base.Identity;
+    Record.AgentFacts = Base.AgentFacts;
     Record.State = Base.State;
     Record.Properties = Base.Properties;
     Record.Guidance.SharedFlow = Flow;
@@ -233,14 +283,18 @@ void FCrowdMassRuntimeBridge::BuildWorkBatches(
   TArray<FCrowdMassGatherRecord> Records(RecordView);
   Records.Sort([](const auto& A, const auto& B)
   {
-    return A.Identity.AgentId < B.Identity.AgentId;
+    return A.AgentFacts.StableEntityRef < B.AgentFacts.StableEntityRef;
   });
-  int32 PreviousAgentId = INDEX_NONE;
+  FCrowdStableEntityRef PreviousRef;
+  TSet<int32> SeenAgentIds;
   for (const FCrowdMassGatherRecord& Record : Records)
   {
     if (Record.Identity.AgentId == INDEX_NONE
-      || Record.Identity.AgentId <= PreviousAgentId
-      || Record.Identity.LifecycleSerial <= 0
+      || !Record.AgentFacts.IsWellFormed()
+      || Record.Identity.GetStableEntityRef() != Record.AgentFacts.StableEntityRef
+      || (!PreviousRef.IsUnset()
+        && !(PreviousRef < Record.AgentFacts.StableEntityRef))
+      || SeenAgentIds.Contains(Record.Identity.AgentId)
       || !Record.State.bInitialized
       || !IsFiniteVector(Record.State.Position)
       || !IsFiniteVector(Record.State.Velocity)
@@ -259,7 +313,8 @@ void FCrowdMassRuntimeBridge::BuildWorkBatches(
       OutBatches.Reset();
       return;
     }
-    PreviousAgentId = Record.Identity.AgentId;
+    PreviousRef = Record.AgentFacts.StableEntityRef;
+    SeenAgentIds.Add(Record.Identity.AgentId);
     const FCrowdSimulationProfile* Profile = FindProfile(
       Profiles, Record.Properties.CapabilityProfileKey);
     if (!Profile)
@@ -369,7 +424,7 @@ void FCrowdMassRuntimeBridge::MergeWorkOutputs(
   if (Inputs.IsEmpty()) return;
   OutPlan.FixedStepIndex = Inputs[0].WorkOutput.FixedStepIndex;
   OutPlan.PlanRevision = Inputs[0].WorkOutput.PlanRevision;
-  uint32 Hash = Fold(FnvOffset, 1);
+  uint64 Hash = Fold64(FnvOffset64, 2);
   uint32 PreviousProfileKey = 0;
   bool bHavePreviousProfile = false;
   for (FCrowdMassWorkBatchOutput& Input : Inputs)
@@ -378,24 +433,41 @@ void FCrowdMassRuntimeBridge::MergeWorkOutputs(
         && Input.CapabilityProfileKey == PreviousProfileKey)
       || !Input.WorkOutput.bValid
       || Input.WorkOutput.FixedStepIndex != OutPlan.FixedStepIndex
-      || Input.WorkOutput.PlanRevision != OutPlan.PlanRevision)
+      || Input.WorkOutput.PlanRevision != OutPlan.PlanRevision
+      || Input.EntityRefs.Num() != Input.WorkOutput.Movements.Num())
       return;
     PreviousProfileKey = Input.CapabilityProfileKey;
     bHavePreviousProfile = true;
-    Input.WorkOutput.Movements.Sort([](const auto& A, const auto& B)
+
+    struct FResolvedMovement
     {
-      return A.AgentId < B.AgentId;
+      FCrowdStableEntityRef EntityRef;
+      FCrowdMovementOutput Movement;
+    };
+    TArray<FResolvedMovement> Resolved;
+    Resolved.Reserve(Input.WorkOutput.Movements.Num());
+    for (int32 Index = 0; Index < Input.WorkOutput.Movements.Num(); ++Index)
+      Resolved.Add({Input.EntityRefs[Index], Input.WorkOutput.Movements[Index]});
+    Resolved.Sort([](const auto& A, const auto& B)
+    {
+      return A.EntityRef < B.EntityRef;
     });
-    Hash = Fold(Hash, Input.CapabilityProfileKey);
-    Hash = Fold(Hash, Input.WorkOutput.StableHash);
-    for (const FCrowdMovementOutput& Movement : Input.WorkOutput.Movements)
+
+    Hash = Fold64(Hash, Input.CapabilityProfileKey);
+    Hash = Fold64(Hash, Input.WorkOutput.StableHash);
+    for (const FResolvedMovement& ResolvedMovement : Resolved)
     {
+      const FCrowdMovementOutput& Movement = ResolvedMovement.Movement;
       if (!Movement.bValid || Movement.AgentId == INDEX_NONE
+        || !ResolvedMovement.EntityRef.IsValid()
+        || ResolvedMovement.EntityRef.LifecycleSerial
+          != Movement.LifecycleSerial
         || !IsFiniteVector(Movement.Position)
         || !IsFiniteVector(Movement.Velocity)
         || !FMath::IsFinite(Movement.YawDegrees))
         return;
       FCrowdMassCommitRecord& Record = OutPlan.Records.AddDefaulted_GetRef();
+      Record.EntityRef = ResolvedMovement.EntityRef;
       Record.CapabilityProfileKey = Input.CapabilityProfileKey;
       Record.PlanRevision = OutPlan.PlanRevision;
       Record.Movement = Movement;
@@ -403,23 +475,27 @@ void FCrowdMassRuntimeBridge::MergeWorkOutputs(
   }
   OutPlan.Records.Sort([](const auto& A, const auto& B)
   {
-    return A.Movement.AgentId < B.Movement.AgentId;
+    return A.EntityRef < B.EntityRef;
   });
-  int32 PreviousAgentId = INDEX_NONE;
+  FCrowdStableEntityRef PreviousRef;
+  TSet<int32> SeenAgentIds;
   for (const FCrowdMassCommitRecord& Record : OutPlan.Records)
   {
-    if (Record.Movement.AgentId <= PreviousAgentId) return;
-    PreviousAgentId = Record.Movement.AgentId;
-    Hash = FoldInt(Hash, Record.Movement.AgentId);
-    Hash = Fold(Hash, Record.Movement.LifecycleSerial);
-    Hash = FoldFloat(Hash, static_cast<float>(Record.Movement.Position.X));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.Movement.Position.Y));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.Movement.Position.Z));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.Movement.Velocity.X));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.Movement.Velocity.Y));
-    Hash = FoldFloat(Hash, static_cast<float>(Record.Movement.Velocity.Z));
-    Hash = FoldFloat(Hash, Record.Movement.YawDegrees, 100.0f);
-    Hash = Fold(Hash, Record.Movement.StableHash);
+    if ((!PreviousRef.IsUnset() && !(PreviousRef < Record.EntityRef))
+      || SeenAgentIds.Contains(Record.Movement.AgentId))
+      return;
+    PreviousRef = Record.EntityRef;
+    SeenAgentIds.Add(Record.Movement.AgentId);
+    Hash = FoldRef64(Hash, Record.EntityRef);
+    Hash = FoldInt64(Hash, Record.Movement.AgentId);
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.Movement.Position.X));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.Movement.Position.Y));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.Movement.Position.Z));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.Movement.Velocity.X));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.Movement.Velocity.Y));
+    Hash = FoldFloat64(Hash, static_cast<float>(Record.Movement.Velocity.Z));
+    Hash = FoldFloat64(Hash, Record.Movement.YawDegrees, 100.0f);
+    Hash = Fold64(Hash, Record.Movement.StableHash);
   }
   OutPlan.StableHash = Hash;
   OutPlan.bValid = !OutPlan.Records.IsEmpty();
@@ -433,10 +509,11 @@ bool FCrowdMassRuntimeBridge::ValidateCommitTargets(
   TArray<FCrowdMassCommitTarget> Targets(TargetView);
   Targets.Sort([](const auto& A, const auto& B)
   {
-    return A.AgentId < B.AgentId;
+    return A.EntityRef < B.EntityRef;
   });
   for (int32 Index = 0; Index < Plan.Records.Num(); ++Index)
-    if (Plan.Records[Index].Movement.AgentId != Targets[Index].AgentId
+    if (Plan.Records[Index].EntityRef != Targets[Index].EntityRef
+      || Plan.Records[Index].Movement.AgentId != Targets[Index].AgentId
       || Plan.Records[Index].Movement.LifecycleSerial
         != Targets[Index].LifecycleSerial)
       return false;
@@ -450,6 +527,7 @@ bool FCrowdMassRuntimeBridge::ApplyMovementToState(
   FCrowdMassMovementOutputFragment& OutMovement)
 {
   if (!Record.Movement.bValid
+    || Record.EntityRef != Target.EntityRef
     || Record.Movement.AgentId != Target.AgentId
     || Record.Movement.LifecycleSerial != Target.LifecycleSerial)
     return false;

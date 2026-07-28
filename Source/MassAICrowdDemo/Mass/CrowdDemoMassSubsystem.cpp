@@ -21,6 +21,8 @@
 
 namespace
 {
+  constexpr uint32 CrowdDemoStableProviderId = 1;
+
   FMassEntityTemplateID GetCrowdDemoReplicationTemplateID()
   {
     return FMassEntityTemplateIDFactory::Make(FGuid(0x6d617373, 0x61696372, 0x6f776464, 0x656d6f31));
@@ -32,12 +34,9 @@ namespace
     TemplateData.AddTag<FCrowdDemoMassAgentTag>();
     TemplateData.AddTag<FCrowdMassAgentTag>();
     TemplateData.AddFragment<FCrowdMassAgentFragment>();
+    TemplateData.AddFragment<FCrowdMassBehaviorFragment>();
     TemplateData.AddFragment<FCrowdMassSimulationStateFragment>();
     TemplateData.AddFragment<FCrowdMassPropertiesFragment>();
-    TemplateData.AddFragment<FCrowdMassGuidanceCandidatesFragment>();
-    TemplateData.AddFragment<FCrowdMassComposedGuidanceFragment>();
-    TemplateData.AddFragment<FCrowdMassLocalVelocityFragment>();
-    TemplateData.AddFragment<FCrowdMassParticleConstraintFragment>();
     TemplateData.AddFragment<FCrowdMassFacingFragment>();
     TemplateData.AddFragment<FCrowdMassMovementOutputFragment>();
     TemplateData.AddFragment<FCrowdDemoMassIdentityFragment>();
@@ -45,16 +44,12 @@ namespace
     TemplateData.AddFragment<FCrowdDemoBusinessStateFragment>();
     TemplateData.AddFragment<FCrowdDemoRangedAttackFragment>();
     TemplateData.AddFragment<FCrowdDemoReactiveMotionFragment>();
-    TemplateData.AddFragment<FCrowdDemoReactiveMotionStepFragment>();
     TemplateData.AddFragment<FCrowdDemoHitFlashFragment>();
     TemplateData.AddFragment<FCrowdDemoMassMovementFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundSimStateFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFormationFragment>();
-    TemplateData.AddFragment<FCrowdDemoTargetCapabilityFragment>();
     TemplateData.AddFragment<FCrowdDemoRoundFlowSampleFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundProposedMovementFragment>();
     TemplateData.AddFragment<FCrowdDemoParticlePropertiesFragment>();
-    TemplateData.AddFragment<FCrowdDemoRoundObstacleConstraintFragment>();
     TemplateData.AddFragment<FCrowdDemoMassVisualFragment>();
     TemplateData.AddFragment<FCrowdDemoClientAuthorityFragment>();
     TemplateData.AddFragment<FCrowdDemoClientVisualOffsetFragment>();
@@ -182,7 +177,15 @@ void UCrowdDemoMassSubsystem::RegisterRoundSimProcessors()
   RoundSimPipelineProcessor->CallInitialize(this, EntityManager);
   SimulationSubsystem->RegisterDynamicProcessor(*RoundSimPipelineProcessor);
 
-  if (World->GetNetMode() != NM_DedicatedServer)
+  const bool bPublicPresentationOwnsClient =
+    FParse::Param(FCommandLine::Get(),
+      TEXT("CrowdDemoFriendlyLogisticsSmall"))
+    || FParse::Param(FCommandLine::Get(),
+      TEXT("CrowdDemoMixedSandbox"))
+    || FParse::Param(FCommandLine::Get(),
+      TEXT("CrowdDemoContinuousLifecycle"));
+  if (World->GetNetMode() != NM_DedicatedServer
+    && !bPublicPresentationOwnsClient)
   {
     ClientVisualProcessor = NewObject<UCrowdDemoClientVisualMassProcessor>(this);
     ClientVisualProcessor->CallInitialize(this, EntityManager);
@@ -192,8 +195,9 @@ void UCrowdDemoMassSubsystem::RegisterRoundSimProcessors()
   UE_LOG(
     LogTemp,
     Display,
-    TEXT("CrowdDemoMass: round_processors_registered pipeline=1 client_visual=%d net_mode=%d source=MassSubsystem"),
+    TEXT("CrowdDemoMass: round_processors_registered pipeline=1 client_visual=%d public_presentation=%d net_mode=%d source=MassSubsystem"),
     ClientVisualProcessor ? 1 : 0,
+    bPublicPresentationOwnsClient ? 1 : 0,
     static_cast<int32>(World->GetNetMode()));
 }
 
@@ -474,6 +478,224 @@ int32 UCrowdDemoMassSubsystem::BuildRoundAgentStates(TArray<FCrowdDemoRoundAgent
   return OutStates.Num();
 }
 
+bool UCrowdDemoMassSubsystem::BuildProductBoundarySnapshot(
+  const int32 FixedStepIndex,
+  const int32 PlanRevision,
+  FCrowdMassBoundarySnapshot& OutSnapshot,
+  TArray<FCrowdMassCommitTarget>& OutTargets) const
+{
+  OutSnapshot = {};
+  OutTargets.Reset();
+  const UWorld* World = GetWorld();
+  const UMassEntitySubsystem* EntitySubsystem =
+    World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+  if (!IsInGameThread() || !EntitySubsystem
+    || FixedStepIndex < 0 || PlanRevision < 0)
+    return false;
+
+  const FMassEntityManager& EntityManager =
+    EntitySubsystem->GetEntityManager();
+  TArray<FCrowdMassBoundaryAgentRecord> Records;
+  Records.Reserve(TrackedAgents.Num());
+  OutTargets.Reserve(TrackedAgents.Num());
+  for (const FMassEntityHandle Entity : TrackedAgents)
+  {
+    if (!EntityManager.IsEntityValid(Entity))
+      return false;
+    const auto* Identity =
+      EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(Entity);
+    const auto* Behavior =
+      EntityManager.GetFragmentDataPtr<FCrowdMassBehaviorFragment>(Entity);
+    const auto* State =
+      EntityManager.GetFragmentDataPtr<FCrowdMassSimulationStateFragment>(
+        Entity);
+    const auto* Properties =
+      EntityManager.GetFragmentDataPtr<FCrowdMassPropertiesFragment>(Entity);
+    const auto* Transform =
+      EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
+    const auto* Velocity =
+      EntityManager.GetFragmentDataPtr<FMassVelocityFragment>(Entity);
+    if (!Identity || !Behavior || !State || !Properties
+      || !Transform || !Velocity
+      || !Identity->GetStableEntityRef().IsValid())
+      return false;
+    FCrowdMassBoundaryAgentRecord& Record =
+      Records.AddDefaulted_GetRef();
+    Record.Identity = *Identity;
+    Record.AgentFacts = Behavior->GetAgentFacts(*Identity);
+    Record.State = *State;
+    Record.State.Position = Transform->GetTransform().GetLocation();
+    Record.State.Velocity = Velocity->Value;
+    Record.State.YawDegrees =
+      Transform->GetTransform().Rotator().Yaw;
+    Record.State.bInitialized = true;
+    Record.Properties = *Properties;
+    FCrowdMassCommitTarget& Target =
+      OutTargets.AddDefaulted_GetRef();
+    Target.EntityRef = Identity->GetStableEntityRef();
+    Target.AgentId = Identity->AgentId;
+    Target.LifecycleSerial = Identity->LifecycleSerial;
+  }
+  FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
+    FixedStepIndex, PlanRevision, Records, OutSnapshot);
+  OutTargets.Sort([](const auto& A, const auto& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
+  return OutSnapshot.bValid
+    && OutSnapshot.Agents.Num() == TrackedAgents.Num()
+    && OutTargets.Num() == TrackedAgents.Num();
+}
+
+bool UCrowdDemoMassSubsystem::ApplyProductBoundaryCommit(
+  const FCrowdMassCommitPlan& Plan,
+  const TConstArrayView<FCrowdMassCommitTarget> Targets)
+{
+  UWorld* World = GetWorld();
+  UMassEntitySubsystem* EntitySubsystem =
+    World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+  if (!IsInGameThread() || !EntitySubsystem
+    || !FCrowdMassRuntimeBridge::ValidateCommitTargets(Plan, Targets))
+    return false;
+
+  FMassEntityManager& EntityManager =
+    EntitySubsystem->GetMutableEntityManager();
+  TMap<FCrowdStableEntityRef, FMassEntityHandle> Resolved;
+  for (const FMassEntityHandle Entity : TrackedAgents)
+  {
+    if (!EntityManager.IsEntityValid(Entity))
+      return false;
+    const auto* Identity =
+      EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(Entity);
+    if (!Identity || Resolved.Contains(Identity->GetStableEntityRef()))
+      return false;
+    Resolved.Add(Identity->GetStableEntityRef(), Entity);
+  }
+  if (Resolved.Num() != Targets.Num())
+    return false;
+  for (const FCrowdMassCommitTarget& Target : Targets)
+  {
+    const FMassEntityHandle* Entity = Resolved.Find(Target.EntityRef);
+    if (!Entity)
+      return false;
+    const auto* Identity =
+      EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(*Entity);
+    if (!Identity || Identity->AgentId != Target.AgentId
+      || Identity->LifecycleSerial != Target.LifecycleSerial)
+      return false;
+  }
+
+  for (const FCrowdMassCommitRecord& Record : Plan.Records)
+  {
+    const FMassEntityHandle Entity =
+      Resolved.FindChecked(Record.EntityRef);
+    const FCrowdMassCommitTarget* Target = Targets.FindByPredicate(
+      [&Record](const FCrowdMassCommitTarget& Value)
+      {
+        return Value.EntityRef == Record.EntityRef;
+      });
+    check(Target);
+    auto& RuntimeState =
+      EntityManager.GetFragmentDataChecked<
+        FCrowdMassSimulationStateFragment>(Entity);
+    auto& RuntimeMovement =
+      EntityManager.GetFragmentDataChecked<
+        FCrowdMassMovementOutputFragment>(Entity);
+    checkf(FCrowdMassRuntimeBridge::ApplyMovementToState(
+        Record, *Target, RuntimeState, RuntimeMovement),
+      TEXT("Product boundary movement failed after target validation"));
+    FTransform& Transform =
+      EntityManager.GetFragmentDataChecked<FTransformFragment>(
+        Entity).GetMutableTransform();
+    Transform.SetLocation(Record.Movement.Position);
+    Transform.SetRotation(FRotator(
+      0.0f, Record.Movement.YawDegrees, 0.0f).Quaternion());
+    EntityManager.GetFragmentDataChecked<FMassVelocityFragment>(
+      Entity).Value = Record.Movement.Velocity;
+    auto& DemoMovement =
+      EntityManager.GetFragmentDataChecked<
+        FCrowdDemoMassMovementFragment>(Entity);
+    DemoMovement.CurrentVelocity = Record.Movement.Velocity;
+    DemoMovement.DesiredVelocity = Record.Movement.Velocity;
+    DemoMovement.YawDegrees = Record.Movement.YawDegrees;
+    auto& DemoState =
+      EntityManager.GetFragmentDataChecked<
+        FCrowdDemoRoundSimStateFragment>(Entity);
+    DemoState.Location = Record.Movement.Position;
+    DemoState.Velocity = Record.Movement.Velocity;
+    DemoState.YawDegrees = Record.Movement.YawDegrees;
+    DemoState.PlanRevision = Record.PlanRevision;
+    DemoState.bInitialized = true;
+  }
+  return true;
+}
+
+bool UCrowdDemoMassSubsystem::RecycleTrackedAgent(
+  const FCrowdStableEntityRef& EntityRef,
+  FCrowdStableEntityRef& OutReplacementRef)
+{
+  OutReplacementRef = {};
+  UWorld* World = GetWorld();
+  UMassEntitySubsystem* EntitySubsystem =
+    World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+  UMassSpawnerSubsystem* SpawnerSubsystem =
+    World ? World->GetSubsystem<UMassSpawnerSubsystem>() : nullptr;
+  if (!IsInGameThread() || !World || !EntitySubsystem
+    || !SpawnerSubsystem || !EntityRef.IsValid())
+    return false;
+  FMassEntityManager& EntityManager =
+    EntitySubsystem->GetMutableEntityManager();
+  int32 TrackedIndex = INDEX_NONE;
+  for (int32 Index = 0; Index < TrackedAgents.Num(); ++Index)
+  {
+    const FMassEntityHandle Entity = TrackedAgents[Index];
+    const auto* Identity = EntityManager.IsEntityValid(Entity)
+      ? EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(Entity)
+      : nullptr;
+    if (Identity && Identity->GetStableEntityRef() == EntityRef)
+    {
+      TrackedIndex = Index;
+      break;
+    }
+  }
+  const FMassEntityTemplate* Template =
+    SpawnerSubsystem->GetMassEntityTemplate(
+      GetCrowdDemoReplicationTemplateID());
+  if (TrackedIndex == INDEX_NONE || !Template)
+    return false;
+
+  EntityManager.DestroyEntity(TrackedAgents[TrackedIndex]);
+  TArray<FMassEntityHandle> Replacement;
+  SpawnerSubsystem->SpawnEntities(*Template, 1, Replacement);
+  if (Replacement.Num() != 1
+    || !EntityManager.IsEntityValid(Replacement[0]))
+    return false;
+  InitializeAgentFragments(
+    EntityManager, Replacement[0], TrackedIndex, TrackedAgents.Num());
+  auto& DemoIdentity =
+    EntityManager.GetFragmentDataChecked<
+      FCrowdDemoMassIdentityFragment>(Replacement[0]);
+  auto& RuntimeIdentity =
+    EntityManager.GetFragmentDataChecked<
+      FCrowdMassAgentFragment>(Replacement[0]);
+  DemoIdentity.LifecycleSerial =
+    static_cast<int32>(EntityRef.LifecycleSerial + 1);
+  RuntimeIdentity.SetStableEntityRef({
+    EntityRef.ProviderId, EntityRef.StableEntityId,
+    EntityRef.LifecycleSerial + 1});
+  auto& Behavior =
+    EntityManager.GetFragmentDataChecked<
+      FCrowdMassBehaviorFragment>(Replacement[0]);
+  FCrowdAgentFacts Facts = Behavior.GetAgentFacts(RuntimeIdentity);
+  Facts.StableEntityRef = RuntimeIdentity.GetStableEntityRef();
+  Facts.BusinessTaskRef = {};
+  Facts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+  Behavior.SetAgentFacts(Facts);
+  TrackedAgents[TrackedIndex] = Replacement[0];
+  OutReplacementRef = RuntimeIdentity.GetStableEntityRef();
+  return true;
+}
+
 void UCrowdDemoMassSubsystem::DestroyTrackedAgents()
 {
   UWorld* World = GetWorld();
@@ -589,6 +811,14 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   Identity.VisualId = AgentIndex;
   Identity.LifecycleSerial = 1;
 
+  FCrowdMassAgentFragment& RuntimeIdentity =
+    EntityManager.GetFragmentDataChecked<FCrowdMassAgentFragment>(Entity);
+  RuntimeIdentity.AgentId = Identity.Id;
+  RuntimeIdentity.SetStableEntityRef(FCrowdStableEntityRef{
+    CrowdDemoStableProviderId,
+    static_cast<uint64>(Identity.Id) + 1,
+    static_cast<uint32>(Identity.LifecycleSerial)});
+
   FCrowdDemoMassStatsFragment& Stats = EntityManager.GetFragmentDataChecked<FCrowdDemoMassStatsFragment>(Entity);
   Stats.Health = 100.0f;
   Stats.MaxHealth = 100.0f;
@@ -604,8 +834,6 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   FCrowdDemoReactiveMotionFragment& Reactive =
     EntityManager.GetFragmentDataChecked<FCrowdDemoReactiveMotionFragment>(Entity);
   Reactive = FCrowdDemoReactiveMotionFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoReactiveMotionStepFragment>(Entity) =
-    FCrowdDemoReactiveMotionStepFragment();
   FCrowdDemoHitFlashFragment& HitFlash =
     EntityManager.GetFragmentDataChecked<FCrowdDemoHitFlashFragment>(Entity);
   HitFlash = FCrowdDemoHitFlashFragment();
@@ -625,21 +853,21 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   RoundSimState.PlanRevision = 0;
   RoundSimState.bInitialized = false;
 
+  FCrowdMassSimulationStateFragment& RuntimeState =
+    EntityManager.GetFragmentDataChecked<FCrowdMassSimulationStateFragment>(Entity);
+  RuntimeState.Position = RoundSimState.Location;
+  RuntimeState.Velocity = RoundSimState.Velocity;
+  RuntimeState.YawDegrees = RoundSimState.YawDegrees;
+  RuntimeState.PlanRevision = RoundSimState.PlanRevision;
+  RuntimeState.bInitialized = RoundSimState.bInitialized;
+
   FCrowdDemoRoundFormationFragment& RoundFormation = EntityManager.GetFragmentDataChecked<FCrowdDemoRoundFormationFragment>(Entity);
   RoundFormation.FormationIndex = AgentIndex;
   RoundFormation.LocalOffset = FVector::ZeroVector;
   RoundFormation.RadiusCm = Movement.ContactRadiusCm;
   RoundFormation.bInitialized = false;
 
-  FCrowdDemoTargetCapabilityFragment& TargetCapability =
-    EntityManager.GetFragmentDataChecked<FCrowdDemoTargetCapabilityFragment>(Entity);
-  // Capability is stable configuration, not replicated runtime state. Keep the
-  // authority bootstrap identical to the Mass template default consumed by
-  // client prediction; AgentId remains the deterministic tie-breaker.
-  TargetCapability = FCrowdDemoTargetCapabilityFragment();
-
   EntityManager.GetFragmentDataChecked<FCrowdDemoRoundFlowSampleFragment>(Entity) = FCrowdDemoRoundFlowSampleFragment();
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundProposedMovementFragment>(Entity) = FCrowdDemoRoundProposedMovementFragment();
   FCrowdDemoParticlePropertiesFragment& ParticleProperties =
     EntityManager.GetFragmentDataChecked<FCrowdDemoParticlePropertiesFragment>(Entity);
   const FCrowdDemoParticleProfile DefaultParticleProfile;
@@ -647,7 +875,24 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   ParticleProperties.HardSafetyGapCm = DefaultParticleProfile.HardSafetyGapCm;
   ParticleProperties.SoftMarginCm = DefaultParticleProfile.SoftMarginCm;
   ParticleProperties.Mobility = DefaultParticleProfile.Mobility;
-  EntityManager.GetFragmentDataChecked<FCrowdDemoRoundObstacleConstraintFragment>(Entity) = FCrowdDemoRoundObstacleConstraintFragment();
+  FCrowdMassPropertiesFragment& RuntimeProperties =
+    EntityManager.GetFragmentDataChecked<FCrowdMassPropertiesFragment>(Entity);
+  RuntimeProperties.PhysicalRadiusCm = ParticleProperties.PhysicalRadiusCm;
+  RuntimeProperties.HardSafetyGapCm = ParticleProperties.HardSafetyGapCm;
+  RuntimeProperties.SoftMarginCm = ParticleProperties.SoftMarginCm;
+  RuntimeProperties.Mobility = ParticleProperties.Mobility;
+  RuntimeProperties.MaximumSpeedCmps = Movement.MaxSpeedCmPerSecond;
+  RuntimeProperties.CapabilityProfileKey = ParticleProperties.CapabilityProfileKey;
+
+  FCrowdAgentFacts RuntimeFacts;
+  RuntimeFacts.StableEntityRef = RuntimeIdentity.GetStableEntityRef();
+  RuntimeFacts.CapabilitySet.Add(ECrowdCapability::Move);
+  RuntimeFacts.CapabilitySet.Add(ECrowdCapability::MoveTo);
+  RuntimeFacts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+  RuntimeFacts.MovementProfileKey = RuntimeProperties.CapabilityProfileKey;
+  FCrowdMassBehaviorFragment& RuntimeBehavior =
+    EntityManager.GetFragmentDataChecked<FCrowdMassBehaviorFragment>(Entity);
+  RuntimeBehavior.SetAgentFacts(RuntimeFacts);
 
 
   FCrowdDemoMassVisualFragment& Visual = EntityManager.GetFragmentDataChecked<FCrowdDemoMassVisualFragment>(Entity);

@@ -3,6 +3,7 @@
 #include "CrowdDemoReplicator.h"
 #include "CrowdDemoScenarioRegistry.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
+#include "Mass/CrowdDemoRelevantSnapshotAdapter.h"
 #include "Mass/CrowdDemoRoundCheckpointTransport.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
@@ -10,13 +11,18 @@
 #include "Mass/CrowdDemoOpenCohortMovementKernel.h"
 #include "Mass/CrowdDemoBidirectionalSwapKernel.h"
 #include "Mass/CrowdDemoValidCorridorTransitKernel.h"
+#include "MassCrowdReplicationActor.h"
+#include "MassCrowdReplicationChannel.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/GameStateBase.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Net/UnrealNetwork.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
 
 namespace
 {
@@ -30,7 +36,97 @@ namespace
   constexpr float CrowdDemoMaxCorrectionFrameAgeMs = 1000.0f;
   constexpr int32 CrowdDemoCorrectionFrameChunkSize = 100;
   constexpr int32 CrowdDemoCorrectionFrameHistoryRevisions = 4;
-  constexpr int32 CrowdDemoCorrectionChunksPerFlush = 1;
+  constexpr uint32 CrowdDemoProductPayloadVersion = 1;
+  constexpr uint32 CrowdDemoCorrectionHeaderMagic = 0x48435231u;
+  constexpr uint32 CrowdDemoCorrectionAgentMagic = 0x41435231u;
+  constexpr uint32 CrowdDemoProjectileEventMagic = 0x45565031u;
+  constexpr uint32 CrowdDemoRoundResultHeaderMagic = 0x48525231u;
+
+  template <typename T>
+  bool EncodeProductPayload(
+    const uint32 Magic,
+    const T& Value,
+    TArray<uint8>& OutBytes)
+  {
+    OutBytes.Reset();
+    FMemoryWriter Writer(OutBytes, true);
+    uint32 MutableMagic = Magic;
+    uint32 Version = CrowdDemoProductPayloadVersion;
+    Writer << MutableMagic;
+    Writer << Version;
+    T Copy = Value;
+    T::StaticStruct()->SerializeItem(Writer, &Copy, nullptr);
+    return !Writer.IsError() && OutBytes.Num() <= 4096;
+  }
+
+  template <typename T>
+  bool DecodeProductPayload(
+    const TConstArrayView<uint8> Bytes,
+    const uint32 ExpectedMagic,
+    T& OutValue)
+  {
+    TArray<uint8> Copy;
+    Copy.Append(Bytes.GetData(), Bytes.Num());
+    FMemoryReader Reader(Copy, true);
+    uint32 Magic = 0;
+    uint32 Version = 0;
+    Reader << Magic;
+    Reader << Version;
+    if (Reader.IsError() || Magic != ExpectedMagic
+      || Version != CrowdDemoProductPayloadVersion)
+    {
+      return false;
+    }
+    T Value;
+    T::StaticStruct()->SerializeItem(Reader, &Value, nullptr);
+    if (Reader.IsError() || Reader.Tell() != Reader.TotalSize())
+    {
+      return false;
+    }
+    OutValue = MoveTemp(Value);
+    return true;
+  }
+
+  bool EncodeProductRoundResultHeader(
+    const FCrowdDemoRoundResultHeader& Header,
+    TArray<uint8>& OutBytes)
+  {
+    OutBytes.Reset();
+    FMemoryWriter Writer(OutBytes, true);
+    uint32 Magic = CrowdDemoRoundResultHeaderMagic;
+    uint32 Version = CrowdDemoProductPayloadVersion;
+    Writer << Magic;
+    Writer << Version;
+    FCrowdDemoRoundResultHeader Copy = Header;
+    bool bSuccess = false;
+    Copy.NetSerialize(Writer, nullptr, bSuccess);
+    return bSuccess && !Writer.IsError()
+      && OutBytes.Num() <= 4096;
+  }
+
+  bool DecodeProductRoundResultHeader(
+    const TConstArrayView<uint8> Bytes,
+    FCrowdDemoRoundResultHeader& OutHeader)
+  {
+    TArray<uint8> Copy;
+    Copy.Append(Bytes.GetData(), Bytes.Num());
+    FMemoryReader Reader(Copy, true);
+    uint32 Magic = 0;
+    uint32 Version = 0;
+    Reader << Magic;
+    Reader << Version;
+    if (Reader.IsError() || Magic != CrowdDemoRoundResultHeaderMagic
+      || Version != CrowdDemoProductPayloadVersion)
+      return false;
+    FCrowdDemoRoundResultHeader Header;
+    bool bSuccess = false;
+    Header.NetSerialize(Reader, nullptr, bSuccess);
+    if (!bSuccess || Reader.IsError()
+      || Reader.Tell() != Reader.TotalSize())
+      return false;
+    OutHeader = MoveTemp(Header);
+    return true;
+  }
 
   FString SerializeParticleFailureFixture(const FCrowdDemoParticleFailureFixture& Fixture)
   {
@@ -476,9 +572,7 @@ void ACrowdDemoRoundSimCoordinator::Tick(const float DeltaSeconds)
 void ACrowdDemoRoundSimCoordinator::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
   Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-  DOREPLIFETIME(ACrowdDemoRoundSimCoordinator, RoundBootstrapPacket);
   DOREPLIFETIME(ACrowdDemoRoundSimCoordinator, CurrentRoundPlan);
-  DOREPLIFETIME(ACrowdDemoRoundSimCoordinator, RoundResultHeader);
 }
 
 bool ACrowdDemoRoundSimCoordinator::IsRoundSimActive() const
@@ -508,34 +602,19 @@ const FCrowdDemoCorrectionFrameMetrics& ACrowdDemoRoundSimCoordinator::GetLastCo
   return Pipeline ? Pipeline->GetLastCorrectionMetrics() : LastCorrectionFrameMetrics;
 }
 
-void ACrowdDemoRoundSimCoordinator::OnRep_RoundBootstrapPacket()
-{
-  if (HasAuthority() || RoundBootstrapPacket.bValid == 0)
-  {
-    return;
-  }
-
-  if (UWorld* World = GetWorld())
-  {
-    if (UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>())
-    {
-      Pipeline->QueueBootstrap(RoundBootstrapPacket);
-      Pipeline->QueueRoundPlan(CurrentRoundPlan);
-    }
-  }
-}
-
 void ACrowdDemoRoundSimCoordinator::OnRep_CurrentRoundPlan()
 {
   QueueClientRoundPlan(CurrentRoundPlan);
 }
 
-void ACrowdDemoRoundSimCoordinator::OnRep_RoundResultHeader()
+void ACrowdDemoRoundSimCoordinator::ConsumeProductRoundResultHeader(
+  const FCrowdDemoRoundResultHeader& Header)
 {
-  if (HasAuthority() || RoundResultHeader.bValid == 0)
+  if (HasAuthority() || Header.bValid == 0)
   {
     return;
   }
+  RoundResultHeader = Header;
   ++RoundResultHeaderReceivedCount;
   PendingClientResultHeaders.Add(RoundResultHeader.StateFrameRevision, RoundResultHeader);
   PendingClientResultHeaderReceiveTimes.Add(
@@ -563,35 +642,11 @@ void ACrowdDemoRoundSimCoordinator::OnRep_RoundResultHeader()
   TryProcessClientCorrectionAssemblies();
 }
 
-void ACrowdDemoRoundSimCoordinator::MulticastCorrectionFrameChunk_Implementation(const FCrowdDemoCorrectionFrameChunk& Chunk)
-{
-  if (HasAuthority())
-  {
-    return;
-  }
-
-  CacheClientCorrectionChunk(Chunk);
-}
-
 void ACrowdDemoRoundSimCoordinator::MulticastRoundPlan_Implementation(const FCrowdDemoRoundPlanPacket& Plan)
 {
   if (!HasAuthority())
   {
     QueueClientRoundPlan(Plan);
-  }
-}
-
-void ACrowdDemoRoundSimCoordinator::MulticastProjectileVisualEvents_Implementation(
-  const TArray<FCrowdDemoProjectileVisualEvent>& Events)
-{
-  UWorld* World = GetWorld();
-  if (!World || World->GetNetMode() == NM_DedicatedServer || Events.IsEmpty())
-  {
-    return;
-  }
-  if (ACrowdDemoReplicator* VisualHost = FindProjectileVisualHost(*World))
-  {
-    VisualHost->ApplyProjectileVisualEvents(Events);
   }
 }
 
@@ -607,11 +662,12 @@ void ACrowdDemoRoundSimCoordinator::TickServer()
     return;
   }
 
+  RefreshProductReplicationChannels();
 
   TArray<FCrowdDemoProjectileVisualEvent> ProjectileVisualEvents;
   if (Pipeline->DequeueProjectileVisualEvents(ProjectileVisualEvents))
   {
-    MulticastProjectileVisualEvents(ProjectileVisualEvents);
+    PublishProductProjectileEvents(ProjectileVisualEvents);
   }
 
   const float NowSeconds = World->GetTimeSeconds();
@@ -645,11 +701,7 @@ void ACrowdDemoRoundSimCoordinator::TickServer()
     return;
   }
 
-  FlushServerCorrectionChunks();
-  if (PendingServerCorrectionChunks.IsEmpty())
-  {
-    PublishServerCorrectionFrame();
-  }
+  PublishServerCorrectionFrame();
 
   if (Pipeline->IsActive() && !bRoundResultPublished)
   {
@@ -685,7 +737,13 @@ void ACrowdDemoRoundSimCoordinator::TickServer()
 void ACrowdDemoRoundSimCoordinator::TickClient()
 {
   UWorld* World = GetWorld();
-  if (!World || RoundBootstrapPacket.bValid == 0)
+  if (!World)
+  {
+    return;
+  }
+
+  ConsumeProductReplicationChannels();
+  if (RoundBootstrapPacket.bValid == 0)
   {
     return;
   }
@@ -753,6 +811,46 @@ void ACrowdDemoRoundSimCoordinator::StartServerRound(UCrowdDemoMassSubsystem& Ma
   {
     return A.AgentId < B.AgentId;
   });
+
+  TArray<FCrowdRelevantSnapshotEntityPayload> EntityPayloads;
+  FCrowdRelevantSnapshotHeader SnapshotHeader;
+  TArray<FCrowdRelevantSnapshotChunk> SnapshotChunks;
+  const FCrowdRelevantSnapshotLimits SnapshotLimits = FCrowdDemoRelevantSnapshotAdapter::MakeLimits();
+  const bool bBuiltSnapshot = FCrowdDemoRelevantSnapshotAdapter::EncodeAgents(
+      RoundBootstrapPacket.Agents,
+      EntityPayloads)
+    && FCrowdRelevantSnapshotTransport::Build(
+      static_cast<uint32>(RoundBootstrapPacket.Revision),
+      0,
+      static_cast<uint32>(RoundBootstrapPacket.Revision),
+      EntityPayloads,
+      SnapshotLimits,
+      SnapshotHeader,
+      SnapshotChunks);
+  if (!bBuiltSnapshot)
+  {
+    UE_LOG(
+      LogTemp,
+      Error,
+      TEXT("VIOLATION CrowdDemoBootstrapSnapshot role=server stage=build revision=%d agents=%d source=RelevantSnapshot"),
+      RoundBootstrapPacket.Revision,
+      RoundBootstrapPacket.Agents.Num());
+    RoundBootstrapPacket = FCrowdDemoRoundBootstrapPacket();
+    return;
+  }
+
+  BootstrapSnapshotMetadata = FCrowdDemoBootstrapSnapshotMetadata();
+  BootstrapSnapshotMetadata.bValid = 1;
+  BootstrapSnapshotMetadata.ServerTimeSeconds = StartServerTimeSeconds;
+  BootstrapSnapshotMetadata.SnapshotHeader = SnapshotHeader;
+  CurrentProductBootstrapChunks = MoveTemp(SnapshotChunks);
+  for (TPair<TWeakObjectPtr<APlayerController>,
+    TWeakObjectPtr<AMassCrowdReplicationActor>>& Pair
+    : ProductReplicationChannels)
+  {
+    if (AMassCrowdReplicationActor* Channel = Pair.Value.Get())
+      PublishProductBaseline(*Channel);
+  }
 
   const FVector StartLocation = ComputeRoundCohortCenter(RoundBootstrapPacket.Agents);
   const FCrowdDemoRoundPlanPacket FirstPlan = BuildRoundPlanPacket(
@@ -845,6 +943,7 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
   ++CompletedRoundCount;
   RefreshLastCompareCounters();
   LastRoundCompletedWorldSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+  PublishProductRoundResultHeader(RoundResultHeader);
   ForceNetUpdate();
 
   UE_LOG(
@@ -1347,15 +1446,14 @@ void ACrowdDemoRoundSimCoordinator::PublishServerCorrectionFrame()
     return;
   }
 
+  TArray<FCrowdDemoCorrectionFrameChunk> MetricChunks;
   FCrowdDemoRoundCheckpointTransport::BuildChunks(
     FullFrame,
     CrowdDemoCorrectionFrameChunkSize,
     CorrectionFrameHeader,
-    PendingServerCorrectionChunks);
+    MetricChunks);
   const int32 ChunkSize = CorrectionFrameHeader.ChunkSize;
   const int32 ChunkCount = CorrectionFrameHeader.ChunkCount;
-  PendingServerCorrectionRevision = FullFrame.CorrectionRevision;
-  NextPendingServerCorrectionChunkIndex = 0;
 
   const int32 OldestKeptRevision = FullFrame.CorrectionRevision - CrowdDemoCorrectionFrameHistoryRevisions + 1;
   DroppedCorrectionRevisions.Remove(OldestKeptRevision);
@@ -1370,9 +1468,8 @@ void ACrowdDemoRoundSimCoordinator::PublishServerCorrectionFrame()
   LastAppliedCorrectionRevision = FullFrame.CorrectionRevision;
   LastServerCorrectionChunkCount = ChunkCount;
   LastServerCorrectionChunkSize = ChunkSize;
+  PublishProductCorrectionFrame(FullFrame);
   RefreshLastCorrectionCounters();
-  FlushServerCorrectionChunks();
-  ForceNetUpdate();
 
   UE_LOG(
     LogTemp,
@@ -1391,31 +1488,407 @@ void ACrowdDemoRoundSimCoordinator::PublishServerCorrectionFrame()
     LastCorrectionFrameMetrics.CorrectionIntervalMsP95);
 }
 
-void ACrowdDemoRoundSimCoordinator::FlushServerCorrectionChunks()
+void ACrowdDemoRoundSimCoordinator::RefreshProductReplicationChannels()
 {
-  if (!HasAuthority() || PendingServerCorrectionChunks.IsEmpty())
+  UWorld* World = GetWorld();
+  if (!HasAuthority() || !World) return;
+  for (FConstPlayerControllerIterator It =
+      World->GetPlayerControllerIterator(); It; ++It)
   {
+    APlayerController* Controller = It->Get();
+    if (!Controller || ProductReplicationChannels.Contains(Controller))
+      continue;
+    AMassCrowdReplicationActor* Channel =
+      AMassCrowdReplicationActor::SpawnForController(*Controller);
+    if (!Channel) continue;
+    ProductReplicationChannels.Add(Controller, Channel);
+    NextProductReliableSequence.Add(Channel, 1);
+    if (BootstrapSnapshotMetadata.bValid != 0
+      && !PublishProductBaseline(*Channel))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=late_join_baseline"));
+    }
+  }
+}
+
+bool ACrowdDemoRoundSimCoordinator::PublishProductBaseline(
+  AMassCrowdReplicationActor& Channel)
+{
+  uint64* NextSequence = NextProductReliableSequence.Find(&Channel);
+  return HasAuthority() && NextSequence && *NextSequence > 0
+    && BootstrapSnapshotMetadata.bValid != 0
+    && !CurrentProductBootstrapChunks.IsEmpty()
+    && Channel.PublishBaseline(
+      BootstrapSnapshotMetadata.SnapshotHeader,
+      CurrentProductBootstrapChunks,
+      *NextSequence);
+}
+
+bool ACrowdDemoRoundSimCoordinator::PublishProductReliable(
+  AMassCrowdReplicationActor& Channel,
+  const ECrowdReliableStateKind Kind,
+  const FCrowdStableEntityRef& EntityRef,
+  const uint32 RevisionValue,
+  const TConstArrayView<uint8> Payload)
+{
+  uint64* NextSequence = NextProductReliableSequence.Find(&Channel);
+  if (!NextSequence || *NextSequence == 0 || !EntityRef.IsValid())
+    return false;
+  FCrowdReliableStateRecord Record;
+  Record.Sequence = *NextSequence;
+  Record.Kind = Kind;
+  Record.EntityRef = EntityRef;
+  Record.Revision = RevisionValue;
+  Record.Payload.Append(Payload.GetData(), Payload.Num());
+  Record.StableHash =
+    FCrowdReplicationTransport::CalculateReliableRecordHash(Record);
+  if (!Channel.PublishReliable(Record)) return false;
+  ++(*NextSequence);
+  return true;
+}
+
+void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
+  const FCrowdDemoCorrectionFrame& Frame)
+{
+  TArray<uint8> HeaderPayload;
+  if (!EncodeProductPayload(
+      CrowdDemoCorrectionHeaderMagic,
+      CorrectionFrameHeader,
+      HeaderPayload))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_correction_header revision=%d"),
+      Frame.CorrectionRevision);
+    return;
+  }
+  for (TPair<TWeakObjectPtr<APlayerController>,
+    TWeakObjectPtr<AMassCrowdReplicationActor>>& Pair
+    : ProductReplicationChannels)
+  {
+    AMassCrowdReplicationActor* Channel = Pair.Value.Get();
+    if (!Channel) continue;
+    TArray<FCrowdMovementCorrectionRecord> Corrections;
+    Corrections.Reserve(Frame.AgentStates.Num());
+    if (!Channel->IsServerAwaitingBaselineAck())
+      for (const FCrowdDemoRoundAgentState& Agent : Frame.AgentStates)
+      {
+        FCrowdMovementCorrectionRecord Correction;
+        Correction.EntityRef = {
+          1,
+          static_cast<uint64>(FMath::Max(0, Agent.AgentId)) + 1ull,
+          static_cast<uint32>(FMath::Max(1, Agent.LifecycleSerial))};
+        Correction.Sequence =
+          static_cast<uint64>(Frame.CorrectionRevision);
+        Correction.FixedStepIndex = Frame.CorrectionRevision;
+        Correction.Position = Agent.Location;
+        Correction.Velocity = Agent.Velocity;
+        Correction.YawDegrees = Agent.YawDegrees;
+        Correction.StableHash =
+          FCrowdReplicationTransport::CalculateMovementCorrectionHash(
+            Correction);
+        Corrections.Add(Correction);
+      }
+    if (!Corrections.IsEmpty()
+      && !Channel->PublishMovementCorrections(Corrections))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_correction_batch revision=%d agents=%d"),
+        Frame.CorrectionRevision, Corrections.Num());
+      continue;
+    }
+    if (!PublishProductReliable(
+      *Channel,
+      ECrowdReliableStateKind::Membership,
+      {8, static_cast<uint64>(Frame.CorrectionRevision), 1},
+      static_cast<uint32>(Frame.CorrectionRevision),
+      HeaderPayload))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_correction_header revision=%d"),
+        Frame.CorrectionRevision);
+      continue;
+    }
+    for (const FCrowdDemoRoundAgentState& Agent : Frame.AgentStates)
+    {
+      TArray<uint8> AgentPayload;
+      const FCrowdStableEntityRef EntityRef{
+        1,
+        static_cast<uint64>(FMath::Max(0, Agent.AgentId)) + 1ull,
+        static_cast<uint32>(FMath::Max(1, Agent.LifecycleSerial))};
+      if (!EncodeProductPayload(
+          CrowdDemoCorrectionAgentMagic, Agent, AgentPayload)
+        || !PublishProductReliable(
+          *Channel,
+          ECrowdReliableStateKind::Behavior,
+          EntityRef,
+          static_cast<uint32>(Frame.CorrectionRevision),
+          AgentPayload))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_agent revision=%d agent=%d"),
+          Frame.CorrectionRevision, Agent.AgentId);
+        break;
+      }
+    }
+  }
+}
+
+void ACrowdDemoRoundSimCoordinator::PublishProductRoundResultHeader(
+  const FCrowdDemoRoundResultHeader& Header)
+{
+  TArray<uint8> Payload;
+  if (!EncodeProductRoundResultHeader(Header, Payload))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_result_header round_id=%d"),
+      Header.RoundId);
+    return;
+  }
+  for (TPair<TWeakObjectPtr<APlayerController>,
+    TWeakObjectPtr<AMassCrowdReplicationActor>>& Pair
+    : ProductReplicationChannels)
+  {
+    AMassCrowdReplicationActor* Channel = Pair.Value.Get();
+    if (!Channel
+      || !PublishProductReliable(
+        *Channel,
+        ECrowdReliableStateKind::HostEvent,
+        {9, static_cast<uint64>(FMath::Max(1, Header.RoundId)), 1},
+        static_cast<uint32>(
+          FMath::Max(1, Header.StateFrameRevision)),
+        Payload))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_result_header round_id=%d"),
+        Header.RoundId);
+    }
+  }
+}
+
+void ACrowdDemoRoundSimCoordinator::PublishProductProjectileEvents(
+  const TConstArrayView<FCrowdDemoProjectileVisualEvent> Events)
+{
+  for (TPair<TWeakObjectPtr<APlayerController>,
+    TWeakObjectPtr<AMassCrowdReplicationActor>>& Pair
+    : ProductReplicationChannels)
+  {
+    AMassCrowdReplicationActor* Channel = Pair.Value.Get();
+    if (!Channel) continue;
+    for (const FCrowdDemoProjectileVisualEvent& Event : Events)
+    {
+      TArray<uint8> Payload;
+      if (!EncodeProductPayload(
+          CrowdDemoProjectileEventMagic, Event, Payload)
+        || !PublishProductReliable(
+          *Channel,
+          ECrowdReliableStateKind::PresentationEvent,
+          {7, FMath::Max<uint64>(1ull, Event.ProjectileId), 1},
+          static_cast<uint32>(FMath::Max(0, Event.FixedStepIndex) + 1),
+          Payload))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_projectile id=%llu"),
+          Event.ProjectileId);
+        break;
+      }
+    }
+  }
+}
+
+void ACrowdDemoRoundSimCoordinator::
+  ConsumeProductReplicationChannels()
+{
+  UWorld* World = GetWorld();
+  if (!World || HasAuthority()) return;
+  for (TActorIterator<AMassCrowdReplicationActor> It(World); It; ++It)
+  {
+    AMassCrowdReplicationActor* Channel = *It;
+    if (!Channel || !Channel->IsReady()) continue;
+    const uint32 BaselineRevision =
+      Channel->GetCompletedBaselineRevision();
+    if (BaselineRevision > LastConsumedProductBaselineRevision)
+    {
+      TArray<FCrowdDemoRoundAgentState> Agents;
+      if (!FCrowdDemoRelevantSnapshotAdapter::DecodeAgents(
+          Channel->GetCompletedBaselineEntities(), Agents))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoRoundProductChannel role=client stage=decode_baseline revision=%u"),
+          BaselineRevision);
+        continue;
+      }
+      RoundBootstrapPacket = {};
+      RoundBootstrapPacket.bValid = 1;
+      RoundBootstrapPacket.Revision =
+        static_cast<int32>(BaselineRevision);
+      const AGameStateBase* GameState = World->GetGameState();
+      RoundBootstrapPacket.ServerTimeSeconds =
+        CurrentRoundPlan.bValid != 0
+          ? CurrentRoundPlan.StartServerTimeSeconds
+          : (GameState
+            ? GameState->GetServerWorldTimeSeconds()
+            : World->GetTimeSeconds());
+      RoundBootstrapPacket.Agents = MoveTemp(Agents);
+      LastConsumedProductBaselineRevision = BaselineRevision;
+      if (UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
+        World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>())
+      {
+        Pipeline->QueueBootstrap(RoundBootstrapPacket);
+        if (CurrentRoundPlan.bValid != 0)
+          Pipeline->QueueRoundPlan(CurrentRoundPlan);
+      }
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoBootstrapSnapshot role=client stage=complete revision=%u agents=%d source=MassCrowdReplicationChannel"),
+        BaselineRevision, RoundBootstrapPacket.Agents.Num());
+    }
+
+    TArray<FCrowdReplicationApplyFrame> ApplyFrames;
+    if (!Channel->DrainClientApplyFrames(ApplyFrames))
+      continue;
+    for (const FCrowdReplicationApplyFrame& ApplyFrame : ApplyFrames)
+    {
+      if (ApplyFrame.Kind
+        == ECrowdReplicationApplyFrameKind::ReliableState)
+      {
+        for (const FCrowdReliableStateRecord& Record
+          : ApplyFrame.ReliableRecords)
+          ConsumeProductReliableRecord(*Channel, Record);
+      }
+      else if (ApplyFrame.Kind
+        == ECrowdReplicationApplyFrameKind::MovementCorrection)
+      {
+        LatestProductCorrectionCount =
+          ApplyFrame.Corrections.Num();
+      }
+    }
+  }
+}
+
+void ACrowdDemoRoundSimCoordinator::ConsumeProductReliableRecord(
+  AMassCrowdReplicationActor& Channel,
+  const FCrowdReliableStateRecord& Record)
+{
+  FCrowdDemoCorrectionFrameHeader Header;
+  if (DecodeProductPayload(
+      Record.Payload,
+      CrowdDemoCorrectionHeaderMagic,
+      Header))
+  {
+    ProductCorrectionHeaders.Add(
+      Header.CorrectionRevision, Header);
+    ProductCorrectionAgents.FindOrAdd(
+      Header.CorrectionRevision).Reset();
+    CacheClientCorrectionHeader(Header);
     return;
   }
 
-  int32 SentCount = 0;
-  while (PendingServerCorrectionChunks.IsValidIndex(NextPendingServerCorrectionChunkIndex)
-    && SentCount < CrowdDemoCorrectionChunksPerFlush)
+  FCrowdDemoRoundAgentState Agent;
+  if (DecodeProductPayload(
+      Record.Payload,
+      CrowdDemoCorrectionAgentMagic,
+      Agent))
   {
-    const FCrowdDemoCorrectionFrameChunk& PendingChunk = PendingServerCorrectionChunks[NextPendingServerCorrectionChunkIndex];
-    MulticastCorrectionFrameChunk(PendingChunk);
-
-    ++NextPendingServerCorrectionChunkIndex;
-    ++SentCount;
+    TArray<FCrowdDemoRoundAgentState>& Agents =
+      ProductCorrectionAgents.FindOrAdd(
+        static_cast<int32>(Record.Revision));
+    if (!Agents.ContainsByPredicate(
+      [&](const FCrowdDemoRoundAgentState& Existing)
+      {
+        return Existing.AgentId == Agent.AgentId;
+      }))
+    {
+      Agents.Add(Agent);
+    }
+    TryFinalizeProductCorrection(
+      static_cast<int32>(Record.Revision));
+    return;
   }
 
-  if (NextPendingServerCorrectionChunkIndex >= PendingServerCorrectionChunks.Num())
+  FCrowdDemoProjectileVisualEvent ProjectileEvent;
+  if (DecodeProductPayload(
+      Record.Payload,
+      CrowdDemoProjectileEventMagic,
+      ProjectileEvent))
   {
-    PendingServerCorrectionChunks.Reset();
-    NextPendingServerCorrectionChunkIndex = 0;
-    PendingServerCorrectionRevision = 0;
+    UWorld* World = GetWorld();
+    if (World && World->GetNetMode() != NM_DedicatedServer)
+      if (ACrowdDemoReplicator* VisualHost =
+        FindProjectileVisualHost(*World))
+      {
+        const FCrowdDemoProjectileVisualEvent Events[] = {
+          ProjectileEvent};
+        VisualHost->ApplyProjectileVisualEvents(Events);
+      }
+    return;
   }
 
+  FCrowdDemoRoundResultHeader ResultHeader;
+  if (DecodeProductRoundResultHeader(
+      Record.Payload, ResultHeader))
+  {
+    ConsumeProductRoundResultHeader(ResultHeader);
+    return;
+  }
+
+  UE_LOG(LogTemp, Error,
+    TEXT("VIOLATION CrowdDemoRoundProductChannel role=client stage=unknown_payload sequence=%llu kind=%d"),
+    Record.Sequence, static_cast<int32>(Record.Kind));
+}
+
+void ACrowdDemoRoundSimCoordinator::TryFinalizeProductCorrection(
+  const int32 CorrectionRevisionValue)
+{
+  FCrowdDemoCorrectionFrameHeader* Header =
+    ProductCorrectionHeaders.Find(CorrectionRevisionValue);
+  TArray<FCrowdDemoRoundAgentState>* Agents =
+    ProductCorrectionAgents.Find(CorrectionRevisionValue);
+  if (!Header || !Agents || Agents->Num() != Header->AgentCount)
+    return;
+  Agents->Sort([](
+    const FCrowdDemoRoundAgentState& A,
+    const FCrowdDemoRoundAgentState& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
+  for (int32 Index = 1; Index < Agents->Num(); ++Index)
+    if ((*Agents)[Index - 1].AgentId == (*Agents)[Index].AgentId)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=client stage=duplicate_agent revision=%d"),
+        CorrectionRevisionValue);
+      return;
+    }
+
+  FCrowdDemoCorrectionFrame Frame;
+  Frame.bValid = Header->bValid;
+  Frame.FrameKind = Header->FrameKind;
+  Frame.CorrectionRevision = Header->CorrectionRevision;
+  Frame.RoundId = Header->RoundId;
+  Frame.RoundRevision = Header->RoundRevision;
+  Frame.SourceCheckpointRevision =
+    Header->SourceCheckpointRevision;
+  Frame.ServerTimeSeconds = Header->ServerTimeSeconds;
+  Frame.AgentCount = Header->AgentCount;
+  Frame.CrowdState = Header->CrowdState;
+  Frame.AgentStates = *Agents;
+  FCrowdDemoCorrectionFrameHeader BuiltHeader;
+  TArray<FCrowdDemoCorrectionFrameChunk> Chunks;
+  FCrowdDemoRoundCheckpointTransport::BuildChunks(
+    Frame,
+    CrowdDemoCorrectionFrameChunkSize,
+    BuiltHeader,
+    Chunks);
+  for (const FCrowdDemoCorrectionFrameChunk& Chunk : Chunks)
+    CacheClientCorrectionChunk(Chunk);
+  UE_LOG(LogTemp, Display,
+    TEXT("CrowdDemoRoundProductChannel role=client stage=correction_complete revision=%d agents=%d chunks=%d latest_corrections=%d source=MassCrowdReplicationChannel"),
+    CorrectionRevisionValue,
+    Agents->Num(),
+    Chunks.Num(),
+    LatestProductCorrectionCount);
+  ProductCorrectionHeaders.Remove(CorrectionRevisionValue);
+  ProductCorrectionAgents.Remove(CorrectionRevisionValue);
 }
 
 FCrowdDemoRoundPlanPacket ACrowdDemoRoundSimCoordinator::BuildRoundPlanPacket(

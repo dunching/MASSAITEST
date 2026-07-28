@@ -29,12 +29,12 @@
     {
       "Name": "MassCrowdNetworking",
       "Type": "Runtime",
-      "LoadingPhase": "None"
+      "LoadingPhase": "Default"
     },
     {
       "Name": "MassCrowdPresentation",
       "Type": "Runtime",
-      "LoadingPhase": "None"
+      "LoadingPhase": "Default"
     },
     {
       "Name": "MassCrowdTests",

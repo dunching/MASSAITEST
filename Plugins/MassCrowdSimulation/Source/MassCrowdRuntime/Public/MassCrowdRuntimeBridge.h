@@ -1,14 +1,23 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CrowdGuidanceComposeKernel.h"
 #include "MassCrowdRuntimeFragments.h"
+
+struct FCrowdMassGuidanceCandidates
+{
+  FCrowdGuidanceCandidate SharedFlow;
+  FCrowdGuidanceCandidate TargetRegion;
+  FCrowdGuidanceCandidate BusinessOverride;
+};
 
 struct FCrowdMassGatherRecord
 {
   FCrowdMassAgentFragment Identity;
+  FCrowdAgentFacts AgentFacts;
   FCrowdMassSimulationStateFragment State;
   FCrowdMassPropertiesFragment Properties;
-  FCrowdMassGuidanceCandidatesFragment Guidance;
+  FCrowdMassGuidanceCandidates Guidance;
 };
 
 // Immutable base motion facts gathered once at the beginning of a fixed-step
@@ -17,6 +26,7 @@ struct FCrowdMassGatherRecord
 struct FCrowdMassBoundaryAgentRecord
 {
   FCrowdMassAgentFragment Identity;
+  FCrowdAgentFacts AgentFacts;
   FCrowdMassSimulationStateFragment State;
   FCrowdMassPropertiesFragment Properties;
 };
@@ -26,7 +36,7 @@ struct FCrowdMassBoundarySnapshot
   int32 FixedStepIndex = INDEX_NONE;
   int32 PlanRevision = INDEX_NONE;
   TArray<FCrowdMassBoundaryAgentRecord> Agents;
-  uint32 StableHash = 2166136261u;
+  uint64 StableHash = 14695981039346656037ull;
   bool bValid = false;
 };
 
@@ -42,10 +52,12 @@ struct FCrowdMassWorkBatchOutput
 {
   uint32 CapabilityProfileKey = 0;
   FCrowdRoundWorkOutput WorkOutput;
+  TArray<FCrowdStableEntityRef> EntityRefs;
 };
 
 struct FCrowdMassCommitRecord
 {
+  FCrowdStableEntityRef EntityRef;
   uint32 CapabilityProfileKey = 0;
   int32 PlanRevision = INDEX_NONE;
   FCrowdMovementOutput Movement;
@@ -53,6 +65,7 @@ struct FCrowdMassCommitRecord
 
 struct FCrowdMassCommitTarget
 {
+  FCrowdStableEntityRef EntityRef;
   int32 AgentId = INDEX_NONE;
   uint32 LifecycleSerial = 0;
 };
@@ -62,7 +75,7 @@ struct FCrowdMassCommitPlan
   int32 FixedStepIndex = INDEX_NONE;
   int32 PlanRevision = INDEX_NONE;
   TArray<FCrowdMassCommitRecord> Records;
-  uint32 StableHash = 2166136261u;
+  uint64 StableHash = 14695981039346656037ull;
   bool bValid = false;
 };
 

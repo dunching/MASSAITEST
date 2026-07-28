@@ -13,6 +13,7 @@ struct FCrowdMassFinalKinematicState
 
 struct FCrowdMassMovementFinalizeRecord
 {
+  FCrowdStableEntityRef EntityRef;
   int32 AgentId = INDEX_NONE;
   uint32 LifecycleSerial = 0;
   uint32 CapabilityProfileKey = 0;

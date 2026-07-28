@@ -9,12 +9,14 @@
 #include "Engine/World.h"
 #include "MassCrowdMovementTrait.h"
 #include "MassCrowdFacingWork.h"
+#include "MassCrowdFacingFinalizeWork.h"
 #include "MassCrowdGuidanceWork.h"
 #include "MassCrowdLocalPredictiveWork.h"
 #include "MassCrowdMovementFinalizeWork.h"
 #include "MassCrowdMovementPipelineWork.h"
 #include "MassCrowdMovementPredictWork.h"
 #include "MassCrowdParticleWork.h"
+#include "MassCrowdParticlePipelineWork.h"
 #include "MassCrowdRuntimeBridge.h"
 #include "MassCrowdSharedFlowWork.h"
 #include "MassEntityManager.h"
@@ -61,7 +63,14 @@ namespace
   {
     FCrowdMassGatherRecord Record;
     Record.Identity.AgentId = AgentId;
-    Record.Identity.LifecycleSerial = AgentId + 10;
+    Record.Identity.SetStableEntityRef({
+      1u, static_cast<uint64>(AgentId) + 100u,
+      static_cast<uint32>(AgentId + 10)});
+    Record.AgentFacts.StableEntityRef =
+      Record.Identity.GetStableEntityRef();
+    Record.AgentFacts.CapabilitySet.Add(ECrowdCapability::Move);
+    Record.AgentFacts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+    Record.AgentFacts.MovementProfileKey = ProfileKey;
     Record.State.Position = FVector(
       static_cast<float>(AgentId * 100), 10.0f, 60.0f);
     Record.State.Velocity = FVector(30.0f, 0.0f, 0.0f);
@@ -108,7 +117,8 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
     MakeRecord(3, 7), MakeRecord(1, 0), MakeRecord(2, 7)};
   TArray<FCrowdMassBoundaryAgentRecord> BoundaryRecords;
   for (const FCrowdMassGatherRecord& Record : Records)
-    BoundaryRecords.Add({Record.Identity, Record.State, Record.Properties});
+    BoundaryRecords.Add({
+      Record.Identity, Record.AgentFacts, Record.State, Record.Properties});
   FCrowdMassBoundarySnapshot BoundaryForward;
   FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
     11, 3, BoundaryRecords, BoundaryForward);
@@ -214,8 +224,18 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
     Output.WorkOutput.StableHash = Batch.GatherHash ^ 0x55aa55aau;
     Output.WorkOutput.bValid = true;
     for (const FCrowdAgentInput& Agent : Batch.WorkInput.Agents)
+    {
       Output.WorkOutput.Movements.Add(MakeMovement(Agent));
+      const FCrowdMassGatherRecord* Source = Records.FindByPredicate(
+        [&Agent](const FCrowdMassGatherRecord& Candidate)
+        {
+          return Candidate.Identity.AgentId == Agent.AgentId;
+        });
+      Output.EntityRefs.Add(Source
+        ? Source->AgentFacts.StableEntityRef : FCrowdStableEntityRef{});
+    }
     Algo::Reverse(Output.WorkOutput.Movements);
+    Algo::Reverse(Output.EntityRefs);
   }
   FCrowdMassCommitPlan ForwardPlan;
   FCrowdMassRuntimeBridge::MergeWorkOutputs(Outputs, ForwardPlan);
@@ -233,7 +253,10 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
 
   TArray<FCrowdMassCommitTarget> Targets;
   for (const FCrowdMassCommitRecord& Record : ForwardPlan.Records)
-    Targets.Add({Record.Movement.AgentId, Record.Movement.LifecycleSerial});
+    Targets.Add({
+      Record.EntityRef,
+      Record.Movement.AgentId,
+      Record.Movement.LifecycleSerial});
   Algo::Reverse(Targets);
   TestTrue(TEXT("full target set validates before any write"),
     FCrowdMassRuntimeBridge::ValidateCommitTargets(ForwardPlan, Targets));
@@ -245,7 +268,9 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
   FCrowdMassMovementOutputFragment Applied;
   const FCrowdMassCommitRecord& Record = ForwardPlan.Records[0];
   const FCrowdMassCommitTarget Target = {
-    Record.Movement.AgentId, Record.Movement.LifecycleSerial};
+    Record.EntityRef,
+    Record.Movement.AgentId,
+    Record.Movement.LifecycleSerial};
   TestTrue(TEXT("validated record applies"),
     FCrowdMassRuntimeBridge::ApplyMovementToState(
       Record, Target, State, Applied));
@@ -557,6 +582,7 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
   {
     FCrowdMassMovementFinalizeRecord& Final =
       FinalizeInput.Records.AddDefaulted_GetRef();
+    Final.EntityRef = Gather.AgentFacts.StableEntityRef;
     Final.AgentId = Gather.Identity.AgentId;
     Final.LifecycleSerial = static_cast<uint32>(
       Gather.Identity.LifecycleSerial);
@@ -701,6 +727,175 @@ bool FMassCrowdRuntimeMovementPipelineWorkTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdRuntimeFacingFinalizeWorkTest,
+  "MassCrowd.Runtime.FacingFinalizeWork",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdRuntimeFacingFinalizeWorkTest::RunTest(
+  const FString& Parameters)
+{
+  TArray<FCrowdMassBoundaryAgentRecord> BoundaryRecords;
+  for (const int32 AgentId : {3, 1, 2})
+  {
+    const FCrowdMassGatherRecord Gather = MakeRecord(AgentId, AgentId % 2);
+    FCrowdMassBoundaryAgentRecord& Boundary =
+      BoundaryRecords.AddDefaulted_GetRef();
+    Boundary.Identity = Gather.Identity;
+    Boundary.AgentFacts = Gather.AgentFacts;
+    Boundary.State = Gather.State;
+    Boundary.Properties = Gather.Properties;
+  }
+  FCrowdMassFacingFinalizeWorkInput Input;
+  FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
+    31, 3, BoundaryRecords, Input.Snapshot);
+  Input.Facing.FixedStepIndex = 31;
+  Input.Facing.PlanRevision = 3;
+  Input.Facing.Settings.FixedStepSeconds = 1.0f / 30.0f;
+  for (const FCrowdMassBoundaryAgentRecord& Agent : Input.Snapshot.Agents)
+  {
+    FCrowdFacingInput& Facing = Input.Facing.Agents.AddDefaulted_GetRef();
+    Facing.AgentId = Agent.Identity.AgentId;
+    Facing.CurrentYawDegrees = Agent.State.YawDegrees;
+    Facing.AutonomousPreferredVelocity = FVector2f(100.0f, 20.0f);
+    Facing.Location = FVector2f(Agent.State.Position.X, Agent.State.Position.Y);
+    Facing.TargetLocation = FVector2f(500.0f, 0.0f);
+    Facing.bHasTarget = Agent.Identity.AgentId == 2;
+    Facing.bFinalPositionSettled = Agent.Identity.AgentId == 2;
+
+    FCrowdMassFinalKinematicState& Kinematic =
+      Input.Kinematics.AddDefaulted_GetRef();
+    Kinematic.AgentId = Agent.Identity.AgentId;
+    Kinematic.Position = Agent.State.Position + FVector(4.0f, 5.0f, 0.0f);
+    Kinematic.Velocity = FVector(120.0f, 30.0f, 0.0f);
+    Kinematic.bValid = true;
+  }
+
+  const FCrowdMassFacingFinalizeWorkOutput CombinedForward =
+    FCrowdMassFacingFinalizeWork::Run(Input);
+  TestTrue(TEXT("combined facing/finalize WORK completes"),
+    CombinedForward.bCompleted);
+
+  const FCrowdMassFacingWorkOutput FacingLegacy =
+    FCrowdMassFacingWork::Resolve(Input.Facing);
+  FCrowdMassMovementFinalizeWorkInput FinalizeLegacyInput;
+  TArray<FCrowdMassCommitTarget> LegacyTargets;
+  TestTrue(TEXT("legacy facing output builds finalize input"),
+    FCrowdMassMovementFinalizeWork::BuildInputFromPrepared(
+      Input.Snapshot, Input.Kinematics, FacingLegacy.Summary.Results,
+      FinalizeLegacyInput, LegacyTargets));
+  const FCrowdMassMovementFinalizeWorkOutput FinalizeLegacy =
+    FCrowdMassMovementFinalizeWork::BuildCommitPlan(FinalizeLegacyInput);
+  TestEqual(TEXT("facing stage hash unchanged by task merge"),
+    CombinedForward.Facing.StableHash, FacingLegacy.StableHash);
+  TestEqual(TEXT("finalize stage hash unchanged by task merge"),
+    CombinedForward.Finalize.StableHash, FinalizeLegacy.StableHash);
+
+  Algo::Reverse(Input.Facing.Agents);
+  Algo::Reverse(Input.Kinematics);
+  const FCrowdMassFacingFinalizeWorkOutput CombinedReverse =
+    FCrowdMassFacingFinalizeWork::Run(Input);
+  TestEqual(TEXT("combined facing/finalize input order stable"),
+    CombinedReverse.StableHash, CombinedForward.StableHash);
+
+  Input.Facing.PlanRevision = 4;
+  TestFalse(TEXT("combined facing/finalize rejects revision mismatch"),
+    FCrowdMassFacingFinalizeWork::Run(Input).bCompleted);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdRuntimeParticlePipelineWorkTest,
+  "MassCrowd.Runtime.ParticlePipelineWork",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdRuntimeParticlePipelineWorkTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdMassParticlePipelineWorkInput Input;
+  TArray<FCrowdMassBoundaryAgentRecord> BoundaryRecords;
+  for (const int32 AgentId : {3, 1, 2})
+  {
+    const FCrowdMassGatherRecord Gather = MakeRecord(AgentId, 0);
+    FCrowdMassBoundaryAgentRecord& Boundary =
+      BoundaryRecords.AddDefaulted_GetRef();
+    Boundary.Identity = Gather.Identity;
+    Boundary.AgentFacts = Gather.AgentFacts;
+    Boundary.State = Gather.State;
+    Boundary.Properties = Gather.Properties;
+  }
+  FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
+    41, 3, BoundaryRecords, Input.Snapshot);
+  Input.Particle.FixedStepIndex = 41;
+  Input.Particle.PlanRevision = 3;
+  Input.Particle.Environment.FlowConfig =
+    FCrowdSharedFlowFieldKernel::MakeSf1Config(1);
+  Input.Particle.Environment.FlowConfig.ObstacleSpecs.Reset();
+  Input.Particle.Environment.FlowConfig.BoundsMin =
+    FVector(-2000.0f, -2000.0f, 0.0f);
+  Input.Particle.Environment.FlowConfig.BoundsMax =
+    FVector(2000.0f, 2000.0f, 0.0f);
+  Input.ExpectedExternalAgentCount = 1;
+  for (const FCrowdMassBoundaryAgentRecord& Agent : Input.Snapshot.Agents)
+  {
+    FCrowdMassPredictedMovement& Predicted =
+      Input.PredictedMovements.AddDefaulted_GetRef();
+    Predicted.AgentId = Agent.Identity.AgentId;
+    Predicted.StartPosition = Agent.State.Position;
+    Predicted.PredictedPosition = Agent.State.Position + FVector(5.0f, 0.0f, 0.0f);
+    Predicted.Velocity = FVector(150.0f, 0.0f, 0.0f);
+    Predicted.bParticleActive = Agent.Identity.AgentId != 2;
+    Predicted.bValid = true;
+    if (Predicted.bParticleActive)
+    {
+      FCrowdParticleConstraintAgent& Particle =
+        Input.Particle.Agents.AddDefaulted_GetRef();
+      Particle.AgentId = Predicted.AgentId;
+      Particle.StartPosition = Predicted.StartPosition;
+      Particle.PredictedPosition = Predicted.PredictedPosition;
+      Particle.PhysicalRadiusCm = 10.0f;
+      Particle.HardSafetyGapCm = 1.0f;
+      Particle.SoftMarginCm = 1.0f;
+    }
+  }
+  FCrowdParticleConstraintAgent& External =
+    Input.Particle.Agents.AddDefaulted_GetRef();
+  External.AgentId = -100;
+  External.StartPosition = FVector(500.0f, 500.0f, 60.0f);
+  External.PredictedPosition = External.StartPosition;
+  External.PhysicalRadiusCm = 20.0f;
+  External.Mobility = 0.0f;
+
+  const FCrowdMassParticlePipelineWorkOutput Forward =
+    FCrowdMassParticlePipelineWork::Run(Input);
+  TestTrue(TEXT("particle pipeline WORK completes"), Forward.bCompleted);
+  TestEqual(TEXT("publish plan covers every boundary agent"),
+    Forward.PublishPlan.Records.Num(), 3);
+  TestEqual(TEXT("prepared results retain external and inactive facts"),
+    Forward.PublishPlan.PreparedResults.Num(), 4);
+  const FCrowdMassParticlePublishRecord* Inactive =
+    Forward.PublishPlan.Records.FindByPredicate([](const auto& Record)
+    {
+      return Record.AgentId == 2;
+    });
+  TestTrue(TEXT("inactive particle publishes predicted position and zero speed"),
+    Inactive && !Inactive->bParticleActive && !Inactive->bAppliedStateSample
+      && Inactive->Result.CorrectedPosition.Equals(
+        Input.PredictedMovements[1].PredictedPosition)
+      && Inactive->Result.CorrectedVelocity.IsNearlyZero());
+
+  Algo::Reverse(Input.PredictedMovements);
+  Algo::Reverse(Input.Particle.Agents);
+  const FCrowdMassParticlePipelineWorkOutput Reverse =
+    FCrowdMassParticlePipelineWork::Run(Input);
+  TestEqual(TEXT("particle pipeline input order stable"),
+    Reverse.StableHash, Forward.StableHash);
+  Input.ExpectedExternalAgentCount = 0;
+  TestFalse(TEXT("particle pipeline rejects external count mismatch"),
+    FCrowdMassParticlePipelineWork::Run(Input).bCompleted);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FMassCrowdRuntimeMinimalMassWorldTest,
   "MassCrowd.Runtime.MinimalMassWorld",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -727,12 +922,9 @@ bool FMassCrowdRuntimeMinimalMassWorldTest::RunTest(const FString& Parameters)
 
   const TArray<const UScriptStruct*> Types = {
     FCrowdMassAgentFragment::StaticStruct(),
+    FCrowdMassBehaviorFragment::StaticStruct(),
     FCrowdMassSimulationStateFragment::StaticStruct(),
     FCrowdMassPropertiesFragment::StaticStruct(),
-    FCrowdMassGuidanceCandidatesFragment::StaticStruct(),
-    FCrowdMassComposedGuidanceFragment::StaticStruct(),
-    FCrowdMassLocalVelocityFragment::StaticStruct(),
-    FCrowdMassParticleConstraintFragment::StaticStruct(),
     FCrowdMassFacingFragment::StaticStruct(),
     FCrowdMassMovementOutputFragment::StaticStruct(),
     FCrowdMassAgentTag::StaticStruct()};
@@ -747,14 +939,23 @@ bool FMassCrowdRuntimeMinimalMassWorldTest::RunTest(const FString& Parameters)
     EntityManager->GetFragmentDataChecked<FCrowdMassSimulationStateFragment>(Entity);
   FCrowdMassPropertiesFragment& Properties =
     EntityManager->GetFragmentDataChecked<FCrowdMassPropertiesFragment>(Entity);
+  FCrowdMassBehaviorFragment& Behavior =
+    EntityManager->GetFragmentDataChecked<FCrowdMassBehaviorFragment>(Entity);
   Identity.AgentId = 12;
-  Identity.LifecycleSerial = 4;
+  Identity.SetStableEntityRef({1, 12, 4});
+  FCrowdCapabilitySet Capabilities;
+  Capabilities.Add(ECrowdCapability::Move);
+  Capabilities.Add(ECrowdCapability::MoveTo);
+  Behavior.CapabilityBits = Capabilities.Bits;
+  Behavior.ActiveBehavior =
+    static_cast<uint8>(ECrowdActiveBehavior::MoveTo);
   State.Position = FVector(100.0f, 200.0f, 60.0f);
   State.bInitialized = true;
   Properties.CapabilityProfileKey = 0;
 
   FCrowdMassGatherRecord Record;
   Record.Identity = Identity;
+  Record.AgentFacts = Behavior.GetAgentFacts(Identity);
   Record.State = State;
   Record.Properties = Properties;
   TArray<FCrowdMassWorkBatch> Batches;

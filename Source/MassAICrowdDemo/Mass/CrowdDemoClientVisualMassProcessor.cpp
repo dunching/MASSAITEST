@@ -2,8 +2,10 @@
 
 #include "CrowdDemoReplicator.h"
 #include "Mass/CrowdDemoMassFragments.h"
+#include "Mass/CrowdDemoPresentationAdapter.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Mass/CrowdDemoVatPlaybackKernel.h"
+#include "MassCrowdPresentationSubsystem.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
@@ -240,6 +242,12 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   {
     return;
   }
+  UMassCrowdPresentationSubsystem* Presentation =
+    World->GetSubsystem<UMassCrowdPresentationSubsystem>();
+  if (!Presentation)
+  {
+    return;
+  }
   if (Instances->NumCustomDataFloats != 3)
   {
     Instances->NumCustomDataFloats = 3;
@@ -249,10 +257,27 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
     HitFlashInstances->NumCustomDataFloats = 3;
   }
   const bool bRebuildInstances = bRebuildInstancesNextFrame || bOwnerChanged;
-  if (bRebuildInstances)
+  if (bRebuildInstances && bPresentationProfileRegistered)
+  {
+    Presentation->ResetProfile(1);
+    Presentation->UnregisterProfile(1);
+    bPresentationProfileRegistered = false;
+    PresentedEntities.Reset();
+  }
+  if (!bPresentationProfileRegistered)
   {
     Replicator->ClearCrowdVisualInstances();
     Replicator->RecordVisualInstanceRebuild();
+    const TSharedRef<FCrowdDemoIsmPresentationSink> Sink =
+      MakeShared<FCrowdDemoIsmPresentationSink>(
+        *Instances, *HitFlashInstances);
+    if (!Presentation->RegisterProfile(1, Sink))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoClientVisual role=client stage=presentation_profile"));
+      return;
+    }
+    bPresentationProfileRegistered = true;
     bRebuildInstancesNextFrame = false;
   }
   Replicator->ResetClientMassEntityStates();
@@ -263,6 +288,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
     ? GameState->GetServerWorldTimeSeconds()
     : World->GetTimeSeconds();
   const int32 AppliedCorrectionRevision = Pipeline->GetLastAppliedCorrectionRevision();
+  ++PresentationSequence;
   int32 SubmittedCount = 0;
   int32 VatPlaybackCount = 0;
   int32 ActiveHitFlashCount = 0;
@@ -454,20 +480,6 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
       const FTransform InstanceTransform = MakeInstanceTransform(
         Offset.DisplayLocation,
         Offset.DisplayYawDegrees);
-      if (bRebuildInstances || Offset.InstanceIndex == INDEX_NONE
-        || Offset.InstanceIndex >= Instances->GetInstanceCount())
-      {
-        Offset.InstanceIndex = Instances->AddInstance(InstanceTransform, true);
-      }
-      else
-      {
-        Instances->UpdateInstanceTransform(
-          Offset.InstanceIndex,
-          InstanceTransform,
-          true,
-          false,
-          true);
-      }
       FCrowdDemoVatPlaybackInput PlaybackInput;
       PlaybackInput.VisualState = Authority.Combat.VisualState;
       PlaybackInput.ServerTimeSeconds = ClientServerSeconds;
@@ -483,41 +495,48 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         && Playback.HitFlashIntensity > KINDA_SMALL_NUMBER;
       if (Playback.bValid)
       {
-        Instances->SetCustomDataValue(Offset.InstanceIndex, 0, Playback.Frame, false);
-        Instances->SetCustomDataValue(Offset.InstanceIndex, 1, Playback.PreviousFrame, false);
-        Instances->SetCustomDataValue(Offset.InstanceIndex, 2, Playback.HitFlashIntensity, false);
         ++VatPlaybackCount;
         ActiveHitFlashCount += bHitFlashActive ? 1 : 0;
         ++VisualStateCounts[Playback.ClipIndex];
       }
 
-      FTransform HitFlashTransform = InstanceTransform;
-      HitFlashTransform.SetScale3D(bHitFlashActive
-        ? InstanceTransform.GetScale3D() * (1.02f + 0.03f * Playback.HitFlashIntensity)
-        : FVector::ZeroVector);
-      if (bRebuildInstances || Offset.InstanceIndex >= HitFlashInstances->GetInstanceCount())
+      const FCrowdStableEntityRef PresentationRef{
+        1,
+        static_cast<uint64>(FMath::Max(0, Identities[It].Id)) + 1ull,
+        static_cast<uint32>(FMath::Max(1, Identities[It].LifecycleSerial))};
+      FCrowdPresentationState PresentationState;
+      PresentationState.EntityRef = PresentationRef;
+      PresentationState.Transform = InstanceTransform;
+      PresentationState.ProfileKey = 1;
+      PresentationState.VisualState =
+        static_cast<uint32>(Authority.Combat.VisualState);
+      PresentationState.CustomData = Playback.bValid
+        ? FVector3f(
+          Playback.Frame,
+          Playback.PreviousFrame,
+          Playback.HitFlashIntensity)
+        : FVector3f::ZeroVector;
+      PresentationState.Sequence = PresentationSequence;
+      PresentationState.SampleServerSeconds = ClientServerSeconds;
+      const bool bAlreadyPresented =
+        PresentedEntities.Contains(PresentationRef);
+      const ECrowdPresentationApplyResult PresentationResult =
+        bAlreadyPresented
+          ? Presentation->ApplyUpdate(PresentationState)
+          : Presentation->ApplySpawn(PresentationState);
+      if (PresentationResult
+          != ECrowdPresentationApplyResult::Applied
+        && PresentationResult
+          != ECrowdPresentationApplyResult::Duplicate)
       {
-        const int32 HitFlashIndex = HitFlashInstances->AddInstance(HitFlashTransform, true);
-        if (HitFlashIndex != Offset.InstanceIndex)
-        {
-          bRebuildInstancesNextFrame = true;
-        }
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoClientVisual role=client stage=presentation_apply agent=%d result=%d"),
+          Identities[It].Id,
+          static_cast<int32>(PresentationResult));
+        bRebuildInstancesNextFrame = true;
+        continue;
       }
-      else
-      {
-        HitFlashInstances->UpdateInstanceTransform(
-          Offset.InstanceIndex,
-          HitFlashTransform,
-          true,
-          false,
-          true);
-      }
-      if (Playback.bValid && Offset.InstanceIndex < HitFlashInstances->GetInstanceCount())
-      {
-        HitFlashInstances->SetCustomDataValue(Offset.InstanceIndex, 0, Playback.Frame, false);
-        HitFlashInstances->SetCustomDataValue(Offset.InstanceIndex, 1, Playback.PreviousFrame, false);
-        HitFlashInstances->SetCustomDataValue(Offset.InstanceIndex, 2, Playback.HitFlashIntensity, false);
-      }
+      PresentedEntities.Add(PresentationRef);
 
       const float SampleAgeMs = Authority.ServerSampleTimeSeconds > 0.0f
         ? FMath::Max(0.0f, ClientServerSeconds - Authority.ServerSampleTimeSeconds) * 1000.0f
@@ -547,7 +566,9 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   {
     return;
   }
-  if (Instances->GetInstanceCount() != SubmittedCount)
+  const int32 ProductInstanceCount =
+    Presentation->GetInstanceCount(1);
+  if (ProductInstanceCount != SubmittedCount)
   {
     bRebuildInstancesNextFrame = true;
   }
@@ -581,7 +602,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
       Display,
       TEXT("CrowdDemoVisual: submitted=%d instances=%d vat_playback=%d states=[idle:%d move:%d attack:%d hit:%d death:%d] state_mask=%u hit_flash_active=%d visual_mode=RoundSimVAT round_visual_smoothing=1 source=MassClientVisualProcessor"),
       SubmittedCount,
-      Instances->GetInstanceCount(),
+      ProductInstanceCount,
       VatPlaybackCount,
       VisualStateCounts[0],
       VisualStateCounts[1],

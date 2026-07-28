@@ -11,16 +11,19 @@ void UMassCrowdMovementTrait::BuildTemplate(
 {
   BuildContext.AddTag<FCrowdMassAgentTag>();
   BuildContext.AddFragment<FCrowdMassAgentFragment>();
+  FCrowdMassBehaviorFragment& Behavior =
+    BuildContext.AddFragment_GetRef<FCrowdMassBehaviorFragment>();
+  FCrowdCapabilitySet BaseCapabilities;
+  BaseCapabilities.Add(ECrowdCapability::Move);
+  BaseCapabilities.Add(ECrowdCapability::MoveTo);
+  Behavior.CapabilityBits = BaseCapabilities.Bits;
+  Behavior.ActiveBehavior = static_cast<uint8>(ECrowdActiveBehavior::Idle);
   BuildContext.AddFragment<FCrowdMassSimulationStateFragment>();
   FCrowdMassPropertiesFragment& Properties =
     BuildContext.AddFragment_GetRef<FCrowdMassPropertiesFragment>();
   Properties.PhysicalRadiusCm = PhysicalRadiusCm;
   Properties.MaximumSpeedCmps = MaximumSpeedCmps;
   Properties.CapabilityProfileKey = CapabilityProfileKey;
-  BuildContext.AddFragment<FCrowdMassGuidanceCandidatesFragment>();
-  BuildContext.AddFragment<FCrowdMassComposedGuidanceFragment>();
-  BuildContext.AddFragment<FCrowdMassLocalVelocityFragment>();
-  BuildContext.AddFragment<FCrowdMassParticleConstraintFragment>();
   BuildContext.AddFragment<FCrowdMassFacingFragment>();
   BuildContext.AddFragment<FCrowdMassMovementOutputFragment>();
 }

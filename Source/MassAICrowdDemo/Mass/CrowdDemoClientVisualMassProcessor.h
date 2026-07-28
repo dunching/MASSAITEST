@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassProcessor.h"
+#include "MassCrowdAgentFacts.h"
 #include "CrowdDemoClientVisualMassProcessor.generated.h"
 
 class ACrowdDemoReplicator;
@@ -25,5 +26,8 @@ private:
   double LastTargetMarkerDrawSeconds = -1.0;
   uint32 LastVisualStateMask = 0;
   int32 LastHitFlashActiveCount = 0;
+  uint64 PresentationSequence = 0;
+  TSet<FCrowdStableEntityRef> PresentedEntities;
+  bool bPresentationProfileRegistered = false;
   bool bRebuildInstancesNextFrame = false;
 };

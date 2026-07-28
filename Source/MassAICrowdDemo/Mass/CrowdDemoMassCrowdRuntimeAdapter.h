@@ -17,13 +17,16 @@ class MASSAICROWDDEMO_API FCrowdDemoMassCrowdRuntimeAdapter
 public:
   static bool BuildBoundaryAgentRecord(
     const FCrowdDemoMassIdentityFragment& Identity,
+    const FCrowdMassAgentFragment& RuntimeIdentity,
+    const FCrowdMassBehaviorFragment& RuntimeBehavior,
     const FCrowdDemoRoundSimStateFragment& State,
     const FCrowdDemoMassMovementFragment& Movement,
     const FCrowdDemoParticlePropertiesFragment& Particle,
     FCrowdMassBoundaryAgentRecord& OutRecord);
 
   static FCrowdMassCommitTarget BuildCommitTarget(
-    const FCrowdDemoMassIdentityFragment& Identity);
+    const FCrowdDemoMassIdentityFragment& Identity,
+    const FCrowdMassAgentFragment& RuntimeIdentity);
 
   static FCrowdDemoComposedGuidance BuildDemoComposedGuidance(
     const FCrowdComposedGuidance& Source);
@@ -77,15 +80,6 @@ public:
 
   static FCrowdLocalPredictiveSettings BuildCoreLocalPredictiveSettings(
     const FCrowdDemoLocalPredictiveSettings& Source);
-
-  static bool BuildCoreLocalPredictiveAgent(
-    const FCrowdMassAgentFragment& Identity,
-    const FCrowdMassSimulationStateFragment& State,
-    const FCrowdMassPropertiesFragment& Properties,
-    const FCrowdMassComposedGuidanceFragment& Composed,
-    float MaximumSpeedCmps,
-    int32 BlockedAgeSteps,
-    FCrowdLocalPredictiveAgent& OutAgent);
 
   static FCrowdLocalPredictiveGrantState BuildCoreLocalPredictiveGrant(
     const FCrowdDemoLocalPredictiveGrantState& Source);
@@ -141,5 +135,6 @@ public:
   static bool ApplyCommitRecord(
     const FCrowdMassCommitRecord& Record,
     const FCrowdDemoMassIdentityFragment& Identity,
+    const FCrowdMassAgentFragment& RuntimeIdentity,
     FCrowdDemoRoundSimStateFragment& InOutState);
 };

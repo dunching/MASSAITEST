@@ -10,7 +10,8 @@ public class MassCrowdNetworking : ModuleRules
     {
       "Core",
       "MassCrowdCore",
-      "MassCrowdRuntime"
+      "MassCrowdRuntime",
+      "MassEntity"
     });
     PrivateDependencyModuleNames.AddRange(new[]
     {

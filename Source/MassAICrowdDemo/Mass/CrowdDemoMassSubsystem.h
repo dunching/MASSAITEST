@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
 #include "MassEntityHandle.h"
+#include "MassCrowdRuntimeBridge.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CrowdDemoMassSubsystem.generated.h"
 
@@ -53,6 +54,17 @@ public:
   int32 GetAliveAgentCount() const;
   int32 BuildVisualSnapshot(TArray<FCrowdDemoEntityState>& OutSnapshot, float ServerTimeSeconds) const;
   int32 BuildRoundAgentStates(TArray<FCrowdDemoRoundAgentState>& OutStates) const;
+  bool BuildProductBoundarySnapshot(
+    int32 FixedStepIndex,
+    int32 PlanRevision,
+    FCrowdMassBoundarySnapshot& OutSnapshot,
+    TArray<FCrowdMassCommitTarget>& OutTargets) const;
+  bool ApplyProductBoundaryCommit(
+    const FCrowdMassCommitPlan& Plan,
+    TConstArrayView<FCrowdMassCommitTarget> Targets);
+  bool RecycleTrackedAgent(
+    const FCrowdStableEntityRef& EntityRef,
+    FCrowdStableEntityRef& OutReplacementRef);
   void MirrorProjectileStates(TConstArrayView<struct FCrowdDemoProjectileState> Projectiles);
   int32 GetTrackedProjectilePoolCount() const { return TrackedProjectiles.Num(); }
 
