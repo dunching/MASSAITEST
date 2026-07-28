@@ -43,7 +43,7 @@ struct MASSCROWDRUNTIME_API FCrowdMassBehaviorFragment : public FMassFragment
 
   UPROPERTY(Transient) uint32 FactionKey = 0;
   UPROPERTY(Transient) uint64 CapabilityBits = 0;
-  UPROPERTY(Transient) uint8 ActiveBehavior = 0;
+  UPROPERTY(Transient) uint32 DerivedBehaviorLabel = 0;
   UPROPERTY(Transient) uint32 BusinessTaskProviderId = 0;
   UPROPERTY(Transient) uint64 BusinessTaskStableEntityId = 0;
   UPROPERTY(Transient) uint32 BusinessTaskLifecycleSerial = 0;
@@ -60,7 +60,7 @@ struct MASSCROWDRUNTIME_API FCrowdMassBehaviorFragment : public FMassFragment
     Facts.StableEntityRef = Identity.GetStableEntityRef();
     Facts.FactionKey = FactionKey;
     Facts.CapabilitySet.Bits = CapabilityBits;
-    Facts.ActiveBehavior = static_cast<ECrowdActiveBehavior>(ActiveBehavior);
+    Facts.DerivedBehaviorLabel = DerivedBehaviorLabel;
     Facts.BusinessTaskRef = {
       BusinessTaskProviderId,
       BusinessTaskStableEntityId,
@@ -77,7 +77,7 @@ struct MASSCROWDRUNTIME_API FCrowdMassBehaviorFragment : public FMassFragment
   {
     FactionKey = Facts.FactionKey;
     CapabilityBits = Facts.CapabilitySet.Bits;
-    ActiveBehavior = static_cast<uint8>(Facts.ActiveBehavior);
+    DerivedBehaviorLabel = Facts.DerivedBehaviorLabel;
     BusinessTaskProviderId = Facts.BusinessTaskRef.ProviderId;
     BusinessTaskStableEntityId = Facts.BusinessTaskRef.StableEntityId;
     BusinessTaskLifecycleSerial = Facts.BusinessTaskRef.LifecycleSerial;

@@ -3,27 +3,6 @@
 #include "CoreMinimal.h"
 #include "MassCrowdAgentFacts.h"
 
-enum class ECrowdBehaviorTargetKind : uint8
-{
-  None = 0,
-  Location,
-  Entity,
-  Count
-};
-
-enum class ECrowdInteractionIntentKind : uint8
-{
-  None = 0,
-  Move,
-  Pursue,
-  Pickup,
-  Deliver,
-  Attack,
-  Guard,
-  Flee,
-  Count
-};
-
 enum class ECrowdBusinessCommitKind : uint8
 {
   None = 0,
@@ -31,33 +10,6 @@ enum class ECrowdBusinessCommitKind : uint8
   CargoDeliver,
   CombatHit,
   Count
-};
-
-struct MASSCROWDRUNTIME_API FCrowdBehaviorTarget
-{
-  ECrowdBehaviorTargetKind Kind = ECrowdBehaviorTargetKind::None;
-  FCrowdStableEntityRef EntityRef;
-  FVector Location = FVector::ZeroVector;
-
-  bool IsValid() const;
-};
-
-struct MASSCROWDRUNTIME_API FCrowdBehaviorObjective
-{
-  uint32 ObjectiveKey = 0;
-  FVector Location = FVector::ZeroVector;
-  uint32 AcceptanceRadiusCm = 0;
-
-  bool IsValid() const;
-};
-
-struct MASSCROWDRUNTIME_API FCrowdInteractionIntent
-{
-  ECrowdInteractionIntentKind Kind = ECrowdInteractionIntentKind::None;
-  FCrowdStableEntityRef TargetRef;
-  uint32 PayloadKey = 0;
-
-  bool IsValid() const;
 };
 
 struct MASSCROWDRUNTIME_API FCrowdBusinessCommitRequest
@@ -75,6 +27,8 @@ struct MASSCROWDRUNTIME_API FCrowdBusinessCommitRequest
   bool IsValid() const;
 };
 
+// Migration-only recipe input. It is not stored on an entity, replicated, or
+// committed as authoritative state.
 struct MASSCROWDRUNTIME_API FCrowdRuntimeBehaviorContext
 {
   FCrowdAgentFacts AgentFacts;
@@ -92,51 +46,10 @@ struct MASSCROWDRUNTIME_API FCrowdRuntimeBehaviorContext
   bool bInteractionReady = false;
 };
 
-struct MASSCROWDRUNTIME_API FCrowdRuntimeBehaviorOutput
-{
-  ECrowdActiveBehavior Behavior = ECrowdActiveBehavior::Idle;
-  FCrowdBehaviorTarget Target;
-  FCrowdBehaviorObjective Objective;
-  uint32 MovementProfileKey = 0;
-  FCrowdInteractionIntent InteractionIntent;
-  FCrowdBusinessCommitRequest BusinessCommitRequest;
-
-  bool IsValidFor(const FCrowdRuntimeBehaviorContext& Context) const;
-};
-
-class MASSCROWDRUNTIME_API ICrowdRuntimeBehaviorProvider
+class MASSCROWDRUNTIME_API FCrowdBehaviorCommitId
 {
 public:
-  virtual ~ICrowdRuntimeBehaviorProvider() = default;
-  virtual bool Supports(ECrowdActiveBehavior Behavior) const = 0;
-  virtual bool Evaluate(
-    const FCrowdRuntimeBehaviorContext& Context,
-    FCrowdRuntimeBehaviorOutput& OutOutput) const = 0;
-};
-
-class MASSCROWDRUNTIME_API FCrowdRuntimeBasicBehaviorProvider final
-  : public ICrowdRuntimeBehaviorProvider
-{
-public:
-  virtual bool Supports(ECrowdActiveBehavior Behavior) const override;
-  virtual bool Evaluate(
-    const FCrowdRuntimeBehaviorContext& Context,
-    FCrowdRuntimeBehaviorOutput& OutOutput) const override;
-};
-
-class MASSCROWDRUNTIME_API FCrowdRuntimeBehaviorTransition
-{
-public:
-  static bool Evaluate(
-    const ICrowdRuntimeBehaviorProvider& Provider,
-    const FCrowdRuntimeBehaviorContext& Context,
-    FCrowdRuntimeBehaviorOutput& OutOutput);
-
-  static bool Commit(
-    const FCrowdRuntimeBehaviorOutput& Output,
-    FCrowdAgentFacts& InOutAgentFacts);
-
-  static uint64 MakeCommitId(
+  static uint64 Make(
     ECrowdBusinessCommitKind Kind,
     const FCrowdRuntimeBehaviorContext& Context);
 };

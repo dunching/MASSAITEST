@@ -1,5 +1,13 @@
 #include "MassCrowdMovementFinalizeWork.h"
 
+#define FnvOffset MovementFinalize_FnvOffset
+#define FnvPrime MovementFinalize_FnvPrime
+#define Fold MovementFinalize_Fold
+#define FoldInt MovementFinalize_FoldInt
+#define FoldFloat MovementFinalize_FoldFloat
+#define IsFiniteVector MovementFinalize_IsFiniteVector
+#define BuildMovementHash MovementFinalize_BuildMovementHash
+
 namespace
 {
   constexpr uint32 FnvOffset = 2166136261u;
@@ -201,3 +209,11 @@ FCrowdMassMovementFinalizeWork::BuildCommitPlan(
   Output.bCompleted = true;
   return Output;
 }
+
+#undef BuildMovementHash
+#undef IsFiniteVector
+#undef FoldFloat
+#undef FoldInt
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

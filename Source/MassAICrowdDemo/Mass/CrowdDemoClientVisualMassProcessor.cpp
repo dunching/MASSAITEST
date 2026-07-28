@@ -169,11 +169,6 @@ namespace
       }
     }
 
-    if (ReplicatedOwner && LocalFallback && ReplicatedOwner != LocalFallback)
-    {
-      LocalFallback->ClearCrowdVisualInstances();
-      LocalFallback->Destroy();
-    }
     if (CachedOwner.Get() != Selected)
     {
       CachedOwner = Selected;
@@ -230,6 +225,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
     return;
   }
 
+  ACrowdDemoReplicator* PreviousOwner = CachedVisualOwner.Get();
   bool bOwnerChanged = false;
   ACrowdDemoReplicator* Replicator = FindVisualOwner(*World, CachedVisualOwner, bOwnerChanged);
   UInstancedStaticMeshComponent* Instances = Replicator
@@ -259,23 +255,43 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   const bool bRebuildInstances = bRebuildInstancesNextFrame || bOwnerChanged;
   if (bRebuildInstances && bPresentationProfileRegistered)
   {
-    Presentation->ResetProfile(1);
-    Presentation->UnregisterProfile(1);
+    if (!Presentation->ResetProfile(1)
+      || !Presentation->UnregisterProfile(1))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoClientVisual role=client stage=presentation_owner_release"));
+      return;
+    }
     bPresentationProfileRegistered = false;
     PresentedEntities.Reset();
+  }
+  if (bOwnerChanged && PreviousOwner && PreviousOwner != Replicator
+    && PreviousOwner->IsLocalVisualHostOnly())
+  {
+    PreviousOwner->Destroy();
   }
   if (!bPresentationProfileRegistered)
   {
     Replicator->ClearCrowdVisualInstances();
     Replicator->RecordVisualInstanceRebuild();
-    const TSharedRef<FCrowdDemoIsmPresentationSink> Sink =
+    TSharedRef<FCrowdDemoIsmPresentationSink> Sink =
       MakeShared<FCrowdDemoIsmPresentationSink>(
         *Instances, *HitFlashInstances);
     if (!Presentation->RegisterProfile(1, Sink))
     {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoClientVisual role=client stage=presentation_profile"));
-      return;
+      const bool bRecoveredStaleOwner =
+        Presentation->ResetProfile(1)
+        && Presentation->UnregisterProfile(1)
+        && Presentation->RegisterProfile(
+          1,
+          MakeShared<FCrowdDemoIsmPresentationSink>(
+            *Instances, *HitFlashInstances));
+      if (!bRecoveredStaleOwner)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoClientVisual role=client stage=presentation_profile"));
+        return;
+      }
     }
     bPresentationProfileRegistered = true;
     bRebuildInstancesNextFrame = false;

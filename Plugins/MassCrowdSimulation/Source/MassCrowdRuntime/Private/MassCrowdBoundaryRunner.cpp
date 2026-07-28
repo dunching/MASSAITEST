@@ -94,14 +94,16 @@ bool FCrowdMassBoundaryRunner::BuildAndSealCommit(
   const FCrowdMassCommitPlan& MovementPlan,
   const TConstArrayView<FCrowdBoundaryPreparedPatch> PreparedPatches,
   const TConstArrayView<FCrowdMassCommitTarget> Targets,
-  const double MergeMilliseconds)
+  const double MergeMilliseconds,
+  const FCrowdBehaviorBoundaryMetadata* BehaviorMetadata)
 {
   if (!bWaited
     || !FCrowdMassRuntimeBridge::ValidateCommitTargets(
       MovementPlan, Targets)
     || !ValidatePreparedPatches(Snapshot, PreparedPatches, Targets)
     || !FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
-      Snapshot, MovementPlan, PreparedPatches, CommitEnvelope))
+      Snapshot, MovementPlan, PreparedPatches, CommitEnvelope,
+      BehaviorMetadata))
     return false;
   return Orchestrator.SealMergedEnvelope(
     CommitEnvelope, MergeMilliseconds);

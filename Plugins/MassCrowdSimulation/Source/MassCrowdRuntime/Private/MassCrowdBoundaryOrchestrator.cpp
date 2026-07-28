@@ -315,7 +315,8 @@ bool FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
   const FCrowdMassBoundarySnapshot& Snapshot,
   const FCrowdMassCommitPlan& MovementPlan,
   const TConstArrayView<FCrowdBoundaryPreparedPatch> PreparedPatches,
-  FCrowdBoundaryCommitEnvelope& OutEnvelope)
+  FCrowdBoundaryCommitEnvelope& OutEnvelope,
+  const FCrowdBehaviorBoundaryMetadata* BehaviorMetadata)
 {
   OutEnvelope = {};
   if (!Snapshot.bValid
@@ -334,6 +335,11 @@ bool FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
     return false;
 
   OutEnvelope.MovementPlan = MovementPlan;
+  if (BehaviorMetadata)
+  {
+    if (!BehaviorMetadata->IsValid()) return false;
+    OutEnvelope.Behavior = *BehaviorMetadata;
+  }
   OutEnvelope.Patches.Reserve(PreparedPatches.Num());
   for (const FCrowdBoundaryPreparedPatch& Patch : PreparedPatches)
   {
@@ -364,6 +370,10 @@ bool FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
   uint64 Hash = FoldUint32(FnvOffset64, OutEnvelope.Version);
   Hash = FoldUint64(Hash, Snapshot.StableHash);
   Hash = FoldUint64(Hash, MovementPlan.StableHash);
+  Hash = FoldUint32(Hash, OutEnvelope.Behavior.SourceSetRevision);
+  Hash = FoldUint64(Hash, OutEnvelope.Behavior.SourceSetHash);
+  Hash = FoldUint64(Hash, OutEnvelope.Behavior.CommandBatchHash);
+  Hash = FoldUint64(Hash, OutEnvelope.Behavior.ResolvedChannelHash);
   Hash = FoldUint32(Hash, static_cast<uint32>(OutEnvelope.Patches.Num()));
   for (const FCrowdBoundaryPatchDescriptor& Patch : OutEnvelope.Patches)
   {

@@ -1,5 +1,8 @@
 #include "MassCrowdFacingWork.h"
 
+#define FnvPrime FacingWork_FnvPrime
+#define Fold FacingWork_Fold
+
 namespace
 {
   constexpr uint32 FnvPrime = 16777619u;
@@ -36,3 +39,6 @@ FCrowdMassFacingWorkOutput FCrowdMassFacingWork::Resolve(
   Output.bCompleted = true;
   return Output;
 }
+
+#undef Fold
+#undef FnvPrime

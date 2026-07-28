@@ -20,7 +20,9 @@ MassAICrowdDemo → 插件公共接口与可选模块
 
 [COMPUTED][HIGH] `MassCrowdCore`只依赖 UE `Core`模块，保存稳定纯数据合同、确定性算法、排序、量化、hash及通用 Movement WORK 输入输出。Core禁止引用 Mass EntityManager、Actor、World、复制、渲染、Round、Scenario 或 Demo 语义。
 
-[COMPUTED][HIGH] `MassCrowdRuntime`依赖 Core 和 MassEntity；当前承载通用运动链、AgentFacts fragments映射及真实Mass LifecycleStore。Store支持snapshot create、spawn、destroy、槽位复用、membership原子更新、correction与完整集合hash；持续调度和Behavior注册/切换服务尚未实现。Runtime不依赖Networking或Presentation。
+[COMPUTED][HIGH] `MassCrowdRuntime`依赖 Core 和 MassEntity；当前承载通用运动链、AgentFacts fragments映射、真实Mass LifecycleStore和按StableEntityRef存储的Behavior Source World Store。Source Registry在World初始化时注册并冻结，Runtime不依赖Networking、Presentation或StateTree。
+
+[COMPUTED][HIGH] 可选`MassCrowdStateTreeAdapter`单向依赖Runtime、`StateTreeModule`与`GameplayStateTreeModule`；Runtime不反向依赖StateTree。完整合同见`EntityBehaviorSourceArchitecture.md`。
 
 [COMPUTED][HIGH] `MassCrowdNetworking`当前已实现不含Demo语义的Relevant Snapshot与Spawn/Despawn/Membership batch primitives；Demo已通过宿主adapter实际消费Snapshot。Delta具备严格序列、bounds、原子状态转换和membership hash，但仍无宿主无关RPC包装、真实Mass apply、Correction/Event、late join或Relevancy调度。
 

@@ -1,5 +1,10 @@
 #include "MassCrowdSharedFlowWork.h"
 
+#define Fold SharedFlowWork_Fold
+#define QuantizeFloat SharedFlowWork_QuantizeFloat
+#define ObstaclesMatch SharedFlowWork_ObstaclesMatch
+#define TopologyMatches SharedFlowWork_TopologyMatches
+
 namespace
 {
   uint32 Fold(uint32 Hash, const uint32 Value)
@@ -192,3 +197,8 @@ FCrowdMassSharedFlowSampleOutput FCrowdMassSharedFlowWork::BuildPreferred(
   Output.bValid = Output.Agents.Num() == Agents.Num();
   return Output;
 }
+
+#undef TopologyMatches
+#undef ObstaclesMatch
+#undef QuantizeFloat
+#undef Fold

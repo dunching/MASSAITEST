@@ -45,7 +45,8 @@ namespace
     Facts.FactionKey = 2;
     Facts.CapabilitySet.Add(ECrowdCapability::Move);
     Facts.CapabilitySet.Add(ECrowdCapability::MoveTo);
-    Facts.ActiveBehavior = ECrowdActiveBehavior::MoveTo;
+    Facts.DerivedBehaviorLabel =
+      static_cast<uint32>(ECrowdActiveBehavior::MoveTo);
     Facts.MovementProfileKey = 7;
     Facts.PresentationProfileKey = 8;
     Facts.RuntimeState = 9;

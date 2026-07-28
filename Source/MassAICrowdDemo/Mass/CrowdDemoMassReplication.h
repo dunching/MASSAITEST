@@ -16,6 +16,10 @@ struct FReplicatedCrowdDemoAgent : public FReplicatedAgentBase
 
   const FReplicatedAgentPositionYawData& GetReplicatedPositionYawData() const { return PositionYaw; }
   FReplicatedAgentPositionYawData& GetReplicatedPositionYawDataMutable() { return PositionYaw; }
+  bool NetSerialize(
+    FArchive& Ar,
+    UPackageMap* Map,
+    bool& bOutSuccess);
 
   UPROPERTY(Transient)
   FVector_NetQuantize10 Velocity = FVector::ZeroVector;
@@ -50,6 +54,16 @@ struct FReplicatedCrowdDemoAgent : public FReplicatedAgentBase
 private:
   UPROPERTY(Transient)
   FReplicatedAgentPositionYawData PositionYaw;
+};
+
+template<>
+struct TStructOpsTypeTraits<FReplicatedCrowdDemoAgent>
+  : public TStructOpsTypeTraitsBase2<FReplicatedCrowdDemoAgent>
+{
+  enum
+  {
+    WithNetSerializer = true,
+  };
 };
 
 USTRUCT()
@@ -99,16 +113,43 @@ struct FCrowdDemoMassClientBubbleSerializer : public FMassClientBubbleSerializer
 
   bool NetDeltaSerialize(FNetDeltaSerializeInfo& DeltaParams)
   {
-    return FFastArraySerializer::FastArrayDeltaSerialize<FCrowdDemoMassFastArrayItem, FCrowdDemoMassClientBubbleSerializer>(Agents, DeltaParams, *this);
+    if (DeltaParams.Writer)
+    {
+      constexpr int32 MaxInitialAgentsPerDelta = 128;
+      MaxWritableAgents = FMath::Min(
+        Agents.Num(),
+        MaxWritableAgents + MaxInitialAgentsPerDelta);
+    }
+    const bool bResult =
+      FFastArraySerializer::FastArrayDeltaSerialize<
+        FCrowdDemoMassFastArrayItem,
+        FCrowdDemoMassClientBubbleSerializer>(
+          Agents, DeltaParams, *this);
+    if (DeltaParams.Writer
+      && MaxWritableAgents < Agents.Num())
+      MarkArrayDirty();
+    return bResult;
   }
 
   int32 GetAgentCount() const { return Agents.Num(); }
+
+  template<typename Type, typename SerializerType>
+  bool ShouldWriteFastArrayItem(
+    const Type& Item,
+    const bool bIsWritingOnClient) const
+  {
+    if (bIsWritingOnClient)
+      return Item.ReplicationID != INDEX_NONE;
+    return Item.Agent.VisualId >= 0
+      && Item.Agent.VisualId < MaxWritableAgents;
+  }
 
   FCrowdDemoMassClientBubbleHandler Bubble;
 
 private:
   UPROPERTY(Transient)
   TArray<FCrowdDemoMassFastArrayItem> Agents;
+  int32 MaxWritableAgents = 0;
 };
 
 template<>

@@ -689,7 +689,8 @@ bool UCrowdDemoMassSubsystem::RecycleTrackedAgent(
   FCrowdAgentFacts Facts = Behavior.GetAgentFacts(RuntimeIdentity);
   Facts.StableEntityRef = RuntimeIdentity.GetStableEntityRef();
   Facts.BusinessTaskRef = {};
-  Facts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+  Facts.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::Idle);
   Behavior.SetAgentFacts(Facts);
   TrackedAgents[TrackedIndex] = Replacement[0];
   OutReplacementRef = RuntimeIdentity.GetStableEntityRef();
@@ -888,7 +889,8 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
   RuntimeFacts.StableEntityRef = RuntimeIdentity.GetStableEntityRef();
   RuntimeFacts.CapabilitySet.Add(ECrowdCapability::Move);
   RuntimeFacts.CapabilitySet.Add(ECrowdCapability::MoveTo);
-  RuntimeFacts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+  RuntimeFacts.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::Idle);
   RuntimeFacts.MovementProfileKey = RuntimeProperties.CapabilityProfileKey;
   FCrowdMassBehaviorFragment& RuntimeBehavior =
     EntityManager.GetFragmentDataChecked<FCrowdMassBehaviorFragment>(Entity);

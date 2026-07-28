@@ -2,6 +2,8 @@
 
 #include <limits>
 
+#define Quantize VelocityHalfPlane_Quantize
+
 namespace
 {
 struct FNumericalTolerances
@@ -465,3 +467,5 @@ FCrowdVelocityHalfPlaneResult FCrowdVelocityHalfPlaneKernel::Solve(
     && ValidateVelocity(Canonical, Result.QuantizedVelocity);
   return Result;
 }
+
+#undef Quantize

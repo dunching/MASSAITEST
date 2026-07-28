@@ -128,6 +128,62 @@ namespace
     return true;
   }
 
+  bool EncodeProductCorrectionAgent(
+    const FCrowdDemoRoundAgentState& Agent,
+    TArray<uint8>& OutBytes)
+  {
+    TArray<FCrowdRelevantSnapshotEntityPayload> Payloads;
+    if (!FCrowdDemoRelevantSnapshotAdapter::EncodeAgents(
+        MakeArrayView(&Agent, 1), Payloads)
+      || Payloads.Num() != 1)
+      return false;
+    OutBytes.Reset();
+    FMemoryWriter Writer(OutBytes, true);
+    uint32 Magic = CrowdDemoCorrectionAgentMagic;
+    uint32 Version = CrowdDemoProductPayloadVersion;
+    Writer << Magic;
+    Writer << Version;
+    Writer.Serialize(
+      Payloads[0].Bytes.GetData(),
+      Payloads[0].Bytes.Num());
+    return !Writer.IsError() && OutBytes.Num() <= 4096;
+  }
+
+  bool DecodeProductCorrectionAgent(
+    const TConstArrayView<uint8> Bytes,
+    FCrowdDemoRoundAgentState& OutAgent)
+  {
+    if (Bytes.Num() < static_cast<int32>(
+        sizeof(uint32) * 2))
+      return false;
+    TArray<uint8> Copy;
+    Copy.Append(Bytes.GetData(), Bytes.Num());
+    FMemoryReader Reader(Copy, true);
+    uint32 Magic = 0;
+    uint32 Version = 0;
+    Reader << Magic;
+    Reader << Version;
+    if (Reader.IsError()
+      || Magic != CrowdDemoCorrectionAgentMagic
+      || Version != CrowdDemoProductPayloadVersion)
+      return false;
+    FCrowdRelevantSnapshotEntityPayload Payload;
+    const int64 Remaining = Reader.TotalSize() - Reader.Tell();
+    if (Remaining <= 0 || Remaining > 4096)
+      return false;
+    Payload.Bytes.SetNumUninitialized(
+      static_cast<int32>(Remaining));
+    Reader.Serialize(Payload.Bytes.GetData(), Remaining);
+    TArray<FCrowdDemoRoundAgentState> Agents;
+    if (Reader.IsError()
+      || !FCrowdDemoRelevantSnapshotAdapter::DecodeAgents(
+        MakeArrayView(&Payload, 1), Agents)
+      || Agents.Num() != 1)
+      return false;
+    OutAgent = MoveTemp(Agents[0]);
+    return true;
+  }
+
   FString SerializeParticleFailureFixture(const FCrowdDemoParticleFailureFixture& Fixture)
   {
     FString Json = FString::Printf(
@@ -1568,6 +1624,14 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
   {
     AMassCrowdReplicationActor* Channel = Pair.Value.Get();
     if (!Channel) continue;
+    uint64* NextSequence = NextProductReliableSequence.Find(Channel);
+    if (!NextSequence || *NextSequence == 0)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=missing_sequence revision=%d"),
+        Frame.CorrectionRevision);
+      continue;
+    }
     TArray<FCrowdMovementCorrectionRecord> Corrections;
     Corrections.Reserve(Frame.AgentStates.Num());
     if (!Channel->IsServerAwaitingBaselineAck())
@@ -1597,18 +1661,22 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
         Frame.CorrectionRevision, Corrections.Num());
       continue;
     }
-    if (!PublishProductReliable(
-      *Channel,
-      ECrowdReliableStateKind::Membership,
-      {8, static_cast<uint64>(Frame.CorrectionRevision), 1},
-      static_cast<uint32>(Frame.CorrectionRevision),
-      HeaderPayload))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_correction_header revision=%d"),
-        Frame.CorrectionRevision);
-      continue;
-    }
+    TArray<FCrowdReliableStateRecord> ReliableRecords;
+    ReliableRecords.Reserve(Frame.AgentStates.Num() + 1);
+    FCrowdReliableStateRecord& HeaderRecord =
+      ReliableRecords.AddDefaulted_GetRef();
+    HeaderRecord.Sequence = *NextSequence;
+    HeaderRecord.Kind =
+      ECrowdReliableStateKind::ResolvedBehaviorState;
+    HeaderRecord.EntityRef = {
+      8, static_cast<uint64>(Frame.CorrectionRevision), 1};
+    HeaderRecord.Revision =
+      static_cast<uint32>(Frame.CorrectionRevision);
+    HeaderRecord.Payload = HeaderPayload;
+    HeaderRecord.StableHash =
+      FCrowdReplicationTransport::CalculateReliableRecordHash(
+        HeaderRecord);
+    bool bEncodeSucceeded = true;
     for (const FCrowdDemoRoundAgentState& Agent : Frame.AgentStates)
     {
       TArray<uint8> AgentPayload;
@@ -1616,20 +1684,57 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
         1,
         static_cast<uint64>(FMath::Max(0, Agent.AgentId)) + 1ull,
         static_cast<uint32>(FMath::Max(1, Agent.LifecycleSerial))};
-      if (!EncodeProductPayload(
-          CrowdDemoCorrectionAgentMagic, Agent, AgentPayload)
-        || !PublishProductReliable(
-          *Channel,
-          ECrowdReliableStateKind::Behavior,
-          EntityRef,
-          static_cast<uint32>(Frame.CorrectionRevision),
-          AgentPayload))
+      if (!EncodeProductCorrectionAgent(
+          Agent, AgentPayload))
       {
+        bEncodeSucceeded = false;
         UE_LOG(LogTemp, Error,
-          TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_agent revision=%d agent=%d"),
+          TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_agent revision=%d agent=%d"),
           Frame.CorrectionRevision, Agent.AgentId);
         break;
       }
+      FCrowdReliableStateRecord& Record =
+        ReliableRecords.AddDefaulted_GetRef();
+      Record.Sequence =
+        *NextSequence + static_cast<uint64>(
+          ReliableRecords.Num() - 1);
+      Record.Kind =
+        ECrowdReliableStateKind::ResolvedBehaviorState;
+      Record.EntityRef = EntityRef;
+      Record.Revision =
+        static_cast<uint32>(Frame.CorrectionRevision);
+      Record.Payload = MoveTemp(AgentPayload);
+      Record.StableHash =
+        FCrowdReplicationTransport::CalculateReliableRecordHash(
+          Record);
+    }
+    if (!bEncodeSucceeded)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_correction_batch revision=%d records=%d"),
+        Frame.CorrectionRevision, ReliableRecords.Num());
+      continue;
+    }
+    bool bPublished = true;
+    constexpr int32 MaxRecordsPerRpc = 128;
+    for (int32 Begin = 0; Begin < ReliableRecords.Num();
+      Begin += MaxRecordsPerRpc)
+    {
+      const int32 Count = FMath::Min(
+        MaxRecordsPerRpc, ReliableRecords.Num() - Begin);
+      if (!Channel->PublishReliables(MakeArrayView(
+          ReliableRecords.GetData() + Begin, Count)))
+      {
+        bPublished = false;
+        break;
+      }
+      *NextSequence += static_cast<uint64>(Count);
+    }
+    if (!bPublished)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_correction_batch revision=%d records=%d"),
+        Frame.CorrectionRevision, ReliableRecords.Num());
     }
   }
 }
@@ -1784,10 +1889,8 @@ void ACrowdDemoRoundSimCoordinator::ConsumeProductReliableRecord(
   }
 
   FCrowdDemoRoundAgentState Agent;
-  if (DecodeProductPayload(
-      Record.Payload,
-      CrowdDemoCorrectionAgentMagic,
-      Agent))
+  if (DecodeProductCorrectionAgent(
+      Record.Payload, Agent))
   {
     TArray<FCrowdDemoRoundAgentState>& Agents =
       ProductCorrectionAgents.FindOrAdd(

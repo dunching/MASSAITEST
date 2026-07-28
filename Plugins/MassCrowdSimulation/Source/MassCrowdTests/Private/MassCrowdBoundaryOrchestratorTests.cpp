@@ -23,7 +23,8 @@ namespace
       Record.AgentFacts.StableEntityRef =
         Record.Identity.GetStableEntityRef();
       Record.AgentFacts.CapabilitySet.Add(ECrowdCapability::Move);
-      Record.AgentFacts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+      Record.AgentFacts.DerivedBehaviorLabel =
+        static_cast<uint32>(ECrowdActiveBehavior::Idle);
       Record.State.Position = FVector(
         static_cast<double>(AgentId) * 100.0, 0.0, 60.0);
       Record.State.bInitialized = true;
@@ -296,6 +297,21 @@ bool FMassCrowdBoundaryCommitEnvelopeTest::RunTest(
       Snapshot, MovementPlan, Duplicates, RejectedEnvelope));
   TestFalse(TEXT("rejected envelope remains invalid"),
     RejectedEnvelope.bValid);
+
+  FCrowdBehaviorBoundaryMetadata BehaviorMetadata;
+  BehaviorMetadata.SourceSetRevision = 3;
+  BehaviorMetadata.SourceSetHash = 11;
+  BehaviorMetadata.CommandBatchHash = 12;
+  BehaviorMetadata.ResolvedChannelHash = 13;
+  FCrowdBoundaryCommitEnvelope BehaviorEnvelope;
+  TestTrue(TEXT("v3 envelope includes behavior source hashes"),
+    FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
+      Snapshot, MovementPlan, Forward,
+      BehaviorEnvelope, &BehaviorMetadata));
+  TestEqual(TEXT("commit envelope protocol is v3"),
+    BehaviorEnvelope.Version, 3u);
+  TestTrue(TEXT("behavior metadata changes authoritative hash"),
+    BehaviorEnvelope.StableHash != ForwardEnvelope.StableHash);
 
   FCrowdMassBoundaryOrchestrator Orchestrator;
   TestTrue(TEXT("orchestrator begins"), Orchestrator.Begin(Snapshot, 0.0));

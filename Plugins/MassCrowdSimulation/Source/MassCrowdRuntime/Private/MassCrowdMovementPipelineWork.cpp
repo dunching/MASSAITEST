@@ -2,6 +2,11 @@
 
 #include "HAL/PlatformTime.h"
 
+#define FnvOffset MovementPipeline_FnvOffset
+#define FnvPrime MovementPipeline_FnvPrime
+#define Fold MovementPipeline_Fold
+#define IsFiniteVector MovementPipeline_IsFiniteVector
+
 namespace
 {
   constexpr uint32 FnvOffset = 2166136261u;
@@ -179,3 +184,8 @@ FCrowdMassMovementPipelineWorkOutput FCrowdMassMovementPipelineWork::Run(
   Output.bCompleted = true;
   return Output;
 }
+
+#undef IsFiniteVector
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

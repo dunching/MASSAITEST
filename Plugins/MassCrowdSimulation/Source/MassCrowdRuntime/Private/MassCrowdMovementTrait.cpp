@@ -17,7 +17,7 @@ void UMassCrowdMovementTrait::BuildTemplate(
   BaseCapabilities.Add(ECrowdCapability::Move);
   BaseCapabilities.Add(ECrowdCapability::MoveTo);
   Behavior.CapabilityBits = BaseCapabilities.Bits;
-  Behavior.ActiveBehavior = static_cast<uint8>(ECrowdActiveBehavior::Idle);
+  Behavior.DerivedBehaviorLabel = 0;
   BuildContext.AddFragment<FCrowdMassSimulationStateFragment>();
   FCrowdMassPropertiesFragment& Properties =
     BuildContext.AddFragment_GetRef<FCrowdMassPropertiesFragment>();

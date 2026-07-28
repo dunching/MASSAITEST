@@ -1,5 +1,7 @@
 #include "MassCrowdSpatialSafety.h"
 
+#define IsFiniteVector SpatialSafety_IsFiniteVector
+
 namespace
 {
   bool IsFiniteVector(const FVector& Value)
@@ -116,3 +118,5 @@ bool FCrowdSpatialSafetyIndex::Update(
   Agent->Position = NewPosition;
   return true;
 }
+
+#undef IsFiniteVector

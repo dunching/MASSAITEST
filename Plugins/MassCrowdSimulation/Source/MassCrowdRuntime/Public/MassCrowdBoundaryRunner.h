@@ -27,7 +27,8 @@ public:
     const FCrowdMassCommitPlan& MovementPlan,
     TConstArrayView<FCrowdBoundaryPreparedPatch> PreparedPatches,
     TConstArrayView<FCrowdMassCommitTarget> Targets,
-    double MergeMilliseconds);
+    double MergeMilliseconds,
+    const FCrowdBehaviorBoundaryMetadata* BehaviorMetadata = nullptr);
 
   bool MarkValidated(double ValidateMilliseconds);
   bool MarkCommitted(double CommitMilliseconds);

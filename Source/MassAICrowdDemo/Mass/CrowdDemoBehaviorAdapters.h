@@ -1,48 +1,6 @@
 #pragma once
 
-#include "Mass/CrowdDemoCombatStateKernel.h"
 #include "MassCrowdRuntimeBehavior.h"
-
-class FCrowdDemoLogisticsBehaviorAdapter final
-  : public ICrowdRuntimeBehaviorProvider
-{
-public:
-  virtual bool Supports(ECrowdActiveBehavior Behavior) const override;
-  virtual bool Evaluate(
-    const FCrowdRuntimeBehaviorContext& Context,
-    FCrowdRuntimeBehaviorOutput& OutOutput) const override;
-
-};
-
-class FCrowdDemoCombatBehaviorAdapter final
-  : public ICrowdRuntimeBehaviorProvider
-{
-public:
-  virtual bool Supports(ECrowdActiveBehavior Behavior) const override;
-  virtual bool Evaluate(
-    const FCrowdRuntimeBehaviorContext& Context,
-    FCrowdRuntimeBehaviorOutput& OutOutput) const override;
-
-  bool BuildContextFromHitFact(
-    const FCrowdDemoHitFact& HitFact,
-    const FCrowdAgentFacts& SourceFacts,
-    uint32 TransitionRevision,
-    FCrowdRuntimeBehaviorContext& OutContext) const;
-};
-
-class FCrowdDemoBehaviorProviderSet final : public ICrowdRuntimeBehaviorProvider
-{
-public:
-  virtual bool Supports(ECrowdActiveBehavior Behavior) const override;
-  virtual bool Evaluate(
-    const FCrowdRuntimeBehaviorContext& Context,
-    FCrowdRuntimeBehaviorOutput& OutOutput) const override;
-
-private:
-  FCrowdRuntimeBasicBehaviorProvider Basic;
-  FCrowdDemoLogisticsBehaviorAdapter Logistics;
-  FCrowdDemoCombatBehaviorAdapter Combat;
-};
 
 enum class ECrowdDemoBusinessCommitAcceptResult : uint8
 {

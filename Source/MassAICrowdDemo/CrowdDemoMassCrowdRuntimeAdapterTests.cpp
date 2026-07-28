@@ -28,7 +28,8 @@ bool FCrowdDemoMassCrowdRuntimeAdapterTest::RunTest(
   FCrowdAgentFacts RuntimeFacts;
   RuntimeFacts.StableEntityRef = RuntimeIdentity.GetStableEntityRef();
   RuntimeFacts.CapabilitySet.Add(ECrowdCapability::Move);
-  RuntimeFacts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+  RuntimeFacts.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::Idle);
   FCrowdMassBehaviorFragment RuntimeBehavior;
   RuntimeBehavior.SetAgentFacts(RuntimeFacts);
   FCrowdDemoRoundSimStateFragment State;

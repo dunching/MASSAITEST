@@ -2,6 +2,8 @@
 
 #include "CrowdGuidanceComposeKernel.h"
 
+#define Fold GuidanceWork_Fold
+
 namespace
 {
   uint32 Fold(uint32 Hash, const uint32 Value)
@@ -52,3 +54,5 @@ FCrowdMassGuidanceWorkOutput FCrowdMassGuidanceWork::Compose(
     && Output.ComposedGuidance.Num() == Records.Num();
   return Output;
 }
+
+#undef Fold

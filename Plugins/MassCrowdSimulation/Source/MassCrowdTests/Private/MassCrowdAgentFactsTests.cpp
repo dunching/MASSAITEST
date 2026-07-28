@@ -29,15 +29,13 @@ bool FMassCrowdAgentFactsTest::RunTest(const FString& Parameters)
   Capabilities.Add(ECrowdCapability::Haul);
   Capabilities.Add(ECrowdCapability::Attack);
   TestTrue(TEXT("known capability bits are valid"), Capabilities.IsValid());
-  TestTrue(TEXT("haul enables pickup"),
-    Capabilities.CanActivate(ECrowdActiveBehavior::HaulPickup));
-  TestTrue(TEXT("haul enables delivery"),
-    Capabilities.CanActivate(ECrowdActiveBehavior::HaulDeliver));
-  TestFalse(TEXT("move does not imply move-to"),
-    Capabilities.CanActivate(ECrowdActiveBehavior::MoveTo));
+  TestTrue(TEXT("capability presence is explicit"),
+    Capabilities.Has(ECrowdCapability::Haul));
+  TestFalse(TEXT("move does not imply move-to capability"),
+    Capabilities.Has(ECrowdCapability::MoveTo));
   Capabilities.Remove(ECrowdCapability::Haul);
-  TestFalse(TEXT("removed capability disables behavior"),
-    Capabilities.CanActivate(ECrowdActiveBehavior::HaulDeliver));
+  TestFalse(TEXT("removed capability is absent"),
+    Capabilities.Has(ECrowdCapability::Haul));
 
   FCrowdCapabilitySet UnknownCapability;
   UnknownCapability.Bits = uint64{1} << static_cast<uint8>(ECrowdCapability::Count);
@@ -47,25 +45,26 @@ bool FMassCrowdAgentFactsTest::RunTest(const FString& Parameters)
   Facts.StableEntityRef = FirstLife;
   Facts.FactionKey = 11;
   Facts.CapabilitySet.Add(ECrowdCapability::Attack);
-  Facts.ActiveBehavior = ECrowdActiveBehavior::Attack;
+  Facts.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::Attack);
   Facts.BusinessTaskRef = FCrowdStableEntityRef{20, 500, 1};
   Facts.TargetRef = FCrowdStableEntityRef{21, 600, 3};
   TestTrue(TEXT("complete supported facts are well formed"), Facts.IsWellFormed());
 
   FCrowdAgentFacts OtherFaction = Facts;
   OtherFaction.FactionKey = 99;
-  TestTrue(TEXT("faction does not change capability support"),
-    OtherFaction.CapabilitySet.CanActivate(OtherFaction.ActiveBehavior));
+  TestTrue(TEXT("faction does not change capability set"),
+    OtherFaction.CapabilitySet.Bits == Facts.CapabilitySet.Bits);
 
   FCrowdAgentFacts PartialOptionalRef = Facts;
   PartialOptionalRef.TargetRef = FCrowdStableEntityRef{21, 0, 0};
   TestFalse(TEXT("partial optional references are rejected"),
     PartialOptionalRef.IsWellFormed());
 
-  FCrowdAgentFacts UnsupportedBehavior = Facts;
-  UnsupportedBehavior.ActiveBehavior = ECrowdActiveBehavior::Guard;
-  TestFalse(TEXT("unsupported active behavior is rejected"),
-    UnsupportedBehavior.IsWellFormed());
+  FCrowdAgentFacts ArbitraryDiagnosticLabel = Facts;
+  ArbitraryDiagnosticLabel.DerivedBehaviorLabel = MAX_uint32;
+  TestTrue(TEXT("diagnostic label has no authority over validity"),
+    ArbitraryDiagnosticLabel.IsWellFormed());
   return true;
 }
 
@@ -86,7 +85,8 @@ bool FMassCrowdAgentFactsRuntimeMappingTest::RunTest(const FString& Parameters)
   Input.CapabilitySet.Add(ECrowdCapability::Move);
   Input.CapabilitySet.Add(ECrowdCapability::Haul);
   Input.CapabilitySet.Add(ECrowdCapability::Attack);
-  Input.ActiveBehavior = ECrowdActiveBehavior::HaulDeliver;
+  Input.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::HaulDeliver);
   Input.BusinessTaskRef = FCrowdStableEntityRef{30, 4001, 2};
   Input.TargetRef = FCrowdStableEntityRef{31, 4002, 5};
   Input.MovementProfileKey = 12;
@@ -101,8 +101,8 @@ bool FMassCrowdAgentFactsRuntimeMappingTest::RunTest(const FString& Parameters)
     Output.StableEntityRef == Input.StableEntityRef);
   TestTrue(TEXT("runtime mapping preserves capabilities"),
     Output.CapabilitySet.Bits == Input.CapabilitySet.Bits);
-  TestTrue(TEXT("runtime mapping preserves active behavior"),
-    Output.ActiveBehavior == Input.ActiveBehavior);
+  TestTrue(TEXT("runtime mapping preserves diagnostic label"),
+    Output.DerivedBehaviorLabel == Input.DerivedBehaviorLabel);
   TestTrue(TEXT("runtime mapping preserves business task"),
     Output.BusinessTaskRef == Input.BusinessTaskRef);
   TestTrue(TEXT("runtime mapping preserves target"), Output.TargetRef == Input.TargetRef);

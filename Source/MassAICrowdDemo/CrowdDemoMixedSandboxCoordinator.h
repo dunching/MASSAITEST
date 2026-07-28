@@ -7,6 +7,7 @@
 #include "Mass/CrowdDemoBehaviorAdapters.h"
 #include "MassCrowdMassLifecycleWorld.h"
 #include "MassCrowdBoundaryRunner.h"
+#include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdNavRuntime.h"
 #include "MassCrowdSpatialSafety.h"
 #include "CrowdDemoMixedSandboxCoordinator.generated.h"
@@ -35,7 +36,7 @@ struct FCrowdDemoMixedAgentState
   UPROPERTY() uint32 LifecycleSerial = 0;
   UPROPERTY() uint32 MembershipKey = 0;
   UPROPERTY() FVector_NetQuantize10 Location = FVector::ZeroVector;
-  UPROPERTY() uint8 Behavior = 0;
+  UPROPERTY() uint32 DerivedBehaviorLabel = 0;
   UPROPERTY() uint8 Health = 0;
   UPROPERTY() uint32 TargetProviderId = 0;
   UPROPERTY() uint64 TargetStableEntityId = 0;
@@ -68,6 +69,8 @@ private:
     FVector Location = FVector::ZeroVector;
     uint32 MembershipKey = 0;
     uint32 TransitionRevision = 1;
+    uint32 NextSourceCommandSequence = 1;
+    uint32 NextSourceSequence = 1;
     int32 Health = 100;
     int64 LastAttackFixedStep = -1000;
     bool bActive = false;
@@ -78,7 +81,7 @@ private:
 
   FCrowdMassLifecycleWorld LifecycleWorld;
   FMassArchetypeHandle LifecycleArchetype;
-  FCrowdDemoBehaviorProviderSet BehaviorProviders;
+  FCrowdBehaviorSourceRuntime* BehaviorSourceRuntime = nullptr;
   FCrowdDemoBusinessCommitLedger BusinessLedger;
   TSharedPtr<const FCrowdNavSurfaceGraph, ESPMode::ThreadSafe> NavGraphHandle;
   TMap<FName, FVector> MarkerLocations;
@@ -136,8 +139,11 @@ private:
   FCrowdAgentFacts MakeAgentFacts(int32 SlotIndex, uint32 LifecycleSerial) const;
   void AdvanceServerFixedStep();
   bool EvaluateSlotBehavior(int32 SlotIndex);
-  bool RunProductMovementBoundary();
-  ECrowdActiveBehavior ChooseBehavior(int32 SlotIndex) const;
+  bool ApplyPreparedBehaviorBusiness(
+    const FCrowdBehaviorPreparedBoundary& Prepared);
+  bool RunProductMovementBoundary(
+    const FCrowdBehaviorPreparedBoundary& PreparedBehavior);
+  ECrowdActiveBehavior SelectLegacyRecipeLabel(int32 SlotIndex) const;
   FVector ChooseObjectiveLocation(int32 SlotIndex, ECrowdActiveBehavior Behavior) const;
   FCrowdStableEntityRef ChooseTargetRef(int32 SlotIndex, ECrowdActiveBehavior Behavior) const;
   bool GetOrBuildFlow(const FVector& Objective, const FCrowdNavSurfaceFlow*& OutFlow);
@@ -157,6 +163,6 @@ private:
   void LogCheckpoint();
   void TryLogPass();
   FVector Marker(FName Tag, const FVector& Fallback) const;
-  uint32 MembershipForBehavior(ECrowdActiveBehavior Behavior) const;
+  uint32 MembershipForDiagnosticLabel(ECrowdActiveBehavior Label) const;
   static double Percentile95(TArray<double> Values);
 };

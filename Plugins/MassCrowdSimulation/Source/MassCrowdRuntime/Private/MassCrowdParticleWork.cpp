@@ -1,5 +1,8 @@
 #include "MassCrowdParticleWork.h"
 
+#define Fold ParticleWork_Fold
+#define IsFiniteVector ParticleWork_IsFiniteVector
+
 namespace
 {
   uint32 Fold(uint32 Hash, const uint32 Value)
@@ -87,3 +90,6 @@ FCrowdMassParticleWorkOutput FCrowdMassParticleWork::Solve(
   Output.bCompleted = true;
   return Output;
 }
+
+#undef IsFiniteVector
+#undef Fold

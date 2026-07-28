@@ -1,5 +1,7 @@
 #include "CrowdSharedFlowFieldKernel.h"
 
+#define HashInt SharedFlow_HashInt
+
 namespace
 {
   constexpr int32 StraightCost = 1000;
@@ -1685,3 +1687,5 @@ bool FCrowdSharedFlowFieldKernel::IsInsideInflatedObstacle(
 {
   return IsInsideInflatedObstacleCompatible(Config, Location);
 }
+
+#undef HashInt

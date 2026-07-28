@@ -23,9 +23,9 @@
 
 | 规模 | 当前结论 |
 |---|---|
-| 20 | [COMPUTED][HIGH] 当前唯一正式架构收敛规模。 |
-| 100 | [COMPUTED][HIGH] 未验证当前完整组合。 |
-| 500 | [COMPUTED][HIGH] D已用生产adapter和Snapshot primitives完成合成500实体transport；当前完整产品组合仍未运行，必须留在K正式验证。历史单属性复制bunch过大路径已删除。 |
+| 20 | [COMPUTED][HIGH] 8202 Mixed Sandbox通过组合行为、业务、安全与双端Hash；8216 T8通过攻击/投射/伤害=`50/50/50`和双端业务Hash。 |
+| 100 | [COMPUTED][HIGH] 8210 SoftPressure通过100实体双端启动、连续correction、revision gap=0与性能门，fixed-step p95=`28.168ms`、realtime=`0.997`。 |
+| 500 | [COMPUTED][HIGH] 8215 Obstacle完成500实体基线、5块连续correction和5轮双端Checkpoint；每轮服务端障碍穿透=0，客户端revision gap=0，最终位置误差p95=`0.014cm`，硬错误=0。 |
 
 ## 生产生命周期与复制场景
 

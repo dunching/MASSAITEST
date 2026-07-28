@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassCrowdAgentFacts.h"
+#include "MassCrowdBehaviorSource.h"
 #include "MassCrowdRelevantSnapshot.h"
 
 enum class ECrowdReliableStateKind : uint8
@@ -10,7 +11,9 @@ enum class ECrowdReliableStateKind : uint8
   Despawn,
   RelevancyExit,
   Membership,
-  Behavior,
+  BehaviorSourceCommand,
+  BehaviorSourceSet,
+  ResolvedBehaviorState,
   Task,
   Inventory,
   Cargo,
@@ -71,8 +74,20 @@ struct FCrowdAgentReplicationRecord
   FVector Velocity = FVector::ZeroVector;
   float YawDegrees = 0.0f;
   uint32 MovementProfileKey = 0;
-  uint8 Behavior = 0;
+  FCrowdCapabilityProfileKey CapabilityProfileKey;
+  uint32 CapabilityModifierRevision = 0;
+  uint32 SourceSetRevision = 0;
+  uint64 SourceSetHash = 0;
+  uint64 ResolvedBehaviorHash = 0;
+  uint32 DerivedDiagnosticLabel = 0;
   uint32 Revision = 0;
+};
+
+struct FCrowdBehaviorSourceSetReplicationRecord
+{
+  FCrowdBehaviorSourceSet SourceSet;
+  uint64 ResolvedBehaviorHash = 0;
+  uint32 DerivedDiagnosticLabel = 0;
 };
 
 struct FCrowdPresentationReplicationRecord
@@ -137,7 +152,7 @@ enum class ECrowdReplicationApplyFrameKind : uint8
 
 struct FCrowdReplicationApplyFrame
 {
-  static constexpr uint16 CurrentVersion = 1;
+  static constexpr uint16 CurrentVersion = 2;
 
   uint16 Version = CurrentVersion;
   ECrowdReplicationApplyFrameKind Kind =
@@ -194,6 +209,18 @@ public:
     const FCrowdAgentReplicationRecord& Record, TArray<uint8>& OutBytes);
   static bool DecodeAgent(
     TConstArrayView<uint8> Bytes, FCrowdAgentReplicationRecord& OutRecord);
+  static bool EncodeBehaviorSourceCommand(
+    const FCrowdBehaviorSourceCommand& Command,
+    TArray<uint8>& OutBytes);
+  static bool DecodeBehaviorSourceCommand(
+    TConstArrayView<uint8> Bytes,
+    FCrowdBehaviorSourceCommand& OutCommand);
+  static bool EncodeBehaviorSourceSet(
+    const FCrowdBehaviorSourceSetReplicationRecord& Record,
+    TArray<uint8>& OutBytes);
+  static bool DecodeBehaviorSourceSet(
+    TConstArrayView<uint8> Bytes,
+    FCrowdBehaviorSourceSetReplicationRecord& OutRecord);
   static bool EncodeTask(
     const FCrowdTaskReplicationRecord& Record, TArray<uint8>& OutBytes);
   static bool DecodeTask(

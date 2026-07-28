@@ -1,5 +1,13 @@
 #include "MassCrowdParticlePipelineWork.h"
 
+#define FnvOffset ParticlePipeline_FnvOffset
+#define FnvPrime ParticlePipeline_FnvPrime
+#define Fold ParticlePipeline_Fold
+#define FoldInt ParticlePipeline_FoldInt
+#define FoldFloat ParticlePipeline_FoldFloat
+#define FoldVector ParticlePipeline_FoldVector
+#define IsFiniteVector ParticlePipeline_IsFiniteVector
+
 namespace
 {
   constexpr uint32 FnvOffset = 2166136261u;
@@ -181,3 +189,11 @@ FCrowdMassParticlePipelineWorkOutput FCrowdMassParticlePipelineWork::Run(
   Output.bCompleted = true;
   return Output;
 }
+
+#undef IsFiniteVector
+#undef FoldVector
+#undef FoldFloat
+#undef FoldInt
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

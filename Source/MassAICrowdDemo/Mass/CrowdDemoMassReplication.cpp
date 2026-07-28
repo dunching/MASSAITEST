@@ -1,6 +1,7 @@
 #include "Mass/CrowdDemoMassReplication.h"
 
 #include "Mass/CrowdDemoMassFragments.h"
+#include "Mass/CrowdDemoRelevantSnapshotAdapter.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassEntityTemplate.h"
@@ -199,6 +200,219 @@ namespace
       || Existing.VatPlayRateByte != Next.VatPlayRateByte
       || !SameCombatState(Existing.Combat, Next.Combat);
   }
+}
+
+bool FReplicatedCrowdDemoAgent::NetSerialize(
+  FArchive& Ar,
+  UPackageMap* Map,
+  bool& bOutSuccess)
+{
+  static_cast<void>(Map);
+  constexpr uint32 ContractVersion = 2;
+  constexpr uint32 PositionBits = 20;
+  constexpr int32 PositionBias = 1 << (PositionBits - 1);
+  constexpr uint32 YawBits = 12;
+  constexpr uint32 TimeBits = 20;
+  constexpr uint32 MaxCombatPayloadBytes = 4095;
+  bOutSuccess = false;
+
+  uint32 Version = ContractVersion;
+  Ar.SerializeBits(&Version, 3);
+  if (Ar.IsLoading() && Version != ContractVersion)
+    return false;
+
+  uint32 VisualValue = Ar.IsSaving()
+    ? static_cast<uint32>(VisualId) : 0;
+  if (Ar.IsSaving()
+    && (VisualId < 0 || VisualValue > MAX_uint16))
+    return false;
+  Ar.SerializeBits(&VisualValue, 16);
+
+  const uint32 DerivedNetworkId = VisualValue + 1u;
+  uint32 NetworkValue = Ar.IsSaving()
+    ? NetworkIdValue : DerivedNetworkId;
+  uint32 bExplicitNetworkId = Ar.IsSaving()
+    ? (NetworkValue != DerivedNetworkId ? 1u : 0u) : 0u;
+  Ar.SerializeBits(&bExplicitNetworkId, 1);
+  if (bExplicitNetworkId != 0)
+    Ar.SerializeBits(&NetworkValue, 32);
+  else
+    NetworkValue = DerivedNetworkId;
+  if (NetworkValue == 0)
+    return false;
+
+  uint32 LifecycleValue = Ar.IsSaving()
+    ? static_cast<uint32>(LifecycleSerial) : 0;
+  if (Ar.IsSaving()
+    && (LifecycleSerial <= 0
+      || LifecycleValue > MAX_uint16))
+    return false;
+  Ar.SerializeBits(&LifecycleValue, 16);
+
+  FVector Position = PositionYaw.GetPosition();
+  for (int32 Axis = 0; Axis < 3; ++Axis)
+  {
+    int32 Quantized = Ar.IsSaving()
+      ? FMath::RoundToInt(Position[Axis]) : 0;
+    if (Ar.IsSaving()
+      && (Quantized < -PositionBias
+        || Quantized >= PositionBias))
+      return false;
+    uint32 Packed = Ar.IsSaving()
+      ? static_cast<uint32>(Quantized + PositionBias) : 0;
+    Ar.SerializeBits(&Packed, PositionBits);
+    if (Ar.IsLoading())
+      Position[Axis] =
+        static_cast<float>(
+          static_cast<int32>(Packed) - PositionBias);
+  }
+
+  uint32 YawValue = Ar.IsSaving()
+    ? static_cast<uint32>(FMath::RoundToInt(
+        FMath::Fmod(
+          FMath::RadiansToDegrees(PositionYaw.GetYaw())
+            + 360.0f,
+          360.0f)
+        * static_cast<float>((1u << YawBits) - 1u)
+        / 360.0f))
+    : 0;
+  Ar.SerializeBits(&YawValue, YawBits);
+
+  uint32 TimeValue = Ar.IsSaving()
+    ? static_cast<uint32>(FMath::Clamp(
+        FMath::RoundToInt(ServerSampleTimeSeconds * 100.0f),
+        0,
+        static_cast<int32>((1u << TimeBits) - 1u)))
+    : 0;
+  Ar.SerializeBits(&TimeValue, TimeBits);
+
+  const FVector VelocityValue = FVector(Velocity);
+  uint32 bHasVelocity = Ar.IsSaving()
+    ? (!VelocityValue.IsNearlyZero(0.5f) ? 1u : 0u) : 0u;
+  Ar.SerializeBits(&bHasVelocity, 1);
+  FVector DecodedVelocity = FVector::ZeroVector;
+  if (bHasVelocity != 0)
+  {
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+      int32 Quantized = Ar.IsSaving()
+        ? FMath::RoundToInt(VelocityValue[Axis]) : 0;
+      if (Ar.IsSaving()
+        && (Quantized < MIN_int16
+          || Quantized > MAX_int16))
+        return false;
+      uint32 Packed = Ar.IsSaving()
+        ? static_cast<uint16>(static_cast<int16>(Quantized)) : 0;
+      Ar.SerializeBits(&Packed, 16);
+      if (Ar.IsLoading())
+        DecodedVelocity[Axis] =
+          static_cast<float>(
+            static_cast<int16>(
+              static_cast<uint16>(Packed)));
+    }
+  }
+
+  uint32 bHasVisual = Ar.IsSaving()
+    ? (AnimState != 0 || VatClipIndex != 0
+      || VatPhaseByte != 0 || VatPlayRateByte != 128
+      ? 1u : 0u)
+    : 0u;
+  Ar.SerializeBits(&bHasVisual, 1);
+  uint32 VisualBytes = 0;
+  if (Ar.IsSaving())
+  {
+    VisualBytes = static_cast<uint32>(AnimState)
+      | (static_cast<uint32>(VatClipIndex) << 8)
+      | (static_cast<uint32>(VatPhaseByte) << 16)
+      | (static_cast<uint32>(VatPlayRateByte) << 24);
+  }
+  if (bHasVisual != 0)
+    Ar.SerializeBits(&VisualBytes, 32);
+
+  const FCrowdDemoCombatNetState DefaultCombat;
+  uint32 bHasCombat = Ar.IsSaving()
+    ? (!SameCombatState(Combat, DefaultCombat) ? 1u : 0u)
+    : 0u;
+  Ar.SerializeBits(&bHasCombat, 1);
+  FCrowdDemoCombatNetState DecodedCombat;
+  if (bHasCombat != 0)
+  {
+    TArray<uint8> CombatBytes;
+    if (Ar.IsSaving())
+    {
+      FCrowdDemoRoundAgentState State;
+      State.AgentId = static_cast<int32>(VisualValue);
+      State.LifecycleSerial =
+        static_cast<int32>(LifecycleValue);
+      State.Location = Position;
+      State.Velocity = VelocityValue;
+      State.YawDegrees =
+        FMath::RadiansToDegrees(PositionYaw.GetYaw());
+      State.Combat = Combat;
+      TArray<FCrowdRelevantSnapshotEntityPayload> Payloads;
+      if (!FCrowdDemoRelevantSnapshotAdapter::EncodeAgents(
+          MakeArrayView(&State, 1), Payloads)
+        || Payloads.Num() != 1
+        || Payloads[0].Bytes.Num()
+          > static_cast<int32>(MaxCombatPayloadBytes))
+        return false;
+      CombatBytes = MoveTemp(Payloads[0].Bytes);
+    }
+    uint32 PayloadSize = Ar.IsSaving()
+      ? static_cast<uint32>(CombatBytes.Num()) : 0;
+    Ar.SerializeBits(&PayloadSize, 12);
+    if (PayloadSize == 0
+      || PayloadSize > MaxCombatPayloadBytes)
+      return false;
+    if (Ar.IsLoading())
+      CombatBytes.SetNumUninitialized(
+        static_cast<int32>(PayloadSize));
+    Ar.Serialize(
+      CombatBytes.GetData(),
+      static_cast<int64>(PayloadSize));
+    if (Ar.IsLoading())
+    {
+      FCrowdRelevantSnapshotEntityPayload Payload;
+      Payload.Bytes = MoveTemp(CombatBytes);
+      TArray<FCrowdDemoRoundAgentState> States;
+      if (!FCrowdDemoRelevantSnapshotAdapter::DecodeAgents(
+          MakeArrayView(&Payload, 1), States)
+        || States.Num() != 1)
+        return false;
+      DecodedCombat = States[0].Combat;
+    }
+  }
+
+  if (Ar.IsError())
+    return false;
+  if (Ar.IsLoading())
+  {
+    NetworkIdValue = NetworkValue;
+    SetNetID(FMassNetworkID(NetworkIdValue));
+    SetTemplateID(
+      GetCrowdDemoReplicationTemplateIDForBubble());
+    VisualId = static_cast<int32>(VisualValue);
+    LifecycleSerial = static_cast<int32>(LifecycleValue);
+    PositionYaw.SetPosition(Position);
+    PositionYaw.SetYaw(FMath::DegreesToRadians(
+      static_cast<float>(YawValue) * 360.0f
+      / static_cast<float>((1u << YawBits) - 1u)));
+    Velocity = FVector_NetQuantize10(DecodedVelocity);
+    AnimState = static_cast<uint8>(VisualBytes & 0xffu);
+    VatClipIndex =
+      static_cast<uint8>((VisualBytes >> 8) & 0xffu);
+    VatPhaseByte =
+      static_cast<uint8>((VisualBytes >> 16) & 0xffu);
+    VatPlayRateByte = bHasVisual != 0
+      ? static_cast<uint8>((VisualBytes >> 24) & 0xffu)
+      : 128;
+    ServerSampleTimeSeconds =
+      static_cast<float>(TimeValue) / 100.0f;
+    Combat = bHasCombat != 0
+      ? MoveTemp(DecodedCombat) : DefaultCombat;
+  }
+  bOutSuccess = true;
+  return true;
 }
 
 bool FCrowdDemoMassClientBubbleHandler::UpdateAgent(const FMassReplicatedAgentHandle Handle, const FReplicatedCrowdDemoAgent& Agent)

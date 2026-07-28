@@ -28,7 +28,7 @@ struct MASSCROWDNETWORKING_API FCrowdRelevantSnapshotHeader
 {
   GENERATED_BODY()
 
-  static constexpr uint16 CurrentProtocolVersion = 1;
+  static constexpr uint16 CurrentProtocolVersion = 2;
 
   UPROPERTY() uint16 ProtocolVersion = CurrentProtocolVersion;
   UPROPERTY() uint32 SnapshotRevision = 0;

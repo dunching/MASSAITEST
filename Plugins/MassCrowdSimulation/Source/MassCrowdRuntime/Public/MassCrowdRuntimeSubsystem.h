@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdNavRuntime.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "MassCrowdRuntimeSubsystem.generated.h"
@@ -75,9 +76,20 @@ public:
     FlowCache.SetLimits(Limits);
   }
 
+  FCrowdBehaviorSourceRuntime& GetBehaviorSourceRuntime()
+  {
+    return BehaviorSourceRuntime;
+  }
+
+  const FCrowdBehaviorSourceRuntime& GetBehaviorSourceRuntime() const
+  {
+    return BehaviorSourceRuntime;
+  }
+
 private:
   TUniquePtr<ICrowdNavDataProvider> NavDataProvider;
   FCrowdNavGraphResource NavGraphResource;
   FCrowdNavSurfaceGraphBuildConfig GraphBuildConfig;
   FCrowdNavFlowCache FlowCache;
+  FCrowdBehaviorSourceRuntime BehaviorSourceRuntime;
 };

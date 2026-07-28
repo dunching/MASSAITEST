@@ -1,5 +1,13 @@
 #include "MassCrowdMovementPredictWork.h"
 
+#define FnvOffset MovementPredict_FnvOffset
+#define FnvPrime MovementPredict_FnvPrime
+#define Fold MovementPredict_Fold
+#define FoldInt MovementPredict_FoldInt
+#define FoldFloat MovementPredict_FoldFloat
+#define FoldVector MovementPredict_FoldVector
+#define IsFiniteVector MovementPredict_IsFiniteVector
+
 namespace
 {
   constexpr uint32 FnvOffset = 2166136261u;
@@ -108,3 +116,11 @@ FCrowdMassMovementPredictWorkOutput FCrowdMassMovementPredictWork::Predict(
   Output.bCompleted = true;
   return Output;
 }
+
+#undef IsFiniteVector
+#undef FoldVector
+#undef FoldFloat
+#undef FoldInt
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

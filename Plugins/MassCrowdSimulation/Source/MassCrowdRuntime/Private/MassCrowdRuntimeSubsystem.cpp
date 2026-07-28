@@ -50,11 +50,13 @@ void UMassCrowdRuntimeSubsystem::Initialize(
   NavDataProvider = MakeUnique<FCrowdRecastNavDataProvider>(*GetWorld());
   NavGraphResource = {};
   FlowCache.Reset();
+  verify(BehaviorSourceRuntime.InitializeBuiltins());
 }
 
 void UMassCrowdRuntimeSubsystem::Deinitialize()
 {
   FlowCache.Reset();
+  BehaviorSourceRuntime.Reset();
   NavGraphResource = {};
   NavDataProvider.Reset();
   Super::Deinitialize();

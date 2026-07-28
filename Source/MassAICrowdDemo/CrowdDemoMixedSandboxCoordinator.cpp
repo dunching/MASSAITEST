@@ -106,7 +106,7 @@ namespace
       FMath::RoundToInt(State.Location.Y * 10.0)));
     WriteU32(OutBytes, static_cast<uint32>(
       FMath::RoundToInt(State.Location.Z * 10.0)));
-    OutBytes.Add(State.Behavior);
+    WriteU32(OutBytes, State.DerivedBehaviorLabel);
     OutBytes.Add(State.Health);
     WriteU32(OutBytes, State.TargetProviderId);
     WriteU64(OutBytes, State.TargetStableEntityId);
@@ -138,9 +138,10 @@ namespace
       || !ReadU32(Bytes, Offset, X)
       || !ReadU32(Bytes, Offset, Y)
       || !ReadU32(Bytes, Offset, Z)
-      || Offset + 2 > Bytes.Num())
+      || Offset + 5 > Bytes.Num())
       return false;
-    OutState.Behavior = Bytes[Offset++];
+    if (!ReadU32(Bytes, Offset, OutState.DerivedBehaviorLabel))
+      return false;
     OutState.Health = Bytes[Offset++];
     if (!ReadU32(Bytes, Offset, OutState.TargetProviderId)
       || !ReadU64(Bytes, Offset, OutState.TargetStableEntityId)
@@ -232,8 +233,18 @@ void ACrowdDemoMixedSandboxCoordinator::EndPlay(
       for (const TPair<uint64, FCrowdNavFlowHandle>& Pair
         : FlowHandleByGoalNode)
         Runtime->ReleaseFlow(Pair.Value);
+      if (BehaviorSourceRuntime)
+      {
+        for (const FSlotState& Slot : Slots)
+        {
+          if (Slot.Facts.StableEntityRef.IsValid())
+            BehaviorSourceRuntime->RemoveEntity(
+              Slot.Facts.StableEntityRef);
+        }
+      }
     }
   }
+  BehaviorSourceRuntime = nullptr;
   FlowHandleByGoalNode.Reset();
   NavGraphHandle.Reset();
   Super::EndPlay(EndPlayReason);
@@ -368,8 +379,12 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
   UWorld* World = GetWorld();
   UMassEntitySubsystem* EntitySubsystem =
     World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
-  if (!EntitySubsystem || Config.bValid == 0
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    World ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>() : nullptr;
+  if (!EntitySubsystem || !RuntimeSubsystem || Config.bValid == 0
     || Config.PopulationLimit != MixedPopulation) return false;
+  BehaviorSourceRuntime =
+    &RuntimeSubsystem->GetBehaviorSourceRuntime();
 
   FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
   const TArray<const UScriptStruct*> Types = {
@@ -387,6 +402,12 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
   for (int32 SlotIndex = 1; SlotIndex <= Config.PopulationLimit; ++SlotIndex)
   {
     InitializeSlotState(SlotIndex, 1);
+    FCrowdCapabilityBinding Binding;
+    Binding.ProfileKey =
+      CrowdBuiltinBehaviorSchemas::LegacyFullProfile;
+    if (!BehaviorSourceRuntime->RegisterEntity(
+        Slots[SlotIndex].Facts.StableEntityRef, Binding))
+      return false;
     Snapshot.Add({Slots[SlotIndex].Facts, Slots[SlotIndex].MembershipKey});
   }
   FCrowdLifecycleBatchLimits Limits;
@@ -426,7 +447,8 @@ void ACrowdDemoMixedSandboxCoordinator::InitializeSlotState(
   FSlotState& Slot = Slots[SlotIndex];
   Slot = {};
   Slot.Facts = MakeAgentFacts(SlotIndex, LifecycleSerial);
-  Slot.MembershipKey = MembershipForBehavior(Slot.Facts.ActiveBehavior);
+  Slot.MembershipKey = MembershipForDiagnosticLabel(
+    static_cast<ECrowdActiveBehavior>(Slot.Facts.DerivedBehaviorLabel));
   Slot.Health = 100;
   Slot.bActive = true;
   Slot.TransitionRevision = 1;
@@ -477,25 +499,29 @@ FCrowdAgentFacts ACrowdDemoMixedSandboxCoordinator::MakeAgentFacts(
   if (SlotIndex <= 6)
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Haul);
-    Facts.ActiveBehavior = ECrowdActiveBehavior::HaulPickup;
+    Facts.DerivedBehaviorLabel =
+      static_cast<uint32>(ECrowdActiveBehavior::HaulPickup);
   }
   else if (SlotIndex <= 12)
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Pursue);
     Facts.CapabilitySet.Add(ECrowdCapability::Attack);
-    Facts.ActiveBehavior = ECrowdActiveBehavior::Pursue;
+    Facts.DerivedBehaviorLabel =
+      static_cast<uint32>(ECrowdActiveBehavior::Pursue);
   }
   else if (SlotIndex <= 16)
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Guard);
     Facts.CapabilitySet.Add(ECrowdCapability::Flee);
-    Facts.ActiveBehavior = ECrowdActiveBehavior::Guard;
+    Facts.DerivedBehaviorLabel =
+      static_cast<uint32>(ECrowdActiveBehavior::Guard);
   }
   else
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Wander);
     Facts.CapabilitySet.Add(ECrowdCapability::MoveTo);
-    Facts.ActiveBehavior = ECrowdActiveBehavior::Wander;
+    Facts.DerivedBehaviorLabel =
+      static_cast<uint32>(ECrowdActiveBehavior::Wander);
   }
   Facts.MovementProfileKey = 1;
   Facts.PresentationProfileKey = 1;
@@ -525,6 +551,8 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   const uint32 OriginalSeenBehaviorBits = SeenBehaviorBits;
   const int32 OriginalPendingCombatDeathSlot =
     PendingCombatDeathSlot;
+  const int32 OriginalPendingSourceCommandCount =
+    BehaviorSourceRuntime->GetPendingCommandCount();
   for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
   {
     if (Slots[SlotIndex].bActive && !EvaluateSlotBehavior(SlotIndex))
@@ -537,12 +565,34 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       SeenBehaviorBits = OriginalSeenBehaviorBits;
       PendingCombatDeathSlot =
         OriginalPendingCombatDeathSlot;
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        OriginalPendingSourceCommandCount);
       ++StaleRejectCount;
       UE_LOG(LogTemp, Error,
         TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=behavior slot=%d fixed_step=%lld"),
         SlotIndex, FixedStepIndex);
       return;
     }
+  }
+  FCrowdBehaviorPreparedBoundary PreparedBehavior;
+  if (!BehaviorSourceRuntime->PrepareBoundary(
+      FixedStepIndex, PreparedBehavior)
+    || !BehaviorSourceRuntime->ValidatePrepared(PreparedBehavior)
+    || !ApplyPreparedBehaviorBusiness(PreparedBehavior))
+  {
+    Slots = OriginalSlots;
+    BusinessLedger = OriginalBusinessLedger;
+    BehaviorTransitionCount = OriginalBehaviorTransitionCount;
+    DuplicateCommitCount = OriginalDuplicateCommitCount;
+    SeenBehaviorBits = OriginalSeenBehaviorBits;
+    PendingCombatDeathSlot = OriginalPendingCombatDeathSlot;
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      OriginalPendingSourceCommandCount);
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=source_prepare fixed_step=%lld"),
+      FixedStepIndex);
+    return;
   }
   TArray<FCrowdAgentFacts> PreparedFacts;
   for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
@@ -563,13 +613,15 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     SeenBehaviorBits = OriginalSeenBehaviorBits;
     PendingCombatDeathSlot =
       OriginalPendingCombatDeathSlot;
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      OriginalPendingSourceCommandCount);
     ++StaleRejectCount;
     UE_LOG(LogTemp, Error,
       TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=business_commit fixed_step=%lld"),
       FixedStepIndex);
     return;
   }
-  if (!RunProductMovementBoundary())
+  if (!RunProductMovementBoundary(PreparedBehavior))
   {
     TArray<FCrowdAgentFacts> OriginalFacts;
     for (int32 SlotIndex = 1;
@@ -592,12 +644,16 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     SeenBehaviorBits = OriginalSeenBehaviorBits;
     PendingCombatDeathSlot =
       OriginalPendingCombatDeathSlot;
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      OriginalPendingSourceCommandCount);
     ++StaleRejectCount;
     UE_LOG(LogTemp, Error,
       TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=product_boundary fixed_step=%lld rollback=%d"),
       FixedStepIndex, bRolledBack ? 1 : 0);
     return;
   }
+  checkf(BehaviorSourceRuntime->CommitPrepared(PreparedBehavior),
+    TEXT("Validated behavior source transaction changed before final apply"));
 
   MinimumSeparationCm = TNumericLimits<float>::Max();
   for (int32 A = 1; A < Slots.Num(); ++A)
@@ -660,7 +716,7 @@ bool ACrowdDemoMixedSandboxCoordinator::EvaluateSlotBehavior(
   const int32 SlotIndex)
 {
   FSlotState& Slot = Slots[SlotIndex];
-  const ECrowdActiveBehavior Requested = ChooseBehavior(SlotIndex);
+  const ECrowdActiveBehavior Requested = SelectLegacyRecipeLabel(SlotIndex);
   const FVector Objective = ChooseObjectiveLocation(SlotIndex, Requested);
   const FCrowdStableEntityRef TargetRef = ChooseTargetRef(SlotIndex, Requested);
   const float Distance = FVector::Distance(Slot.Location, Objective);
@@ -688,43 +744,116 @@ bool ACrowdDemoMixedSandboxCoordinator::EvaluateSlotBehavior(
     || ((Requested == ECrowdActiveBehavior::HaulPickup
       || Requested == ECrowdActiveBehavior::HaulDeliver) && Distance <= 90.0f);
 
-  FCrowdRuntimeBehaviorOutput Output;
-  if (!FCrowdRuntimeBehaviorTransition::Evaluate(
-    BehaviorProviders, Context, Output)) return false;
-  if (Slot.Facts.ActiveBehavior != Requested)
+  if (Context.bInteractionReady)
+  {
+    ECrowdBusinessCommitKind CommitKind =
+      ECrowdBusinessCommitKind::None;
+    if (Requested == ECrowdActiveBehavior::HaulPickup)
+      CommitKind = ECrowdBusinessCommitKind::CargoPickup;
+    else if (Requested == ECrowdActiveBehavior::HaulDeliver)
+      CommitKind = ECrowdBusinessCommitKind::CargoDeliver;
+    else if (Requested == ECrowdActiveBehavior::Attack)
+      CommitKind = ECrowdBusinessCommitKind::CombatHit;
+    if (CommitKind != ECrowdBusinessCommitKind::None)
+      Context.ExternalCommitId =
+        FCrowdBehaviorCommitId::Make(
+          CommitKind, Context);
+  }
+  const FCrowdBehaviorSourceSet* CurrentSet =
+    BehaviorSourceRuntime->FindSourceSet(
+      Slot.Facts.StableEntityRef);
+  if (!CurrentSet) return false;
+  TArray<FCrowdBehaviorSourceCommand> Commands;
+  if (!FCrowdLegacyBehaviorRecipe::BuildTransitionCommands(
+      Context, *CurrentSet, {1},
+      Slot.NextSourceCommandSequence,
+      Slot.NextSourceSequence, Commands))
+    return false;
+  for (const FCrowdBehaviorSourceCommand& Command : Commands)
+    if (!BehaviorSourceRuntime->QueueCommand(Command))
+      return false;
+
+  if (Slot.Facts.DerivedBehaviorLabel != static_cast<uint32>(Requested))
   {
     ++BehaviorTransitionCount;
     ++Slot.TransitionRevision;
   }
   SeenBehaviorBits |= BehaviorBit(Requested);
-  if (!FCrowdRuntimeBehaviorTransition::Commit(
-      Output, Slot.Facts))
-    return false;
-
-  if (Output.BusinessCommitRequest.Kind != ECrowdBusinessCommitKind::None)
-  {
-    const ECrowdDemoBusinessCommitAcceptResult First =
-      BusinessLedger.Apply(Output.BusinessCommitRequest);
-    const ECrowdDemoBusinessCommitAcceptResult Replay =
-      BusinessLedger.Apply(Output.BusinessCommitRequest);
-    if (First != ECrowdDemoBusinessCommitAcceptResult::Applied
-      || Replay != ECrowdDemoBusinessCommitAcceptResult::Duplicate) return false;
-    ++DuplicateCommitCount;
-    if (Requested == ECrowdActiveBehavior::Attack)
-    {
-      Slot.LastAttackFixedStep = FixedStepIndex;
-      const int32 TargetSlot = static_cast<int32>(TargetRef.StableEntityId);
-      if (!Slots.IsValidIndex(TargetSlot) || !Slots[TargetSlot].bActive) return false;
-      Slots[TargetSlot].Health = FMath::Max(0, Slots[TargetSlot].Health - 25);
-      if (Slots[TargetSlot].Health == 0 && PendingCombatDeathSlot == INDEX_NONE)
-        PendingCombatDeathSlot = TargetSlot;
-    }
-  }
+  Slot.Facts.DerivedBehaviorLabel = static_cast<uint32>(Requested);
+  Slot.Facts.TargetRef = TargetRef;
+  Slot.Facts.BusinessTaskRef = Context.TaskRef;
+  Slot.Facts.MovementProfileKey = Context.MovementProfileKey;
 
   return true;
 }
 
-ECrowdActiveBehavior ACrowdDemoMixedSandboxCoordinator::ChooseBehavior(
+bool ACrowdDemoMixedSandboxCoordinator::ApplyPreparedBehaviorBusiness(
+  const FCrowdBehaviorPreparedBoundary& Prepared)
+{
+  for (const FCrowdBehaviorPreparedEntity& Entity
+    : Prepared.Entities)
+  {
+    const int32 SlotIndex =
+      static_cast<int32>(Entity.EntityRef.StableEntityId);
+    if (!Slots.IsValidIndex(SlotIndex)
+      || !Slots[SlotIndex].bActive
+      || Slots[SlotIndex].Facts.StableEntityRef != Entity.EntityRef)
+      return false;
+    FSlotState& Slot = Slots[SlotIndex];
+    for (const FCrowdBusinessContribution& Contribution
+      : Entity.ResolvedChannels.Business)
+    {
+      FCrowdBusinessCommitRequest Request;
+      if (Contribution.Key.SourceTypeId
+        == CrowdBuiltinSourceTypeIds::PickupInteraction)
+        Request.Kind = ECrowdBusinessCommitKind::CargoPickup;
+      else if (Contribution.Key.SourceTypeId
+        == CrowdBuiltinSourceTypeIds::DeliverInteraction)
+        Request.Kind = ECrowdBusinessCommitKind::CargoDeliver;
+      else if (Contribution.Key.SourceTypeId
+        == CrowdBuiltinSourceTypeIds::AttackTarget)
+        Request.Kind = ECrowdBusinessCommitKind::CombatHit;
+      else
+        return false;
+      Request.CommitId = Contribution.CommitId;
+      Request.FixedStepIndex = Prepared.FixedStepIndex;
+      Request.TransitionRevision = Slot.TransitionRevision;
+      Request.AgentRef = Contribution.InstigatorRef;
+      Request.PayloadKey = Contribution.PayloadTypeId;
+      Request.Quantity = Contribution.Quantity;
+      if (Request.Kind == ECrowdBusinessCommitKind::CombatHit)
+        Request.TargetRef = Contribution.TargetRef;
+      else
+        Request.TaskRef = Contribution.TargetRef;
+
+      const ECrowdDemoBusinessCommitAcceptResult First =
+        BusinessLedger.Apply(Request);
+      const ECrowdDemoBusinessCommitAcceptResult Replay =
+        BusinessLedger.Apply(Request);
+      if (First != ECrowdDemoBusinessCommitAcceptResult::Applied
+        || Replay != ECrowdDemoBusinessCommitAcceptResult::Duplicate)
+        return false;
+      ++DuplicateCommitCount;
+      if (Request.Kind == ECrowdBusinessCommitKind::CombatHit)
+      {
+        Slot.LastAttackFixedStep = FixedStepIndex;
+        const int32 TargetSlot = static_cast<int32>(
+          Request.TargetRef.StableEntityId);
+        if (!Slots.IsValidIndex(TargetSlot)
+          || !Slots[TargetSlot].bActive)
+          return false;
+        Slots[TargetSlot].Health = FMath::Max(
+          0, Slots[TargetSlot].Health - Request.Quantity);
+        if (Slots[TargetSlot].Health == 0
+          && PendingCombatDeathSlot == INDEX_NONE)
+          PendingCombatDeathSlot = TargetSlot;
+      }
+    }
+  }
+  return true;
+}
+
+ECrowdActiveBehavior ACrowdDemoMixedSandboxCoordinator::SelectLegacyRecipeLabel(
   const int32 SlotIndex) const
 {
   const FSlotState& Slot = Slots[SlotIndex];
@@ -745,7 +874,8 @@ ECrowdActiveBehavior ACrowdDemoMixedSandboxCoordinator::ChooseBehavior(
   if (SlotIndex <= 16)
     return Slot.Health <= 50 ? ECrowdActiveBehavior::Flee : ECrowdActiveBehavior::Guard;
 
-  const ECrowdActiveBehavior Current = Slot.Facts.ActiveBehavior;
+  const ECrowdActiveBehavior Current = static_cast<ECrowdActiveBehavior>(
+    Slot.Facts.DerivedBehaviorLabel);
   const FVector CurrentObjective = ChooseObjectiveLocation(SlotIndex, Current);
   if (FVector::Distance(Slot.Location, CurrentObjective) <= 100.0f)
   {
@@ -802,7 +932,8 @@ FCrowdStableEntityRef ACrowdDemoMixedSandboxCoordinator::ChooseTargetRef(
   return {};
 }
 
-bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary()
+bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
+  const FCrowdBehaviorPreparedBoundary& PreparedBehavior)
 {
   UWorld* World = GetWorld();
   UMassEntitySubsystem* EntitySubsystem =
@@ -819,6 +950,12 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary()
     Flows;
   TSet<FCrowdStableEntityRef> MovingRefs;
   TArray<FCrowdMassCommitTarget> Targets;
+  TMap<FCrowdStableEntityRef, const FCrowdBehaviorPreparedEntity*>
+    PreparedBehaviorByEntity;
+  for (const FCrowdBehaviorPreparedEntity& PreparedEntity
+    : PreparedBehavior.Entities)
+    PreparedBehaviorByEntity.Add(
+      PreparedEntity.EntityRef, &PreparedEntity);
   for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
   {
     const FSlotState& Slot = Slots[SlotIndex];
@@ -847,20 +984,33 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary()
       SlotIndex,
       Slot.Facts.StableEntityRef.LifecycleSerial});
 
-    const ECrowdActiveBehavior Behavior =
-      Slot.Facts.ActiveBehavior;
-    const FVector Objective =
-      ChooseObjectiveLocation(SlotIndex, Behavior);
-    const float Distance =
-      FVector::Distance(Slot.Location, Objective);
-    const bool bInteractionReady =
-      (Behavior == ECrowdActiveBehavior::Attack
-        && Distance <= 180.0f)
-      || ((Behavior == ECrowdActiveBehavior::HaulPickup
-        || Behavior == ECrowdActiveBehavior::HaulDeliver)
-        && Distance <= 90.0f);
-    if (Behavior == ECrowdActiveBehavior::Attack
-      || bInteractionReady)
+    const FCrowdBehaviorPreparedEntity* const* PreparedPtr =
+      PreparedBehaviorByEntity.Find(Slot.Facts.StableEntityRef);
+    if (!PreparedPtr || !*PreparedPtr) return false;
+    const FCrowdBehaviorPreparedEntity& PreparedEntity =
+      **PreparedPtr;
+    FVector Objective = FVector::ZeroVector;
+    bool bHasMovementSource = false;
+    bool bHasAttackSource = false;
+    for (const FCrowdBehaviorSourceInstance& Instance
+      : PreparedEntity.StagedSourceSet.Instances)
+    {
+      if (Instance.SourceTypeId
+        == CrowdBuiltinSourceTypeIds::AttackTarget)
+        bHasAttackSource = true;
+      if (Instance.SourceTypeId
+        != CrowdBuiltinSourceTypeIds::MoveToSink)
+        continue;
+      FCrowdBuiltinBehaviorSourcePayload Payload;
+      if (!Instance.Payload.Get(
+          CrowdBuiltinBehaviorSchemas::Standard, Payload))
+        return false;
+      Objective = Payload.Vector;
+      bHasMovementSource = true;
+    }
+    if (!bHasMovementSource
+      || bHasAttackSource
+      || !PreparedEntity.ResolvedChannels.Business.IsEmpty())
       continue;
     const FCrowdNavSurfaceFlow* IgnoredFlow = nullptr;
     if (!GetOrBuildFlow(Objective, IgnoredFlow))
@@ -1023,8 +1173,22 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary()
     return false;
   if (!Runner.Dispatch() || !Runner.WaitAndDrain()
     || !Work->bCompleted
-    || !Runner.BuildAndSealCommit(
-      Work->Plan, {}, Targets, 0.0))
+    )
+    return false;
+  FCrowdBehaviorBoundaryMetadata BehaviorMetadata;
+  for (const FCrowdBehaviorPreparedEntity& Entity
+    : PreparedBehavior.Entities)
+    BehaviorMetadata.SourceSetRevision = FMath::Max(
+      BehaviorMetadata.SourceSetRevision,
+      Entity.StagedSourceSet.Revision);
+  BehaviorMetadata.SourceSetHash =
+    PreparedBehavior.SourceSetHash;
+  BehaviorMetadata.CommandBatchHash =
+    PreparedBehavior.CommandBatchHash;
+  BehaviorMetadata.ResolvedChannelHash =
+    PreparedBehavior.ResolvedChannelHash;
+  if (!Runner.BuildAndSealCommit(
+      Work->Plan, {}, Targets, 0.0, &BehaviorMetadata))
     return false;
 
   struct FResolvedWrite
@@ -1135,8 +1299,10 @@ bool ACrowdDemoMixedSandboxCoordinator::BuildLifecycleOperation(
     OutOperation.Kind = ECrowdDemoContinuousLifecycleOperationKind::Spawn;
     OutOperation.StableEntityId = PendingRespawnSlot;
     OutOperation.LifecycleSerial = Slot.Facts.StableEntityRef.LifecycleSerial + 1;
-    OutOperation.NewMembershipKey = MembershipForBehavior(
-      MakeAgentFacts(PendingRespawnSlot, OutOperation.LifecycleSerial).ActiveBehavior);
+    OutOperation.NewMembershipKey = MembershipForDiagnosticLabel(
+      static_cast<ECrowdActiveBehavior>(MakeAgentFacts(
+        PendingRespawnSlot,
+        OutOperation.LifecycleSerial).DerivedBehaviorLabel));
     return true;
   }
   if (PendingCombatDeathSlot != INDEX_NONE && Slots[PendingCombatDeathSlot].bActive)
@@ -1152,7 +1318,8 @@ bool ACrowdDemoMixedSandboxCoordinator::BuildLifecycleOperation(
   {
     const int32 Candidate = 1 + ((MembershipCursor - 1 + Offset) % Config.PopulationLimit);
     const FSlotState& Slot = Slots[Candidate];
-    const uint32 Desired = MembershipForBehavior(Slot.Facts.ActiveBehavior);
+    const uint32 Desired = MembershipForDiagnosticLabel(
+      static_cast<ECrowdActiveBehavior>(Slot.Facts.DerivedBehaviorLabel));
     if (Slot.bActive && Slot.MembershipKey != Desired)
     {
       OutOperation.Kind = ECrowdDemoContinuousLifecycleOperationKind::Membership;
@@ -1202,6 +1369,12 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyLifecycleOperation(
     if (Result == ECrowdLifecycleBatchAcceptResult::Accepted)
     {
       InitializeSlotState(SlotIndex, Operation.LifecycleSerial);
+      FCrowdCapabilityBinding Binding;
+      Binding.ProfileKey =
+        CrowdBuiltinBehaviorSchemas::LegacyFullProfile;
+      if (!BehaviorSourceRuntime->RegisterEntity(
+          Slot.Facts.StableEntityRef, Binding))
+        return false;
       Slot.MembershipKey = Operation.NewMembershipKey;
       PendingRespawnSlot = INDEX_NONE;
       ++SpawnCount;
@@ -1217,6 +1390,8 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyLifecycleOperation(
     Result = LifecycleWorld.ApplyAtBoundary(Batch);
     if (Result == ECrowdLifecycleBatchAcceptResult::Accepted)
     {
+      if (!BehaviorSourceRuntime->RemoveEntity(Ref))
+        return false;
       Slot.bActive = false;
       PendingRespawnSlot = SlotIndex;
       if (PendingCombatDeathSlot == SlotIndex) PendingCombatDeathSlot = INDEX_NONE;
@@ -1275,7 +1450,7 @@ void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
       Slot.Facts.StableEntityRef.LifecycleSerial,
       Slot.MembershipKey,
       Slot.Location,
-      static_cast<uint8>(Slot.Facts.ActiveBehavior),
+      Slot.Facts.DerivedBehaviorLabel,
       static_cast<uint8>(FMath::Clamp(Slot.Health, 0, 100)),
       Slot.Facts.TargetRef.ProviderId,
       Slot.Facts.TargetRef.StableEntityId,
@@ -1289,7 +1464,7 @@ void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
     FCrowdReliableStateRecord& Record =
       Records.AddDefaulted_GetRef();
     Record.Sequence = NextStateSequence++;
-    Record.Kind = ECrowdReliableStateKind::Behavior;
+    Record.Kind = ECrowdReliableStateKind::HostEvent;
     Record.EntityRef = {
       1, State.StableEntityId, State.LifecycleSerial};
     Record.Revision = static_cast<uint32>(
@@ -1368,7 +1543,7 @@ bool ACrowdDemoMixedSandboxCoordinator::PublishBaseline(
       Slot.Facts.StableEntityRef.LifecycleSerial,
       Slot.MembershipKey,
       Slot.Location,
-      static_cast<uint8>(Slot.Facts.ActiveBehavior),
+      Slot.Facts.DerivedBehaviorLabel,
       static_cast<uint8>(FMath::Clamp(Slot.Health, 0, 100)),
       Slot.Facts.TargetRef.ProviderId,
       Slot.Facts.TargetRef.StableEntityId,
@@ -1444,7 +1619,7 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
           EntityLifecycleResume, EntityRelevantRevision)
         || State.StableEntityId == 0
         || State.StableEntityId >= static_cast<uint64>(Slots.Num())
-        || State.Behavior >= static_cast<uint8>(
+        || State.DerivedBehaviorLabel >= static_cast<uint32>(
           ECrowdActiveBehavior::Count)
         || (BaselineStep != INDEX_NONE
           && (BaselineStep != Step
@@ -1463,8 +1638,7 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
       const int32 SlotIndex = static_cast<int32>(State.StableEntityId);
       FSlotState& Slot = Slots[SlotIndex];
       Slot.Facts = MakeAgentFacts(SlotIndex, State.LifecycleSerial);
-      Slot.Facts.ActiveBehavior =
-        static_cast<ECrowdActiveBehavior>(State.Behavior);
+      Slot.Facts.DerivedBehaviorLabel = State.DerivedBehaviorLabel;
       Slot.Facts.TargetRef = {
         State.TargetProviderId,
         State.TargetStableEntityId,
@@ -1559,7 +1733,7 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
     {
       for (const FCrowdReliableStateRecord& Record : Frame.ReliableRecords)
       {
-        if (Record.Kind == ECrowdReliableStateKind::Behavior)
+        if (Record.Kind == ECrowdReliableStateKind::HostEvent)
         {
           FCrowdDemoMixedAgentState State;
           int64 Step = 0;
@@ -1622,14 +1796,16 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyReplicatedAgentState(
 {
   if (State.StableEntityId == 0
     || State.StableEntityId >= static_cast<uint64>(Slots.Num())
-    || State.Behavior >= static_cast<uint8>(ECrowdActiveBehavior::Count))
+    || State.DerivedBehaviorLabel >=
+      static_cast<uint32>(ECrowdActiveBehavior::Count))
   {
     if (!bClientApplyFailureLogged)
     {
       bClientApplyFailureLogged = true;
       UE_LOG(LogTemp, Warning,
         TEXT("CrowdDemoMixedSandboxClientApplyReject reason=invalid_payload entity=%llu lifecycle=%u behavior=%u step=%lld slots=%d"),
-        State.StableEntityId, State.LifecycleSerial, State.Behavior,
+        State.StableEntityId, State.LifecycleSerial,
+        State.DerivedBehaviorLabel,
         InFixedStepIndex, Slots.Num());
     }
     return false;
@@ -1651,8 +1827,7 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyReplicatedAgentState(
   }
   Slot.Location = State.Location;
   Slot.MembershipKey = State.MembershipKey;
-  Slot.Facts.ActiveBehavior =
-    static_cast<ECrowdActiveBehavior>(State.Behavior);
+  Slot.Facts.DerivedBehaviorLabel = State.DerivedBehaviorLabel;
   Slot.Facts.TargetRef = {
     State.TargetProviderId,
     State.TargetStableEntityId,
@@ -1662,7 +1837,8 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyReplicatedAgentState(
     State.TaskStableEntityId,
     State.TaskLifecycleSerial};
   Slot.Health = State.Health;
-  SeenBehaviorBits |= BehaviorBit(Slot.Facts.ActiveBehavior);
+  SeenBehaviorBits |= BehaviorBit(
+    static_cast<ECrowdActiveBehavior>(Slot.Facts.DerivedBehaviorLabel));
   LastReceivedFixedStep = FMath::Max(LastReceivedFixedStep, InFixedStepIndex);
   const bool bApplied = LifecycleWorld.ApplyAgentFactsCorrectionAtBoundary(
     FMath::Max(InFixedStepIndex, LifecycleWorld.GetLastAppliedFixedStep()),
@@ -1672,7 +1848,8 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyReplicatedAgentState(
     bClientApplyFailureLogged = true;
     UE_LOG(LogTemp, Warning,
       TEXT("CrowdDemoMixedSandboxClientApplyReject reason=runtime_facts entity=%llu lifecycle=%u behavior=%u well_formed=%d step=%lld world_step=%lld"),
-      State.StableEntityId, State.LifecycleSerial, State.Behavior,
+      State.StableEntityId, State.LifecycleSerial,
+      State.DerivedBehaviorLabel,
       Slot.Facts.IsWellFormed() ? 1 : 0, InFixedStepIndex,
       LifecycleWorld.GetLastAppliedFixedStep());
   }
@@ -1738,8 +1915,10 @@ void ACrowdDemoMixedSandboxCoordinator::SyncClientVisualsIncremental()
         FVector(34));
       State.ProfileKey = 1;
       State.VisualState =
-        Slot.Facts.ActiveBehavior == ECrowdActiveBehavior::Attack ? 1 : 0;
-      if (Slot.Facts.ActiveBehavior == ECrowdActiveBehavior::HaulDeliver)
+        Slot.Facts.DerivedBehaviorLabel ==
+          static_cast<uint32>(ECrowdActiveBehavior::Attack) ? 1 : 0;
+      if (Slot.Facts.DerivedBehaviorLabel ==
+        static_cast<uint32>(ECrowdActiveBehavior::HaulDeliver))
         State.CargoRef = Slot.Facts.BusinessTaskRef;
       State.Sequence = Sequence;
       State.SampleServerSeconds = FixedStepIndex * MixedFixedStepSeconds;
@@ -1899,7 +2078,7 @@ FVector ACrowdDemoMixedSandboxCoordinator::Marker(
   return Found ? *Found : Fallback;
 }
 
-uint32 ACrowdDemoMixedSandboxCoordinator::MembershipForBehavior(
+uint32 ACrowdDemoMixedSandboxCoordinator::MembershipForDiagnosticLabel(
   const ECrowdActiveBehavior Behavior) const
 {
   switch (Behavior)

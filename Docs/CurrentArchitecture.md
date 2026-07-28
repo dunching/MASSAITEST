@@ -10,7 +10,7 @@
 
 [COMPUTED][HIGH] 当前已实现的是固定 Agent 集合、Round Bootstrap/Plan、双端 fixed-step、分块 correction/checkpoint、RoundResult/hash 验收，以及插件 Core/Runtime 的通用运动 kernel 与 WORK 合同。
 
-[COMPUTED][HIGH] 当前已实现生产Relevant Snapshot、Demo RoundBootstrap adapter、lifecycle batches、真实Mass lifecycle store、统一Behavior、Runtime静态Recast Graph/Flow资源、owner-only late-join channel、空间RelevantSet、可靠状态/latest-wins correction、公共Presentation slot lifecycle，以及20实体continuous混合Sandbox。
+[COMPUTED][HIGH] 当前已实现生产Relevant Snapshot、Demo RoundBootstrap adapter、lifecycle batches、真实Mass lifecycle store、组合式Behavior Source Runtime、Runtime静态Recast Graph/Flow资源、owner-only late-join channel、空间RelevantSet、可靠状态/latest-wins correction、公共Presentation slot lifecycle，以及20实体continuous混合Sandbox。行为架构事实源为`EntityBehaviorSourceArchitecture.md`。
 
 [COMPUTED][HIGH] P0–P5公共产品闭环已完成：旧Round接入P1 Orchestrator与P3 channel/Presentation，J已删除O(N)安全检查，`NavFlowProductSmall`与专用`FriendlyLogisticsSmall`场景均通过。
 
@@ -199,7 +199,7 @@ RoundPlanApply
 
 [COMPUTED][HIGH] P4新增`FCrowdLogisticsTransactionStore`和专用`CrowdDemo_FriendlyLogisticsSmall`地图。8154延迟客户端从公共baseline/reliable channel恢复最终状态；20实体、40总量/5交付、竞争、幂等、死亡后cargo恢复、fallback sink、两次不可达退避及取消通过，双端hash=`3180435972084878253`。Cargo attach/detach=`2/2`，携货与交付近景证据已保存。
 
-[COMPUTED][HIGH] P0–P5最终累计门：Development/DebugGame Editor `-DisableUnity`通过，`MassCrowd`40/40、`CrowdDemo`115/115；8151 Round、8153 J、8154 P4、8156 NavFlow与8157双客户端late join均通过且零硬错误。当前停止在K前。
+[COMPUTED][HIGH] P0–P5当时的累计门：Development/DebugGame Editor `-DisableUnity`通过，`MassCrowd`40/40、`CrowdDemo`115/115；8151 Round、8153 J、8154 P4、8156 NavFlow与8157双客户端late join均通过且零硬错误。该历史检查点当时停止在K前；当前B0–B7与K状态以本文1.1节、`EntityBehaviorSourceArchitecture.md`和`PhasePlan.md`为准。
 
 [COMPUTED][HIGH] T7首次冷运行8777出现client frame p95=`112.235ms`、collapsed steps p95=`4`；新增证据后的两次普通运行8781/8783连续通过，frame p95=`6.016/5.820ms`，Round内shader/loading/PSO帧均为0。`-noshaderddc`控制运行8782因shader job超过60秒而未进入场景，只证明冷资源门可以阻塞ready，不能事后归因为8777的唯一根因。
 

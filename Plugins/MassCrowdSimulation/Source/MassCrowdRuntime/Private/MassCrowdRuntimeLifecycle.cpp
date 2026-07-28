@@ -30,7 +30,7 @@ namespace
     FoldRef(Hash, Facts.StableEntityRef);
     FoldUnsigned(Hash, Facts.FactionKey);
     FoldUnsigned(Hash, Facts.CapabilitySet.Bits);
-    FoldByte(Hash, static_cast<uint8>(Facts.ActiveBehavior));
+    FoldUnsigned(Hash, Facts.DerivedBehaviorLabel);
     FoldRef(Hash, Facts.BusinessTaskRef);
     FoldRef(Hash, Facts.TargetRef);
     FoldUnsigned(Hash, Facts.MovementProfileKey);

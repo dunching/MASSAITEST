@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassCrowdAgentFacts.h"
+#include "MassCrowdBehaviorSource.h"
 
 enum class ECrowdDespawnReason : uint8
 {
@@ -42,7 +43,7 @@ struct FCrowdLifecycleBatchLimits
 
 struct FCrowdLifecycleBatchHeader
 {
-  static constexpr uint16 CurrentProtocolVersion = 1;
+  static constexpr uint16 CurrentProtocolVersion = 2;
 
   uint16 ProtocolVersion = CurrentProtocolVersion;
   uint32 BaseSnapshotRevision = 0;
@@ -53,16 +54,44 @@ struct FCrowdLifecycleBatchHeader
   uint64 BatchHash = 0;
 };
 
+struct FCrowdLifecycleBehaviorState
+{
+  FCrowdCapabilityBinding CapabilityBinding;
+  uint32 SourceSetRevision = 0;
+  uint64 SourceSetHash = 0;
+  uint64 ResolvedBehaviorHash = 0;
+  uint32 DerivedDiagnosticLabel = 0;
+
+  bool IsEmpty() const
+  {
+    return !CapabilityBinding.ProfileKey.IsValid()
+      && SourceSetRevision == 0
+      && SourceSetHash == 0
+      && ResolvedBehaviorHash == 0
+      && DerivedDiagnosticLabel == 0;
+  }
+
+  bool IsValid() const
+  {
+    return CapabilityBinding.IsValid()
+      && SourceSetRevision != 0
+      && SourceSetHash != 0
+      && ResolvedBehaviorHash != 0;
+  }
+};
+
 struct FCrowdLifecycleSnapshotEntity
 {
   FCrowdAgentFacts AgentFacts;
   uint32 MembershipKey = 0;
+  FCrowdLifecycleBehaviorState BehaviorState;
 };
 
 struct FCrowdSpawnEntry
 {
   FCrowdAgentFacts AgentFacts;
   uint32 MembershipKey = 0;
+  FCrowdLifecycleBehaviorState BehaviorState;
 };
 
 struct FCrowdDespawnEntry

@@ -32,12 +32,31 @@ namespace
     FoldRef(Hash, Facts.StableEntityRef);
     FoldUnsigned(Hash, Facts.FactionKey);
     FoldUnsigned(Hash, Facts.CapabilitySet.Bits);
-    FoldByte(Hash, static_cast<uint8>(Facts.ActiveBehavior));
     FoldRef(Hash, Facts.BusinessTaskRef);
     FoldRef(Hash, Facts.TargetRef);
     FoldUnsigned(Hash, Facts.MovementProfileKey);
     FoldUnsigned(Hash, Facts.PresentationProfileKey);
     FoldUnsigned(Hash, Facts.RuntimeState);
+  }
+
+  void FoldBehaviorState(
+    uint64& Hash, const FCrowdLifecycleBehaviorState& State)
+  {
+    FoldUnsigned(Hash, State.CapabilityBinding.ProfileKey.Value);
+    FoldUnsigned(Hash, State.CapabilityBinding.ModifierRevision);
+    FoldByte(Hash, State.CapabilityBinding.ModifierCount);
+    for (uint8 Index = 0;
+      Index < State.CapabilityBinding.ModifierCount; ++Index)
+    {
+      FoldUnsigned(Hash,
+        State.CapabilityBinding.Modifiers[Index].CapabilityId.Value);
+      FoldByte(Hash, static_cast<uint8>(
+        State.CapabilityBinding.Modifiers[Index].Operation));
+    }
+    FoldUnsigned(Hash, State.SourceSetRevision);
+    FoldUnsigned(Hash, State.SourceSetHash);
+    FoldUnsigned(Hash, State.ResolvedBehaviorHash);
+    FoldUnsigned(Hash, State.DerivedDiagnosticLabel);
   }
 
   uint64 BeginBatchHash(
@@ -93,6 +112,7 @@ uint64 FCrowdLifecycleBatchTransport::CalculateHash(const FCrowdSpawnBatch& Batc
   {
     FoldAgentFacts(Hash, Entry.AgentFacts);
     FoldUnsigned(Hash, Entry.MembershipKey);
+    FoldBehaviorState(Hash, Entry.BehaviorState);
   }
   return Hash;
 }
@@ -178,6 +198,8 @@ bool FCrowdLifecycleDeltaState::BeginFromSnapshot(
   {
     const FCrowdStableEntityRef& Ref = Entity.AgentFacts.StableEntityRef;
     if (!Entity.AgentFacts.IsWellFormed()
+      || (!Entity.BehaviorState.IsEmpty()
+        && !Entity.BehaviorState.IsValid())
       || (bHasPrevious && !IsStrictlySorted(Previous, Ref)))
     {
       TrackedEntities.Reset();
@@ -235,6 +257,8 @@ ECrowdLifecycleBatchAcceptResult FCrowdLifecycleDeltaState::AcceptSpawnBatch(
   {
     const FCrowdStableEntityRef& Ref = Entry.AgentFacts.StableEntityRef;
     if (!Entry.AgentFacts.IsWellFormed()
+      || (!Entry.BehaviorState.IsEmpty()
+        && !Entry.BehaviorState.IsValid())
       || (bHasPrevious && !IsStrictlySorted(Previous, Ref)))
       return ECrowdLifecycleBatchAcceptResult::RejectedInvalid;
 

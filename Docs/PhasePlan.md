@@ -2,7 +2,7 @@
 
 ## 历史能力阶段与当前产品化顺序
 
-[COMPUTED][HIGH] A–J是已经完成并保留证据的历史能力阶段；K/L未授权且继续冻结。它们不等同于Runtime、Networking和Presentation公共产品路径已经闭环。
+[COMPUTED][HIGH] A–J是已经完成并保留证据的历史能力阶段；本次B0–B7授权同时完成K的20/100/500验证，L原工程迁移仍冻结。历史阶段不等同于Runtime、Networking和Presentation公共产品路径已经闭环。
 
 A. [x] [COMPUTED][HIGH] 通用 Runtime/Replication 合同文档冻结。
 B. [x] [COMPUTED][HIGH] StableEntityRef + Capability + Behavior POD。
@@ -14,10 +14,10 @@ G. [x] [COMPUTED][HIGH] Demo continuous lifecycle 场景。
 H. [x] [COMPUTED][HIGH] Logistics/Combat 通过同一 Behavior 接口接入。
 I. [x] [COMPUTED][HIGH] NavMesh Surface Graph + Shared Flow。
 J. [x] [COMPUTED][HIGH] 混合行为 Sandbox。
-K. [ ] [INFERRED][HIGH] 20/100/500。
+K. [x] [COMPUTED][HIGH] 20/100/500。
 L. [ ] [INFERRED][HIGH] 原工程最小宿主与生产迁移。
 
-[COMPUTED][HIGH] 当前已完成 A–J；不运行K的正式20/100/500，也不执行L迁移。
+[COMPUTED][HIGH] 当前已完成 A–K；L迁移未执行。
 
 [INFERRED][HIGH] 当前唯一实施顺序改为以下产品化闭环；各阶段保持独立边界，但按用户修订合同连续执行，不再要求逐阶段人工授权：
 
@@ -28,7 +28,20 @@ P3. [x] [COMPUTED][HIGH] owner-only replication actor、late-join baseline、可
 P4. [x] [COMPUTED][HIGH] 插件新增可复用事务Store，覆盖Claim/Pickup/Deliver/Cancel/Requeue、死亡后无Carrier cargo恢复和fallback sink；专用`CrowdDemo_FriendlyLogisticsSmall`地图以20个真实Mass实体通过稳定竞争、数量守恒、幂等、退避、取消及公共channel late join。8154双端hash=`3180435972084878253`，客户端Cargo attach/detach=`2/2`、最终实例=`20`，携货与交付近景证据已保存。
 P5. [x] [COMPUTED][HIGH] J、Continuous与旧Round的实体状态均统一到公共Networking/Presentation。旧Round bootstrap、correction、ResultHeader和projectile event使用owner-only公共channel，20条latest-wins correction按帧有界聚合；客户端实体ISM只由Presentation subsystem/sink管理。8151 T2、8153 J和8157双客户端late join通过，J step600双端hash一致且无硬错误。
 
-[COMPUTED][HIGH] 当前准确状态是P0–P5全部关闭并停止在K前。K/L、正式100/500、原工程迁移与动态NavMesh topology更新仍未实施。
+[COMPUTED][HIGH] 当前准确状态是P0–P5与B0–B7全部关闭；K以20实体混合/T8、100实体SoftPressure和500实体Obstacle完成正式运行，L原工程迁移与动态NavMesh topology更新仍未实施。
+
+## B0–B7 Behavior Source 重构（2026-07-28）
+
+B0. [x] [COMPUTED][HIGH] 脏工作区与P0–P5成果已保存为提交`ddb4740`并推送。
+B1. [x] [COMPUTED][HIGH] Capability Profile/Modifier、稳定Source POD、容量与Hash已实现。
+B2. [x] [COMPUTED][HIGH] 冻结Registry、内置Evaluator、六通道确定性Resolver与诊断已实现。
+B3. [x] [COMPUTED][HIGH] Legacy Recipe把旧标签展开为多Source；Provider生产控制权已删除。
+B4. [x] [COMPUTED][HIGH] Source staging/Resolved Channels接入P1 Boundary，Envelope升级v3并验证失败零写入。
+B5. [x] [COMPUTED][HIGH] Mixed Sandbox的移动/Facing/物流/攻击/HitReaction组合改走Runtime World Store；旧Round移动安全内核保持Resolver后的强制阶段，原场景自动化用于迁移等价门。
+B6. [x] [COMPUTED][HIGH] 可选StateTree Adapter与物流中断恢复链路已实现。
+B7. [x] [COMPUTED][HIGH] 权威ActiveBehavior字段、中心CanActivate、Provider API和网络Behavior字节已删除；协议统一升级并拒绝v1。
+
+[COMPUTED][HIGH] B0–B7最终门：DebugGame `-DisableUnity`与Development `-ForceUnity`成功，`MassCrowd 50/50`、`CrowdDemo 115/115`成功；8216 T8的攻击/投射/伤害=`50/50/50`且双端Hash一致；8210的100实体SoftPressure性能门成功；8215的500实体Obstacle连续5轮双端Checkpoint成功、障碍穿透和revision gap均为0。
 
 ## 已完成
 
@@ -128,6 +141,6 @@ P5. [x] [COMPUTED][HIGH] J、Continuous与旧Round的实体状态均统一到公
 - [x] [COMPUTED][HIGH] P5关闭：J、Continuous与Round继续消费公共Networking/Presentation路径；7939、7946、7948–7951无硬错误。
 - [x] [COMPUTED][HIGH] 累计门：Development/DebugGame `-DisableUnity`、MassCrowd 43/43、CrowdDemo 115/115、插件反向依赖扫描和`git diff --check`通过。
 
-[COMPUTED][HIGH] 当前停止在K前；K/L、正式100/500与原工程迁移继续冻结。
+[COMPUTED][HIGH] 该P0–P5关闭检查点当时停止在K前；本次B0–B7授权已完成K的20/100/500正式运行，L原工程迁移继续冻结。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

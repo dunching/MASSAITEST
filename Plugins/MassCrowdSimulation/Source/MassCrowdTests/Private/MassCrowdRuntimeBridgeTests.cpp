@@ -69,7 +69,8 @@ namespace
     Record.AgentFacts.StableEntityRef =
       Record.Identity.GetStableEntityRef();
     Record.AgentFacts.CapabilitySet.Add(ECrowdCapability::Move);
-    Record.AgentFacts.ActiveBehavior = ECrowdActiveBehavior::Idle;
+    Record.AgentFacts.DerivedBehaviorLabel =
+      static_cast<uint32>(ECrowdActiveBehavior::Idle);
     Record.AgentFacts.MovementProfileKey = ProfileKey;
     Record.State.Position = FVector(
       static_cast<float>(AgentId * 100), 10.0f, 60.0f);
@@ -947,8 +948,8 @@ bool FMassCrowdRuntimeMinimalMassWorldTest::RunTest(const FString& Parameters)
   Capabilities.Add(ECrowdCapability::Move);
   Capabilities.Add(ECrowdCapability::MoveTo);
   Behavior.CapabilityBits = Capabilities.Bits;
-  Behavior.ActiveBehavior =
-    static_cast<uint8>(ECrowdActiveBehavior::MoveTo);
+  Behavior.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::MoveTo);
   State.Position = FVector(100.0f, 200.0f, 60.0f);
   State.bInitialized = true;
   Properties.CapabilityProfileKey = 0;

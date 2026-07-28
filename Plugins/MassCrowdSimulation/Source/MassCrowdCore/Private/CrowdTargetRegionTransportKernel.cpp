@@ -3,6 +3,12 @@
 #include "Algo/Sort.h"
 #include "CrowdSharedFlowFieldKernel.h"
 
+#define FnvOffset TargetRegion_FnvOffset
+#define FnvPrime TargetRegion_FnvPrime
+#define Fold TargetRegion_Fold
+#define Q TargetRegion_Q
+#define Quantize TargetRegion_Quantize
+
 namespace
 {
   constexpr uint32 FnvOffset = 2166136261u;
@@ -2160,3 +2166,9 @@ void FCrowdTargetRegionTransportKernel::BuildGuidance(
   BuildGuidanceWithExecution(InputAgents, Settings, Topology, Demand, Plan,
     ExecutionState, OutResults, OutSummary);
 }
+
+#undef Quantize
+#undef Q
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

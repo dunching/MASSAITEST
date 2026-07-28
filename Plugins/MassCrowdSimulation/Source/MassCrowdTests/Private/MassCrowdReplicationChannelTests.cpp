@@ -24,7 +24,7 @@ namespace
   {
     FCrowdReliableStateRecord Record;
     Record.Sequence = Sequence;
-    Record.Kind = ECrowdReliableStateKind::Behavior;
+    Record.Kind = ECrowdReliableStateKind::BehaviorSourceSet;
     Record.EntityRef = {1, Sequence, 1};
     Record.Revision = 3;
     Record.Payload = {static_cast<uint8>(Sequence), 7};
@@ -194,7 +194,12 @@ bool FMassCrowdReplicationCodecTest::RunTest(
   Agent.Velocity = FVector(1.0, 2.0, 3.0);
   Agent.YawDegrees = 45.0f;
   Agent.MovementProfileKey = 7;
-  Agent.Behavior = 4;
+  Agent.CapabilityProfileKey = {1};
+  Agent.CapabilityModifierRevision = 2;
+  Agent.SourceSetRevision = 4;
+  Agent.SourceSetHash = 0x1234;
+  Agent.ResolvedBehaviorHash = 0x5678;
+  Agent.DerivedDiagnosticLabel = 4;
   Agent.Revision = 9;
   FCrowdAgentReplicationRecord DecodedAgent;
   TestTrue(TEXT("agent codec encodes"),
@@ -207,8 +212,79 @@ bool FMassCrowdReplicationCodecTest::RunTest(
       && DecodedAgent.Velocity == Agent.Velocity
       && DecodedAgent.YawDegrees == Agent.YawDegrees
       && DecodedAgent.MovementProfileKey == Agent.MovementProfileKey
-      && DecodedAgent.Behavior == Agent.Behavior
+      && DecodedAgent.CapabilityProfileKey
+        == Agent.CapabilityProfileKey
+      && DecodedAgent.CapabilityModifierRevision
+        == Agent.CapabilityModifierRevision
+      && DecodedAgent.SourceSetRevision == Agent.SourceSetRevision
+      && DecodedAgent.SourceSetHash == Agent.SourceSetHash
+      && DecodedAgent.ResolvedBehaviorHash
+        == Agent.ResolvedBehaviorHash
+      && DecodedAgent.DerivedDiagnosticLabel
+        == Agent.DerivedDiagnosticLabel
       && DecodedAgent.Revision == Agent.Revision);
+  TArray<uint8> V1Agent = Bytes;
+  V1Agent[0] = 1;
+  V1Agent[1] = 0;
+  TestFalse(TEXT("v1 agent payload is explicitly rejected"),
+    FCrowdReplicationCodec::DecodeAgent(V1Agent, DecodedAgent));
+
+  FCrowdBehaviorSourceCommand SourceCommand;
+  SourceCommand.EffectiveFixedStep = 20;
+  SourceCommand.Handle = {{1, 42, 3}, {7}, 8};
+  SourceCommand.CommandSequence = 9;
+  SourceCommand.Kind = ECrowdBehaviorSourceCommandKind::Start;
+  SourceCommand.SourceTypeId = {1001};
+  SourceCommand.Priority = 30;
+  SourceCommand.LifetimeSteps = 12;
+  const uint32 SourcePayloadValue = 77;
+  SourceCommand.Payload.Set(5, SourcePayloadValue);
+  FCrowdBehaviorSourceCommand DecodedSourceCommand;
+  TestTrue(TEXT("source command codec encodes"),
+    FCrowdReplicationCodec::EncodeBehaviorSourceCommand(
+      SourceCommand, Bytes));
+  TestTrue(TEXT("source command codec round trips"),
+    FCrowdReplicationCodec::DecodeBehaviorSourceCommand(
+      Bytes, DecodedSourceCommand));
+  TestEqual(TEXT("source handle preserves controller identity"),
+    DecodedSourceCommand.Handle.ControllerId.Value, 7u);
+  TestEqual(TEXT("source command sequence round trips"),
+    DecodedSourceCommand.CommandSequence, 9u);
+
+  FCrowdBehaviorSourceSetReplicationRecord SourceSetRecord;
+  SourceSetRecord.SourceSet.EntityRef = {1, 42, 3};
+  SourceSetRecord.SourceSet.CapabilityBinding.ProfileKey = {1};
+  SourceSetRecord.SourceSet.Revision = 2;
+  FCrowdBehaviorSourceInstance& Instance =
+    SourceSetRecord.SourceSet.Instances.AddDefaulted_GetRef();
+  Instance.Handle = SourceCommand.Handle;
+  Instance.SourceTypeId = SourceCommand.SourceTypeId;
+  Instance.SourceVersion = 1;
+  Instance.Priority = 30;
+  Instance.StartFixedStep = 20;
+  Instance.LastUpdateFixedStep = 20;
+  Instance.ExpireFixedStep = 32;
+  Instance.ReplicationPolicy =
+    ECrowdBehaviorSourceReplicationPolicy::Predictable;
+  Instance.Payload = SourceCommand.Payload;
+  SourceSetRecord.SourceSet.ControllerCursors.Add(
+    {{7}, 9, SourceCommand.CalculateStableHash()});
+  SourceSetRecord.SourceSet.RecalculateStableHash();
+  SourceSetRecord.ResolvedBehaviorHash = 0x9999;
+  SourceSetRecord.DerivedDiagnosticLabel = 4;
+  FCrowdBehaviorSourceSetReplicationRecord DecodedSourceSet;
+  TestTrue(TEXT("source set baseline codec encodes"),
+    FCrowdReplicationCodec::EncodeBehaviorSourceSet(
+      SourceSetRecord, Bytes));
+  TestTrue(TEXT("source set baseline codec round trips"),
+    FCrowdReplicationCodec::DecodeBehaviorSourceSet(
+      Bytes, DecodedSourceSet));
+  TestEqual(TEXT("source set hash round trips"),
+    DecodedSourceSet.SourceSet.StableHash,
+    SourceSetRecord.SourceSet.StableHash);
+  TestEqual(TEXT("resolved behavior hash round trips"),
+    DecodedSourceSet.ResolvedBehaviorHash,
+    SourceSetRecord.ResolvedBehaviorHash);
 
   FCrowdTaskReplicationRecord Task{
     {2, 1, 1}, {2, 2, 1}, {2, 3, 1}, {2, 4, 1},
@@ -269,8 +345,8 @@ bool FMassCrowdReplicationCodecTest::RunTest(
       && DecodedPresentation.Location == Presentation.Location
       && DecodedPresentation.VisualState == Presentation.VisualState);
 
-  Bytes[0] = 2;
-  TestFalse(TEXT("unsupported codec version fails closed"),
+  Bytes[0] = 1;
+  TestFalse(TEXT("v1 codec version fails closed"),
     FCrowdReplicationCodec::DecodePresentation(
       Bytes, DecodedPresentation));
   return true;

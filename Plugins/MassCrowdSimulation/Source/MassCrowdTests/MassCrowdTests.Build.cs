@@ -15,6 +15,7 @@ public class MassCrowdTests : ModuleRules
       "MassCrowdRuntime",
       "MassCrowdNetworking",
       "MassCrowdPresentation",
+      "MassCrowdStateTreeAdapter",
       "MassEntity",
       "Projects"
     });

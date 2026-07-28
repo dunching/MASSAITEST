@@ -29,12 +29,14 @@
 ## 生产运行与复制（与 Demo 验收分开）
 
 - [x] [COMPUTED][HIGH] 通用运行、行为组合、持续生命周期和生产复制合同已冻结在`MassCrowdUnifiedRuntimeAndReplicationContract.md`。
-- [x] [COMPUTED][HIGH] `FCrowdStableEntityRef`、通用 CapabilitySet、ActiveBehavior 与组合式 AgentFacts POD 已在`MassCrowdCore`实现；Runtime identity/behavior fragments 提供基础映射，Faction 不决定 Capability。
+- [x] [COMPUTED][HIGH] `FCrowdStableEntityRef`、Capability Profile/Modifier、Source Handle/Spec/Command/Instance、六通道 Contribution 与组合式 AgentFacts POD 已在`MassCrowdCore`实现；Fragment不再保存权威ActiveBehavior，Faction不决定Capability。
 - [x] [COMPUTED][HIGH] `MassCrowdNetworking`已实现通用 Relevant Snapshot、lifecycle batches、owner-only replication actor、late-join baseline、可靠状态序列、latest-wins correction、空间RelevantSet与resync重建。
 - [x] [COMPUTED][HIGH] `MassCrowdPresentation`已实现按StableEntityRef管理的slot table、swap-remove反向表、幂等spawn/update/despawn、stale tombstone、Profile与可选Cargo引用；J和ContinuousLifecycle已通过Demo ISM sink消费该公共层。
 - [x] [COMPUTED][HIGH] 阶段F已在插件最小World实现真实Mass entity创建/销毁、boundary apply、LifecycleSerial槽位复用、membership迁移与stale correction/despawn拒绝。
 - [x] [COMPUTED][HIGH] Demo continuous lifecycle 与J均使用公共owner-only replication channel和Presentation subsystem；Continuous 7975延迟加入追平可靠生命周期序列，J 7977 step600双端hash与active/visible通过。
-- [x] [COMPUTED][HIGH] Runtime统一Behavior provider/transition合同显式输出Target、Objective、MovementProfile、InteractionIntent与BusinessCommitRequest；Demo Logistics/Combat adapters、Cargo pickup/deliver、真实HitFact映射及rollback commit幂等测试通过，Faction不授予Capability。
+- [x] [COMPUTED][HIGH] Runtime Behavior Source合同以只读Context和有界Writer输出Movement、Facing、Constraint、Interaction、Business与Presentation；Provider选择API和中心`CanActivate`已删除，Demo业务Ledger只消费已解析Business请求。
+- [x] [COMPUTED][HIGH] Commit Envelope v3与Snapshot/Lifecycle/Apply/Codec v2已落地；旧v1拒绝，网络Agent记录不再携带单字节Behavior。
+- [x] [COMPUTED][HIGH] `MassCrowdStateTreeAdapter`只提交Source Command并等待Runtime Event；物流→受击暂停→恢复→交付自动化证明Cargo与任务Source未丢失。
 - [x] [COMPUTED][HIGH] Core稳定分层Surface Graph与Runtime静态Recast提取器已实现；Shared Flow按NavLayer构建integration/direction，支持动态目标重新attachment而不改变拓扑，真实高低差地图已验证坡道、桥上桥下、高台、多路线、窄桥与不可通行落差。
 - [x] [COMPUTED][HIGH] 20实体混合Sandbox已在独立非Round入口组合continuous lifecycle、统一Behavior、Cargo、Combat、Recast Shared Flow和增量ISM；行为切换、幂等commit、死亡/重生、membership迁移、安全间距及双端hash均通过真实运行。
 - [x] [COMPUTED][HIGH] Demo固定Round初态已通过显式版本化adapter进入通用Relevant Snapshot；完整`RoundBootstrapPacket.Agents`不再作为复制属性，本地packet只作为既有Pipeline消费对象。
@@ -54,7 +56,7 @@
 
 - [x] [COMPUTED][HIGH] Development Editor使用`-DisableUnity`通过。
 - [x] [COMPUTED][HIGH] DebugGame Editor使用`-DisableUnity`通过。
-- [ ] [COMPUTED][HIGH] 默认Unity Development仍因`MassCrowdSimulation`插件旧`.cpp`匿名命名空间辅助函数重名失败；第十切片未修改这些文件。
+- [x] [COMPUTED][HIGH] B7已消除插件旧`.cpp`匿名命名空间辅助函数重名，Development `-ForceUnity`最终构建通过。
 - [x] [COMPUTED][HIGH] 阶段H收口时`CrowdDemo` 111/111与`MassCrowd` 25/25自动化通过；RuntimeBehavior与BehaviorAdapters定向2/2通过。
 - [x] [COMPUTED][HIGH] 阶段I收口时Development/DebugGame `-DisableUnity`、NavSurfaceGraph定向3/3、`MassCrowd` 27/27与`CrowdDemo` 112/112通过；8800真实Recast probe的8/8可达marker与不可达drop门通过，并保留视觉截图。
 - [x] [COMPUTED][HIGH] 阶段J收口时Development/DebugGame `-DisableUnity`、MixedSandbox定向2/2、`MassCrowd` 27/27与`CrowdDemo` 114/114通过；8804双端20实体业务、安全、同步和视觉门通过。
@@ -103,7 +105,7 @@
 - [x] [COMPUTED][HIGH] T5M 8785技术、性能与稳定诊断通过；无merge block/chatter。
 - [x] [COMPUTED][HIGH] T6M 8790的Round末inside/coverage=`20/20`且安全、同步、性能通过；AcquireThenHold资格有效期间不要求持续重排Region，最后90步18/17保留为过程诊断。
 - [ ] [COMPUTED][HIGH] 单进程DebugGame PIE和当前版人工审片未完成。
-- [ ] [COMPUTED][HIGH] 100/500当前组合未验收。
+- [x] [COMPUTED][HIGH] 100实体SoftPressure在8210通过双端启动、连续correction与性能门；500实体Obstacle在8215连续完成5轮双端Checkpoint，障碍穿透、revision gap与硬错误均为0。
 
 - [x] [COMPUTED][HIGH] 临时`FCrowdMassParticleConstraintFragment`已物理删除；Particle processor无Mass query，FacingFinalize从prepared final kinematics验证并提交最终运动事实。
 - [x] [COMPUTED][HIGH] 第十五切片Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8731 T2为20/20 settled、16/16 coverage，8732异构T6为20/20 completed/settled/inside/coverage，双端安全、同步与性能门通过。
@@ -120,7 +122,7 @@
 - [x] [COMPUTED][HIGH] 第二十四切片完成剩余查询/写入接缝矩阵：删除ReactiveMotionStep与TargetCapability两个无持久所有权fragment；TargetRegionGuidance改读boundary snapshot且零Mass遍历；FlowPreferred只保留一次FlowSample持久写回；SoftPressure MovementWork不再写SF1 ProposedMovement桥。Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8759–8762覆盖T7/T8/T2/T6，能力、安全、同步、可见实例及性能门均通过。
 - [x] [COMPUTED][HIGH] 第二十五切片已删除SF1 ProposedMovement/ObstacleConstraint两个中间fragment；MovementWork与ObstacleConstraint均为零Mass遍历并通过prepared POD交换，8763 SF1 Single保持golden Flow与障碍安全，8765/8766 T2/T6无回退。
 - [x] [COMPUTED][HIGH] 8763曾出现correction interval位置误差p95=`26.745cm`；第二十七切片已由8770修复到`0.064cm`，该项不再是开放失败。
-- [ ] [COMPUTED][HIGH] SF1 Cohort 500回归8764在Round前触发`Ensure !IsBunchTooLarge`并未完成client readiness；500网络启动门未通过，不能列为能力或架构验收通过。
+- [x] [COMPUTED][HIGH] 历史8764的500实体单属性bunch失败已由紧凑Agent NetSerialize、128项渐进FastArray和有界correction可靠批次关闭；8215客户端完成500实体基线、5块连续correction与5轮Checkpoint，未出现bunch过大或revision gap。
 - [x] [COMPUTED][HIGH] 第二十六切片把Facing历史settle事实并入BoundaryGather，FacingFinalize由3次Mass遍历降为2次；全量预验证与唯一原子提交仍独立。Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105及8767–8769 SF1/T2/T6回归通过。
 - [x] [COMPUTED][HIGH] 第二十七切片已把fixed-step correction history/replay扩展到SF1。8770 snapshot hit/miss/mismatch=`36/0/0`，correction interval位置误差p95=`0.064cm`、checkpoint p95=`0.008cm`，Flow golden hash与路线/障碍结果不变；Development、DebugGame、MassCrowd 15/15、CrowdDemo 106/106通过。
 - [x] [COMPUTED][HIGH] 阶段 B 通过 Development Editor `-DisableUnity`、`MassCrowd` 17/17与完整`CrowdDemo` 106/106自动化；新增 Core POD/capability/lifecycle fixture 与 Runtime AgentFacts 映射测试。

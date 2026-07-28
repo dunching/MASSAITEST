@@ -9,7 +9,8 @@
 
 enum class ECrowdBoundaryTaskStage : uint8
 {
-  BusinessPrepare = 0,
+  BehaviorSource = 0,
+  BusinessPrepare,
   SharedFlow,
   TargetTopology,
   TargetDemand,
@@ -124,15 +125,40 @@ struct MASSCROWDRUNTIME_API FCrowdBoundaryPatchDescriptor
   bool operator==(const FCrowdBoundaryPatchDescriptor& Other) const = default;
 };
 
+struct MASSCROWDRUNTIME_API FCrowdBehaviorBoundaryMetadata
+{
+  uint32 SourceSetRevision = 0;
+  uint64 SourceSetHash = 0;
+  uint64 CommandBatchHash = 0;
+  uint64 ResolvedChannelHash = 0;
+
+  bool IsEmpty() const
+  {
+    return SourceSetRevision == 0
+      && SourceSetHash == 0
+      && CommandBatchHash == 0
+      && ResolvedChannelHash == 0;
+  }
+
+  bool IsValid() const
+  {
+    return SourceSetRevision != 0
+      && SourceSetHash != 0
+      && CommandBatchHash != 0
+      && ResolvedChannelHash != 0;
+  }
+};
+
 // Versioned, product-level description of every write that belongs to one
 // fixed-step transaction. Demo-owned payloads stay outside Runtime; only their
 // stable descriptors participate in the authoritative plan hash.
 struct MASSCROWDRUNTIME_API FCrowdBoundaryCommitEnvelope
 {
-  static constexpr uint32 CurrentVersion = 2;
+  static constexpr uint32 CurrentVersion = 3;
 
   uint32 Version = CurrentVersion;
   FCrowdMassCommitPlan MovementPlan;
+  FCrowdBehaviorBoundaryMetadata Behavior;
   TArray<FCrowdBoundaryPatchDescriptor> Patches;
   uint64 StableHash = 0;
   bool bValid = false;
@@ -196,7 +222,8 @@ public:
     const FCrowdMassBoundarySnapshot& Snapshot,
     const FCrowdMassCommitPlan& MovementPlan,
     TConstArrayView<FCrowdBoundaryPreparedPatch> PreparedPatches,
-    FCrowdBoundaryCommitEnvelope& OutEnvelope);
+    FCrowdBoundaryCommitEnvelope& OutEnvelope,
+    const FCrowdBehaviorBoundaryMetadata* BehaviorMetadata = nullptr);
 
   bool SealMergedEnvelope(
     const FCrowdBoundaryCommitEnvelope& Envelope,

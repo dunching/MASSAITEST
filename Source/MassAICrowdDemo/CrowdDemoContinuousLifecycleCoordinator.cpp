@@ -872,7 +872,8 @@ FCrowdAgentFacts ACrowdDemoContinuousLifecycleCoordinator::MakeAgentFacts(
   Facts.FactionKey = static_cast<uint32>(SlotIndex % 2) + 1;
   Facts.CapabilitySet.Add(ECrowdCapability::Move);
   Facts.CapabilitySet.Add(ECrowdCapability::Wander);
-  Facts.ActiveBehavior = ECrowdActiveBehavior::Wander;
+  Facts.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::Wander);
   Facts.MovementProfileKey = 1;
   Facts.PresentationProfileKey = 1;
   Facts.RuntimeState = 1;

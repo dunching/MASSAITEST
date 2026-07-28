@@ -60,7 +60,7 @@ namespace
     Hash = FoldRef64(Hash, Facts.StableEntityRef);
     Hash = Fold64(Hash, Facts.FactionKey);
     Hash = Fold64(Hash, Facts.CapabilitySet.Bits);
-    Hash = Fold64(Hash, static_cast<uint8>(Facts.ActiveBehavior));
+    Hash = Fold64(Hash, Facts.DerivedBehaviorLabel);
     Hash = FoldRef64(Hash, Facts.BusinessTaskRef);
     Hash = FoldRef64(Hash, Facts.TargetRef);
     Hash = Fold64(Hash, Facts.MovementProfileKey);

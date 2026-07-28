@@ -58,10 +58,20 @@ namespace
       Out.Add(static_cast<uint8>((Value >> (Byte * 8)) & 0xffu));
   }
 
+  void WriteI16(TArray<uint8>& Out, const int16 Value)
+  {
+    WriteU16(Out, static_cast<uint16>(Value));
+  }
+
   void WriteU64(TArray<uint8>& Out, const uint64 Value)
   {
     for (int32 Byte = 0; Byte < 8; ++Byte)
       Out.Add(static_cast<uint8>((Value >> (Byte * 8)) & 0xffull));
+  }
+
+  void WriteI64(TArray<uint8>& Out, const int64 Value)
+  {
+    WriteU64(Out, static_cast<uint64>(Value));
   }
 
   void WriteI32(TArray<uint8>& Out, const int32 Value)
@@ -131,6 +141,22 @@ namespace
       return true;
     }
 
+    bool ReadI16(int16& Out)
+    {
+      uint16 Value = 0;
+      if (!ReadU16(Value)) return false;
+      Out = static_cast<int16>(Value);
+      return true;
+    }
+
+    bool ReadI64(int64& Out)
+    {
+      uint64 Value = 0;
+      if (!ReadU64(Value)) return false;
+      Out = static_cast<int64>(Value);
+      return true;
+    }
+
     bool ReadU64(uint64& Out)
     {
       if (Offset + 8 > Bytes.Num()) return false;
@@ -179,13 +205,37 @@ namespace
         && ReadDouble(Out.Z);
     }
 
+    bool ReadPayload(FCrowdBehaviorSourcePayload& Out)
+    {
+      Out = {};
+      if (!ReadU32(Out.SchemaId)
+        || !ReadU16(Out.Size)
+        || Out.Size > CrowdBehavior::MaxPayloadBytes
+        || Offset + Out.Size > Bytes.Num())
+        return false;
+      if (Out.Size > 0)
+      {
+        FMemory::Memcpy(Out.Bytes, Bytes.GetData() + Offset, Out.Size);
+        Offset += Out.Size;
+      }
+      return Out.IsValid();
+    }
+
     bool AtEnd() const { return Offset == Bytes.Num(); }
 
     TConstArrayView<uint8> Bytes;
     int32 Offset = 0;
   };
 
-  constexpr uint16 CodecVersion = 1;
+  void WritePayload(
+    TArray<uint8>& Out, const FCrowdBehaviorSourcePayload& Payload)
+  {
+    WriteU32(Out, Payload.SchemaId);
+    WriteU16(Out, Payload.Size);
+    Out.Append(Payload.Bytes, Payload.Size);
+  }
+
+  constexpr uint16 CodecVersion = 2;
 }
 
 bool FCrowdReplicationChannelLimits::IsValid() const
@@ -202,7 +252,7 @@ bool FCrowdReplicationChannelLimits::IsValid() const
 uint64 FCrowdReplicationTransport::CalculateReliableRecordHash(
   const FCrowdReliableStateRecord& Record)
 {
-  uint64 Hash = Fold(FnvOffset, 1);
+  uint64 Hash = Fold(FnvOffset, CodecVersion);
   Hash = Fold(Hash, Record.Sequence);
   Hash = Fold(Hash, static_cast<uint8>(Record.Kind));
   Hash = FoldRef(Hash, Record.EntityRef);
@@ -213,7 +263,7 @@ uint64 FCrowdReplicationTransport::CalculateReliableRecordHash(
 uint64 FCrowdReplicationTransport::CalculateReliableBatchHash(
   const FCrowdReliableStateBatch& Batch)
 {
-  uint64 Hash = Fold(FnvOffset, 1);
+  uint64 Hash = Fold(FnvOffset, CodecVersion);
   Hash = Fold(Hash, Batch.FirstSequence);
   Hash = Fold(Hash, Batch.Records.Num());
   for (const FCrowdReliableStateRecord& Record : Batch.Records)
@@ -224,7 +274,7 @@ uint64 FCrowdReplicationTransport::CalculateReliableBatchHash(
 uint64 FCrowdReplicationTransport::CalculateMovementCorrectionHash(
   const FCrowdMovementCorrectionRecord& Record)
 {
-  uint64 Hash = Fold(FnvOffset, 1);
+  uint64 Hash = Fold(FnvOffset, CodecVersion);
   Hash = FoldRef(Hash, Record.EntityRef);
   Hash = Fold(Hash, Record.Sequence);
   Hash = Fold(Hash, Record.FixedStepIndex);
@@ -273,7 +323,12 @@ bool FCrowdReplicationCodec::EncodeAgent(
   WriteVector(OutBytes, Record.Velocity);
   WriteFloat(OutBytes, Record.YawDegrees);
   WriteU32(OutBytes, Record.MovementProfileKey);
-  OutBytes.Add(Record.Behavior);
+  WriteU32(OutBytes, Record.CapabilityProfileKey.Value);
+  WriteU32(OutBytes, Record.CapabilityModifierRevision);
+  WriteU32(OutBytes, Record.SourceSetRevision);
+  WriteU64(OutBytes, Record.SourceSetHash);
+  WriteU64(OutBytes, Record.ResolvedBehaviorHash);
+  WriteU32(OutBytes, Record.DerivedDiagnosticLabel);
   WriteU32(OutBytes, Record.Revision);
   return true;
 }
@@ -291,9 +346,227 @@ bool FCrowdReplicationCodec::DecodeAgent(
     || !Reader.ReadVector(OutRecord.Velocity)
     || !Reader.ReadFloat(OutRecord.YawDegrees)
     || !Reader.ReadU32(OutRecord.MovementProfileKey)
-    || !Reader.ReadU8(OutRecord.Behavior)
+    || !Reader.ReadU32(OutRecord.CapabilityProfileKey.Value)
+    || !Reader.ReadU32(OutRecord.CapabilityModifierRevision)
+    || !Reader.ReadU32(OutRecord.SourceSetRevision)
+    || !Reader.ReadU64(OutRecord.SourceSetHash)
+    || !Reader.ReadU64(OutRecord.ResolvedBehaviorHash)
+    || !Reader.ReadU32(OutRecord.DerivedDiagnosticLabel)
     || !Reader.ReadU32(OutRecord.Revision)
-    || !Reader.AtEnd() || !OutRecord.EntityRef.IsValid())
+    || !Reader.AtEnd() || !OutRecord.EntityRef.IsValid()
+    || !OutRecord.CapabilityProfileKey.IsValid()
+    || OutRecord.SourceSetRevision == 0
+    || OutRecord.SourceSetHash == 0
+    || OutRecord.ResolvedBehaviorHash == 0)
+  {
+    OutRecord = {};
+    return false;
+  }
+  return true;
+}
+
+bool FCrowdReplicationCodec::EncodeBehaviorSourceCommand(
+  const FCrowdBehaviorSourceCommand& Command,
+  TArray<uint8>& OutBytes)
+{
+  OutBytes.Reset();
+  if (!Command.IsValid()) return false;
+  WriteU16(OutBytes, CodecVersion);
+  WriteI64(OutBytes, Command.EffectiveFixedStep);
+  WriteRef(OutBytes, Command.Handle.EntityRef);
+  WriteU32(OutBytes, Command.Handle.ControllerId.Value);
+  WriteU32(OutBytes, Command.Handle.SourceSequence);
+  WriteU32(OutBytes, Command.CommandSequence);
+  OutBytes.Add(static_cast<uint8>(Command.Kind));
+  WriteU32(OutBytes, Command.SourceTypeId.Value);
+  WriteI16(OutBytes, Command.Priority);
+  WriteI32(OutBytes, Command.LifetimeSteps);
+  WritePayload(OutBytes, Command.Payload);
+  return true;
+}
+
+bool FCrowdReplicationCodec::DecodeBehaviorSourceCommand(
+  const TConstArrayView<uint8> Bytes,
+  FCrowdBehaviorSourceCommand& OutCommand)
+{
+  OutCommand = {};
+  FByteReader Reader(Bytes);
+  uint16 Version = 0;
+  uint8 Kind = 0;
+  if (!Reader.ReadU16(Version) || Version != CodecVersion
+    || !Reader.ReadI64(OutCommand.EffectiveFixedStep)
+    || !Reader.ReadRef(OutCommand.Handle.EntityRef)
+    || !Reader.ReadU32(OutCommand.Handle.ControllerId.Value)
+    || !Reader.ReadU32(OutCommand.Handle.SourceSequence)
+    || !Reader.ReadU32(OutCommand.CommandSequence)
+    || !Reader.ReadU8(Kind)
+    || !Reader.ReadU32(OutCommand.SourceTypeId.Value)
+    || !Reader.ReadI16(OutCommand.Priority)
+    || !Reader.ReadI32(OutCommand.LifetimeSteps)
+    || !Reader.ReadPayload(OutCommand.Payload)
+    || !Reader.AtEnd())
+  {
+    OutCommand = {};
+    return false;
+  }
+  OutCommand.Kind =
+    static_cast<ECrowdBehaviorSourceCommandKind>(Kind);
+  if (!OutCommand.IsValid())
+  {
+    OutCommand = {};
+    return false;
+  }
+  return true;
+}
+
+bool FCrowdReplicationCodec::EncodeBehaviorSourceSet(
+  const FCrowdBehaviorSourceSetReplicationRecord& Record,
+  TArray<uint8>& OutBytes)
+{
+  OutBytes.Reset();
+  const FCrowdBehaviorSourceSet& Set = Record.SourceSet;
+  if (!Set.IsValid() || Record.ResolvedBehaviorHash == 0)
+    return false;
+  WriteU16(OutBytes, CodecVersion);
+  WriteRef(OutBytes, Set.EntityRef);
+  WriteU32(OutBytes, Set.CapabilityBinding.ProfileKey.Value);
+  WriteU32(OutBytes, Set.CapabilityBinding.ModifierRevision);
+  OutBytes.Add(Set.CapabilityBinding.ModifierCount);
+  for (uint8 Index = 0;
+    Index < Set.CapabilityBinding.ModifierCount; ++Index)
+  {
+    WriteU32(OutBytes,
+      Set.CapabilityBinding.Modifiers[Index].CapabilityId.Value);
+    OutBytes.Add(static_cast<uint8>(
+      Set.CapabilityBinding.Modifiers[Index].Operation));
+  }
+  WriteU32(OutBytes, Set.Revision);
+  WriteU64(OutBytes, Set.StableHash);
+  OutBytes.Add(static_cast<uint8>(Set.Instances.Num()));
+  for (const FCrowdBehaviorSourceInstance& Instance : Set.Instances)
+  {
+    WriteU32(OutBytes, Instance.Handle.ControllerId.Value);
+    WriteU32(OutBytes, Instance.Handle.SourceSequence);
+    WriteU32(OutBytes, Instance.SourceTypeId.Value);
+    WriteU16(OutBytes, Instance.SourceVersion);
+    WriteI16(OutBytes, Instance.Priority);
+    WriteU16(OutBytes, Instance.ExclusiveGroup);
+    WriteI64(OutBytes, Instance.StartFixedStep);
+    WriteI64(OutBytes, Instance.LastUpdateFixedStep);
+    WriteI64(OutBytes, Instance.ExpireFixedStep);
+    OutBytes.Add(static_cast<uint8>(Instance.ReplicationPolicy));
+    WritePayload(OutBytes, Instance.Payload);
+  }
+  OutBytes.Add(static_cast<uint8>(Set.ControllerCursors.Num()));
+  for (const FCrowdBehaviorControllerCursor& Cursor
+    : Set.ControllerCursors)
+  {
+    WriteU32(OutBytes, Cursor.ControllerId.Value);
+    WriteU32(OutBytes, Cursor.LastCommandSequence);
+    WriteU64(OutBytes, Cursor.LastCommandHash);
+  }
+  WriteU64(OutBytes, Record.ResolvedBehaviorHash);
+  WriteU32(OutBytes, Record.DerivedDiagnosticLabel);
+  return true;
+}
+
+bool FCrowdReplicationCodec::DecodeBehaviorSourceSet(
+  const TConstArrayView<uint8> Bytes,
+  FCrowdBehaviorSourceSetReplicationRecord& OutRecord)
+{
+  OutRecord = {};
+  FByteReader Reader(Bytes);
+  FCrowdBehaviorSourceSet& Set = OutRecord.SourceSet;
+  uint16 Version = 0;
+  uint8 ModifierCount = 0;
+  if (!Reader.ReadU16(Version) || Version != CodecVersion
+    || !Reader.ReadRef(Set.EntityRef)
+    || !Reader.ReadU32(Set.CapabilityBinding.ProfileKey.Value)
+    || !Reader.ReadU32(Set.CapabilityBinding.ModifierRevision)
+    || !Reader.ReadU8(ModifierCount)
+    || ModifierCount > CrowdBehavior::MaxCapabilityModifiers)
+    return false;
+  Set.CapabilityBinding.ModifierCount = ModifierCount;
+  for (uint8 Index = 0; Index < ModifierCount; ++Index)
+  {
+    uint8 Operation = 0;
+    if (!Reader.ReadU32(
+        Set.CapabilityBinding.Modifiers[Index].CapabilityId.Value)
+      || !Reader.ReadU8(Operation))
+    {
+      OutRecord = {};
+      return false;
+    }
+    Set.CapabilityBinding.Modifiers[Index].Operation =
+      static_cast<ECrowdCapabilityModifierOperation>(Operation);
+  }
+  uint64 EncodedSourceSetHash = 0;
+  uint8 InstanceCount = 0;
+  if (!Reader.ReadU32(Set.Revision)
+    || !Reader.ReadU64(EncodedSourceSetHash)
+    || !Reader.ReadU8(InstanceCount)
+    || InstanceCount > CrowdBehavior::MaxSourcesPerEntity)
+  {
+    OutRecord = {};
+    return false;
+  }
+  Set.Instances.Reserve(InstanceCount);
+  for (uint8 Index = 0; Index < InstanceCount; ++Index)
+  {
+    FCrowdBehaviorSourceInstance& Instance =
+      Set.Instances.AddDefaulted_GetRef();
+    Instance.Handle.EntityRef = Set.EntityRef;
+    uint8 ReplicationPolicy = 0;
+    if (!Reader.ReadU32(Instance.Handle.ControllerId.Value)
+      || !Reader.ReadU32(Instance.Handle.SourceSequence)
+      || !Reader.ReadU32(Instance.SourceTypeId.Value)
+      || !Reader.ReadU16(Instance.SourceVersion)
+      || !Reader.ReadI16(Instance.Priority)
+      || !Reader.ReadU16(Instance.ExclusiveGroup)
+      || !Reader.ReadI64(Instance.StartFixedStep)
+      || !Reader.ReadI64(Instance.LastUpdateFixedStep)
+      || !Reader.ReadI64(Instance.ExpireFixedStep)
+      || !Reader.ReadU8(ReplicationPolicy)
+      || !Reader.ReadPayload(Instance.Payload))
+    {
+      OutRecord = {};
+      return false;
+    }
+    Instance.ReplicationPolicy =
+      static_cast<ECrowdBehaviorSourceReplicationPolicy>(
+        ReplicationPolicy);
+  }
+  uint8 CursorCount = 0;
+  if (!Reader.ReadU8(CursorCount)
+    || CursorCount > CrowdBehavior::MaxControllersPerEntity)
+  {
+    OutRecord = {};
+    return false;
+  }
+  Set.ControllerCursors.Reserve(CursorCount);
+  for (uint8 Index = 0; Index < CursorCount; ++Index)
+  {
+    FCrowdBehaviorControllerCursor& Cursor =
+      Set.ControllerCursors.AddDefaulted_GetRef();
+    if (!Reader.ReadU32(Cursor.ControllerId.Value)
+      || !Reader.ReadU32(Cursor.LastCommandSequence)
+      || !Reader.ReadU64(Cursor.LastCommandHash))
+    {
+      OutRecord = {};
+      return false;
+    }
+  }
+  if (!Reader.ReadU64(OutRecord.ResolvedBehaviorHash)
+    || !Reader.ReadU32(OutRecord.DerivedDiagnosticLabel)
+    || !Reader.AtEnd())
+  {
+    OutRecord = {};
+    return false;
+  }
+  Set.RecalculateStableHash();
+  if (!Set.IsValid()
+    || Set.StableHash != EncodedSourceSetHash
+    || OutRecord.ResolvedBehaviorHash == 0)
   {
     OutRecord = {};
     return false;

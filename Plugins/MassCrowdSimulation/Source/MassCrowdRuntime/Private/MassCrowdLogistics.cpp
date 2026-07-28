@@ -1,5 +1,10 @@
 #include "MassCrowdLogistics.h"
 
+#define FnvOffset Logistics_FnvOffset
+#define FnvPrime Logistics_FnvPrime
+#define Fold Logistics_Fold
+#define FoldRef Logistics_FoldRef
+
 namespace
 {
   constexpr uint64 FnvOffset = 14695981039346656037ull;
@@ -376,3 +381,8 @@ bool FCrowdLogisticsTransactionStore::RetargetSink(
   AppliedCommitIds.Add(CommitId);
   return true;
 }
+
+#undef FoldRef
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

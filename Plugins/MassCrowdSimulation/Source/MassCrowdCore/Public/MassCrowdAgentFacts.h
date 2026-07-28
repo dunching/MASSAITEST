@@ -58,6 +58,8 @@ enum class ECrowdCapability : uint8
   Count
 };
 
+// Migration-only labels accepted by FCrowdLegacyBehaviorRecipe. Runtime
+// authority lives in the behavior source set, never in this enum.
 enum class ECrowdActiveBehavior : uint8
 {
   Idle = 0,
@@ -116,32 +118,6 @@ struct FCrowdCapabilitySet
     return Required.IsValid() && (Bits & Required.Bits) == Required.Bits;
   }
 
-  bool CanActivate(const ECrowdActiveBehavior Behavior) const
-  {
-    switch (Behavior)
-    {
-    case ECrowdActiveBehavior::Idle:
-    case ECrowdActiveBehavior::Dead:
-      return true;
-    case ECrowdActiveBehavior::Wander:
-      return Has(ECrowdCapability::Wander);
-    case ECrowdActiveBehavior::MoveTo:
-      return Has(ECrowdCapability::MoveTo);
-    case ECrowdActiveBehavior::Pursue:
-      return Has(ECrowdCapability::Pursue);
-    case ECrowdActiveBehavior::HaulPickup:
-    case ECrowdActiveBehavior::HaulDeliver:
-      return Has(ECrowdCapability::Haul);
-    case ECrowdActiveBehavior::Attack:
-      return Has(ECrowdCapability::Attack);
-    case ECrowdActiveBehavior::Guard:
-      return Has(ECrowdCapability::Guard);
-    case ECrowdActiveBehavior::Flee:
-      return Has(ECrowdCapability::Flee);
-    default:
-      return false;
-    }
-  }
 };
 
 struct FCrowdAgentFacts
@@ -149,7 +125,8 @@ struct FCrowdAgentFacts
   FCrowdStableEntityRef StableEntityRef;
   uint32 FactionKey = 0;
   FCrowdCapabilitySet CapabilitySet;
-  ECrowdActiveBehavior ActiveBehavior = ECrowdActiveBehavior::Idle;
+  // Non-authoritative numeric label for telemetry and migration diagnostics.
+  uint32 DerivedBehaviorLabel = 0;
   FCrowdStableEntityRef BusinessTaskRef;
   FCrowdStableEntityRef TargetRef;
   uint32 MovementProfileKey = 0;
@@ -160,8 +137,6 @@ struct FCrowdAgentFacts
   {
     return StableEntityRef.IsValid()
       && CapabilitySet.IsValid()
-      && ActiveBehavior < ECrowdActiveBehavior::Count
-      && CapabilitySet.CanActivate(ActiveBehavior)
       && (BusinessTaskRef.IsUnset() || BusinessTaskRef.IsValid())
       && (TargetRef.IsUnset() || TargetRef.IsValid());
   }

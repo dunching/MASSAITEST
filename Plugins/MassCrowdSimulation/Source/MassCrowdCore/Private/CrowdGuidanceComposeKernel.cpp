@@ -1,5 +1,12 @@
 #include "CrowdGuidanceComposeKernel.h"
 
+#define FnvOffset GuidanceCompose_FnvOffset
+#define FnvPrime GuidanceCompose_FnvPrime
+#define Fold GuidanceCompose_Fold
+#define FoldSigned GuidanceCompose_FoldSigned
+#define FoldVector GuidanceCompose_FoldVector
+#define Priority GuidanceCompose_Priority
+
 namespace
 {
   constexpr uint32 FnvOffset = 2166136261u;
@@ -126,3 +133,10 @@ FCrowdComposedGuidance FCrowdGuidanceComposeKernel::Compose(
   Result.StableHash = Hash;
   return Result;
 }
+
+#undef Priority
+#undef FoldVector
+#undef FoldSigned
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

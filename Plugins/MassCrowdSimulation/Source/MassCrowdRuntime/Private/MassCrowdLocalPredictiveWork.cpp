@@ -1,5 +1,7 @@
 #include "MassCrowdLocalPredictiveWork.h"
 
+#define Fold LocalPredictiveWork_Fold
+
 namespace
 {
   uint32 Fold(uint32 Hash, const uint32 Value)
@@ -47,3 +49,5 @@ FCrowdMassLocalPredictiveWorkOutput FCrowdMassLocalPredictiveWork::Solve(
   Output.bCompleted = true;
   return Output;
 }
+
+#undef Fold
