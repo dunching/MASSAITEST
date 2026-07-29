@@ -1,5 +1,7 @@
 # MassAI Crowd 通用粒子运动设计
 
+[COMPUTED][HIGH] 文档状态：本文件保留粒子运动设计与2026-07-15历史证据。Behavior Source权威、Capability Profile现状和B0–B7关闭状态由`EntityBehaviorSourceArchitecture.md`接管；本文件中带日期的“尚未实现”不得作为当前全局状态。
+
 ## 1. 职责
 
 [COMPUTED][HIGH] 当前生产链由 Shared Flow 决定世界空间宏观路线，Target Influence Distance Band + Polar Region Transport 决定目标附近的共享区域运输 Preferred，Particle负责局部Soft压力与Hard/Environment安全；该链已在8417 Static与8418 Moving Small进入生产验证。
@@ -68,7 +70,7 @@ DesiredVelocity
 
 [COMPUTED][HIGH] 8417 Static与8418 Moving Small均达到inside band=`20/20`、Plan/Guidance unrouted=0、Particle四类安全违规=0、rollback miss/mismatch=0及五类Transport hash双端一致；该证据只覆盖统一半径、统一Mobility和统一Target距离配置。
 
-## 7. 异构粒子与能力边界（尚未实现）
+## 7. 异构粒子与能力边界（2026-07-15设计缺口快照）
 
 [INFERRED][HIGH] SmallLight、Standard和LargeHeavy继续使用相同Particle kernel；差异只来自逐实体PhysicalRadius、HardSafetyGap、SoftMargin和Mobility输入，不增加职业专用碰撞规则。
 

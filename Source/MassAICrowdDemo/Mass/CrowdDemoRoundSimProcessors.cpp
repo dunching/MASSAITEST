@@ -2682,6 +2682,7 @@ void UCrowdDemoRoundCombatBoundaryProcessor::Execute(
     Agent.LifecycleSerial = Identity.LifecycleSerial;
     Agent.FormationIndex = Fact.FormationIndex;
     Agent.Position = Base.State.Position;
+    Agent.Velocity = Base.State.Velocity;
     Agent.RadiusCm = Fact.RadiusCm;
     Agent.bAlive = Fact.Stats.bAlive;
     Agent.Combat = MakeCombatAgentState(
@@ -2727,8 +2728,14 @@ void UCrowdDemoRoundCombatBoundaryProcessor::Execute(
   TArray<FCrowdDemoHitFact> HitFacts;
   FCrowdDemoProjectileStepSummary ProjectileSummary;
   TArray<FCrowdDemoProjectileVisualEvent> ProjectileEvents;
-  TArray<FCrowdDemoProjectileState> NextProjectiles =
-    Pipeline->GetPreparedProjectiles();
+  TArray<FCrowdDemoProjectileState> NextProjectiles;
+  if (!Pipeline->BuildProjectileSnapshot(NextProjectiles))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMassProjectileGatherFailed step=%d"),
+      Pipeline->GetCurrentFixedStepIndex());
+    return;
+  }
   if (bProjectileCombat)
   {
     TArray<FCrowdDemoProjectileSpawnRequest> Requests;
@@ -2741,10 +2748,30 @@ void UCrowdDemoRoundCombatBoundaryProcessor::Execute(
       FixedStep, Pipeline->GetCurrentStepEndServerTimeSeconds(),
       ProjectileSettings, Requests, NextProjectiles,
       ProjectileEvents, ProjectileSummary);
+    TArray<FCrowdImpactFact> Impacts;
+    TArray<FCrowdProjectileEnvironmentBody> EnvironmentBodies;
+    const FCrowdDemoFlowObstacleCollisionSnapshotProvider
+      EnvironmentProvider(
+        Pipeline->GetRules().FlowFieldConfig);
+    if (!EnvironmentProvider.Gather(
+        FixedStep, EnvironmentBodies))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoProjectileEnvironmentGatherFailed step=%d"),
+        FixedStep);
+      return;
+    }
     FCrowdDemoProjectileKernel::AdvanceProjectiles(
       FixedStep, Pipeline->GetCurrentStepEndServerTimeSeconds(),
       Pipeline->GetCurrentFixedStepSeconds(), ProjectileSettings, Agents,
-      NextProjectiles, HitFacts, ProjectileEvents, ProjectileSummary);
+      EnvironmentBodies, NextProjectiles, Impacts,
+      ProjectileEvents, ProjectileSummary);
+    TArray<FCrowdHitFact> ResolvedHits;
+    const FCrowdDemoHostHitResolver HitResolver(ProjectileSettings);
+    if (!HitResolver.Resolve(Impacts, ResolvedHits)
+      || !FCrowdDemoHostHitResolver::BuildDemoHitFacts(
+        ResolvedHits, HitFacts))
+      ProjectileSummary.bValid = false;
   }
 
   if (bShowcase)
@@ -3959,6 +3986,22 @@ bool UCrowdDemoRoundFacingFinalizeProcessor::ApplyPreparedCommit(
       Pipeline.GetCurrentFixedStepIndex(), ResolvedTargets.Num());
     return false;
   }
+  if (CombatCommit && CombatCommit->bProjectileCombat)
+  {
+    int32 RequiredActiveProjectiles = 0;
+    for (const FCrowdDemoProjectileState& Projectile
+      : CombatCommit->Projectiles)
+      RequiredActiveProjectiles += Projectile.bActive ? 1 : 0;
+    if (!Pipeline.PrepareProjectileFinalApply(
+        RequiredActiveProjectiles))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoMassProjectileCapacityRejected step=%d required=%d"),
+        Pipeline.GetCurrentFixedStepIndex(),
+        RequiredActiveProjectiles);
+      return false;
+    }
+  }
   const double ValidateMilliseconds =
     (FPlatformTime::Seconds() - ValidateStartSeconds) * 1000.0;
   if (ValidateMilliseconds > 2.0)
@@ -4139,22 +4182,14 @@ bool UCrowdDemoRoundFacingFinalizeProcessor::ApplyPreparedCommit(
   Pipeline.ApplyPreparedBoundaryResourcePatches();
   if (CombatCommit)
   {
-    Pipeline.GetPreparedProjectiles() = CombatCommit->Projectiles;
     if (CombatCommit->bProjectileCombat)
     {
+      Pipeline.ApplyProjectileFinalState(
+        CombatCommit->Projectiles);
       Pipeline.RecordProjectileStep(
         CombatCommit->ProjectileSummary,
         CombatCommit->ProjectileEvents);
       Pipeline.RecordProjectileHitResponse(CombatCommit->HitSummary);
-      if (UWorld* World = Pipeline.GetWorld())
-      {
-        if (auto* MassSubsystem =
-          World->GetSubsystem<UCrowdDemoMassSubsystem>())
-        {
-          MassSubsystem->MirrorProjectileStates(
-            Pipeline.GetPreparedProjectiles());
-        }
-      }
     }
     Pipeline.ResetPreparedCombatBoundaryCommit();
     Pipeline.LogStageOnce(

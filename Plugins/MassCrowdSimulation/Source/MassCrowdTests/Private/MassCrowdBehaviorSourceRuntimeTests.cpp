@@ -1,4 +1,5 @@
 #include "MassCrowdBehaviorSourceRuntime.h"
+#include "MassCrowdTestBehaviorProvider.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -51,7 +52,8 @@ bool FCrowdBehaviorSourceRuntimeAtomicTest::RunTest(
   const FString& Parameters)
 {
   FCrowdBehaviorSourceRuntime Runtime;
-  TestTrue(TEXT("builtins initialize"), Runtime.InitializeBuiltins());
+  TestTrue(TEXT("providers initialize"),
+    Runtime.InitializeFromRegisteredProviders());
   const FCrowdStableEntityRef EntityRef{1, 100, 1};
   TestTrue(TEXT("entity registers"),
     Runtime.RegisterEntity(EntityRef, MakeLegacyBinding()));
@@ -129,44 +131,6 @@ bool FCrowdBehaviorSourceRuntimeAtomicTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-  FCrowdLegacyBehaviorRecipeTest,
-  "MassCrowd.BehaviorSource.LegacyRecipe",
-  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCrowdLegacyBehaviorRecipeTest::RunTest(
-  const FString& Parameters)
-{
-  FCrowdBehaviorSourceRuntime Runtime;
-  TestTrue(TEXT("runtime initializes"), Runtime.InitializeBuiltins());
-  const FCrowdStableEntityRef EntityRef{1, 200, 1};
-  TestTrue(TEXT("legacy entity registers"),
-    Runtime.RegisterEntity(EntityRef, MakeLegacyBinding()));
-
-  FCrowdRuntimeBehaviorContext Context;
-  Context.AgentFacts.StableEntityRef = EntityRef;
-  Context.RequestedBehavior = ECrowdActiveBehavior::MoveTo;
-  Context.FixedStepIndex = 20;
-  Context.TargetLocation = FVector(300.0, 20.0, 0.0);
-  Context.InteractionQuantity = 1;
-  uint32 CommandSequence = 1;
-  uint32 SourceSequence = 1;
-  TArray<FCrowdBehaviorSourceCommand> Commands;
-  TestTrue(TEXT("legacy behavior expands into source recipe"),
-    FCrowdLegacyBehaviorRecipe::BuildTransitionCommands(
-      Context, *Runtime.FindSourceSet(EntityRef), {9},
-      CommandSequence, SourceSequence, Commands));
-  TestEqual(TEXT("movement and facing are independent sources"),
-    Commands.Num(), 2);
-  TestTrue(TEXT("primary command is stable source type"),
-    Commands[0].SourceTypeId
-      == CrowdBuiltinSourceTypeIds::MoveToSink);
-  TestTrue(TEXT("secondary command is facing source"),
-    Commands[1].SourceTypeId
-      == CrowdBuiltinSourceTypeIds::FaceMovement);
-  return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdBehaviorSourcePreparedValidationTest,
   "MassCrowd.BehaviorSource.PreparedValidation",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -175,7 +139,8 @@ bool FCrowdBehaviorSourcePreparedValidationTest::RunTest(
   const FString& Parameters)
 {
   FCrowdBehaviorSourceRuntime Runtime;
-  TestTrue(TEXT("runtime initializes"), Runtime.InitializeBuiltins());
+  TestTrue(TEXT("runtime initializes"),
+    Runtime.InitializeFromRegisteredProviders());
   const FCrowdStableEntityRef EntityRef{1, 300, 1};
   const FCrowdCapabilityBinding Binding = MakeLegacyBinding();
   TestTrue(TEXT("entity registers"),

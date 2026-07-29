@@ -8,6 +8,7 @@ struct FCrowdSpatialSafetyAgent
   FCrowdStableEntityRef EntityRef;
   FVector Position = FVector::ZeroVector;
   float RadiusCm = 0.0f;
+  uint32 NavLayer = 0;
 };
 
 class MASSCROWDRUNTIME_API FCrowdSpatialSafetyIndex
@@ -24,6 +25,11 @@ public:
   bool Update(
     const FCrowdStableEntityRef& EntityRef,
     const FVector& NewPosition);
+  bool Update(
+    const FCrowdStableEntityRef& EntityRef,
+    const FVector& NewPosition,
+    uint32 NewNavLayer);
+  float CalculateMinimumSeparationCm() const;
   int32 Num() const { return AgentsByRef.Num(); }
 
 private:

@@ -50,6 +50,7 @@ public:
   {
     return ServerState.RequiresNewBaseline();
   }
+  void RequestResync() { ServerRequestResync(); }
   uint32 GetCompletedBaselineRevision() const
   {
     return CompletedBaselineRevision;
@@ -118,7 +119,7 @@ private:
   bool bClientReady = false;
 
   double NowSeconds() const;
-  void HandleClientFailure();
+  void HandleClientFailure(const TCHAR* Stage);
   void SendReliable(const FCrowdReliableStateRecord& Record);
   void SendReliableBatch(
     TConstArrayView<FCrowdReliableStateRecord> Records);

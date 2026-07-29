@@ -112,6 +112,7 @@ FCrowdMassMovementPipelineWorkOutput FCrowdMassMovementPipelineWork::Run(
       FCrowdLocalPredictiveAgent& Agent =
         LocalInput.Agents.AddDefaulted_GetRef();
       Agent.AgentId = Record.Identity.AgentId;
+      Agent.InteractionLayer = Overlay.InteractionLayer;
       Agent.Position = FVector2f(
         Record.State.Position.X, Record.State.Position.Y);
       Agent.Velocity = FVector2f(

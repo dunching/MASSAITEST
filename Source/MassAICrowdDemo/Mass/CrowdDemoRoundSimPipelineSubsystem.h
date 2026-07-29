@@ -657,10 +657,11 @@ public:
       && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
   }
 
-  TArray<FCrowdDemoProjectileState>& GetPreparedProjectiles()
-  { return PreparedProjectiles; }
-  const TArray<FCrowdDemoProjectileState>& GetPreparedProjectiles() const
-  { return PreparedProjectiles; }
+  bool BuildProjectileSnapshot(
+    TArray<FCrowdDemoProjectileState>& OutProjectiles) const;
+  bool PrepareProjectileFinalApply(int32 RequiredActiveCount);
+  void ApplyProjectileFinalState(
+    TConstArrayView<FCrowdDemoProjectileState> Projectiles);
   void RecordProjectileStep(
     const FCrowdDemoProjectileStepSummary& Summary,
     TConstArrayView<FCrowdDemoProjectileVisualEvent> Events);
@@ -1084,7 +1085,6 @@ private:
   FCrowdDemoPreparedParticleDiagnosticCommit PreparedParticleDiagnosticCommit;
   TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> PreparedOpenSpawnBoundaryFacts;
   int32 PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
-  TArray<FCrowdDemoProjectileState> PreparedProjectiles;
   TArray<FCrowdDemoProjectileVisualEvent> OutgoingProjectileVisualEvents;
   FCrowdDemoProjectileMetrics ProjectileMetrics;
   TMap<int32, int32> FormationIndexByAgentId;

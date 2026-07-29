@@ -12,6 +12,19 @@ class AActor;
 class UCrowdDemoClientVisualMassProcessor;
 class UCrowdDemoRoundSimFixedStepPipelineProcessor;
 
+struct MASSAICROWDDEMO_API FCrowdDemoMassProjectileStoreAdapter
+{
+  static void ApplyValidated(
+    FMassEntityManager& EntityManager,
+    TConstArrayView<FMassEntityHandle> ProjectileEntities,
+    TConstArrayView<struct FCrowdDemoProjectileState> Projectiles);
+
+  static bool Gather(
+    const FMassEntityManager& EntityManager,
+    TConstArrayView<FMassEntityHandle> ProjectileEntities,
+    TArray<struct FCrowdDemoProjectileState>& OutProjectiles);
+};
+
 USTRUCT()
 struct FCrowdDemoMassSpawnResult
 {
@@ -65,7 +78,12 @@ public:
   bool RecycleTrackedAgent(
     const FCrowdStableEntityRef& EntityRef,
     FCrowdStableEntityRef& OutReplacementRef);
-  void MirrorProjectileStates(TConstArrayView<struct FCrowdDemoProjectileState> Projectiles);
+  bool PrepareProjectileCapacity(int32 RequiredCount);
+  void ApplyProjectileStates(
+    TConstArrayView<struct FCrowdDemoProjectileState> Projectiles);
+  bool GatherProjectileStates(
+    TArray<struct FCrowdDemoProjectileState>& OutProjectiles) const;
+  void ResetProjectileStates();
   int32 GetTrackedProjectilePoolCount() const { return TrackedProjectiles.Num(); }
 
 private:
@@ -84,7 +102,7 @@ private:
 
   FVector MakeSpawnLocation(int32 AgentIndex, int32 AgentCount) const;
   void DestroyTrackedAgents();
-  void SpawnProjectilePool(FMassEntityManager& EntityManager, int32 PoolSize);
+  void GrowProjectilePool(FMassEntityManager& EntityManager, int32 AddCount);
   void InitializeAgentFragments(FMassEntityManager& EntityManager, FMassEntityHandle Entity, int32 AgentIndex, int32 AgentCount) const;
   void RegisterRoundSimProcessors();
   void UnregisterRoundSimProcessors();

@@ -26,6 +26,7 @@ public class MassAICrowdDemo : ModuleRules
       "MassCrowdCore",
       "MassCrowdNetworking",
       "MassCrowdPresentation",
+      "MassCrowdStandardSources",
       "MassReplication",
       "MassSpawner",
       "NetCore"

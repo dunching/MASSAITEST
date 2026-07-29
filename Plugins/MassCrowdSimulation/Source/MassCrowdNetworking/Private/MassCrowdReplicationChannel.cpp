@@ -221,6 +221,22 @@ namespace
       return Out.IsValid();
     }
 
+    bool ReadState(FCrowdBehaviorSourceState& Out)
+    {
+      Out = {};
+      if (!ReadU32(Out.SchemaId)
+        || !ReadU16(Out.Size)
+        || Out.Size > CrowdBehavior::MaxStateBytes
+        || Offset + Out.Size > Bytes.Num())
+        return false;
+      if (Out.Size > 0)
+      {
+        FMemory::Memcpy(Out.Bytes, Bytes.GetData() + Offset, Out.Size);
+        Offset += Out.Size;
+      }
+      return Out.IsValid();
+    }
+
     bool AtEnd() const { return Offset == Bytes.Num(); }
 
     TConstArrayView<uint8> Bytes;
@@ -235,7 +251,16 @@ namespace
     Out.Append(Payload.Bytes, Payload.Size);
   }
 
+  void WriteState(
+    TArray<uint8>& Out, const FCrowdBehaviorSourceState& State)
+  {
+    WriteU32(Out, State.SchemaId);
+    WriteU16(Out, State.Size);
+    Out.Append(State.Bytes, State.Size);
+  }
+
   constexpr uint16 CodecVersion = 2;
+  constexpr uint16 BehaviorCodecVersion = 3;
 }
 
 bool FCrowdReplicationChannelLimits::IsValid() const
@@ -366,12 +391,16 @@ bool FCrowdReplicationCodec::DecodeAgent(
 }
 
 bool FCrowdReplicationCodec::EncodeBehaviorSourceCommand(
-  const FCrowdBehaviorSourceCommand& Command,
+  const FCrowdBehaviorSourceCommandReplicationRecord& Record,
   TArray<uint8>& OutBytes)
 {
   OutBytes.Reset();
-  if (!Command.IsValid()) return false;
-  WriteU16(OutBytes, CodecVersion);
+  if (!Record.IsValid()) return false;
+  const FCrowdBehaviorSourceCommand& Command = Record.Command;
+  WriteU16(OutBytes, BehaviorCodecVersion);
+  WriteU64(OutBytes, Record.RegistryHash);
+  WriteU64(OutBytes, Record.ContextSchemaHash);
+  WriteU32(OutBytes, Record.StateSchemaId);
   WriteI64(OutBytes, Command.EffectiveFixedStep);
   WriteRef(OutBytes, Command.Handle.EntityRef);
   WriteU32(OutBytes, Command.Handle.ControllerId.Value);
@@ -387,13 +416,21 @@ bool FCrowdReplicationCodec::EncodeBehaviorSourceCommand(
 
 bool FCrowdReplicationCodec::DecodeBehaviorSourceCommand(
   const TConstArrayView<uint8> Bytes,
-  FCrowdBehaviorSourceCommand& OutCommand)
+  const uint64 ExpectedRegistryHash,
+  const uint64 ExpectedContextSchemaHash,
+  FCrowdBehaviorSourceCommandReplicationRecord& OutRecord)
 {
-  OutCommand = {};
+  OutRecord = {};
+  FCrowdBehaviorSourceCommand& OutCommand = OutRecord.Command;
   FByteReader Reader(Bytes);
   uint16 Version = 0;
   uint8 Kind = 0;
-  if (!Reader.ReadU16(Version) || Version != CodecVersion
+  if (!Reader.ReadU16(Version) || Version != BehaviorCodecVersion
+    || !Reader.ReadU64(OutRecord.RegistryHash)
+    || !Reader.ReadU64(OutRecord.ContextSchemaHash)
+    || !Reader.ReadU32(OutRecord.StateSchemaId)
+    || OutRecord.RegistryHash != ExpectedRegistryHash
+    || OutRecord.ContextSchemaHash != ExpectedContextSchemaHash
     || !Reader.ReadI64(OutCommand.EffectiveFixedStep)
     || !Reader.ReadRef(OutCommand.Handle.EntityRef)
     || !Reader.ReadU32(OutCommand.Handle.ControllerId.Value)
@@ -406,14 +443,14 @@ bool FCrowdReplicationCodec::DecodeBehaviorSourceCommand(
     || !Reader.ReadPayload(OutCommand.Payload)
     || !Reader.AtEnd())
   {
-    OutCommand = {};
+    OutRecord = {};
     return false;
   }
   OutCommand.Kind =
     static_cast<ECrowdBehaviorSourceCommandKind>(Kind);
-  if (!OutCommand.IsValid())
+  if (!OutRecord.IsValid())
   {
-    OutCommand = {};
+    OutRecord = {};
     return false;
   }
   return true;
@@ -425,9 +462,15 @@ bool FCrowdReplicationCodec::EncodeBehaviorSourceSet(
 {
   OutBytes.Reset();
   const FCrowdBehaviorSourceSet& Set = Record.SourceSet;
-  if (!Set.IsValid() || Record.ResolvedBehaviorHash == 0)
+  if (!Record.IsValid())
     return false;
-  WriteU16(OutBytes, CodecVersion);
+  for (const FCrowdBehaviorSourceInstance& Instance : Set.Instances)
+    if (Instance.ReplicationPolicy
+      != ECrowdBehaviorSourceReplicationPolicy::Predictable)
+      return false;
+  WriteU16(OutBytes, BehaviorCodecVersion);
+  WriteU64(OutBytes, Record.RegistryHash);
+  WriteU64(OutBytes, Record.ContextSchemaHash);
   WriteRef(OutBytes, Set.EntityRef);
   WriteU32(OutBytes, Set.CapabilityBinding.ProfileKey.Value);
   WriteU32(OutBytes, Set.CapabilityBinding.ModifierRevision);
@@ -456,6 +499,7 @@ bool FCrowdReplicationCodec::EncodeBehaviorSourceSet(
     WriteI64(OutBytes, Instance.ExpireFixedStep);
     OutBytes.Add(static_cast<uint8>(Instance.ReplicationPolicy));
     WritePayload(OutBytes, Instance.Payload);
+    WriteState(OutBytes, Instance.State);
   }
   OutBytes.Add(static_cast<uint8>(Set.ControllerCursors.Num()));
   for (const FCrowdBehaviorControllerCursor& Cursor
@@ -472,6 +516,8 @@ bool FCrowdReplicationCodec::EncodeBehaviorSourceSet(
 
 bool FCrowdReplicationCodec::DecodeBehaviorSourceSet(
   const TConstArrayView<uint8> Bytes,
+  const uint64 ExpectedRegistryHash,
+  const uint64 ExpectedContextSchemaHash,
   FCrowdBehaviorSourceSetReplicationRecord& OutRecord)
 {
   OutRecord = {};
@@ -479,7 +525,11 @@ bool FCrowdReplicationCodec::DecodeBehaviorSourceSet(
   FCrowdBehaviorSourceSet& Set = OutRecord.SourceSet;
   uint16 Version = 0;
   uint8 ModifierCount = 0;
-  if (!Reader.ReadU16(Version) || Version != CodecVersion
+  if (!Reader.ReadU16(Version) || Version != BehaviorCodecVersion
+    || !Reader.ReadU64(OutRecord.RegistryHash)
+    || !Reader.ReadU64(OutRecord.ContextSchemaHash)
+    || OutRecord.RegistryHash != ExpectedRegistryHash
+    || OutRecord.ContextSchemaHash != ExpectedContextSchemaHash
     || !Reader.ReadRef(Set.EntityRef)
     || !Reader.ReadU32(Set.CapabilityBinding.ProfileKey.Value)
     || !Reader.ReadU32(Set.CapabilityBinding.ModifierRevision)
@@ -527,7 +577,8 @@ bool FCrowdReplicationCodec::DecodeBehaviorSourceSet(
       || !Reader.ReadI64(Instance.LastUpdateFixedStep)
       || !Reader.ReadI64(Instance.ExpireFixedStep)
       || !Reader.ReadU8(ReplicationPolicy)
-      || !Reader.ReadPayload(Instance.Payload))
+      || !Reader.ReadPayload(Instance.Payload)
+      || !Reader.ReadState(Instance.State))
     {
       OutRecord = {};
       return false;
@@ -564,7 +615,7 @@ bool FCrowdReplicationCodec::DecodeBehaviorSourceSet(
     return false;
   }
   Set.RecalculateStableHash();
-  if (!Set.IsValid()
+  if (!OutRecord.IsValid()
     || Set.StableHash != EncodedSourceSetHash
     || OutRecord.ResolvedBehaviorHash == 0)
   {
@@ -887,6 +938,9 @@ FCrowdReplicationClientState::AcceptReliableBatch(
     || Batch.StableHash
       != FCrowdReplicationTransport::CalculateReliableBatchHash(Batch))
   {
+    UE_LOG(LogTemp, Error,
+      TEXT("MassCrowdReplicationAcceptReliableReject reason=batch_contract first=%llu count=%d next=%llu"),
+      Batch.FirstSequence, Batch.Records.Num(), NextReliableSequence);
     RequireResync();
     return ECrowdReplicationAcceptResult::ResyncRequired;
   }
@@ -904,6 +958,9 @@ FCrowdReplicationClientState::AcceptReliableBatch(
       || Record.StableHash
         != FCrowdReplicationTransport::CalculateReliableRecordHash(Record))
     {
+      UE_LOG(LogTemp, Error,
+        TEXT("MassCrowdReplicationAcceptReliableReject reason=record_contract sequence=%llu index=%d next=%llu"),
+        Record.Sequence, Index, CandidateNextSequence);
       RequireResync();
       return ECrowdReplicationAcceptResult::ResyncRequired;
     }
@@ -912,6 +969,9 @@ FCrowdReplicationClientState::AcceptReliableBatch(
       const uint64* AppliedHash = AppliedReliableHashes.Find(Record.Sequence);
       if (!AppliedHash || *AppliedHash != Record.StableHash)
       {
+        UE_LOG(LogTemp, Error,
+          TEXT("MassCrowdReplicationAcceptReliableReject reason=duplicate_hash sequence=%llu next=%llu"),
+          Record.Sequence, CandidateNextSequence);
         RequireResync();
         return ECrowdReplicationAcceptResult::ResyncRequired;
       }
@@ -920,6 +980,9 @@ FCrowdReplicationClientState::AcceptReliableBatch(
     bAllDuplicate = false;
     if (Record.Sequence != CandidateNextSequence)
     {
+      UE_LOG(LogTemp, Error,
+        TEXT("MassCrowdReplicationAcceptReliableReject reason=sequence_gap sequence=%llu expected=%llu batch_first=%llu"),
+        Record.Sequence, CandidateNextSequence, Batch.FirstSequence);
       RequireResync();
       return ECrowdReplicationAcceptResult::ResyncRequired;
     }
@@ -932,6 +995,14 @@ FCrowdReplicationClientState::AcceptReliableBatch(
         || (Record.EntityRef.LifecycleSerial > *LatestLifecycle
           && Record.Kind != ECrowdReliableStateKind::Spawn))
       {
+        UE_LOG(LogTemp, Error,
+          TEXT("MassCrowdReplicationAcceptReliableReject reason=lifecycle kind=%u provider=%u entity=%llu serial=%u latest=%u sequence=%llu"),
+          static_cast<uint8>(Record.Kind),
+          Record.EntityRef.ProviderId,
+          Record.EntityRef.StableEntityId,
+          Record.EntityRef.LifecycleSerial,
+          *LatestLifecycle,
+          Record.Sequence);
         RequireResync();
         return ECrowdReplicationAcceptResult::ResyncRequired;
       }
@@ -944,6 +1015,10 @@ FCrowdReplicationClientState::AcceptReliableBatch(
     return ECrowdReplicationAcceptResult::Duplicate;
   if (PendingApplyFrames.Num() >= Limits.MaxPendingApplyFrames)
   {
+    UE_LOG(LogTemp, Error,
+      TEXT("MassCrowdReplicationAcceptReliableReject reason=pending_frames count=%d limit=%d sequence=%llu"),
+      PendingApplyFrames.Num(), Limits.MaxPendingApplyFrames,
+      Batch.FirstSequence);
     RequireResync();
     return ECrowdReplicationAcceptResult::ResyncRequired;
   }

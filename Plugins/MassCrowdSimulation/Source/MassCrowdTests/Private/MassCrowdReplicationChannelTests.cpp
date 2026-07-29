@@ -239,19 +239,40 @@ bool FMassCrowdReplicationCodecTest::RunTest(
   SourceCommand.LifetimeSteps = 12;
   const uint32 SourcePayloadValue = 77;
   SourceCommand.Payload.Set(5, SourcePayloadValue);
-  FCrowdBehaviorSourceCommand DecodedSourceCommand;
+  constexpr uint64 RegistryHash = 0x1122334455667788ull;
+  constexpr uint64 ContextSchemaHash = 0x8877665544332211ull;
+  FCrowdBehaviorSourceCommandReplicationRecord SourceCommandRecord;
+  SourceCommandRecord.RegistryHash = RegistryHash;
+  SourceCommandRecord.ContextSchemaHash = ContextSchemaHash;
+  SourceCommandRecord.StateSchemaId = 7001;
+  SourceCommandRecord.Command = SourceCommand;
+  FCrowdBehaviorSourceCommandReplicationRecord DecodedSourceCommand;
   TestTrue(TEXT("source command codec encodes"),
     FCrowdReplicationCodec::EncodeBehaviorSourceCommand(
-      SourceCommand, Bytes));
+      SourceCommandRecord, Bytes));
   TestTrue(TEXT("source command codec round trips"),
     FCrowdReplicationCodec::DecodeBehaviorSourceCommand(
-      Bytes, DecodedSourceCommand));
+      Bytes, RegistryHash, ContextSchemaHash, DecodedSourceCommand));
   TestEqual(TEXT("source handle preserves controller identity"),
-    DecodedSourceCommand.Handle.ControllerId.Value, 7u);
+    DecodedSourceCommand.Command.Handle.ControllerId.Value, 7u);
   TestEqual(TEXT("source command sequence round trips"),
-    DecodedSourceCommand.CommandSequence, 9u);
+    DecodedSourceCommand.Command.CommandSequence, 9u);
+  TestEqual(TEXT("state schema accompanies source command"),
+    DecodedSourceCommand.StateSchemaId, 7001u);
+  TestFalse(TEXT("registry mismatch requests command resync"),
+    FCrowdReplicationCodec::DecodeBehaviorSourceCommand(
+      Bytes, RegistryHash + 1, ContextSchemaHash, DecodedSourceCommand));
+  TArray<uint8> V2SourceCommand = Bytes;
+  V2SourceCommand[0] = 2;
+  V2SourceCommand[1] = 0;
+  TestFalse(TEXT("v2 behavior command is explicitly rejected"),
+    FCrowdReplicationCodec::DecodeBehaviorSourceCommand(
+      V2SourceCommand, RegistryHash, ContextSchemaHash,
+      DecodedSourceCommand));
 
   FCrowdBehaviorSourceSetReplicationRecord SourceSetRecord;
+  SourceSetRecord.RegistryHash = RegistryHash;
+  SourceSetRecord.ContextSchemaHash = ContextSchemaHash;
   SourceSetRecord.SourceSet.EntityRef = {1, 42, 3};
   SourceSetRecord.SourceSet.CapabilityBinding.ProfileKey = {1};
   SourceSetRecord.SourceSet.Revision = 2;
@@ -267,6 +288,8 @@ bool FMassCrowdReplicationCodecTest::RunTest(
   Instance.ReplicationPolicy =
     ECrowdBehaviorSourceReplicationPolicy::Predictable;
   Instance.Payload = SourceCommand.Payload;
+  const uint32 PersistentStateValue = 1234;
+  Instance.State.Set(7001, PersistentStateValue);
   SourceSetRecord.SourceSet.ControllerCursors.Add(
     {{7}, 9, SourceCommand.CalculateStableHash()});
   SourceSetRecord.SourceSet.RecalculateStableHash();
@@ -278,13 +301,28 @@ bool FMassCrowdReplicationCodecTest::RunTest(
       SourceSetRecord, Bytes));
   TestTrue(TEXT("source set baseline codec round trips"),
     FCrowdReplicationCodec::DecodeBehaviorSourceSet(
-      Bytes, DecodedSourceSet));
+      Bytes, RegistryHash, ContextSchemaHash, DecodedSourceSet));
   TestEqual(TEXT("source set hash round trips"),
     DecodedSourceSet.SourceSet.StableHash,
     SourceSetRecord.SourceSet.StableHash);
   TestEqual(TEXT("resolved behavior hash round trips"),
     DecodedSourceSet.ResolvedBehaviorHash,
     SourceSetRecord.ResolvedBehaviorHash);
+  uint32 DecodedPersistentState = 0;
+  TestTrue(TEXT("persistent source state round trips"),
+    DecodedSourceSet.SourceSet.Instances[0].State.Get(
+      7001, DecodedPersistentState));
+  TestEqual(TEXT("persistent state remains exact"),
+    DecodedPersistentState, PersistentStateValue);
+  TestFalse(TEXT("context schema mismatch requests source-set resync"),
+    FCrowdReplicationCodec::DecodeBehaviorSourceSet(
+      Bytes, RegistryHash, ContextSchemaHash + 1, DecodedSourceSet));
+  TArray<uint8> V2SourceSet = Bytes;
+  V2SourceSet[0] = 2;
+  V2SourceSet[1] = 0;
+  TestFalse(TEXT("v2 behavior source set is explicitly rejected"),
+    FCrowdReplicationCodec::DecodeBehaviorSourceSet(
+      V2SourceSet, RegistryHash, ContextSchemaHash, DecodedSourceSet));
 
   FCrowdTaskReplicationRecord Task{
     {2, 1, 1}, {2, 2, 1}, {2, 3, 1}, {2, 4, 1},

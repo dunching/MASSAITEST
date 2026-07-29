@@ -20,6 +20,10 @@ public:
     FCrowdBoundaryTaskBody&& Body,
     bool bRequireOffGameThread = true);
 
+  bool AddTask(
+    FCrowdBoundaryTaskDescriptor Descriptor,
+    FCrowdBoundaryTaskBody&& Body);
+
   bool Dispatch();
   bool WaitAndDrain();
 
@@ -48,7 +52,6 @@ public:
 
 private:
   FCrowdMassBoundaryOrchestrator Orchestrator;
-  FCrowdMassBoundarySnapshot Snapshot;
   FCrowdBoundaryCommitEnvelope CommitEnvelope;
   bool bDispatched = false;
   bool bWaited = false;

@@ -1,7 +1,16 @@
 #include "Misc/AutomationTest.h"
 
 #include "Algo/Reverse.h"
+#include "CrowdDemoBehaviorSourceProvider.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "Mass/CrowdDemoMassFragments.h"
+#include "Mass/CrowdDemoMassSubsystem.h"
 #include "Mass/CrowdDemoProjectileKernel.h"
+#include "MassCommonFragments.h"
+#include "MassCrowdBehaviorSourceRuntime.h"
+#include "MassCrowdSpatialSafety.h"
+#include "MassEntityManager.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -155,6 +164,46 @@ namespace
       Simulation.DuplicateHit += HitSummary.DuplicateHitCount;
       Simulation.DamageApplied += HitSummary.AppliedHitCount;
     }
+  }
+
+  namespace R7FixtureContract
+  {
+    inline constexpr FCrowdCapabilityProfileKey ProfileKey{60001u};
+    inline constexpr FCrowdBehaviorSourceTypeId SourceTypeId{60001u};
+    inline constexpr FCrowdBehaviorContextTypeId ContextTypeId{60001u};
+    inline constexpr uint32 PayloadSchemaId = 60001u;
+
+    struct FPayload
+    {
+      FVector DesiredVelocity = FVector::ZeroVector;
+      FCrowdStableEntityRef TargetRef;
+      uint64 CommitId = 0;
+    };
+
+    struct FContext
+    {
+      int32 VelocityScaleQ15 = CrowdBehavior::FullQ15Weight;
+    };
+
+    static_assert(std::is_trivially_copyable_v<FPayload>);
+    static_assert(std::is_trivially_copyable_v<FContext>);
+  }
+
+  UWorld* FindR7MassTestWorld()
+  {
+    if (!GEngine)
+      return nullptr;
+    for (const FWorldContext& Context : GEngine->GetWorldContexts())
+    {
+      if (Context.World()
+        && (Context.WorldType == EWorldType::Editor
+          || Context.WorldType == EWorldType::Game
+          || Context.WorldType == EWorldType::PIE))
+      {
+        return Context.World();
+      }
+    }
+    return nullptr;
   }
 }
 
@@ -389,6 +438,683 @@ bool FCrowdDemoProjectileRollbackReplayTest::RunTest(const FString& Parameters)
   TestEqual(TEXT("replay projectile state hash"),
     FCrowdDemoProjectileKernel::HashProjectileStates(Replay.Projectiles),
     FCrowdDemoProjectileKernel::HashProjectileStates(Control.Projectiles));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoProjectileRelativeSweepTest,
+  "CrowdDemo.Combat.T8.RelativeSweepMovingTarget",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoProjectileRelativeSweepTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoRangedCombatSettings Settings = MakeProjectileSettings();
+  Settings.ProjectileSpeedCmps = 100.0f;
+  Settings.ProjectileLifetimeFixedSteps = 10;
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary Summary;
+  const FCrowdDemoProjectileSpawnRequest Request = MakeSpawnRequest(
+    9001, 1, FVector::ZeroVector, FVector(100.0f, 0.0f, 0.0f));
+  FCrowdDemoProjectileKernel::SpawnProjectiles(
+    1, 0.0f, Settings, MakeArrayView(&Request, 1),
+    Projectiles, Events, Summary);
+  FCrowdDemoRangedCombatAgent Source =
+    MakeRangedAgent(1, 0, FVector(-1000.0f, 0.0f, 0.0f));
+  FCrowdDemoRangedCombatAgent Moving =
+    MakeRangedAgent(2, 1, FVector(50.0f, 200.0f, 0.0f));
+  Moving.Velocity = FVector(0.0f, 400.0f, 0.0f);
+  const FCrowdDemoRangedCombatAgent Agents[] = {Source, Moving};
+  TArray<FCrowdDemoHitFact> Hits;
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    1, 1.0f, 1.0f, Settings, Agents,
+    Projectiles, Hits, Events, Summary);
+  TestEqual(TEXT("relative sweep detects crossing moving target"),
+    Hits.Num(), 1);
+  TestEqual(TEXT("moving target identity remains deterministic"),
+    Hits[0].TargetAgentId, 2);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoProjectileSpatialBroadphaseTest,
+  "CrowdDemo.Combat.T8.SpatialBroadphase",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoProjectileSpatialBroadphaseTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoRangedCombatSettings Settings = MakeProjectileSettings();
+  Settings.ProjectileSpeedCmps = 1000.0f;
+  Settings.ProjectileLifetimeFixedSteps = 10;
+  TArray<FCrowdDemoRangedCombatAgent> Agents;
+  Agents.Add(MakeRangedAgent(
+    1, 0, FVector(-1000.0f, 0.0f, 0.0f)));
+  Agents.Add(MakeRangedAgent(
+    2, 1, FVector(500.0f, 0.0f, 0.0f)));
+  for (int32 Index = 0; Index < 998; ++Index)
+  {
+    Agents.Add(MakeRangedAgent(
+      Index + 3, Index + 2,
+      FVector(
+        10000.0f + Index * 300.0f,
+        10000.0f, 3000.0f)));
+  }
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary Summary;
+  const FCrowdDemoProjectileSpawnRequest Request = MakeSpawnRequest(
+    9002, 1, FVector::ZeroVector,
+    FVector(1000.0f, 0.0f, 0.0f));
+  FCrowdDemoProjectileKernel::SpawnProjectiles(
+    1, 0.0f, Settings, MakeArrayView(&Request, 1),
+    Projectiles, Events, Summary);
+  TArray<FCrowdDemoHitFact> Hits;
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    1, 1.0f, 1.0f, Settings, Agents,
+    Projectiles, Hits, Events, Summary);
+  TestEqual(TEXT("near target still hits"), Hits.Num(), 1);
+  TestTrue(TEXT("broadphase avoids projectile times agent scan"),
+    Summary.SweepTestCount < 50);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoProjectileHostResolverTest,
+  "CrowdDemo.Combat.T8.GenericImpactHostResolver",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoProjectileHostResolverTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoRangedCombatSettings Settings = MakeProjectileSettings();
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary Summary;
+  const FCrowdDemoProjectileSpawnRequest Request = MakeSpawnRequest(
+    9010, 1, FVector::ZeroVector,
+    FVector(6000.0f, 0.0f, 0.0f));
+  FCrowdDemoProjectileKernel::SpawnProjectiles(
+    1, 0.0f, Settings, MakeArrayView(&Request, 1),
+    Projectiles, Events, Summary);
+  const FCrowdDemoRangedCombatAgent Agents[] = {
+    MakeRangedAgent(1, 0, FVector(-1000.0f, 0.0f, 0.0f)),
+    MakeRangedAgent(2, 1, FVector(500.0f, 0.0f, 0.0f))};
+  TArray<FCrowdImpactFact> Impacts;
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    1, 1.0f, 0.1f, Settings, Agents,
+    Projectiles, Impacts, Events, Summary);
+  TestEqual(TEXT("worker emits one neutral impact"), Impacts.Num(), 1);
+  TestTrue(TEXT("neutral impact validates"),
+    Impacts.Num() == 1 && Impacts[0].IsValid());
+
+  TArray<FCrowdHitFact> Hits;
+  const FCrowdDemoHostHitResolver Resolver(Settings);
+  TestTrue(TEXT("host resolver accepts neutral impacts"),
+    Resolver.Resolve(Impacts, Hits));
+  TestEqual(TEXT("host resolver emits one generic hit"), Hits.Num(), 1);
+  TestTrue(TEXT("generic hit validates"),
+    Hits.Num() == 1 && Hits[0].IsValid());
+
+  TArray<FCrowdDemoHitFact> DemoFacts;
+  TestTrue(TEXT("demo adapter consumes generic hit"),
+    FCrowdDemoHostHitResolver::BuildDemoHitFacts(Hits, DemoFacts));
+  TestEqual(TEXT("single demo damage fact"), DemoFacts.Num(), 1);
+  TestEqual(TEXT("target lifecycle survives both adapters"),
+    DemoFacts[0].TargetLifecycleSerial, 1);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoProjectileEnvironmentPriorityTest,
+  "CrowdDemo.Combat.T8.EnvironmentWallPriority",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoProjectileEnvironmentPriorityTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoRangedCombatSettings Settings = MakeProjectileSettings();
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary Summary;
+  const FCrowdDemoProjectileSpawnRequest Request = MakeSpawnRequest(
+    9020, 1, FVector::ZeroVector,
+    FVector(6000.0f, 0.0f, 0.0f));
+  FCrowdDemoProjectileKernel::SpawnProjectiles(
+    1, 0.0f, Settings, MakeArrayView(&Request, 1),
+    Projectiles, Events, Summary);
+  const FCrowdDemoRangedCombatAgent Agents[] = {
+    MakeRangedAgent(1, 0, FVector(-1000.0f, 0.0f, 0.0f)),
+    MakeRangedAgent(2, 1, FVector(500.0f, 0.0f, 0.0f))};
+  FCrowdDemoSharedFlowFieldConfig FlowConfig;
+  FCrowdDemoSharedFlowObstacleSpec& WallSpec =
+    FlowConfig.ObstacleSpecs.AddDefaulted_GetRef();
+  WallSpec.ObstacleId = 77;
+  WallSpec.Center = FVector(210.0f, 0.0f, 0.0f);
+  WallSpec.Extent = FVector(10.0f, 100.0f, 0.0f);
+  TArray<FCrowdProjectileEnvironmentBody> EnvironmentBodies;
+  const FCrowdDemoFlowObstacleCollisionSnapshotProvider
+    EnvironmentProvider(FlowConfig);
+  TestTrue(TEXT("demo host gathers flow obstacle snapshot"),
+    EnvironmentProvider.Gather(1, EnvironmentBodies));
+  TestEqual(TEXT("one stable environment body"),
+    EnvironmentBodies.Num(), 1);
+  TArray<FCrowdImpactFact> Impacts;
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    1, 1.0f, 0.1f, Settings, Agents,
+    EnvironmentBodies, Projectiles,
+    Impacts, Events, Summary);
+  TestEqual(TEXT("wall produces one earliest impact"),
+    Impacts.Num(), 1);
+  TestFalse(TEXT("environment impact is not a target hit"),
+    Impacts[0].Target.IsValid());
+  TestEqual(TEXT("environment profile survives sweep"),
+    Impacts[0].CollisionProfileId, 1u);
+  TestEqual(TEXT("environment impact counted"),
+    Summary.EnvironmentImpactCount, 1);
+  TArray<FCrowdHitFact> Hits;
+  const FCrowdDemoHostHitResolver Resolver(Settings);
+  TestTrue(TEXT("host resolver accepts environment impact"),
+    Resolver.Resolve(Impacts, Hits));
+  TestEqual(TEXT("wall never becomes gameplay damage"),
+    Hits.Num(), 0);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoProjectilePierceTest,
+  "CrowdDemo.Combat.T8.PierceStableMultiImpact",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoProjectilePierceTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoRangedCombatSettings Settings = MakeProjectileSettings();
+  Settings.ProjectilePierceCount = 1;
+  Settings.ProjectileLifetimeFixedSteps = 10;
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary Summary;
+  const FCrowdDemoProjectileSpawnRequest Request = MakeSpawnRequest(
+    9030, 1, FVector::ZeroVector,
+    FVector(6000.0f, 0.0f, 0.0f));
+  FCrowdDemoProjectileKernel::SpawnProjectiles(
+    1, 0.0f, Settings, MakeArrayView(&Request, 1),
+    Projectiles, Events, Summary);
+  const FCrowdDemoRangedCombatAgent Agents[] = {
+    MakeRangedAgent(1, 0, FVector(-1000.0f, 0.0f, 0.0f)),
+    MakeRangedAgent(2, 1, FVector(200.0f, 0.0f, 0.0f)),
+    MakeRangedAgent(3, 2, FVector(500.0f, 0.0f, 0.0f))};
+  TArray<FCrowdImpactFact> Impacts;
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    1, 1.0f, 0.1f, Settings, Agents,
+    Projectiles, Impacts, Events, Summary);
+  TestEqual(TEXT("first target is pierced"), Impacts.Num(), 1);
+  TestTrue(TEXT("projectile remains active after one pierce"),
+    Projectiles.Num() == 1 && Projectiles[0].bActive);
+  TestEqual(TEXT("pierce budget is consumed"),
+    Projectiles[0].RemainingPierces, 0);
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    2, 1.1f, 0.1f, Settings, Agents,
+    Projectiles, Impacts, Events, Summary);
+  TestEqual(TEXT("one projectile emits two stable impacts"),
+    Impacts.Num(), 2);
+  TestFalse(TEXT("projectile retires after second target"),
+    Projectiles[0].bActive);
+  TestTrue(TEXT("impact ordering preserves distinct targets"),
+    Impacts[0].Target.StableEntityId == 2
+      && Impacts[1].Target.StableEntityId == 3);
+
+  TArray<FCrowdHitFact> Hits;
+  const FCrowdDemoHostHitResolver Resolver(Settings);
+  TestTrue(TEXT("host resolver accepts multiple impacts per projectile"),
+    Resolver.Resolve(Impacts, Hits));
+  TestEqual(TEXT("both pierced targets receive one hit"), Hits.Num(), 2);
+  TArray<FCrowdImpactFact> DuplicateImpacts = Impacts;
+  DuplicateImpacts.Add(Impacts[0]);
+  TestFalse(TEXT("exact replayed impact is rejected"),
+    Resolver.Resolve(DuplicateImpacts, Hits));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoProjectileFactionAndLayerTest,
+  "CrowdDemo.Combat.T8.FactionAndNavLayerFiltering",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoProjectileFactionAndLayerTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoRangedCombatSettings Settings = MakeProjectileSettings();
+  Settings.ProjectileLifetimeFixedSteps = 10;
+  FCrowdDemoProjectileSpawnRequest Request = MakeSpawnRequest(
+    9040, 1, FVector::ZeroVector,
+    FVector(6000.0f, 0.0f, 0.0f));
+  Request.SourceFactionId = 7;
+  Request.NavLayer = 2;
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary Summary;
+  FCrowdDemoProjectileKernel::SpawnProjectiles(
+    1, 0.0f, Settings, MakeArrayView(&Request, 1),
+    Projectiles, Events, Summary);
+  FCrowdDemoRangedCombatAgent Friendly =
+    MakeRangedAgent(2, 1, FVector(150.0f, 0.0f, 0.0f));
+  Friendly.FactionId = 7;
+  Friendly.NavLayer = 2;
+  FCrowdDemoRangedCombatAgent OtherLayer =
+    MakeRangedAgent(3, 2, FVector(250.0f, 0.0f, 0.0f));
+  OtherLayer.FactionId = 8;
+  OtherLayer.NavLayer = 1;
+  FCrowdDemoRangedCombatAgent Hostile =
+    MakeRangedAgent(4, 3, FVector(500.0f, 0.0f, 0.0f));
+  Hostile.FactionId = 8;
+  Hostile.NavLayer = 2;
+  const FCrowdDemoRangedCombatAgent Agents[] = {
+    MakeRangedAgent(1, 0, FVector(-1000.0f, 0.0f, 0.0f)),
+    Friendly, OtherLayer, Hostile};
+  FCrowdProjectileEnvironmentBody OtherLayerWall;
+  OtherLayerWall.StableSurfaceId = 99;
+  OtherLayerWall.NavLayer = 1;
+  OtherLayerWall.BoundsMin = FVector(300.0f, -100.0f, -100.0f);
+  OtherLayerWall.BoundsMax = FVector(320.0f, 100.0f, 100.0f);
+  OtherLayerWall.CollisionProfileId = 2;
+  OtherLayerWall.EffectProfileId = 3;
+  OtherLayerWall.RecalculateStableHash();
+  TArray<FCrowdImpactFact> Impacts;
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    1, 1.0f, 0.1f, Settings, Agents,
+    MakeArrayView(&OtherLayerWall, 1), Projectiles,
+    Impacts, Events, Summary);
+  TestEqual(TEXT("only same-layer hostile is hit"),
+    Impacts.Num(), 1);
+  TestEqual(TEXT("friendly and other layer are filtered"),
+    Impacts[0].Target.StableEntityId, 4ull);
+  TestEqual(TEXT("projectile collision profile is authoritative"),
+    Impacts[0].CollisionProfileId, 1u);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoR7ThirdPartySourceMassProjectileGateTest,
+  "CrowdDemo.Integration.R7.ThirdPartySourceMassProjectile20",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoR7ThirdPartySourceMassProjectileGateTest::RunTest(
+  const FString& Parameters)
+{
+  constexpr int32 EntityCount = 20;
+  constexpr int32 ProjectileCount = 10;
+  constexpr int64 FixedStep = 50;
+
+  FCrowdBehaviorSourceRuntime SourceRuntime;
+  if (!TestTrue(TEXT("registry includes external providers"),
+      SourceRuntime.InitializeFromRegisteredProviders()))
+    return false;
+  if (!TestNotNull(TEXT("fixture source is unknown to core but registered"),
+      SourceRuntime.GetEvaluators().FindSpec(
+        R7FixtureContract::SourceTypeId)))
+    return false;
+
+  for (int32 Index = 0; Index < EntityCount; ++Index)
+  {
+    const FCrowdStableEntityRef EntityRef{
+      77, static_cast<uint64>(Index + 1), 1};
+    FCrowdCapabilityBinding Binding;
+    Binding.ProfileKey = CrowdDemoBehaviorSchemas::FullProfile;
+    Binding.ModifierRevision = 1;
+    Binding.ModifierCount = 1;
+    Binding.Modifiers[0] = {
+      {60001u}, ECrowdCapabilityModifierOperation::Add};
+    if (!TestTrue(TEXT("fixture entity registers"),
+        SourceRuntime.RegisterEntity(EntityRef, Binding)))
+      return false;
+
+    FCrowdBehaviorEntityEvaluationContext Evaluation;
+    Evaluation.EntityRef = EntityRef;
+    Evaluation.FixedStepIndex = FixedStep;
+    Evaluation.Position = FVector(
+      (Index % 10) * 150.0, Index < 10 ? -200.0 : 0.0, 60.0);
+    Evaluation.Facing = FVector::YAxisVector;
+    FCrowdBehaviorContextRecord& Record =
+      Evaluation.Records.AddDefaulted_GetRef();
+    R7FixtureContract::FContext Extra;
+    if (!TestTrue(TEXT("fixture context serializes"),
+        Record.Set(R7FixtureContract::ContextTypeId, 1, Extra)))
+      return false;
+    Evaluation.RecalculateStableHash();
+    if (!TestTrue(TEXT("fixture context enters production runtime"),
+        SourceRuntime.SetEvaluationContext(Evaluation)))
+      return false;
+
+    R7FixtureContract::FPayload Payload;
+    Payload.DesiredVelocity = FVector(0.0, 120.0, 0.0);
+    Payload.TargetRef = {
+      77, static_cast<uint64>((Index + 10) % EntityCount + 1), 1};
+    Payload.CommitId = 0x71000000ull + Index;
+    FCrowdBehaviorSourceCommand Start;
+    Start.EffectiveFixedStep = FixedStep;
+    Start.Handle = {EntityRef, {0x7100u}, 1};
+    Start.CommandSequence = 1;
+    Start.Kind = ECrowdBehaviorSourceCommandKind::Start;
+    Start.SourceTypeId = R7FixtureContract::SourceTypeId;
+    if (!TestTrue(TEXT("fixture payload serializes"),
+        Start.Payload.Set(
+          R7FixtureContract::PayloadSchemaId, Payload))
+      || !TestTrue(TEXT("fixture start queues"),
+        SourceRuntime.QueueCommand(Start)))
+      return false;
+
+    const auto QueueSource = [&](
+      const FCrowdBehaviorSourceTypeId TypeId,
+      const uint32 SourceSequence,
+      const uint32 CommandSequence,
+      const FCrowdBehaviorSourcePayload& SourcePayload,
+      const int32 LifetimeSteps = 0)
+    {
+      FCrowdBehaviorSourceCommand Command;
+      Command.EffectiveFixedStep = FixedStep;
+      Command.Handle = {
+        EntityRef, {0x7200u}, SourceSequence};
+      Command.CommandSequence = CommandSequence;
+      Command.Kind = ECrowdBehaviorSourceCommandKind::Start;
+      Command.SourceTypeId = TypeId;
+      Command.LifetimeSteps = LifetimeSteps;
+      Command.Payload = SourcePayload;
+      return SourceRuntime.QueueCommand(Command);
+    };
+
+    FCrowdMoveToLocationPayload MovementPayload;
+    MovementPayload.TargetLocation = FVector3f(
+      Evaluation.Position.X, 1000.0f, Evaluation.Position.Z);
+    MovementPayload.MaximumSpeedCmps = 120.0f;
+    MovementPayload.AcceptanceRadiusCm = 10.0f;
+    FCrowdBehaviorSourcePayload MovementSourcePayload;
+    if (!TestTrue(TEXT("persistent movement source queues"),
+        MovementSourcePayload.Set(
+          CrowdStandardSources::PayloadSchema(
+            CrowdStandardSources::MoveToLocation),
+          MovementPayload)
+        && QueueSource(
+          CrowdStandardSources::MoveToLocation,
+          1, 1, MovementSourcePayload)))
+      return false;
+
+    FCrowdDemoBehaviorSourcePayload CargoPayload;
+    CargoPayload.PrimaryId = 7201;
+    CargoPayload.SecondaryId = 1;
+    FCrowdBehaviorSourcePayload CargoSourcePayload;
+    if (!TestTrue(TEXT("persistent cargo source queues"),
+        CargoSourcePayload.Set(
+          CrowdDemoBehaviorSchemas::Standard, CargoPayload)
+        && QueueSource(
+          CrowdDemoSourceTypeIds::CarryCargo,
+          2, 2, CargoSourcePayload)))
+      return false;
+
+    FCrowdDemoBehaviorSourcePayload BusinessPayload;
+    BusinessPayload.TargetRef = Payload.TargetRef;
+    BusinessPayload.CommitId = 0x72000000ull + Index;
+    BusinessPayload.PrimaryId =
+      CrowdDemoBehaviorAdapterIds::CargoPickup;
+    BusinessPayload.SecondaryId = 7202;
+    BusinessPayload.Quantity = 1;
+    FCrowdBehaviorSourcePayload BusinessSourcePayload;
+    if (!TestTrue(TEXT("persistent business source queues"),
+        BusinessSourcePayload.Set(
+          CrowdDemoBehaviorSchemas::Standard, BusinessPayload)
+        && QueueSource(
+          CrowdDemoSourceTypeIds::PickupInteraction,
+          3, 3, BusinessSourcePayload)))
+      return false;
+
+    FCrowdTimedImpulsePayload HitReactionPayload;
+    HitReactionPayload.InitialVelocity =
+      FVector3f(-300.0f, 0.0f, 0.0f);
+    HitReactionPayload.DecayMode =
+      ECrowdImpulseDecayMode::Linear;
+    FCrowdBehaviorSourcePayload HitReactionSourcePayload;
+    if (!TestTrue(TEXT("temporary suppression source queues"),
+        HitReactionSourcePayload.Set(
+          CrowdStandardSources::PayloadSchema(
+            CrowdStandardSources::TimedImpulse),
+          HitReactionPayload)
+        && QueueSource(
+          CrowdStandardSources::TimedImpulse,
+          4, 4, HitReactionSourcePayload, 2)))
+      return false;
+  }
+
+  FCrowdBehaviorPreparedBoundary PreparedSources;
+  if (!TestTrue(TEXT("20 fixture sources prepare together"),
+      SourceRuntime.PrepareBoundary(
+        FixedStep, PreparedSources))
+    || !TestTrue(TEXT("fixture boundary validates"),
+      SourceRuntime.ValidatePrepared(PreparedSources)))
+    return false;
+  TestEqual(TEXT("all 20 fixture entities resolve"),
+    PreparedSources.Entities.Num(), EntityCount);
+  for (const FCrowdBehaviorPreparedEntity& Entity :
+    PreparedSources.Entities)
+  {
+    TestEqual(TEXT("fixture, task, cargo, business and suppression coexist"),
+      Entity.StagedSourceSet.Instances.Num(), 5);
+    TestTrue(TEXT("temporary source overrides resolved movement"),
+      Entity.ResolvedChannels.DesiredVelocity.X < 0.0
+        && !Entity.ResolvedChannels.bMovementLocked);
+    TestTrue(TEXT("persistent business remains resolved under suppression"),
+      Entity.ResolvedChannels.Business.Num() >= 2);
+    TestTrue(TEXT("persistent presentation remains resolved under suppression"),
+      Entity.ResolvedChannels.Presentation.Num() >= 2);
+  }
+
+  UWorld* TestWorld = FindR7MassTestWorld();
+  if (!TestNotNull(TEXT("Mass test world is available"), TestWorld))
+    return false;
+  TSharedRef<FMassEntityManager> EntityManager =
+    MakeShared<FMassEntityManager>(TestWorld);
+  EntityManager->SetDebugName(
+    TEXT("R7ThirdPartySourceMassProjectile20"));
+  EntityManager->Initialize();
+  EntityManager->PostInitialize();
+  const TArray<const UScriptStruct*> ProjectileTypes = {
+    FCrowdDemoMassProjectileTag::StaticStruct(),
+    FCrowdDemoMassProjectileFragment::StaticStruct(),
+    FTransformFragment::StaticStruct()};
+  const FMassArchetypeHandle ProjectileArchetype =
+    EntityManager->CreateArchetype(ProjectileTypes);
+  if (!TestTrue(TEXT("Mass projectile archetype is valid"),
+      ProjectileArchetype.IsValid()))
+    return false;
+  TArray<FMassEntityHandle> ProjectileEntities;
+  for (int32 Index = 0; Index < ProjectileCount; ++Index)
+    ProjectileEntities.Add(
+      EntityManager->CreateEntity(ProjectileArchetype));
+
+  FCrowdDemoRangedCombatSettings Settings = MakeProjectileSettings();
+  Settings.ProjectileLifetimeFixedSteps = 10;
+  TArray<FCrowdDemoRangedCombatAgent> Agents;
+  TArray<FCrowdDemoProjectileSpawnRequest> Requests;
+  for (int32 Lane = 0; Lane < ProjectileCount; ++Lane)
+  {
+    const FVector SourcePosition(Lane * 150.0, -200.0, 60.0);
+    const FVector TargetPosition(Lane * 150.0, 0.0, 60.0);
+    FCrowdDemoRangedCombatAgent Source =
+      MakeRangedAgent(Lane + 1, Lane, SourcePosition);
+    Source.FactionId = 1;
+    FCrowdDemoRangedCombatAgent Target =
+      MakeRangedAgent(
+        ProjectileCount + Lane + 1,
+        ProjectileCount + Lane,
+        TargetPosition);
+    Target.FactionId = 2;
+    Agents.Add(Source);
+    Agents.Add(Target);
+
+    FCrowdDemoProjectileSpawnRequest Request = MakeSpawnRequest(
+      0x710000ull + Lane,
+      static_cast<int32>(FixedStep),
+      SourcePosition,
+      FVector(0.0, 6000.0, 0.0));
+    Request.SourceAgentId = Source.AgentId;
+    Request.TargetAgentId = Target.AgentId;
+    Request.SourceFactionId = Source.FactionId;
+    Requests.Add(Request);
+  }
+
+  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary ProjectileSummary;
+  FCrowdDemoProjectileKernel::SpawnProjectiles(
+    static_cast<int32>(FixedStep),
+    FixedStep / 30.0f,
+    Settings,
+    Requests,
+    Projectiles,
+    Events,
+    ProjectileSummary);
+  TestEqual(TEXT("representative concurrent projectiles spawn"),
+    Projectiles.Num(), ProjectileCount);
+
+  FCrowdDemoMassProjectileStoreAdapter::ApplyValidated(
+    *EntityManager,
+    ProjectileEntities,
+    Projectiles);
+  TArray<FCrowdDemoProjectileState> MassSnapshot;
+  TestTrue(TEXT("Mass fragments gather authoritative projectiles"),
+    FCrowdDemoMassProjectileStoreAdapter::Gather(
+      *EntityManager,
+      ProjectileEntities,
+      MassSnapshot));
+  TestEqual(TEXT("all projectiles are represented by Mass fragments"),
+    MassSnapshot.Num(), ProjectileCount);
+  TestEqual(TEXT("Mass snapshot preserves projectile hash"),
+    FCrowdDemoProjectileKernel::HashProjectileStates(MassSnapshot),
+    FCrowdDemoProjectileKernel::HashProjectileStates(Projectiles));
+
+  TArray<FCrowdImpactFact> Impacts;
+  FCrowdDemoProjectileKernel::AdvanceProjectiles(
+    static_cast<int32>(FixedStep),
+    FixedStep / 30.0f,
+    1.0f / 30.0f,
+    Settings,
+    Agents,
+    MassSnapshot,
+    Impacts,
+    Events,
+    ProjectileSummary);
+  TestEqual(TEXT("all concurrent Mass projectiles hit once"),
+    Impacts.Num(), ProjectileCount);
+  TestEqual(TEXT("impact accounting is exact"),
+    ProjectileSummary.ImpactedCount, ProjectileCount);
+  TestTrue(TEXT("grid broadphase avoids Projectile x Agent scan"),
+    ProjectileSummary.SweepTestCount < ProjectileCount * EntityCount);
+
+  FCrowdDemoMassProjectileStoreAdapter::ApplyValidated(
+    *EntityManager,
+    ProjectileEntities,
+    MassSnapshot);
+  TArray<FCrowdDemoProjectileState> RetiredMassSnapshot;
+  TestTrue(TEXT("retired Mass projectile state gathers"),
+    FCrowdDemoMassProjectileStoreAdapter::Gather(
+      *EntityManager,
+      ProjectileEntities,
+      RetiredMassSnapshot));
+  TestEqual(TEXT("impacted projectiles leave no active authority"),
+    RetiredMassSnapshot.Num(), 0);
+
+  if (!TestTrue(TEXT("combined suppressed Source boundary commits"),
+      SourceRuntime.CommitPrepared(PreparedSources)))
+    return false;
+
+  constexpr int64 RecoveryStep = FixedStep + 3;
+  for (int32 Index = 0; Index < EntityCount; ++Index)
+  {
+    FCrowdBehaviorEntityEvaluationContext Evaluation;
+    Evaluation.EntityRef = {
+      77, static_cast<uint64>(Index + 1), 1};
+    Evaluation.FixedStepIndex = RecoveryStep;
+    Evaluation.Position = FVector(
+      (Index % 10) * 150.0, Index < 10 ? -200.0 : 0.0, 60.0);
+    Evaluation.Facing = FVector::YAxisVector;
+    FCrowdBehaviorContextRecord& Record =
+      Evaluation.Records.AddDefaulted_GetRef();
+    R7FixtureContract::FContext Extra;
+    TestTrue(TEXT("recovery fixture context serializes"),
+      Record.Set(R7FixtureContract::ContextTypeId, 1, Extra));
+    Evaluation.RecalculateStableHash();
+    if (!TestTrue(TEXT("recovery context enters runtime"),
+        SourceRuntime.SetEvaluationContext(Evaluation)))
+      return false;
+  }
+  FCrowdBehaviorPreparedBoundary RecoveredSources;
+  if (!TestTrue(TEXT("expired suppression prepares recovery"),
+      SourceRuntime.PrepareBoundary(
+        RecoveryStep, RecoveredSources))
+    || !TestTrue(TEXT("recovered boundary validates"),
+      SourceRuntime.ValidatePrepared(RecoveredSources)))
+    return false;
+  TestEqual(TEXT("all 20 entities recover"),
+    RecoveredSources.Entities.Num(), EntityCount);
+
+  TArray<FCrowdSpatialSafetyAgent> SafetyAgents;
+  for (int32 Index = 0; Index < EntityCount; ++Index)
+    SafetyAgents.Add({
+      {77, static_cast<uint64>(Index + 1), 1},
+      FVector(
+        (Index % 10) * 150.0,
+        Index < 10 ? -200.0 : 0.0,
+        60.0),
+      35.0f});
+  FCrowdSpatialSafetyIndex Safety;
+  if (!TestTrue(TEXT("movement safety stage builds for 20 entities"),
+      Safety.Build(SafetyAgents, 70.0f, 150.0f)))
+    return false;
+  int32 SafeMovementCount = 0;
+  for (const FCrowdBehaviorPreparedEntity& Entity :
+    RecoveredSources.Entities)
+  {
+    TestEqual(TEXT("only temporary suppression expires"),
+      Entity.StagedSourceSet.Instances.Num(), 4);
+    TestFalse(TEXT("movement unlocks after suppression"),
+      Entity.ResolvedChannels.bMovementLocked);
+    TestTrue(TEXT("business survives suppression recovery"),
+      Entity.ResolvedChannels.Business.Num() >= 2);
+    TestTrue(TEXT("cargo presentation survives suppression recovery"),
+      Entity.ResolvedChannels.Presentation.Num() >= 2);
+    const FCrowdSpatialSafetyAgent* Agent = SafetyAgents.FindByPredicate(
+      [&Entity](const FCrowdSpatialSafetyAgent& Candidate)
+      {
+        return Candidate.EntityRef == Entity.EntityRef;
+      });
+    if (!Agent)
+      return false;
+    const FVector Candidate = Agent->Position
+      + Entity.ResolvedChannels.DesiredVelocity
+        .GetClampedToMaxSize(500.0f) / 30.0f;
+    if (Safety.IsCandidateSafe(
+        Entity.EntityRef, Candidate, Agent->RadiusCm))
+    {
+      TestTrue(TEXT("safe movement updates safety stage"),
+        Safety.Update(Entity.EntityRef, Candidate));
+      ++SafeMovementCount;
+    }
+  }
+  TestEqual(TEXT("all recovered entities traverse movement safety stage"),
+    SafeMovementCount, EntityCount);
+  if (!TestTrue(TEXT("recovered Source boundary commits"),
+      SourceRuntime.CommitPrepared(RecoveredSources)))
+    return false;
+
+  for (int32 Index = 0; Index < EntityCount; ++Index)
+  {
+    const FCrowdBehaviorSourceSet* SourceSet =
+      SourceRuntime.FindSourceSet({
+        77, static_cast<uint64>(Index + 1), 1});
+    TestTrue(TEXT("projectile impacts and suppression preserve persistent sources"),
+      SourceSet && SourceSet->Instances.Num() == 4);
+  }
   return true;
 }
 

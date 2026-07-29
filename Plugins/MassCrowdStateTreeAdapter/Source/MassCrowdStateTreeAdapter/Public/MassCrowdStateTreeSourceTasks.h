@@ -16,7 +16,7 @@ struct FCrowdStateTreeSourceCommandRequest
   FCrowdBehaviorSourceTypeId SourceTypeId;
   int16 Priority = 0;
   int32 LifetimeSteps = 0;
-  FCrowdBuiltinBehaviorSourcePayload Payload;
+  FCrowdBehaviorSourcePayload Payload;
 };
 class MASSCROWDSTATETREEADAPTER_API FCrowdStateTreeCommandBuilder
 {
@@ -54,23 +54,9 @@ struct FCrowdStateTreeSourceCommandTaskInstanceData
   UPROPERTY(EditAnywhere, Category="Source")
   int32 LifetimeSteps = 0;
   UPROPERTY(EditAnywhere, Category="Payload")
-  FVector Vector = FVector::ZeroVector;
+  uint32 PayloadSchemaId = 0;
   UPROPERTY(EditAnywhere, Category="Payload")
-  uint32 TargetProviderId = 0;
-  UPROPERTY(EditAnywhere, Category="Payload")
-  int64 TargetStableEntityId = 0;
-  UPROPERTY(EditAnywhere, Category="Payload")
-  uint32 TargetLifecycleSerial = 0;
-  UPROPERTY(EditAnywhere, Category="Payload")
-  int64 CommitId = 0;
-  UPROPERTY(EditAnywhere, Category="Payload")
-  uint32 PrimaryId = 0;
-  UPROPERTY(EditAnywhere, Category="Payload")
-  uint32 SecondaryId = 0;
-  UPROPERTY(EditAnywhere, Category="Payload")
-  int32 Quantity = 0;
-  UPROPERTY(EditAnywhere, Category="Payload")
-  uint32 Flags = 0;
+  TArray<uint8> PayloadBytes;
 };
 
 USTRUCT(meta=(

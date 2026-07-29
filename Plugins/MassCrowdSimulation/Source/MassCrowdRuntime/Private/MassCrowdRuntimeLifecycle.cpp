@@ -204,9 +204,16 @@ bool FCrowdMassRuntimeLifecycleStore::ApplyAgentFactsCorrection(
 bool FCrowdMassRuntimeLifecycleStore::ApplyAgentFactsCorrectionsAtomic(
   const TConstArrayView<FCrowdAgentFacts> CorrectedFacts)
 {
+  if (!ValidateAgentFactsCorrections(CorrectedFacts))
+    return false;
+  ApplyValidatedAgentFactsCorrections(CorrectedFacts);
+  return true;
+}
+
+bool FCrowdMassRuntimeLifecycleStore::ValidateAgentFactsCorrections(
+  const TConstArrayView<FCrowdAgentFacts> CorrectedFacts) const
+{
   if (CorrectedFacts.IsEmpty() || !EntityManager) return false;
-  TArray<FCrowdMassBehaviorFragment*> Behaviors;
-  Behaviors.Reserve(CorrectedFacts.Num());
   FCrowdStableEntityRef PreviousRef;
   for (const FCrowdAgentFacts& Facts : CorrectedFacts)
   {
@@ -218,17 +225,32 @@ bool FCrowdMassRuntimeLifecycleStore::ApplyAgentFactsCorrectionsAtomic(
     if (!TryGetEntityHandle(Facts.StableEntityRef, Entity)) return false;
     const FCrowdMassAgentFragment* Identity =
       EntityManager->GetFragmentDataPtr<FCrowdMassAgentFragment>(Entity);
-    FCrowdMassBehaviorFragment* Behavior =
+    const FCrowdMassBehaviorFragment* Behavior =
       EntityManager->GetFragmentDataPtr<FCrowdMassBehaviorFragment>(Entity);
     if (!Identity || !Behavior
       || !(Identity->GetStableEntityRef() == Facts.StableEntityRef))
       return false;
-    Behaviors.Add(Behavior);
     PreviousRef = Facts.StableEntityRef;
   }
-  for (int32 Index = 0; Index < CorrectedFacts.Num(); ++Index)
-    Behaviors[Index]->SetAgentFacts(CorrectedFacts[Index]);
   return true;
+}
+
+void FCrowdMassRuntimeLifecycleStore::ApplyValidatedAgentFactsCorrections(
+  const TConstArrayView<FCrowdAgentFacts> CorrectedFacts)
+{
+  check(ValidateAgentFactsCorrections(CorrectedFacts));
+  for (const FCrowdAgentFacts& Facts : CorrectedFacts)
+  {
+    FMassEntityHandle Entity;
+    const bool bFound = TryGetEntityHandle(
+      Facts.StableEntityRef, Entity);
+    check(bFound);
+    FCrowdMassBehaviorFragment* Behavior =
+      EntityManager->GetFragmentDataPtr<FCrowdMassBehaviorFragment>(
+        Entity);
+    check(Behavior);
+    Behavior->SetAgentFacts(Facts);
+  }
 }
 
 void FCrowdMassRuntimeLifecycleStore::Reset()

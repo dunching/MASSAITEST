@@ -21,6 +21,7 @@ struct FCrowdLocalPredictiveSettings
 struct FCrowdLocalPredictiveAgent
 {
   int32 AgentId = INDEX_NONE;
+  uint32 InteractionLayer = 0;
   FVector2f Position = FVector2f::ZeroVector;
   FVector2f Velocity = FVector2f::ZeroVector;
   FVector2f PreferredVelocity = FVector2f::ZeroVector;

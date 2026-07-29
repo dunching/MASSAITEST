@@ -1,6 +1,6 @@
 #include "MassCrowdRuntimeBridge.h"
 
-namespace
+namespace CrowdRuntimeBridgePrivate
 {
   constexpr uint32 FnvOffset = 2166136261u;
   constexpr uint32 FnvPrime = 16777619u;
@@ -112,6 +112,8 @@ namespace
       && Record.Properties.MaximumSpeedCmps >= 0.0f;
   }
 }
+
+using namespace CrowdRuntimeBridgePrivate;
 
 void FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
   const int32 FixedStepIndex,

@@ -1,5 +1,7 @@
 # MassAI Crowd Target Influence Distance Band与Polar Region Transport设计
 
+[COMPUTED][HIGH] 文档状态：本文件保留Target Distance Band/Transport算法合同和历史运行证据。Behavior Source、Capability Profile与当前验收状态以`EntityBehaviorSourceArchitecture.md`、`FeatureChecklist.md`和`TestScenarioMatrix.md`为准；日期章节不覆盖现行状态。
+
 ## 1. 目标
 
 [INFERRED][HIGH] 使用连续、无owner的Target局部距离规则，让不同攻击距离和尺寸的普通虫子自然包围静态或移动Target。
@@ -217,7 +219,7 @@ TargetFactApply
 
 [COMPUTED][HIGH] 当前Source已实现Polar Region Topology、Demand、Aggregate Transport、PlanEpoch、Guidance、Validation、rollback和五类双端hash；旧Polar Density guidance processor已删除。
 
-[COMPUTED][HIGH] 8417 Static与8418 Moving Small已通过；DebugGame、录像、100/500和异构Capability cohort尚未运行或实现。
+[COMPUTED][HIGH] 这是2026-07-15历史状态：8417 Static与8418 Moving Small已通过，当时DebugGame、录像、100/500和异构Capability cohort尚未运行或实现；后续状态以`TestScenarioMatrix.md`为准。
 
 [INFERRED][HIGH] 后续异构虫群必须按量化CapabilityProfileKey共享cohort级区域场；尺寸/质量由Particle属性决定，攻击距离只决定terminal band，不能把Melee/Ranged身份转换成Particle碰撞优先级。
 
@@ -231,6 +233,6 @@ TargetFactApply
 
 [COMPUTED][HIGH] 当前Distance Band运行证据不包含攻击事件或真实VAT表现，不能据此标记Ranged combat通过。
 
-[COMPUTED][HIGH] T6S/T6M 尚未运行，因此内/中/外距离层的真实覆盖、Moving Target 跟随与停止后重入均保持未验收状态。
+[COMPUTED][HIGH] 本段是2026-07-15历史状态：当时T6S/T6M尚未运行。后续T6S与T6M技术门已经运行，当前结果和仍缺的人工审片以`TestScenarioMatrix.md`为准。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

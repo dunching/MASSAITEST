@@ -1,5 +1,9 @@
 # MassAI 远程攻击、VAT 与受击响应设计
 
+[COMPUTED][HIGH] 文档状态：本文件保留T7/T8业务、VAT和静止目标Projectile证据，以及entity-native Projectile迁移前的历史审计。Behavior Source、通用插件和当前阶段状态以`EntityBehaviorSourceArchitecture.md`与`PhasePlan.md`为准。
+
+[COMPUTED][HIGH] 当前覆盖说明：下文“PreparedProjectiles/32槽镜像/全Agent扫描仍存在”是迁移前历史断言。当前T8已改为Mass Fragment唯一权威、动态容量、网格Broadphase、相对/环境Sweep和通用Impact/Hit宿主提交；专项13/13通过。
+
 ## 1. 文档职责与当前状态
 
 [INFERRED][HIGH] 本文件是远程实体投射物、多业务状态、VAT 表现、击退、击飞和命中改色的当前设计事实源；`CurrentArchitecture.md` 只描述已经接入的生产链，`PhasePlan.md` 记录实施顺序，`TestScenarioMatrix.md` 定义独立验收场景。
@@ -181,7 +185,7 @@ HitFlashProfileKey
 
 [INFERRED][HIGH] T8 真实关卡门包括：`completed_windup_count == projectile_spawned_count`；`spawned = active + impacted + expired`；duplicate fire/hit/damage=0；客户端 projectile visual 数量与事件流一致；Attack VAT、发射时刻、impact、hit flash 和受击响应在录像中可辨识。
 
-[COMPUTED][HIGH] T8 生产链已接入32实体 projectile Mass镜像pool、稳定 ProjectileId、攻击 phase、数组批量spawn、previous→proposed swept sphere 命中、统一 HitFact/HitResponse、rollback/hash 和客户端 ISM 事件流。权威轨迹仍在Pipeline数组，且T8目标静止，因此本次验收不能外推为entity-native simulation或移动目标相对 swept collision 已通过。
+[COMPUTED][HIGH] 8451历史版本的T8生产链使用32实体Mass镜像pool、Pipeline数组权威和静止目标；该句只限定8451证据边界。当前R5实现状态以本文件顶部覆盖说明和`MassProjectileHitFrameworkDesign.md`为准。
 
 [COMPUTED][HIGH] 最终构建 8451 单轮得到 acquired/windup/spawned/impacted/damage=`50/50/50/50/50`，active/expired/duplicate fire/duplicate hit/invalid projectile=`0/0/0/0/0`；10 个目标死亡后各产生一次 lifecycle invalidation，`invalid_target_lifecycle=10`。server/client 的 attack/projectile/event hash 分别一致为 `2730049702/4215166500/4204062592`。
 
@@ -221,7 +225,7 @@ HitFlashProfileKey
 
 [INFERRED][HIGH] 详细POD合同、WORK/GT边界、插件模块、迁移顺序和规模门以`MassProjectileHitFrameworkDesign.md`为准；本文件继续作为T7/T8现有业务与视觉证据事实源。
 
-[COMPUTED][HIGH] 2026-07-17插件生产前置核对没有改变T8基线。T3双向交换已在8455/8456完成修复与验收，T4有效通道已在8460/8461关闭；当前仅T6异构前置门仍未关闭。因此尚未创建插件或切换T8，当前数组权威、32实体镜像pool、全Agent扫描、单调HitEventId去重和Reliable视觉事件仍是待替换旧边界。
+[COMPUTED][HIGH] 这是2026-07-17历史快照：当时尚未创建通用插件或切换T8。后续`MassCrowdSimulation`通用插件已建立，T6异构技术门已运行；T8仍未迁移为entity-native Projectile，数组权威、32实体镜像pool、全Agent扫描、单调HitEventId去重和Reliable视觉事件仍是待替换旧边界。
 
 ## 14. 宿主Combat boundary transaction（2026-07-22）
 

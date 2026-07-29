@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CrowdLocalPredictiveInteractionKernel.h"
 #include "CrowdDemoContinuousLifecycleCoordinator.h"
 #include "CrowdNavSurfaceGraph.h"
 #include "GameFramework/Actor.h"
@@ -67,12 +68,19 @@ private:
   {
     FCrowdAgentFacts Facts;
     FVector Location = FVector::ZeroVector;
+    FVector Velocity = FVector::ZeroVector;
+    float YawDegrees = 0.0f;
+    uint64 AttachedNavNodeId = 0;
+    uint64 CachedGoalNodeId = 0;
+    uint32 InteractionLayer = 0;
     uint32 MembershipKey = 0;
     uint32 TransitionRevision = 1;
-    uint32 NextSourceCommandSequence = 1;
-    uint32 NextSourceSequence = 1;
     int32 Health = 100;
     int64 LastAttackFixedStep = -1000;
+    int64 LastLogisticsFixedStep = -1000;
+    int64 HitReactionUntilFixedStep = INDEX_NONE;
+    FVector HitReactionVelocity = FVector::ZeroVector;
+    int32 PreviousBlockedAgeSteps = 0;
     bool bActive = false;
   };
 
@@ -91,6 +99,14 @@ private:
   FCrowdSpatialSafetyIndex SpatialSafety;
   TMap<TWeakObjectPtr<APlayerController>,
     TWeakObjectPtr<AMassCrowdReplicationActor>> ReplicationChannels;
+  TMap<TWeakObjectPtr<APlayerController>, double>
+    ReplicationChannelEligibleSeconds;
+  TMap<FCrowdStableEntityRef, uint32>
+    LastPublishedSourceSetRevisions;
+  TMap<FCrowdStableEntityRef, uint64>
+    LastPublishedHostFactHashes;
+  TArray<FCrowdLocalPredictiveGrantState>
+    MixedLocalPredictiveGrantStates;
   TArray<FSlotState> Slots;
   TArray<double> ServerStepMilliseconds;
   TArray<double> ClientFrameMilliseconds;
@@ -138,15 +154,25 @@ private:
   void InitializeSlotState(int32 SlotIndex, uint32 LifecycleSerial);
   FCrowdAgentFacts MakeAgentFacts(int32 SlotIndex, uint32 LifecycleSerial) const;
   void AdvanceServerFixedStep();
-  bool EvaluateSlotBehavior(int32 SlotIndex);
+  bool EvaluateSlotBehavior(
+    int32 SlotIndex,
+    TArray<FSlotState>& InOutSlots);
   bool ApplyPreparedBehaviorBusiness(
-    const FCrowdBehaviorPreparedBoundary& Prepared);
+    const FCrowdBehaviorPreparedBoundary& Prepared,
+    TArray<FSlotState>& InOutSlots,
+    FCrowdDemoBusinessCommitLedger& InOutLedger,
+    int32& InOutDuplicateCommitCount,
+    int32& InOutPendingCombatDeathSlot);
   bool RunProductMovementBoundary(
-    const FCrowdBehaviorPreparedBoundary& PreparedBehavior);
-  ECrowdActiveBehavior SelectLegacyRecipeLabel(int32 SlotIndex) const;
-  FVector ChooseObjectiveLocation(int32 SlotIndex, ECrowdActiveBehavior Behavior) const;
-  FCrowdStableEntityRef ChooseTargetRef(int32 SlotIndex, ECrowdActiveBehavior Behavior) const;
-  bool GetOrBuildFlow(const FVector& Objective, const FCrowdNavSurfaceFlow*& OutFlow);
+    const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
+    TArray<FSlotState>& InOutSlots,
+    int32& OutSafetyHolds,
+    uint64& OutCommitHash);
+  bool GetOrBuildFlow(
+    const FVector& Objective,
+    const FCrowdNavSurfaceFlow*& OutFlow,
+    uint64 PreferredGoalNodeId = 0,
+    uint64* OutGoalNodeId = nullptr);
   bool RebuildSpatialSafety();
   bool BuildLifecycleOperation(FCrowdDemoContinuousLifecycleOperation& OutOperation);
   bool ApplyLifecycleOperation(const FCrowdDemoContinuousLifecycleOperation& Operation);

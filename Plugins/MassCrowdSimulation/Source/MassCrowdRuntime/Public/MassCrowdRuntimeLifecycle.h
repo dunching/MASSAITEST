@@ -30,6 +30,10 @@ public:
   bool ApplyAgentFactsCorrection(const FCrowdAgentFacts& CorrectedFacts);
   bool ApplyAgentFactsCorrectionsAtomic(
     TConstArrayView<FCrowdAgentFacts> CorrectedFacts);
+  bool ValidateAgentFactsCorrections(
+    TConstArrayView<FCrowdAgentFacts> CorrectedFacts) const;
+  void ApplyValidatedAgentFactsCorrections(
+    TConstArrayView<FCrowdAgentFacts> CorrectedFacts);
   void Reset();
 
   int32 GetActiveEntityCount() const;

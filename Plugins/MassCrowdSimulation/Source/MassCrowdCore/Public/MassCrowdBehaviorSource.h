@@ -15,9 +15,46 @@ namespace CrowdBehavior
   static constexpr int32 MaxControllersPerEntity = 8;
   static constexpr int32 MaxRequiredCapabilitiesPerSource = 8;
   static constexpr int32 MaxPayloadBytes = 96;
+  static constexpr int32 MaxStateBytes = 96;
+  static constexpr int32 MaxContextRecordsPerEntity = 8;
+  static constexpr int32 MaxContextRecordBytes = 96;
   static constexpr int32 MaxContributionsPerChannel = 32;
   static constexpr uint16 FullQ15Weight = 32767;
 }
+
+struct FCrowdBehaviorProviderId
+{
+  uint32 Value = 0;
+
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBehaviorProviderId& Other) const = default;
+  bool operator<(const FCrowdBehaviorProviderId& Other) const
+  {
+    return Value < Other.Value;
+  }
+
+  friend uint32 GetTypeHash(const FCrowdBehaviorProviderId& Id)
+  {
+    return ::GetTypeHash(Id.Value);
+  }
+};
+
+struct FCrowdBehaviorContextTypeId
+{
+  uint32 Value = 0;
+
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBehaviorContextTypeId& Other) const = default;
+  bool operator<(const FCrowdBehaviorContextTypeId& Other) const
+  {
+    return Value < Other.Value;
+  }
+
+  friend uint32 GetTypeHash(const FCrowdBehaviorContextTypeId& Id)
+  {
+    return ::GetTypeHash(Id.Value);
+  }
+};
 
 struct FCrowdCapabilityId
 {
@@ -116,6 +153,7 @@ public:
 
   bool IsFrozen() const { return bFrozen; }
   int32 Num() const { return Profiles.Num(); }
+  uint64 CalculateStableHash() const;
 
 private:
   TMap<FCrowdCapabilityProfileKey, FCrowdCapabilityProfile> Profiles;
@@ -249,6 +287,21 @@ struct MASSCROWDCORE_API FCrowdBehaviorSourcePayload
     return true;
   }
 
+  bool SetBytes(
+    const uint32 InSchemaId,
+    TConstArrayView<uint8> InBytes)
+  {
+    if (InSchemaId == 0
+      || InBytes.Num() > CrowdBehavior::MaxPayloadBytes)
+      return false;
+    *this = {};
+    SchemaId = InSchemaId;
+    Size = static_cast<uint16>(InBytes.Num());
+    if (!InBytes.IsEmpty())
+      FMemory::Memcpy(Bytes, InBytes.GetData(), InBytes.Num());
+    return true;
+  }
+
   template <typename T>
   bool Get(const uint32 ExpectedSchemaId, T& OutValue) const
   {
@@ -263,6 +316,95 @@ struct MASSCROWDCORE_API FCrowdBehaviorSourcePayload
   uint64 CalculateStableHash() const;
 };
 
+struct MASSCROWDCORE_API FCrowdBehaviorSourceState
+{
+  uint32 SchemaId = 0;
+  uint16 Size = 0;
+  uint8 Bytes[CrowdBehavior::MaxStateBytes] = {};
+
+  bool IsValid() const
+  {
+    return (SchemaId == 0 && Size == 0)
+      || (SchemaId != 0 && Size <= CrowdBehavior::MaxStateBytes);
+  }
+
+  template <typename T>
+  bool Set(const uint32 InSchemaId, const T& Value)
+  {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (InSchemaId == 0 || sizeof(T) > CrowdBehavior::MaxStateBytes)
+      return false;
+    *this = {};
+    SchemaId = InSchemaId;
+    Size = sizeof(T);
+    FMemory::Memcpy(Bytes, &Value, sizeof(T));
+    return true;
+  }
+
+  template <typename T>
+  bool Get(const uint32 ExpectedSchemaId, T& OutValue) const
+  {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (SchemaId != ExpectedSchemaId || Size != sizeof(T))
+      return false;
+    FMemory::Memcpy(&OutValue, Bytes, sizeof(T));
+    return true;
+  }
+
+  bool operator==(const FCrowdBehaviorSourceState& Other) const;
+  uint64 CalculateStableHash() const;
+};
+
+struct MASSCROWDCORE_API FCrowdBehaviorContextRecord
+{
+  FCrowdBehaviorContextTypeId TypeId;
+  uint16 SchemaVersion = 0;
+  uint16 Size = 0;
+  uint8 Bytes[CrowdBehavior::MaxContextRecordBytes] = {};
+
+  bool IsValid() const
+  {
+    return TypeId.IsValid()
+      && SchemaVersion != 0
+      && Size <= CrowdBehavior::MaxContextRecordBytes;
+  }
+
+  template <typename T>
+  bool Set(
+    const FCrowdBehaviorContextTypeId InTypeId,
+    const uint16 InSchemaVersion,
+    const T& Value)
+  {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (!InTypeId.IsValid() || InSchemaVersion == 0
+      || sizeof(T) > CrowdBehavior::MaxContextRecordBytes)
+      return false;
+    *this = {};
+    TypeId = InTypeId;
+    SchemaVersion = InSchemaVersion;
+    Size = sizeof(T);
+    FMemory::Memcpy(Bytes, &Value, sizeof(T));
+    return true;
+  }
+
+  template <typename T>
+  bool Get(
+    const FCrowdBehaviorContextTypeId ExpectedTypeId,
+    const uint16 ExpectedSchemaVersion,
+    T& OutValue) const
+  {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (!(TypeId == ExpectedTypeId)
+      || SchemaVersion != ExpectedSchemaVersion
+      || Size != sizeof(T))
+      return false;
+    FMemory::Memcpy(&OutValue, Bytes, sizeof(T));
+    return true;
+  }
+
+  uint64 CalculateStableHash() const;
+};
+
 struct MASSCROWDCORE_API FCrowdBehaviorSourceSpec
 {
   FCrowdBehaviorSourceTypeId TypeId;
@@ -272,6 +414,7 @@ struct MASSCROWDCORE_API FCrowdBehaviorSourceSpec
   uint16 ExclusiveGroup = 0;
   int32 MaxLifetimeSteps = 0;
   uint32 PayloadSchemaId = 0;
+  uint32 StateSchemaId = 0;
   ECrowdBehaviorSourceReplicationPolicy ReplicationPolicy =
     ECrowdBehaviorSourceReplicationPolicy::ServerOnly;
   uint8 RequiredCapabilityCount = 0;
@@ -350,6 +493,7 @@ struct MASSCROWDCORE_API FCrowdBehaviorSourceInstance
   ECrowdBehaviorSourceReplicationPolicy ReplicationPolicy =
     ECrowdBehaviorSourceReplicationPolicy::ServerOnly;
   FCrowdBehaviorSourcePayload Payload;
+  FCrowdBehaviorSourceState State;
 
   bool IsValid() const;
   uint64 CalculateStableHash() const;
@@ -417,12 +561,32 @@ struct FCrowdBehaviorContributionKey
   bool operator==(const FCrowdBehaviorContributionKey& Other) const = default;
 };
 
+struct FCrowdResolvedMovementGoal
+{
+  FVector Location = FVector::ZeroVector;
+  FCrowdStableEntityRef TargetRef;
+  uint64 FactRevision = 0;
+  bool bHasGoal = false;
+
+  bool IsValid() const
+  {
+    return !bHasGoal
+      || (FMath::IsFinite(Location.X)
+        && FMath::IsFinite(Location.Y)
+        && FMath::IsFinite(Location.Z)
+        && (TargetRef.IsUnset() || TargetRef.IsValid())
+        && FactRevision != 0);
+  }
+  bool operator==(const FCrowdResolvedMovementGoal& Other) const = default;
+};
+
 struct FCrowdMovementContribution
 {
   FCrowdBehaviorContributionKey Key;
   ECrowdBehaviorBlendMode BlendMode = ECrowdBehaviorBlendMode::Override;
   uint16 WeightQ15 = CrowdBehavior::FullQ15Weight;
   FVector DesiredVelocity = FVector::ZeroVector;
+  FCrowdResolvedMovementGoal Goal;
 };
 
 struct FCrowdFacingContribution
@@ -489,6 +653,7 @@ struct MASSCROWDCORE_API FCrowdBehaviorContributions
 struct FCrowdResolvedBehaviorChannels
 {
   FVector DesiredVelocity = FVector::ZeroVector;
+  FCrowdResolvedMovementGoal MovementGoal;
   FVector DesiredFacing = FVector::ForwardVector;
   float SpeedLimitCmps = TNumericLimits<float>::Max();
   uint64 AllowedNavLayerMask = MAX_uint64;

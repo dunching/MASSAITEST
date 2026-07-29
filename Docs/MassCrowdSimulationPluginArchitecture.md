@@ -4,16 +4,18 @@
 
 [COMPUTED][HIGH] 本文件是可复用 MassCrowd 插件的模块边界与依赖方向事实源。生产运行、行为组合和复制合同查阅`MassCrowdUnifiedRuntimeAndReplicationContract.md`，Demo目的查阅`DemoPurposeAndTargetEffect.md`，当前代码事实查阅`CurrentArchitecture.md`，阶段执行查阅`PhasePlan.md`。
 
+[COMPUTED][HIGH] Behavior Source详细合同和关闭状态由`EntityBehaviorSourceArchitecture.md`管理；本文件只管理模块责任与依赖，不以模块存在推断端到端功能完成。
+
 ## 2. 产品边界
 
 ```text
 MassCrowdCore
       ↓
 MassCrowdRuntime
-   ↙       ↘
-Networking  Presentation
-      \     /
-    MassCrowdTests
+   ↙       ↓          ↘          ↘
+Networking  StandardSources  Presentation  StateTreeAdapter
+      \          |          |          /
+          MassCrowdTests
 
 MassAICrowdDemo → 插件公共接口与可选模块
 ```
@@ -22,11 +24,13 @@ MassAICrowdDemo → 插件公共接口与可选模块
 
 [COMPUTED][HIGH] `MassCrowdRuntime`依赖 Core 和 MassEntity；当前承载通用运动链、AgentFacts fragments映射、真实Mass LifecycleStore和按StableEntityRef存储的Behavior Source World Store。Source Registry在World初始化时注册并冻结，Runtime不依赖Networking、Presentation或StateTree。
 
+[COMPUTED][HIGH] `MassCrowdStandardSources`已作为随插件交付的Runtime模块落地，单向依赖Core/Runtime并承载13种通用Movement/Facing/Constraint Evaluator与Context/State Schema；Runtime/Core均不反向依赖或按这些TypeId分支。详细阶段见`MassCrowdStandardSourcesDesign.md`。
+
 [COMPUTED][HIGH] 可选`MassCrowdStateTreeAdapter`单向依赖Runtime、`StateTreeModule`与`GameplayStateTreeModule`；Runtime不反向依赖StateTree。完整合同见`EntityBehaviorSourceArchitecture.md`。
 
-[COMPUTED][HIGH] `MassCrowdNetworking`当前已实现不含Demo语义的Relevant Snapshot与Spawn/Despawn/Membership batch primitives；Demo已通过宿主adapter实际消费Snapshot。Delta具备严格序列、bounds、原子状态转换和membership hash，但仍无宿主无关RPC包装、真实Mass apply、Correction/Event、late join或Relevancy调度。
+[COMPUTED][HIGH] `MassCrowdNetworking`已实现不含Demo语义的Relevant Snapshot、Spawn/Despawn/Membership、owner-only channel、late join、可靠状态、latest-wins Correction、RelevantSet与resync；Behavior Source Command/SourceSet Codec v3已接入生产发送/接收、Source baseline、Registry/Schema校验和Hash resync。
 
-[COMPUTED][HIGH] `MassCrowdPresentation`当前只有模块壳，没有 ISM/VAT、视觉插值、Cargo 视觉、correction offset 或实例生命周期实现。其产品职责是承载这些通用表现能力；Demo 客户端视觉代码不是该模块已经完成的证据。
+[COMPUTED][HIGH] `MassCrowdPresentation`已实现StableEntityRef slot table、swap-remove反向表、幂等spawn/update/despawn、stale tombstone、Profile和Cargo引用；J与Continuous已由Demo ISM sink消费公共层。Behavior Presentation Resolver已输出按Property的最高Override与稳定Additive列表，具体Value解释仍由属性Adapter拥有。
 
 [COMPUTED][HIGH] `MassCrowdTests`是DeveloperTool模块，承载纯fixture、乱序/hash、GT/WORK等价、rollback、最小Mass World和可选模块编译测试，不进入Shipping运行依赖。
 
@@ -96,7 +100,7 @@ MassAICrowdDemo → 插件公共接口与可选模块
 
 ## 6. 当前产品化闭环顺序
 
-[COMPUTED][HIGH] 历史 Core/Runtime 运动迁移及A–J能力证据保留在下文；K/L继续冻结。当前实施顺序只以`PhasePlan.md`的P0–P5为准。
+[COMPUTED][HIGH] 历史Core/Runtime运动迁移及A–J能力证据保留在下文。当前实施顺序以`PhasePlan.md`为准；Behavior Source阶段状态以`EntityBehaviorSourceArchitecture.md`为准。
 
 [COMPUTED][HIGH] 合同、通用POD、Relevant Snapshot、Demo生产适配、lifecycle batches、最小Mass World真实生命周期、Demo continuous lifecycle、统一Behavior接口、NavMesh Surface Graph/Shared Flow及20实体混合Sandbox已按A–J完成；这些是能力与验收证据，不是公共Runtime/Networking/Presentation闭环证据。
 
@@ -106,15 +110,15 @@ MassAICrowdDemo → 插件公共接口与可选模块
 
 [COMPUTED][HIGH] `NavFlowProductSmall`已证明Runtime subsystem的静态Recast Graph、Flow handle/refcount/LRU可与20实体P1 boundary同场运行；专用`FriendlyLogisticsSmall`已通过公共Networking/Presentation恢复业务与Cargo视觉。J已删除O(N)`IsMoveSafe`并消费公共空间索引；旧Round bootstrap/correction/ResultHeader/projectile与实体视觉也已迁移到公共channel/subsystem。
 
-[INFERRED][HIGH] P1–P5依次收敛Runtime boundary、Nav资源、Networking/Presentation、FriendlyLogisticsSmall和J/旧入口；完成P5后停止，不进入100/500或原工程迁移。
+[INFERRED][HIGH] P1–P5依次收敛Runtime boundary、Nav资源、Networking/Presentation、FriendlyLogisticsSmall和J/旧入口；这些公共基础闭环不自动关闭Behavior Source的Resolver、Boundary、网络或StateTree端到端门。
 
-[COMPUTED][HIGH] 当前P0–P5公共产品闭环均已关闭；下一停止点固定在K前，不运行正式100/500或原工程迁移。
+[COMPUTED][HIGH] 当前P0–P5公共产品闭环均已关闭；Behavior Source B2–B7与同路径100/500、原工程迁移仍开放。
 
 ### 2026-07-28 产品路径复核
 
 [COMPUTED][HIGH] Networking新增有界reliable batch API和ACK缓存分批追赶；J不再逐记录发送20次可靠RPC，且没有提高既有队列上限。Presentation继续在Runtime/Lifecycle Apply之后按StableEntityRef提交。
 [COMPUTED][HIGH] 7939 J、7946 Continuous、7953 FriendlyLogistics及7948–7951 Round回归均通过硬错误扫描；插件Source到Demo的反向依赖为0。
-[COMPUTED][HIGH] 最新累计门为Development/DebugGame `-DisableUnity`、MassCrowd 43/43与CrowdDemo 115/115。停止点保持在K前。
+[COMPUTED][HIGH] 该次累计门为Development/DebugGame `-DisableUnity`、MassCrowd 43/43与CrowdDemo 115/115。之后Behavior Source代码增量的最新自动化为MassCrowd 50/50与CrowdDemo 115/115；测试数量增加不代表未编写专项已经通过。
 
 ## 6.1 P0冻结的模块责任
 

@@ -1,6 +1,6 @@
 #include "MassCrowdRuntimeBehavior.h"
 
-namespace
+namespace CrowdRuntimeBehaviorPrivate
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
   constexpr uint64 FnvPrime64 = 1099511628211ull;
@@ -23,6 +23,8 @@ namespace
     FoldUnsigned(Hash, Ref.LifecycleSerial);
   }
 }
+
+using namespace CrowdRuntimeBehaviorPrivate;
 
 bool FCrowdBusinessCommitRequest::IsValid() const
 {

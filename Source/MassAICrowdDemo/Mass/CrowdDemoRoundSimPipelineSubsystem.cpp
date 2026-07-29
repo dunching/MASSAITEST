@@ -1,4 +1,5 @@
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
+#include "Mass/CrowdDemoMassSubsystem.h"
 
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoCombatStateKernel.h"
@@ -184,11 +185,25 @@ namespace
         Input.FixedStepIndex, Input.StepEndServerTimeSeconds,
         Input.Rules.RangedCombatSettings, Requests, NextProjectiles,
         ProjectileEvents, ProjectileSummary);
+      TArray<FCrowdImpactFact> Impacts;
+      TArray<FCrowdProjectileEnvironmentBody> EnvironmentBodies;
+      const FCrowdDemoFlowObstacleCollisionSnapshotProvider
+        EnvironmentProvider(Input.Rules.FlowFieldConfig);
+      if (!EnvironmentProvider.Gather(
+          Input.FixedStepIndex, EnvironmentBodies))
+        return Output;
       FCrowdDemoProjectileKernel::AdvanceProjectiles(
         Input.FixedStepIndex, Input.StepEndServerTimeSeconds,
         Input.FixedStepSeconds, Input.Rules.RangedCombatSettings,
-        Agents, NextProjectiles, HitFacts, ProjectileEvents,
-        ProjectileSummary);
+        Agents, EnvironmentBodies, NextProjectiles, Impacts,
+        ProjectileEvents, ProjectileSummary);
+      TArray<FCrowdHitFact> ResolvedHits;
+      const FCrowdDemoHostHitResolver HitResolver(
+        Input.Rules.RangedCombatSettings);
+      if (!HitResolver.Resolve(Impacts, ResolvedHits)
+        || !FCrowdDemoHostHitResolver::BuildDemoHitFacts(
+          ResolvedHits, HitFacts))
+        ProjectileSummary.bValid = false;
     }
     if (bShowcase)
     {
@@ -886,7 +901,10 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
     ParticlePreviousSoftErrorP95 = -1.0f;
     bParticleConstraintRunFailure = false;
     ParticleFailureFixture = FCrowdDemoParticleFailureFixture();
-    PreparedProjectiles.Reset();
+    if (UWorld* World = GetWorld())
+      if (UCrowdDemoMassSubsystem* MassSubsystem =
+        World->GetSubsystem<UCrowdDemoMassSubsystem>())
+        MassSubsystem->ResetProjectileStates();
     OutgoingProjectileVisualEvents.Reset();
     ProjectileMetrics = FCrowdDemoProjectileMetrics();
     ProjectileMetrics.bValid = 1;
@@ -1132,7 +1150,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
   Input.Snapshot = BoundarySnapshot;
   Input.Facts = BoundaryBusinessFacts;
   Input.Rules = ActivePlan.Rules;
-  Input.Projectiles = PreparedProjectiles;
+  if (!BuildProjectileSnapshot(Input.Projectiles))
+    return false;
   Input.RoundId = GetCurrentRoundId();
   Input.FixedStepIndex = GetCurrentFixedStepIndex();
   Input.PlanRevision = GetCurrentPlanRevision();
@@ -1366,22 +1385,18 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       {
         uint64 Hash = FoldBoundaryHash(SnapshotHash, 1);
         Hash = FoldBoundaryHash(
-          Hash, static_cast<uint8>(Key.Stage));
-        Hash = FoldBoundaryHash(Hash, Key.CohortKey);
+          Hash, Key.StageId.Value);
+        Hash = FoldBoundaryHash(Hash, Key.TaskTypeId.Value);
+        Hash = FoldBoundaryHash(Hash, Key.ScopeKey);
         return FCrowdBoundaryTaskResult::Success(Hash);
       },
       false);
   };
-  const FCrowdBoundaryTaskKey Business = {
-    ECrowdBoundaryTaskStage::BusinessPrepare, 0};
-  const FCrowdBoundaryTaskKey SharedFlow = {
-    ECrowdBoundaryTaskStage::SharedFlow, 0};
-  const FCrowdBoundaryTaskKey Movement = {
-    ECrowdBoundaryTaskStage::Movement, 0};
-  const FCrowdBoundaryTaskKey Particle = {
-    ECrowdBoundaryTaskStage::Particle, 0};
-  const FCrowdBoundaryTaskKey Facing = {
-    ECrowdBoundaryTaskStage::FacingFinalize, 0};
+  const FCrowdBoundaryTaskKey Business = {{1}, {101}, 0};
+  const FCrowdBoundaryTaskKey SharedFlow = {{2}, {201}, 0};
+  const FCrowdBoundaryTaskKey Movement = {{3}, {301}, 0};
+  const FCrowdBoundaryTaskKey Particle = {{4}, {401}, 0};
+  const FCrowdBoundaryTaskKey Facing = {{5}, {501}, 0};
   TArray<FCrowdBoundaryTaskKey> MovementDeps = {Business, SharedFlow};
   const bool bHasTargetWork = !State->TargetTopologySlots.IsEmpty();
   const FCrowdBoundaryTaskKey ParticleDeps[] = {Movement};
@@ -1423,13 +1438,13 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       const uint32 CohortKey =
         State->TargetTopologySlots[SlotIndex].CohortKey;
       const FCrowdBoundaryTaskKey Topology = {
-        ECrowdBoundaryTaskStage::TargetTopology, CohortKey};
+        {2}, {202}, CohortKey};
       const FCrowdBoundaryTaskKey Demand = {
-        ECrowdBoundaryTaskStage::TargetDemand, CohortKey};
+        {2}, {203}, CohortKey};
       const FCrowdBoundaryTaskKey Plan = {
-        ECrowdBoundaryTaskStage::TargetPlan, CohortKey};
+        {2}, {204}, CohortKey};
       const FCrowdBoundaryTaskKey Guidance = {
-        ECrowdBoundaryTaskStage::TargetGuidance, CohortKey};
+        {2}, {205}, CohortKey};
       const FCrowdBoundaryTaskKey DemandDeps[] = {
         SharedFlow, Topology};
       const FCrowdBoundaryTaskKey PlanDeps[] = {Demand};
@@ -1725,16 +1740,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
       State->GraphInput.FacingTemplates.AddDefaulted_GetRef();
     Template.Input = MoveTemp(FacingInput);
   }
-  const FCrowdBoundaryTaskKey Business = {
-    ECrowdBoundaryTaskStage::BusinessPrepare, 0};
-  const FCrowdBoundaryTaskKey SharedFlow = {
-    ECrowdBoundaryTaskStage::SharedFlow, 0};
-  const FCrowdBoundaryTaskKey Movement = {
-    ECrowdBoundaryTaskStage::Movement, 0};
-  const FCrowdBoundaryTaskKey Constraint = {
-    ECrowdBoundaryTaskStage::HostConstraint, 0};
-  const FCrowdBoundaryTaskKey Facing = {
-    ECrowdBoundaryTaskStage::FacingFinalize, 0};
+  const FCrowdBoundaryTaskKey Business = {{1}, {101}, 0};
+  const FCrowdBoundaryTaskKey SharedFlow = {{2}, {201}, 0};
+  const FCrowdBoundaryTaskKey Movement = {{3}, {301}, 0};
+  const FCrowdBoundaryTaskKey Constraint = {{4}, {402}, 0};
+  const FCrowdBoundaryTaskKey Facing = {{5}, {501}, 0};
   const FCrowdBoundaryTaskKey MovementDeps[] = {Business, SharedFlow};
   const FCrowdBoundaryTaskKey ConstraintDeps[] = {Movement};
   const FCrowdBoundaryTaskKey FacingDeps[] = {Constraint};
@@ -1890,9 +1900,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::WaitBoundaryWork()
       : LastBoundaryTransactionResult.Tasks)
     {
       UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoBoundaryTaskFailed step=%d stage=%d cohort=%u succeeded=%d off_gt=%d hash=%llu"),
-        GetCurrentFixedStepIndex(), static_cast<int32>(Task.Key.Stage),
-        Task.Key.CohortKey, Task.Result.bSucceeded ? 1 : 0,
+        TEXT("VIOLATION CrowdDemoBoundaryTaskFailed step=%d stage=%d scope=%llu succeeded=%d off_gt=%d hash=%llu"),
+        GetCurrentFixedStepIndex(),
+        static_cast<int32>(Task.Key.StageId.Value),
+        static_cast<unsigned long long>(Task.Key.ScopeKey),
+        Task.Result.bSucceeded ? 1 : 0,
         Task.Result.bRanOffGameThread ? 1 : 0,
         static_cast<unsigned long long>(Task.Result.StableHash));
     }
@@ -2161,12 +2173,16 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PrepareBoundaryCommit(
 
   TArray<FCrowdBoundaryPreparedPatch> Patches;
   const auto AddPatch = [this, &Patches](
-    const FName AdapterId, const uint64 StableHash)
+    const uint32 ApplyPhase,
+    const uint32 AdapterId,
+    const uint64 StableHash)
   {
     if (StableHash == 0) return false;
     FCrowdBoundaryPreparedPatch& Patch =
       Patches.AddDefaulted_GetRef();
-    Patch.AdapterId = AdapterId;
+    Patch.ApplyPhase = {ApplyPhase};
+    Patch.AdapterId = {AdapterId};
+    Patch.PatchKey = {1};
     Patch.FixedStepIndex = GetCurrentFixedStepIndex();
     Patch.PlanRevision = GetCurrentPlanRevision();
     for (const FCrowdMassBoundaryAgentRecord& Agent
@@ -2179,17 +2195,17 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PrepareBoundaryCommit(
     return true;
   };
   if (!IsPreparedMovementBoundaryCommitCurrent()
-    || !AddPatch(TEXT("FacingVisual"),
+    || !AddPatch(4, 8201,
       PreparedMovementBoundaryCommit.StableHash))
     return false;
   if (IsPreparedCombatBoundaryCommitCurrent()
-    && !AddPatch(TEXT("Combat"),
+    && !AddPatch(2, 8202,
       PreparedCombatBoundaryCommit.StableHash))
     return false;
   if (IsPreparedCombatBoundaryCommitCurrent()
-    && (!AddPatch(TEXT("Projectile"),
+    && (!AddPatch(3, 8203,
           PreparedCombatBoundaryCommit.StableHash)
-      || !AddPatch(TEXT("EventsMetrics"),
+      || !AddPatch(5, 8204,
           PreparedCombatBoundaryCommit.StableHash)))
     return false;
   uint64 FlowDiagnosticHash = 14695981039346656037ull;
@@ -2205,7 +2221,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PrepareBoundaryCommit(
       FlowDiagnosticHash,
       static_cast<uint64>(Output.Candidate.StableHash));
   }
-  if (!AddPatch(TEXT("FlowDiagnostic"), FlowDiagnosticHash))
+  if (!AddPatch(5, 8205, FlowDiagnosticHash))
     return false;
   if (!PreparedTargetResourceSlots.IsEmpty())
   {
@@ -2224,7 +2240,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PrepareBoundaryCommit(
         TargetResourceHash,
         Slot.GuidanceOutput.Summary.GuidanceHash);
     }
-    if (!AddPatch(TEXT("TargetResource"), TargetResourceHash))
+    if (!AddPatch(5, 8206, TargetResourceHash))
       return false;
   }
   if (IsPreparedParticleDiagnosticCommitCurrent())
@@ -2235,7 +2251,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PrepareBoundaryCommit(
     ParticleHash = FoldBoundaryHash(
       ParticleHash,
       PreparedParticleDiagnosticCommit.CandidateSummary.CandidateHash);
-    if (!AddPatch(TEXT("ParticleDiagnostic"), ParticleHash))
+    if (!AddPatch(5, 8207, ParticleHash))
       return false;
   }
   const double MergeStartSeconds = FPlatformTime::Seconds();
@@ -2686,7 +2702,10 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.FlowLowSpeedSecondsByAgentId = FlowLowSpeedSecondsByAgentId;
   Snapshot.FlowCorridorDeadlockAgentIds = FlowCorridorDeadlockAgentIds;
   Snapshot.CompareMetrics = LastCompareMetrics;
-  Snapshot.Projectiles = PreparedProjectiles;
+  const bool bProjectileSnapshotBuilt =
+    BuildProjectileSnapshot(Snapshot.Projectiles);
+  checkf(bProjectileSnapshotBuilt,
+    TEXT("Mass projectile authority unavailable during checkpoint"));
   Snapshot.ProjectileMetrics = ProjectileMetrics;
   if (IsSoftPressureRouteDiagnosticEnabled())
     Snapshot.RouteDiagnosticCheckpoint =
@@ -2897,7 +2916,11 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   FlowLowSpeedSecondsByAgentId = Snapshot.FlowLowSpeedSecondsByAgentId;
   FlowCorridorDeadlockAgentIds = Snapshot.FlowCorridorDeadlockAgentIds;
   LastCompareMetrics = Snapshot.CompareMetrics;
-  PreparedProjectiles = Snapshot.Projectiles;
+  const bool bProjectileCapacityReady =
+    PrepareProjectileFinalApply(Snapshot.Projectiles.Num());
+  checkf(bProjectileCapacityReady,
+    TEXT("Mass projectile rollback capacity validation failed"));
+  ApplyProjectileFinalState(Snapshot.Projectiles);
   ProjectileMetrics = Snapshot.ProjectileMetrics;
   if (IsSoftPressureRouteDiagnosticEnabled())
   {
@@ -3484,6 +3507,45 @@ bool UCrowdDemoRoundSimPipelineSubsystem::BuildCurrentLocalPredictiveComponentFi
     Frame.FixedStepIndex, Frame.Agents, GetRules().FlowFieldConfig, Frame.Settings,
     Frame.PreviousGrantStates, Frame.ConflictPairs, Frame.GrantStates,
     Frame.Results, Frame.Summary, Frame.Trace, WitnessAgentIds, OutFixture);
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::BuildProjectileSnapshot(
+  TArray<FCrowdDemoProjectileState>& OutProjectiles) const
+{
+  const UWorld* World = GetWorld();
+  if (!World)
+  {
+    OutProjectiles.Reset();
+    return true;
+  }
+  const UCrowdDemoMassSubsystem* MassSubsystem = World
+    ? World->GetSubsystem<UCrowdDemoMassSubsystem>() : nullptr;
+  return MassSubsystem
+    && MassSubsystem->GatherProjectileStates(OutProjectiles);
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::PrepareProjectileFinalApply(
+  const int32 RequiredActiveCount)
+{
+  UWorld* World = GetWorld();
+  if (!World)
+    return RequiredActiveCount == 0;
+  UCrowdDemoMassSubsystem* MassSubsystem = World
+    ? World->GetSubsystem<UCrowdDemoMassSubsystem>() : nullptr;
+  return MassSubsystem
+    && MassSubsystem->PrepareProjectileCapacity(RequiredActiveCount);
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::ApplyProjectileFinalState(
+  const TConstArrayView<FCrowdDemoProjectileState> Projectiles)
+{
+  UWorld* World = GetWorld();
+  UCrowdDemoMassSubsystem* MassSubsystem = World
+    ? World->GetSubsystem<UCrowdDemoMassSubsystem>() : nullptr;
+  if (!MassSubsystem && Projectiles.IsEmpty())
+    return;
+  check(MassSubsystem);
+  MassSubsystem->ApplyProjectileStates(Projectiles);
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordProjectileStep(

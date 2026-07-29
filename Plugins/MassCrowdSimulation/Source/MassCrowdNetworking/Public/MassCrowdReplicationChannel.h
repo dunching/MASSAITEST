@@ -83,11 +83,37 @@ struct FCrowdAgentReplicationRecord
   uint32 Revision = 0;
 };
 
+struct FCrowdBehaviorSourceCommandReplicationRecord
+{
+  static constexpr uint16 CurrentVersion = 3;
+
+  uint64 RegistryHash = 0;
+  uint64 ContextSchemaHash = 0;
+  uint32 StateSchemaId = 0;
+  FCrowdBehaviorSourceCommand Command;
+
+  bool IsValid() const
+  {
+    return RegistryHash != 0 && ContextSchemaHash != 0
+      && Command.IsValid();
+  }
+};
+
 struct FCrowdBehaviorSourceSetReplicationRecord
 {
+  static constexpr uint16 CurrentVersion = 3;
+
+  uint64 RegistryHash = 0;
+  uint64 ContextSchemaHash = 0;
   FCrowdBehaviorSourceSet SourceSet;
   uint64 ResolvedBehaviorHash = 0;
   uint32 DerivedDiagnosticLabel = 0;
+
+  bool IsValid() const
+  {
+    return RegistryHash != 0 && ContextSchemaHash != 0
+      && SourceSet.IsValid() && ResolvedBehaviorHash != 0;
+  }
 };
 
 struct FCrowdPresentationReplicationRecord
@@ -210,16 +236,20 @@ public:
   static bool DecodeAgent(
     TConstArrayView<uint8> Bytes, FCrowdAgentReplicationRecord& OutRecord);
   static bool EncodeBehaviorSourceCommand(
-    const FCrowdBehaviorSourceCommand& Command,
+    const FCrowdBehaviorSourceCommandReplicationRecord& Record,
     TArray<uint8>& OutBytes);
   static bool DecodeBehaviorSourceCommand(
     TConstArrayView<uint8> Bytes,
-    FCrowdBehaviorSourceCommand& OutCommand);
+    uint64 ExpectedRegistryHash,
+    uint64 ExpectedContextSchemaHash,
+    FCrowdBehaviorSourceCommandReplicationRecord& OutRecord);
   static bool EncodeBehaviorSourceSet(
     const FCrowdBehaviorSourceSetReplicationRecord& Record,
     TArray<uint8>& OutBytes);
   static bool DecodeBehaviorSourceSet(
     TConstArrayView<uint8> Bytes,
+    uint64 ExpectedRegistryHash,
+    uint64 ExpectedContextSchemaHash,
     FCrowdBehaviorSourceSetReplicationRecord& OutRecord);
   static bool EncodeTask(
     const FCrowdTaskReplicationRecord& Record, TArray<uint8>& OutBytes);

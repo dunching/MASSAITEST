@@ -284,7 +284,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   if (!Runner.Begin(Snapshot, 0.0))
     return false;
   if (!Runner.AddTask(
-      {ECrowdBoundaryTaskStage::Movement, 0}, {},
+      {{3}, {301}, 0}, {},
       [Snapshot, Carrier, Objective, Graph, Flow,
         FixedStepSeconds, Work, AcceptanceRadius, CarrierSpeed]()
       {
@@ -420,7 +420,9 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       return false;
     FCrowdBoundaryPreparedPatch& Patch =
       Patches.AddDefaulted_GetRef();
-    Patch.AdapterId = TEXT("FriendlyLogistics");
+    Patch.ApplyPhase = {2};
+    Patch.AdapterId = {8101};
+    Patch.PatchKey = {1};
     Patch.FixedStepIndex = Snapshot.FixedStepIndex;
     Patch.PlanRevision = Snapshot.PlanRevision;
     for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)

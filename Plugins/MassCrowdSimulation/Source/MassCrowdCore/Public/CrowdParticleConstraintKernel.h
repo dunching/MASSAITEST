@@ -6,6 +6,7 @@
 struct FCrowdParticleConstraintAgent
 {
   int32 AgentId = INDEX_NONE;
+  uint32 InteractionLayer = 0;
   FVector StartPosition = FVector::ZeroVector;
   FVector PredictedPosition = FVector::ZeroVector;
   float PhysicalRadiusCm = 42.0f;

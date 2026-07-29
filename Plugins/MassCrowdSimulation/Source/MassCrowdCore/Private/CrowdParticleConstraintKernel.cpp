@@ -501,6 +501,9 @@ void FCrowdParticleConstraintKernel::BuildCandidatePairs(
     {
       for (int32 B = A + 1; B < CellAgents.Num(); ++B)
       {
+        if (Agents[CellAgents[A]].InteractionLayer
+          != Agents[CellAgents[B]].InteractionLayer)
+          continue;
         FCrowdParticleConstraintPair& Pair = OutPairs.AddDefaulted_GetRef();
         Pair.MinAgentIndex = CellAgents[A];
         Pair.MaxAgentIndex = CellAgents[B];
@@ -2219,9 +2222,18 @@ void FCrowdParticleConstraintKernel::Solve(
     FoldVector(FVector(Obstacle.Extent));
   }
   Hash = FoldHash(Hash, SortedAgents.Num());
+  const bool bHasExplicitInteractionLayers =
+    SortedAgents.ContainsByPredicate([](const auto& Agent)
+    {
+      return Agent.InteractionLayer != 0;
+    });
+  if (bHasExplicitInteractionLayers)
+    Hash = FoldHash(Hash, 0x4c415952u);
   for (const auto& Agent : SortedAgents)
   {
     Hash = FoldHash(Hash, Agent.AgentId);
+    if (bHasExplicitInteractionLayers)
+      Hash = FoldHash(Hash, Agent.InteractionLayer);
     FoldVector(Agent.StartPosition);
     FoldVector(Agent.PredictedPosition);
     FoldFloat(Agent.PhysicalRadiusCm, 1000.0f);

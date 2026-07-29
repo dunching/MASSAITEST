@@ -7,42 +7,110 @@
 #include "Tasks/Task.h"
 #include "Templates/Function.h"
 
-enum class ECrowdBoundaryTaskStage : uint8
+struct FCrowdBoundaryStageId
 {
-  BehaviorSource = 0,
-  BusinessPrepare,
-  SharedFlow,
-  TargetTopology,
-  TargetDemand,
-  TargetPlan,
-  TargetGuidance,
-  Movement,
-  Particle,
-  HostConstraint,
-  FacingFinalize
+  uint32 Value = 0;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBoundaryStageId&) const = default;
+  auto operator<=>(const FCrowdBoundaryStageId&) const = default;
+  friend uint32 GetTypeHash(const FCrowdBoundaryStageId Id)
+  {
+    return ::GetTypeHash(Id.Value);
+  }
+};
+
+struct FCrowdBoundaryTaskTypeId
+{
+  uint32 Value = 0;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBoundaryTaskTypeId&) const = default;
+  auto operator<=>(const FCrowdBoundaryTaskTypeId&) const = default;
+  friend uint32 GetTypeHash(const FCrowdBoundaryTaskTypeId Id)
+  {
+    return ::GetTypeHash(Id.Value);
+  }
+};
+
+struct FCrowdBoundaryResourceId
+{
+  uint32 Value = 0;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBoundaryResourceId&) const = default;
+  auto operator<=>(const FCrowdBoundaryResourceId&) const = default;
 };
 
 struct FCrowdBoundaryTaskKey
 {
-  ECrowdBoundaryTaskStage Stage =
-    ECrowdBoundaryTaskStage::BusinessPrepare;
-  uint32 CohortKey = 0;
+  FCrowdBoundaryStageId StageId;
+  FCrowdBoundaryTaskTypeId TaskTypeId;
+  uint64 ScopeKey = 0;
 
   bool operator==(const FCrowdBoundaryTaskKey& Other) const = default;
 
   bool operator<(const FCrowdBoundaryTaskKey& Other) const
   {
-    if (Stage != Other.Stage)
-      return static_cast<uint8>(Stage) < static_cast<uint8>(Other.Stage);
-    return CohortKey < Other.CohortKey;
+    if (StageId != Other.StageId)
+      return StageId < Other.StageId;
+    if (TaskTypeId != Other.TaskTypeId)
+      return TaskTypeId < Other.TaskTypeId;
+    return ScopeKey < Other.ScopeKey;
+  }
+
+  bool IsValid() const
+  {
+    return StageId.IsValid() && TaskTypeId.IsValid();
   }
 
   friend uint32 GetTypeHash(const FCrowdBoundaryTaskKey& Key)
   {
     return HashCombineFast(
-      ::GetTypeHash(static_cast<uint8>(Key.Stage)),
-      ::GetTypeHash(Key.CohortKey));
+      HashCombineFast(
+        ::GetTypeHash(Key.StageId.Value),
+        ::GetTypeHash(Key.TaskTypeId.Value)),
+      ::GetTypeHash(Key.ScopeKey));
   }
+};
+
+struct FCrowdBoundaryInputResource
+{
+  FCrowdBoundaryResourceId ResourceId;
+  uint32 Revision = 0;
+  uint32 SchemaId = 0;
+  uint64 StableHash = 0;
+
+  bool IsValid() const
+  {
+    return ResourceId.IsValid() && Revision != 0
+      && SchemaId != 0 && StableHash != 0;
+  }
+};
+
+struct FCrowdBoundaryOutputResource
+{
+  FCrowdBoundaryResourceId ResourceId;
+  uint32 Revision = 0;
+  uint32 SchemaId = 0;
+  uint32 Capacity = 0;
+  uint64 StableHash = 0;
+  bool bRequiresCompleteSet = true;
+
+  bool IsValid() const
+  {
+    return ResourceId.IsValid() && Revision != 0
+      && SchemaId != 0 && Capacity != 0 && StableHash != 0;
+  }
+};
+
+struct MASSCROWDRUNTIME_API FCrowdBoundaryTaskDescriptor
+{
+  FCrowdBoundaryTaskKey Key;
+  TArray<FCrowdBoundaryTaskKey> Prerequisites;
+  TArray<FCrowdBoundaryInputResource> Inputs;
+  FCrowdBoundaryOutputResource Output;
+  uint32 TelemetryId = 0;
+  bool bRequireOffGameThread = true;
+
+  bool IsValid() const;
 };
 
 struct MASSCROWDRUNTIME_API FCrowdBoundaryTaskResult
@@ -85,6 +153,7 @@ struct FCrowdBoundaryPhaseTimings
 struct FCrowdBoundaryCompletedTask
 {
   FCrowdBoundaryTaskKey Key;
+  uint32 TelemetryId = 0;
   FCrowdBoundaryTaskResult Result;
 };
 
@@ -105,9 +174,35 @@ public:
   virtual ~ICrowdBoundaryPreparedPatchPayload() = default;
 };
 
+struct FCrowdBoundaryApplyPhaseId
+{
+  uint32 Value = 1;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBoundaryApplyPhaseId&) const = default;
+  auto operator<=>(const FCrowdBoundaryApplyPhaseId&) const = default;
+};
+
+struct FCrowdBoundaryAdapterId
+{
+  uint32 Value = 0;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBoundaryAdapterId&) const = default;
+  auto operator<=>(const FCrowdBoundaryAdapterId&) const = default;
+};
+
+struct FCrowdBoundaryPatchKey
+{
+  uint64 Value = 1;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBoundaryPatchKey&) const = default;
+  auto operator<=>(const FCrowdBoundaryPatchKey&) const = default;
+};
+
 struct FCrowdBoundaryPreparedPatch
 {
-  FName AdapterId;
+  FCrowdBoundaryApplyPhaseId ApplyPhase;
+  FCrowdBoundaryAdapterId AdapterId;
+  FCrowdBoundaryPatchKey PatchKey;
   int32 FixedStepIndex = INDEX_NONE;
   int32 PlanRevision = INDEX_NONE;
   TArray<FCrowdStableEntityRef> EntityRefs;
@@ -119,7 +214,9 @@ struct FCrowdBoundaryPreparedPatch
 
 struct MASSCROWDRUNTIME_API FCrowdBoundaryPatchDescriptor
 {
-  FName AdapterId;
+  FCrowdBoundaryApplyPhaseId ApplyPhase;
+  FCrowdBoundaryAdapterId AdapterId;
+  FCrowdBoundaryPatchKey PatchKey;
   uint64 StableHash = 0;
 
   bool operator==(const FCrowdBoundaryPatchDescriptor& Other) const = default;
@@ -190,6 +287,40 @@ public:
     FCrowdBoundaryApplyContext& Context) const = 0;
 };
 
+// Owns the prepare/validate/apply lifecycle for every host adapter in one
+// boundary. ApplyAll is deliberately void: after ValidateAll succeeds there is
+// no business failure path and no adapter is allowed to publish a partial
+// result before the complete patch set has been accepted.
+class MASSCROWDRUNTIME_API FCrowdBoundaryPatchTransaction
+{
+public:
+  bool AddAdapter(const ICrowdBoundaryCommitAdapter& Adapter);
+  bool PrepareAll(const FCrowdMassBoundarySnapshot& Snapshot);
+  bool ValidateAll(TConstArrayView<FCrowdMassCommitTarget> Targets);
+  void ApplyAll(FCrowdBoundaryApplyContext& Context);
+
+  TConstArrayView<FCrowdBoundaryPreparedPatch> GetPreparedPatches() const
+  {
+    return PreparedPatches;
+  }
+
+  bool IsPrepared() const { return bPrepared; }
+  bool IsValidated() const { return bValidated; }
+
+private:
+  struct FEntry
+  {
+    const ICrowdBoundaryCommitAdapter* Adapter = nullptr;
+    FCrowdBoundaryPreparedPatch Patch;
+  };
+
+  TArray<FEntry> Entries;
+  TArray<FCrowdBoundaryPreparedPatch> PreparedPatches;
+  bool bPrepared = false;
+  bool bValidated = false;
+  bool bApplied = false;
+};
+
 class MASSCROWDRUNTIME_API FCrowdMassBoundaryOrchestrator
 {
 public:
@@ -210,6 +341,10 @@ public:
     TConstArrayView<FCrowdBoundaryTaskKey> Prerequisites,
     FCrowdBoundaryTaskBody&& Body,
     bool bRequireOffGameThread = true);
+
+  bool AddTask(
+    FCrowdBoundaryTaskDescriptor Descriptor,
+    FCrowdBoundaryTaskBody&& Body);
 
   bool Dispatch();
   bool WaitAndDrain();

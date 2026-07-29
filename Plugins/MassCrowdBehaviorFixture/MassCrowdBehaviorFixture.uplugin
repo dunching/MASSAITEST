@@ -1,0 +1,29 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0.0",
+  "FriendlyName": "Mass Crowd Behavior Fixture",
+  "Description": "Independent public-API fixture for Behavior Source extensibility.",
+  "Category": "Testing",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Plugins": [
+    {
+      "Name": "MassCrowdSimulation",
+      "Enabled": true
+    }
+  ],
+  "Modules": [
+    {
+      "Name": "MassCrowdBehaviorFixture",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
+      "Name": "MassCrowdBehaviorFixtureTests",
+      "Type": "DeveloperTool",
+      "LoadingPhase": "PostEngineInit"
+    }
+  ]
+}

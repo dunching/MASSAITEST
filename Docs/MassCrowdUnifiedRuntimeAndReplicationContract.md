@@ -1,219 +1,178 @@
 # MassCrowd 通用运行与生产复制合同
 
+## 0. R版合同覆盖
+
+[INFERRED][HIGH] 2026-07-28起，本合同以开放Behavior Provider、通用Boundary Scheduler和Mass权威Projectile为目标；旧B0–B7只保留历史证据，不再要求StateTree业务链、具体Demo Source或动画Root Motion Clip作为框架完成条件。
+
+[INFERRED][HIGH] Core/Runtime只能拥有稳定ID、Schema、Source生命周期、六通道Resolver、通用Task/Patch调度和权威Mass数据合同；插件随包的`MassCrowdStandardSources`拥有通用运动/朝向/约束Evaluator；Demo Provider与宿主Adapter拥有目标选择、攻击、取货、交付等领域解释。
+
+[INFERRED][HIGH] 网络基线必须携带Behavior Registry Hash；Predictable Source要求双端Registry一致。Source Codec v3必须包含Context/State Schema和持久实例状态，旧Behavior Codec拒绝。
+
+[INFERRED][HIGH] Projectile的权威数据只存在于Mass Fragment；对象池仅负责实体复用，池外数组不得保存可独立推进的Projectile状态。
+
 ## 1. 文档职责
 
-[INFERRED][HIGH] 本文件是通用 Agent 能力组合、持续生命周期、生产复制、Demo 验收宿主及模块边界的长期稳定事实源。未来实现若与本文冲突，必须先修订本文并记录迁移理由，不能把 Demo 当前实现直接升级为产品合同。
+[INFERRED][HIGH] 本文件是通用Agent能力组合、持续生命周期、生产复制、Demo宿主和模块边界的长期合同。行为Source的详细数据模型、阶段状态和专项缺口以`EntityBehaviorSourceArchitecture.md`为事实源。
 
-[INFERRED][HIGH] 文档职责固定如下：
+[INFERRED][HIGH] `CurrentArchitecture.md`只描述当前代码；`PhasePlan.md`只描述实施顺序；`FeatureChecklist.md`只记录已经满足的验收；`TestScenarioMatrix.md`只记录具体场景证据。旧设计文档中的日期快照不得覆盖这些现行文档。
 
-| 文档 | 唯一职责 |
-|---|---|
-| `DemoPurposeAndTargetEffect.md` | [INFERRED][HIGH] 产品目标和群体效果。 |
-| `CurrentArchitecture.md` | [INFERRED][HIGH] 当前代码已经如何实现。 |
-| `MassCrowdSimulationPluginArchitecture.md` | [INFERRED][HIGH] 插件模块与依赖方向。 |
-| `PhasePlan.md` | [INFERRED][HIGH] 当前正在做什么。 |
-| `FeatureChecklist.md` | [INFERRED][HIGH] 哪些能力已经通过。 |
-| `TestScenarioMatrix.md` | [INFERRED][HIGH] 具体测试场景与结果。 |
-| `MassCrowdUnifiedRuntimeAndReplicationContract.md` | [INFERRED][HIGH] 生产运行、行为组合和复制的长期稳定合同。 |
-
-## 2. 统一 Agent 模型
-
-[INFERRED][HIGH] 概念合同为：
+## 2. 统一Agent模型
 
 ```text
-FCrowdStableEntityRef
-├── ProviderId
-├── StableEntityId
-└── LifecycleSerial
-
 FCrowdAgentFacts
-├── StableEntityRef
-├── Faction/Team
-├── CapabilitySet
-├── ActiveBehavior
+├── StableEntityRef = ProviderId + StableEntityId + LifecycleSerial
+├── Faction / Team
+├── CapabilityProfileKey
+├── bounded Capability Modifiers
+├── Capability Binding
 ├── BusinessTaskRef
 ├── TargetRef
 ├── MovementProfile
 ├── PresentationProfile
-└── RuntimeState
+└── non-authoritative DerivedBehaviorLabel
+
+Runtime World Store[StableEntityRef]
+└── FCrowdBehaviorSourceSet
+    ├── Revision / StableHash
+    └── sorted Source Instances
 ```
 
-[INFERRED][HIGH] `LifecycleSerial`用于拒绝实体槽位复用后的过期 Spawn、Correction、Hit、Cargo 和 Despawn 事实；仅比较槽位或短整数 AgentId 不足以构成生产身份校验。
+[INFERRED][HIGH] `ActiveBehavior`不属于权威Agent模型。多个Source可以同时贡献Movement、Facing、Constraint、Interaction、Business和Presentation。
 
-[INFERRED][HIGH] Faction/Team 只用于关系和权限、可攻击性、可协作性、目标过滤、资源节点访问策略、伤害与交互规则。
+[INFERRED][HIGH] `LifecycleSerial`拒绝槽位复用后的过期Spawn、Correction、Hit、Cargo、Source Command和Despawn事实；只比较短AgentId不足以形成生产身份。
 
-[INFERRED][HIGH] Faction/Team 不得决定使用哪套 Flow、是否运行 Local Predictive、是否运行 Particle、是否允许动态 spawn/despawn、correction 频率、是否使用 ISM/VAT，或实体是否能够搬运与攻击。
+[INFERRED][HIGH] Faction只用于关系、权限、目标过滤、伤害和交互规则；Faction不得授予Capability，也不得选择Movement、Networking、Presentation或安全实现。
 
-## 3. Capability 与 Behavior 组合
+## 3. Capability与Behavior Source
 
-[INFERRED][HIGH] 通用 Capability 示例包括：`CanMove`、`CanWander`、`CanMoveTo`、`CanPursue`、`CanHaul`、`CanAttack`、`CanGuard`、`CanFlee`、`CanUseRangedAttack`、`CanUseNavLayer`。
+[INFERRED][HIGH] Capability Profile是不可变排序ID集合；实体使用Profile Key和最多8项Add/Remove Modifier。Boundary从Profile与Modifier生成有效Capability Binding。
 
-[INFERRED][HIGH] 通用 Behavior 示例包括：`Idle`、`Wander`、`MoveTo`、`Pursue`、`HaulPickup`、`HaulDeliver`、`Attack`、`Guard`、`Flee`、`Dead`。
+[INFERRED][HIGH] Source Handle固定为`StableEntityRef + ControllerId + SourceSequence`。Source Spec使用稳定数值TypeId、Schema、Required Capability、Channel Mask、Priority、Exclusive Group、Lifetime和Replication Policy。
 
-[INFERRED][HIGH] Capability 表示实体“可以执行哪些行为”；Active Behavior 表示实体“当前执行什么”。行为切换不得替换底层 Movement、Networking 或 Presentation 实现。
+[INFERRED][HIGH] 每实体最多16个活动Source；Registry在首个Boundary前冻结；未知类型、Schema冲突、缺失Capability、重复Handle和超限必须整批拒绝。
 
-[INFERRED][HIGH] 敌方可以具备 `CanHaul`，友方可以具备 `CanPursue` 与 `CanAttack`，中立实体可以具备 `CanWander` 与 `CanFlee`；搬运、追逐和攻击均不是阵营固有能力。
+[INFERRED][HIGH] Evaluator只读取不可变Context并写入有界Contribution Writer；不得直接写Mass Fragment、Actor、业务账本、网络或表现状态。
 
-[INFERRED][HIGH] 行为层主要输出 `TargetRef`、Movement Objective、Movement Profile、Interaction Intent 与 Business Commit Request；行为层不持续直接实现导航、碰撞或 Particle 安全。
+[INFERRED][HIGH] Recipe和StateTree只负责生成Start/Update/Stop Command，不直接拥有移动或业务权威。
 
-## 4. 通用运动链
+[INFERRED][HIGH] 通用`MoveToLocation`、`FollowEntity`、`PursueEntity`、`FleeFromEntity`、`MaintainDistance`、Facing和Constraint Source应由插件的`MassCrowdStandardSources`提供；它们不得判断敌我、选择攻击目标或提交伤害/物流业务。
 
-[INFERRED][HIGH] 固定产品链为：
+[INFERRED][HIGH] Escort、Combat和Logistics属于宿主Recipe：它们组合Standard Source与产品Business/Interaction Source，而不是在Runtime建立新的互斥Behavior中心。详细合同查阅`MassCrowdStandardSourcesDesign.md`。
+
+## 4. Resolver与通用运动链
 
 ```text
-Environment / Navigation Snapshot
-→ Behavior Objective Prepare
-→ Shared Flow / Target Region / Other Guidance Providers
-→ Guidance Compose
+Capability / SourceSet Snapshot
+→ Apply due Source Commands to staged copy
+→ Evaluate Sources
+→ Resolve Movement / Facing / Constraint / Interaction / Business / Presentation
+→ Shared Flow / Target Region / Guidance
 → Local Predictive
-→ MovementPredict
-→ Particle / Obstacle Safety
-→ Facing
-→ MovementFinalize
-→ Runtime Commit
+→ Movement Predict
+→ Particle / Obstacle / Bounds Safety
+→ Quantize
+→ Prepared Patches
+→ Validate complete set and hashes
+→ Final Apply
 ```
 
-[INFERRED][HIGH] 所有阵营和行为复用同一条链。Business 只决定“去哪里、做什么”；Movement 决定“如何安全到达”。
+[INFERRED][HIGH] Resolver排序固定为`Priority降序 → SourceTypeId → ControllerId → SourceSequence`。
 
-[INFERRED][HIGH] Local Predictive 与 Particle 可以观察所有符合 Collision/Interaction Mask 的邻近实体，不按阵营自动分成两个互不作用的求解世界。
+[INFERRED][HIGH] Movement支持Override、Q15 WeightedAdd和Additive；Facing独立支持Override和Q15 WeightedAdd；Constraint合并min/max/lock/NavLayer交集；Interaction使用Exclusive Winner；Business冲突拒绝；Presentation按Property执行Override或Additive。
 
-## 5. Cohort 合同
+[INFERRED][HIGH] Local Predictive、Particle、障碍、边界和最终量化是不可卸载安全阶段。它们消费Resolver结果，但不拥有Source生命周期权威。
 
-[INFERRED][HIGH] Cohort 由共享运动事实形成：`ObjectiveKey`、`NavigationLayer`、`MovementProfile`、`CapabilityProfile`、`MacroStrategy`、`EnvironmentRevision`。
+[INFERRED][HIGH] 所有阵营和行为复用同一安全链；Business决定“做什么和目标是什么”，Movement/Safety决定“如何安全执行”。
 
-[INFERRED][HIGH] Faction 可以影响 Objective Provider 的目标选择，但不得成为 Cohort kernel 的强制职业分支；Cohort 不等同于阵营。
+## 5. Boundary原子性
 
-[INFERRED][HIGH] Cohort membership 必须支持在 fixed-step boundary 增量加入、退出和迁移，不得假设一个 Round 内完整 Agent 集合永久固定。
+[INFERRED][HIGH] Boundary固定为一次不可变Gather、显式POD Overlay、依赖图WORK、稳定Merge、完整集合预验证和一次GT Final Apply。
 
-## 6. 生产持续生命周期
+[INFERRED][HIGH] 所有可能失败的业务检查必须发生在Final Apply之前；Final Apply采用已经验证后不可失败的合同。不得以部分写入后的补偿回滚冒充失败零写入。
 
-[INFERRED][HIGH] 产品状态流为：
+[INFERRED][HIGH] WORK不得访问UObject、World或EntityManager；任何缺失、重复、stale lifecycle、错误revision、错误Hash或任务失败都必须整批零写入。
+
+[INFERRED][HIGH] Commit Envelope v3覆盖SourceSet Revision/Hash、Command Batch Hash、六通道Hash、Movement/Facing结果、排序后的Patch Descriptor和最终Stable Hash。
+
+## 6. Cohort与持续生命周期
+
+[INFERRED][HIGH] Cohort由共享运动事实形成，包括ObjectiveKey、NavigationLayer、MovementProfile、CapabilityProfile、MacroStrategy和EnvironmentRevision；Cohort不等同于Faction。
+
+[INFERRED][HIGH] Cohort membership支持fixed-step boundary增量加入、退出和迁移，不假设Round内完整Agent集合永久固定。
 
 ```text
 Initial Relevant Snapshot
-→ Spawn Delta
-→ Despawn Delta
-→ Membership Delta
-→ Behavior / Task Delta
-→ Movement Correction
-→ Reliable Gameplay Event
-→ Presentation Event
+→ Spawn / Despawn / Membership batches
+→ Capability / SourceSet baseline
+→ Source Command deltas
+→ Resolved state
+→ Movement correction
+→ Reliable gameplay facts
+→ Presentation facts
 ```
 
-[INFERRED][HIGH] 概念 POD 包括：`FCrowdSpawnRecord`、`FCrowdDespawnRecord`、`FCrowdMembershipDelta`、`FCrowdBehaviorStateDelta`、`FCrowdRelevantSnapshotHeader`、`FCrowdRelevantSnapshotChunk`、`FCrowdCorrectionHeader`、`FCrowdCorrectionChunk`、`FCrowdGameplayEvent`。
+[INFERRED][HIGH] Spawn/Despawn在fixed-step boundary原子应用。Despawn区分死亡、相关性退出、业务回收和宿主销毁；客户端表现回收不得反向决定服务端Source或实体生命周期。
 
-[INFERRED][HIGH] Spawn/Despawn 必须在 fixed-step boundary 原子应用。Despawn 必须区分死亡、离开相关区域、业务回收和宿主销毁；客户端表现回收不得反向决定 Server 实体生命周期。
-
-[INFERRED][HIGH] 生产世界不能依赖 Round reset 清理全部实体，必须支持持续 spawn/despawn、死亡移除、实体槽位复用、membership 变化、late join 和动态网络相关集。
+[INFERRED][HIGH] 生产世界不得依赖Round reset，必须支持持续spawn/despawn、Lifecycle槽位复用、membership变化、late join和动态Relevant Set。
 
 ## 7. 生产复制合同
 
 | 事实类别 | 生产传输合同 |
 |---|---|
-| 共享不可变资源 | [INFERRED][HIGH] `Revision + Hash` 或资产引用。 |
-| 初始相关集 | [INFERRED][HIGH] Snapshot Header + bounded Chunks。 |
-| 动态生命周期 | [INFERRED][HIGH] Spawn/Despawn bounded batches。 |
-| 群体事实 | [INFERRED][HIGH] Cohort/Target/Flow/Membership revisions 与 deltas。 |
-| 个体业务事实 | [INFERRED][HIGH] Behavior/Cargo/Combat state deltas。 |
-| 运动纠错 | [INFERRED][HIGH] Relevant entity correction chunks。 |
-| 权威业务事件 | [INFERRED][HIGH] Stable EventId + Lifecycle 校验。 |
-| 客户端表现事件 | [INFERRED][HIGH] Spawn/Impact/Expire/Animation/Cargo visual facts。 |
+| 共享不可变资源 | [INFERRED][HIGH] Revision + Hash或资产引用。 |
+| 初始相关集 | [INFERRED][HIGH] v2 Snapshot Header + bounded Chunks。 |
+| 动态生命周期 | [INFERRED][HIGH] v2 Spawn/Despawn/Membership bounded batches。 |
+| Capability | [INFERRED][HIGH] Profile Key、Modifier Revision和有效Binding Hash。 |
+| 行为Source | [INFERRED][HIGH] SourceSet Revision/Hash、持久Source baseline和可靠Command delta。 |
+| 行为结果 | [INFERRED][HIGH] Resolved Hash及`ResolvedOnly`策略要求的结果。 |
+| 运动纠错 | [INFERRED][HIGH] 当前Relevant实体的latest-wins correction chunks。 |
+| 权威业务事实 | [INFERRED][HIGH] Stable Event/Commit Id + StableEntityRef/Lifecycle校验。 |
+| 表现事实 | [INFERRED][HIGH] 已解析的动画、Cargo、Hit、Projectile视觉状态。 |
 
-[INFERRED][HIGH] 所有 O(N) 数组必须有有界 chunk 或 batch 合同；O(1) 规则、revision 和 header 保持紧凑，不为形式统一强制分块。
+[INFERRED][HIGH] Source复制策略只允许`ServerOnly`、`ResolvedOnly`和`Predictable`；StateTree不复制。
 
-[INFERRED][HIGH] 大型 Navigation/Flow 资源只复制 revision/hash 或资产引用，不复制整张图。Correction 面向当前相关实体集合，不假设全世界 membership 固定。
+[INFERRED][HIGH] 命令缺口、Schema错误或SourceSet/Resolved Hash不一致触发SourceSet resync。客户端相关性退出只清理本地副本，不向服务端发送Stop。
 
-[INFERRED][HIGH] 复制精度和频率按 Relevancy、Ownership、可见性、变化率、事实可靠性和预算决定，不按 Faction 硬编码。
+[INFERRED][HIGH] 所有O(N)数组必须有有界chunk/batch；Navigation/Flow资源只复制Revision/Hash或资产引用，不复制整图。
 
-[INFERRED][HIGH] Cargo 被复制是因为实体当前携带 Cargo 事实；Attack 被复制是因为实体当前执行 Attack 并产生权威事件，而不是因为实体属于友方或敌方。
+[INFERRED][HIGH] 复制频率和精度按Relevancy、Ownership、事实可靠性、变化率和预算决定，不按Faction硬编码。
 
-## 8. Demo 与生产协议的关系
-
-```text
-Production Plugin
-├── Runtime
-├── Networking
-├── Presentation
-└── Public Behavior / Provider APIs
-
-Demo
-├── 使用同一 Runtime
-├── 使用同一 Networking
-├── 使用同一 Presentation
-├── 提供 Scenario 输入
-├── 提供故障注入
-├── 提供 hash 与指标观察
-└── 不复制另一套算法或协议
-```
-
-[INFERRED][HIGH] Demo 可以增加固定 Round 窗口、相同输入重复运行、readiness、全量双端 hash、correction replay 验证、fixture、VIOLATION 与人工审片设施。
-
-[INFERRED][HIGH] 上述 Demo 能力只能观察和控制生产协议，不得成为生产 Agent 运行的必需数据依赖。`RoundPlan`、`RoundResult`、测试端口和 Scenario 枚举不进入插件公共产品 API。
-
-## 9. Bootstrap 重解释
-
-[COMPUTED][HIGH] 当前 `FCrowdDemoRoundBootstrapPacket::Agents` 只作为Demo固定Round的本地Pipeline消费数组；网络传输已由显式版本adapter写入生产Relevant Snapshot Header/Chunks，完整Agents不再作为单个复制属性发送。
-
-[INFERRED][HIGH] 后续不得只新增 `CrowdDemoBootstrapChunk` 并把测试语义固化到 Networking。必须先定义通用 `RelevantSnapshotHeader`、`RelevantSnapshotChunk`、`SnapshotAssembly`、`SnapshotRevision`、`SnapshotHash`、`SnapshotTimeout`。
-
-[INFERRED][HIGH] Demo RoundBootstrap 适配上述生产协议；生产 late join 和进入新 Relevancy 区域也复用同一协议。
-
-[COMPUTED][HIGH] 当前 Demo correction/checkpoint 已有 header、bounded chunks、乱序组装和超时处理，可作为底层实现参考；公共类型不得带 Round、Scenario、测试端口或 Demo 日志语义。
-
-## 10. 业务模块边界
+## 8. 模块与宿主边界
 
 | 所有者 | 长期职责 |
 |---|---|
-| `MassCrowdCore` | [INFERRED][HIGH] 通用 POD、Movement kernels、排序、量化、hash。 |
-| `MassCrowdRuntime` | [INFERRED][HIGH] Mass lifecycle、Gather、WORK、Merge、Commit、Capability 注册。 |
-| `MassCrowdNetworking` | [INFERRED][HIGH] Snapshot/Delta/Correction/Event、assembly、revision、rollback 调度。 |
-| `MassCrowdPresentation` | [INFERRED][HIGH] ISM/VAT、插值、Cargo 视觉、correction offset、调试绘制。 |
-| 宿主 Business 或可选模块 | [INFERRED][HIGH] Combat、Logistics、Inventory、Plant、Warehouse、Damage、Loot。 |
+| `MassCrowdCore` | [INFERRED][HIGH] 稳定POD、Source状态机、Resolver、Movement kernels、排序、量化、Hash。 |
+| `MassCrowdRuntime` | [INFERRED][HIGH] World Store、Registry、Mass生命周期、Gather/WORK/Merge/Prepared/Commit和Nav资源。 |
+| `MassCrowdStandardSources` | [INFERRED][HIGH] 随插件交付的通用Movement/Facing/Constraint Context、Spec与Evaluator；只单向依赖Core/Runtime。 |
+| `MassCrowdNetworking` | [INFERRED][HIGH] Snapshot、Lifecycle、Source状态/命令、Correction、assembly、resync。 |
+| `MassCrowdPresentation` | [INFERRED][HIGH] StableEntityRef实例生命周期、ISM/VAT、插值、Cargo和已解析视觉事实。 |
+| `MassCrowdStateTreeAdapter` | [INFERRED][HIGH] Source Command Task和Runtime Event等待；单向依赖Runtime。 |
+| 宿主Business | [INFERRED][HIGH] Combat、Logistics、Inventory、Warehouse、Damage、Loot及最终业务验证。 |
 
-[INFERRED][HIGH] Logistics 与 Combat 不进入 Movement Core；两者通过相同 Behavior、Objective 与 Gameplay Event 公共接口接入。
+[INFERRED][HIGH] Demo使用同一Runtime、Networking和Presentation，只增加Scenario输入、故障注入、Hash、指标和人工审片；Round/Testcase/端口不得进入插件公共产品API。
 
-## 11. 测试合同
+## 9. 测试合同
 
-[INFERRED][HIGH] 自动化必须直接调用生产 POD 和生产协议。Demo 场景不得用测试专用 spawn 标志模拟真正 despawn 并宣称生命周期通过。
+[INFERRED][HIGH] 测试层次固定为：纯POD fixture → 最小Mass World → Production Networking loopback → Demo真实地图 → continuous Sandbox → 同一路径20/100/500 → 原工程最小宿主。
 
-[INFERRED][HIGH] 后续测试层次固定为：`纯 POD fixture → 最小 Mass World → Production Networking loopback → Demo 真实地图 → continuous Sandbox → 20/100/500 → 原工程最小宿主`。
+[INFERRED][HIGH] Core专项至少覆盖所有Blend Mode、Q15、输入反序、16 Source与32 Contribution上限、命令幂等/冲突/缺口、过期、Capability撤销和Stable Hash。
 
-[INFERRED][HIGH] 生命周期测试至少覆盖：不同 fixed-step 分批 spawn、despawn 与死亡移除、LifecycleSerial 复用、Spawn/Despawn 乱序、late join snapshot 加后续 delta、correction 引用已销毁 Lifecycle、membership 增量、cohort 迁移、client 视觉实例创建与回收、Cargo/Combat 行为切换、rollback 不重复业务事件。
+[INFERRED][HIGH] Runtime专项至少覆盖staged不可见、Source/Movement/Business/Presentation跨通道原子性、失败零写入、Revision规则及HitReaction结束后任务精确恢复。
 
-[COMPUTED][HIGH] A–J历史能力阶段已实现AgentFacts、Relevant Snapshot、Demo接入、lifecycle batches、真实Mass lifecycle、continuous lifecycle、统一Behavior、静态Recast Graph/Flow与独立20实体混合Sandbox。
+[INFERRED][HIGH] 网络专项至少覆盖v1拒绝、v2编解码、乱序/重复/缺口、late join、相关性进出、Predictable/ResolvedOnly、correction replay和Hash resync。
 
-## 12. P0冻结的产品化合同
+[INFERRED][HIGH] StateTree专项必须执行真实Task，覆盖物流完整链、Task中断/重入、重复Event和Command幂等；直接调用CommandBuilder不能替代该门。
 
-[INFERRED][HIGH] GT/WORK边界固定为：
+[INFERRED][HIGH] 规模验收必须让同一Behavior Source生产路径依次通过20、100和500；旧Round 100/500结果只能作为基础运动、网络和安全基线。
 
-```text
-GT canonical gather
-→ immutable base snapshot
-→ versioned host POD overlays
-→ dependency-frontier WORK dispatch
-→ stable merge
-→ full-set validation
-→ single GT atomic final writer
-```
+## 10. 当前实现状态（2026-07-28）
 
-[INFERRED][HIGH] 独立验证遍历、跨boundary持久诊断写回和宿主业务事实准备可以保留；WORK不得访问UObject、World或EntityManager，任何缺失、重复、stale lifecycle、错误revision或任务失败必须整批零写入。
+[COMPUTED][HIGH] Relevant Snapshot、lifecycle、public channel、late join、correction、Presentation、World Store、Core Source状态机、Registry/Resolver数据结构、Envelope v3、v2 Codec和StateTree Adapter代码已经存在。
 
-[INFERRED][HIGH] Nav V1只消费cooked静态Recast topology。运行时允许Objective attachment变化及对应Flow重建；动态NavMesh tile/topology变化不在P0–P5范围内。
+[COMPUTED][HIGH] 生产Mixed Movement Goal/Facing/Constraint已消费Resolved Channels并接入`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`；边界采用完整预验证后的不可失败Apply；Behavior Source Codec v3已接入可靠状态、late join与resync。S6已在该路径依次通过20/100/500服务端门及20实体双端late join。
 
-[INFERRED][HIGH] 物流公共事实至少包含稳定TaskRef、CargoRef、SourceRef、SinkRef、CarrierRef、Quantity、State和Revision。Runtime提供POD与事务接口；宿主保存库存权威、Planner、Warehouse规则和故障恢复策略。Cargo无需逐件成为Mass entity，但必须具有可复制所有权和可见携带状态。
+[COMPUTED][HIGH] 20实体第三方Fixture与代表性并发Mass Projectile组合门、StandardSources自主Evaluator、完整Mixed Movement Pipeline、Business/Movement通道独立性、Presentation Additive以及Pursue/Wander/Escort组合验收均已通过。
 
-[INFERRED][HIGH] 最小生产复制闭环必须包含per-client late-join baseline、Snapshot→Delta恢复序列、动态Relevant-set provider、bounded durable state、unreliable latest-wins correction和StableEntityRef表现生命周期；Demo全量TArray multicast不能充当上述公共合同。
+[COMPUTED][HIGH] 公共生命周期、基础网络、R0–R7、P0–P5及S0–S6均可保持关闭结论；动画Root Motion、真实StateTree业务Task和原工程迁移仍不在本轮范围。
 
-## 13. 当前合同实现状态（2026-07-23）
-
-[COMPUTED][HIGH] per-client baseline、可靠state、latest-wins correction、空间RelevantSet、resync重建和StableEntityRef Presentation lifecycle已实现，J与Continuous真实late join已消费这些公共接口。
-
-[COMPUTED][HIGH] GT/WORK合同已由旧Round完整消费；Nav资源公共所有者通过独立`NavFlowProductSmall`；物流POD/事务内核通过专用`FriendlyLogisticsSmall`地图与Cargo视觉门。P0–P5产品合同已闭环，K/L继续冻结。
-
-[RULES I BROKE]：[COMPUTED][HIGH] P1未关闭时继续实施P2/P3/P5切片，违反锁定的阶段顺序；未改变K/L冻结边界。
-
-## 2026-07-28 合同复核
-
-[COMPUTED][HIGH] Boundary合同仍由一次gather/dispatch/wait、完整预验证、唯一逻辑writer和失败零写入实现；Round T2/T6/T7/T8当前工作树复测通过。
-[COMPUTED][HIGH] Replication channel新增有界reliable batch与ACK后分批追赶；空Drain不再等同于resync，可靠缺序/溢出仍保持fail-closed，correction仍为按StableEntityRef latest-wins。
-[COMPUTED][HIGH] FriendlyLogistics和J均消费公共Boundary/Nav/Networking/Presentation路径；P4 Cargo visual只由复制后的ownership驱动。当前累计构建、自动化和场景门通过，停止在K前。
+[RULES I BROKE]：[COMPUTED][HIGH] 无。

@@ -1,6 +1,6 @@
 #include "MassCrowdLifecycleBatches.h"
 
-namespace
+namespace CrowdLifecycleBatchesPrivate
 {
   constexpr uint64 FnvOffset = 14695981039346656037ull;
   constexpr uint64 FnvPrime = 1099511628211ull;
@@ -96,6 +96,8 @@ namespace
       && ActualEntryCount <= Limits.MaxEntriesPerBatch;
   }
 }
+
+using namespace CrowdLifecycleBatchesPrivate;
 
 bool FCrowdLifecycleBatchLimits::IsValid() const
 {

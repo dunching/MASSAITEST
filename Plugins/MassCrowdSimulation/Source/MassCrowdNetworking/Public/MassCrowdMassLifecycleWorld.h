@@ -28,6 +28,12 @@ public:
   bool ApplyAgentFactsCorrectionsAtBoundary(
     int64 FixedStepIndex,
     TConstArrayView<FCrowdAgentFacts> CorrectedFacts);
+  bool ValidateAgentFactsCorrectionsAtBoundary(
+    int64 FixedStepIndex,
+    TConstArrayView<FCrowdAgentFacts> CorrectedFacts) const;
+  void ApplyValidatedAgentFactsCorrectionsAtBoundary(
+    int64 FixedStepIndex,
+    TConstArrayView<FCrowdAgentFacts> CorrectedFacts);
 
   int32 GetActiveEntityCount() const { return RuntimeStore.GetActiveEntityCount(); }
   int64 GetLastAppliedFixedStep() const { return LastAppliedFixedStep; }

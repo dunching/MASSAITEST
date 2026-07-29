@@ -561,6 +561,9 @@ void FCrowdLocalPredictiveInteractionKernel::BuildCandidatePairs(
     const int32* MinIndex = IndexById.Find(MinId);
     const int32* MaxIndex = IndexById.Find(MaxId);
     if (!MinIndex || !MaxIndex) continue;
+    if (Agents[*MinIndex].InteractionLayer
+      != Agents[*MaxIndex].InteractionLayer)
+      continue;
     FCrowdLocalPredictivePair& Pair = OutPairs.AddDefaulted_GetRef();
     Pair.MinAgentId = MinId;
     Pair.MaxAgentId = MaxId;
@@ -681,6 +684,19 @@ void FCrowdLocalPredictiveInteractionKernel::Solve(
   TArray<FComponent> Components;
   TArray<bool> Visited;
   Visited.Init(false, SortedAgents.Num());
+  TMap<uint32, const FCrowdLocalPredictiveGrantState*>
+    PreviousGrantStateByComponent;
+  PreviousGrantStateByComponent.Reserve(
+    PreviousGrantStates.Num());
+  for (const FCrowdLocalPredictiveGrantState& Candidate :
+    PreviousGrantStates)
+  {
+    const FCrowdLocalPredictiveGrantState** Existing =
+      PreviousGrantStateByComponent.Find(Candidate.ComponentKey);
+    if (!Existing || Candidate.GrantEpoch > (*Existing)->GrantEpoch)
+      PreviousGrantStateByComponent.Add(
+        Candidate.ComponentKey, &Candidate);
+  }
   for (int32 Root = 0; Root < SortedAgents.Num(); ++Root)
   {
     if (Visited[Root] || Adjacency[Root].IsEmpty()) continue;
@@ -704,11 +720,9 @@ void FCrowdLocalPredictiveInteractionKernel::Solve(
       Component.Key = HashInt(Component.Key, SortedAgents[Index].AgentId);
 
     const FCrowdLocalPredictiveGrantState* Previous = nullptr;
-    for (const auto& Candidate : PreviousGrantStates)
-    {
-      if (Candidate.ComponentKey != Component.Key) continue;
-      if (!Previous || Candidate.GrantEpoch > Previous->GrantEpoch) Previous = &Candidate;
-    }
+    if (const FCrowdLocalPredictiveGrantState* const* Match =
+      PreviousGrantStateByComponent.Find(Component.Key))
+      Previous = *Match;
     if (Previous && Previous->RemainingSteps > 0
       && Component.AgentIndices.ContainsByPredicate([&](const int32 Index)
         { return SortedAgents[Index].AgentId == Previous->GrantedAgentId; }))
@@ -1645,9 +1659,19 @@ void FCrowdLocalPredictiveInteractionKernel::Solve(
   Hash = HashInt(Hash, OutSummary.JointPreferredRecoveryComponentCount);
   Hash = HashInt(Hash, OutSummary.JointPreferredRecoveryAgentCount);
   Hash = HashFloat(Hash, OutSummary.JointPreferredRecoveryMaxGainCmps, 1.0f);
+  const bool bHasExplicitInteractionLayers =
+    SortedAgents.ContainsByPredicate([](const auto& Agent)
+    {
+      return Agent.InteractionLayer != 0;
+    });
+  if (bHasExplicitInteractionLayers)
+    Hash = HashInt(Hash, 0x4c415952);
   for (const auto& Agent : SortedAgents)
   {
     Hash = HashInt(Hash, Agent.AgentId);
+    if (bHasExplicitInteractionLayers)
+      Hash = HashInt(
+        Hash, static_cast<int32>(Agent.InteractionLayer));
     Hash = HashFloat(Hash, Agent.Position.X, 1.0f);
     Hash = HashFloat(Hash, Agent.Position.Y, 1.0f);
     Hash = HashFloat(Hash, Agent.Velocity.X, 1.0f);

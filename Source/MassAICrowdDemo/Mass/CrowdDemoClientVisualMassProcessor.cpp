@@ -217,6 +217,15 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   {
     return;
   }
+  // Coordinator-owned scenarios have their own presentation transaction and
+  // profile lifetime. The Round client processor must not compete for the
+  // shared profile while one of those scenarios is active.
+  if (FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoMixedSandbox"))
+    || FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoContinuousLifecycle"))
+    || FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoFriendlyLogisticsSmall")))
+  {
+    return;
+  }
   const double VisualProcessorStartSeconds = FPlatformTime::Seconds();
   UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
     World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>();

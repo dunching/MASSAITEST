@@ -672,6 +672,7 @@ struct FCrowdDemoRangedCombatSettings
   UPROPERTY() float ProjectileSpeedCmps = 1800.0f;
   UPROPERTY() float ProjectileRadiusCm = 12.0f;
   UPROPERTY() int32 ProjectileLifetimeFixedSteps = 60;
+  UPROPERTY() int32 ProjectilePierceCount = 0;
   UPROPERTY() float MuzzleForwardOffsetCm = 70.0f;
   UPROPERTY() float Damage = 20.0f;
   UPROPERTY() float HorizontalImpulseCmps = 0.0f;

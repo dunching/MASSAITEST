@@ -45,16 +45,6 @@ namespace
     return FoldBytes(Hash, Bytes, UE_ARRAY_COUNT(Bytes));
   }
 
-  uint64 FoldName(uint64 Hash, const FName Name)
-  {
-    const FTCHARToUTF8 Utf8(*Name.ToString());
-    Hash = FoldUint32(Hash, static_cast<uint32>(Utf8.Length()));
-    return FoldBytes(
-      Hash,
-      reinterpret_cast<const uint8*>(Utf8.Get()),
-      Utf8.Length());
-  }
-
   bool IsStrictlySortedUnique(
     const TConstArrayView<FCrowdStableEntityRef> Refs)
   {
@@ -70,6 +60,7 @@ namespace
 
 struct FCrowdMassBoundaryOrchestrator::FTaskNode
 {
+  FCrowdBoundaryTaskDescriptor Descriptor;
   FCrowdBoundaryTaskKey Key;
   TArray<FCrowdBoundaryTaskKey> Prerequisites;
   FCrowdBoundaryTaskBody Body;
@@ -78,6 +69,29 @@ struct FCrowdMassBoundaryOrchestrator::FTaskNode
   UE::Tasks::FTask Task;
   bool bRequireOffGameThread = true;
 };
+
+bool FCrowdBoundaryTaskDescriptor::IsValid() const
+{
+  if (!Key.IsValid() || !Output.IsValid() || TelemetryId == 0)
+    return false;
+  for (int32 Index = 0; Index < Prerequisites.Num(); ++Index)
+  {
+    if (!Prerequisites[Index].IsValid()
+      || Prerequisites[Index] == Key
+      || (Index > 0
+        && !(Prerequisites[Index - 1] < Prerequisites[Index])))
+      return false;
+  }
+  FCrowdBoundaryResourceId Previous;
+  for (const FCrowdBoundaryInputResource& Input : Inputs)
+  {
+    if (!Input.IsValid()
+      || (Previous.IsValid() && !(Previous < Input.ResourceId)))
+      return false;
+    Previous = Input.ResourceId;
+  }
+  return true;
+}
 
 FCrowdBoundaryTaskResult FCrowdBoundaryTaskResult::Success(
   const uint64 StableHash)
@@ -91,6 +105,100 @@ FCrowdBoundaryTaskResult FCrowdBoundaryTaskResult::Success(
 FCrowdBoundaryTaskResult FCrowdBoundaryTaskResult::Failure()
 {
   return {};
+}
+
+bool FCrowdBoundaryPatchTransaction::AddAdapter(
+  const ICrowdBoundaryCommitAdapter& Adapter)
+{
+  if (bPrepared || bValidated || bApplied)
+    return false;
+  FEntry& Entry = Entries.AddDefaulted_GetRef();
+  Entry.Adapter = &Adapter;
+  return true;
+}
+
+bool FCrowdBoundaryPatchTransaction::PrepareAll(
+  const FCrowdMassBoundarySnapshot& Snapshot)
+{
+  if (bPrepared || bValidated || bApplied
+    || !Snapshot.bValid || Entries.IsEmpty())
+    return false;
+  for (FEntry& Entry : Entries)
+  {
+    Entry.Patch = {};
+    if (!Entry.Adapter
+      || !Entry.Adapter->Prepare(Snapshot, Entry.Patch)
+      || !Entry.Patch.bValid
+      || !Entry.Patch.ApplyPhase.IsValid()
+      || !Entry.Patch.AdapterId.IsValid()
+      || !Entry.Patch.PatchKey.IsValid()
+      || Entry.Patch.FixedStepIndex != Snapshot.FixedStepIndex
+      || Entry.Patch.PlanRevision != Snapshot.PlanRevision
+      || Entry.Patch.StableHash == 0)
+    {
+      Entries.Reset();
+      PreparedPatches.Reset();
+      return false;
+    }
+  }
+  Entries.Sort([](const FEntry& A, const FEntry& B)
+  {
+    if (A.Patch.ApplyPhase != B.Patch.ApplyPhase)
+      return A.Patch.ApplyPhase < B.Patch.ApplyPhase;
+    if (A.Patch.AdapterId != B.Patch.AdapterId)
+      return A.Patch.AdapterId < B.Patch.AdapterId;
+    return A.Patch.PatchKey < B.Patch.PatchKey;
+  });
+  PreparedPatches.Reserve(Entries.Num());
+  for (int32 Index = 0; Index < Entries.Num(); ++Index)
+  {
+    if (Index > 0)
+    {
+      const FCrowdBoundaryPreparedPatch& Previous =
+        Entries[Index - 1].Patch;
+      const FCrowdBoundaryPreparedPatch& Current =
+        Entries[Index].Patch;
+      if (Previous.ApplyPhase == Current.ApplyPhase
+        && Previous.AdapterId == Current.AdapterId
+        && Previous.PatchKey == Current.PatchKey)
+      {
+        Entries.Reset();
+        PreparedPatches.Reset();
+        return false;
+      }
+    }
+    PreparedPatches.Add(Entries[Index].Patch);
+  }
+  bPrepared = true;
+  return true;
+}
+
+bool FCrowdBoundaryPatchTransaction::ValidateAll(
+  const TConstArrayView<FCrowdMassCommitTarget> Targets)
+{
+  if (!bPrepared || bValidated || bApplied)
+    return false;
+  for (const FEntry& Entry : Entries)
+  {
+    if (!Entry.Adapter
+      || !Entry.Adapter->ValidatePrepared(Entry.Patch, Targets))
+      return false;
+  }
+  bValidated = true;
+  return true;
+}
+
+void FCrowdBoundaryPatchTransaction::ApplyAll(
+  FCrowdBoundaryApplyContext& Context)
+{
+  check(IsInGameThread());
+  check(bPrepared && bValidated && !bApplied);
+  for (const FEntry& Entry : Entries)
+  {
+    check(Entry.Adapter);
+    Entry.Adapter->ApplyPrepared(Entry.Patch, Context);
+  }
+  bApplied = true;
 }
 
 FCrowdMassBoundaryOrchestrator::FCrowdMassBoundaryOrchestrator() = default;
@@ -124,24 +232,47 @@ bool FCrowdMassBoundaryOrchestrator::AddTask(
   FCrowdBoundaryTaskBody&& Body,
   const bool bRequireOffGameThread)
 {
+  FCrowdBoundaryTaskDescriptor Descriptor;
+  Descriptor.Key = Key;
+  Descriptor.Prerequisites =
+    TArray<FCrowdBoundaryTaskKey>(Prerequisites);
+  Descriptor.Prerequisites.Sort();
+  Descriptor.Output.ResourceId = {
+    Key.TaskTypeId.Value != 0 ? Key.TaskTypeId.Value : 1};
+  Descriptor.Output.Revision = 1;
+  Descriptor.Output.SchemaId = 1;
+  Descriptor.Output.Capacity = 1;
+  Descriptor.Output.StableHash = 1;
+  Descriptor.TelemetryId =
+    Key.TaskTypeId.Value != 0 ? Key.TaskTypeId.Value : 1;
+  Descriptor.bRequireOffGameThread = bRequireOffGameThread;
+  return AddTask(MoveTemp(Descriptor), MoveTemp(Body));
+}
+
+bool FCrowdMassBoundaryOrchestrator::AddTask(
+  FCrowdBoundaryTaskDescriptor Descriptor,
+  FCrowdBoundaryTaskBody&& Body)
+{
+  Descriptor.Prerequisites.Sort();
+  Descriptor.Inputs.Sort([](
+    const FCrowdBoundaryInputResource& A,
+    const FCrowdBoundaryInputResource& B)
+  {
+    return A.ResourceId < B.ResourceId;
+  });
   if (!IsInGameThread()
     || State != ECrowdBoundaryTransactionState::Gathering
     || !Body
-    || FindNode(Key))
+    || !Descriptor.IsValid()
+    || FindNode(Descriptor.Key))
     return false;
   TUniquePtr<FTaskNode> Node = MakeUnique<FTaskNode>();
-  Node->Key = Key;
-  Node->Prerequisites = TArray<FCrowdBoundaryTaskKey>(Prerequisites);
-  Node->Prerequisites.Sort();
-  for (int32 Index = 0; Index < Node->Prerequisites.Num(); ++Index)
-  {
-    if (Node->Prerequisites[Index] == Key
-      || (Index > 0
-        && Node->Prerequisites[Index] == Node->Prerequisites[Index - 1]))
-      return false;
-  }
+  Node->Descriptor = MoveTemp(Descriptor);
+  Node->Key = Node->Descriptor.Key;
+  Node->Prerequisites = Node->Descriptor.Prerequisites;
   Node->Body = MoveTemp(Body);
-  Node->bRequireOffGameThread = bRequireOffGameThread;
+  Node->bRequireOffGameThread =
+    Node->Descriptor.bRequireOffGameThread;
   Nodes.Add(MoveTemp(Node));
   return true;
 }
@@ -158,6 +289,24 @@ bool FCrowdMassBoundaryOrchestrator::ValidateTaskGraph() const
     {
       if (!FindNode(Prerequisite)) return false;
       Dependents.FindOrAdd(Prerequisite).Add(Node->Key);
+    }
+    for (const FCrowdBoundaryInputResource& Input
+      : Node->Descriptor.Inputs)
+    {
+      bool bMatched = false;
+      for (const FCrowdBoundaryTaskKey& Prerequisite
+        : Node->Prerequisites)
+      {
+        const FTaskNode* Producer = FindNode(Prerequisite);
+        if (!Producer
+          || Producer->Descriptor.Output.ResourceId != Input.ResourceId)
+          continue;
+        bMatched = Producer->Descriptor.Output.Revision == Input.Revision
+          && Producer->Descriptor.Output.SchemaId == Input.SchemaId
+          && Producer->Descriptor.Output.StableHash == Input.StableHash;
+        break;
+      }
+      if (!bMatched) return false;
     }
   }
   TArray<FCrowdBoundaryTaskKey> Ready;
@@ -344,7 +493,9 @@ bool FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
   for (const FCrowdBoundaryPreparedPatch& Patch : PreparedPatches)
   {
     if (!Patch.bValid
-      || Patch.AdapterId.IsNone()
+      || !Patch.ApplyPhase.IsValid()
+      || !Patch.AdapterId.IsValid()
+      || !Patch.PatchKey.IsValid()
       || Patch.FixedStepIndex != Snapshot.FixedStepIndex
       || Patch.PlanRevision != Snapshot.PlanRevision
       || Patch.StableHash == 0
@@ -352,18 +503,28 @@ bool FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
       || !IsStrictlySortedUnique(Patch.EntityRefs)
       || Patch.EntityRefs != MovementRefs)
       return false;
-    OutEnvelope.Patches.Add({Patch.AdapterId, Patch.StableHash});
+    OutEnvelope.Patches.Add({
+      Patch.ApplyPhase, Patch.AdapterId, Patch.PatchKey,
+      Patch.StableHash});
   }
   OutEnvelope.Patches.Sort([](
     const FCrowdBoundaryPatchDescriptor& A,
     const FCrowdBoundaryPatchDescriptor& B)
   {
-    return A.AdapterId.LexicalLess(B.AdapterId);
+    if (A.ApplyPhase != B.ApplyPhase)
+      return A.ApplyPhase < B.ApplyPhase;
+    if (A.AdapterId != B.AdapterId)
+      return A.AdapterId < B.AdapterId;
+    return A.PatchKey < B.PatchKey;
   });
   for (int32 Index = 1; Index < OutEnvelope.Patches.Num(); ++Index)
   {
-    if (OutEnvelope.Patches[Index - 1].AdapterId
-      == OutEnvelope.Patches[Index].AdapterId)
+    if (OutEnvelope.Patches[Index - 1].ApplyPhase
+        == OutEnvelope.Patches[Index].ApplyPhase
+      && OutEnvelope.Patches[Index - 1].AdapterId
+        == OutEnvelope.Patches[Index].AdapterId
+      && OutEnvelope.Patches[Index - 1].PatchKey
+        == OutEnvelope.Patches[Index].PatchKey)
       return false;
   }
 
@@ -377,7 +538,9 @@ bool FCrowdMassBoundaryOrchestrator::BuildCommitEnvelope(
   Hash = FoldUint32(Hash, static_cast<uint32>(OutEnvelope.Patches.Num()));
   for (const FCrowdBoundaryPatchDescriptor& Patch : OutEnvelope.Patches)
   {
-    Hash = FoldName(Hash, Patch.AdapterId);
+    Hash = FoldUint32(Hash, Patch.ApplyPhase.Value);
+    Hash = FoldUint32(Hash, Patch.AdapterId.Value);
+    Hash = FoldUint64(Hash, Patch.PatchKey.Value);
     Hash = FoldUint64(Hash, Patch.StableHash);
   }
   OutEnvelope.StableHash = Hash;
@@ -468,7 +631,8 @@ FCrowdMassBoundaryOrchestrator::BuildResult() const
     State == ECrowdBoundaryTransactionState::Committed;
   Result.Tasks.Reserve(Nodes.Num());
   for (const TUniquePtr<FTaskNode>& Node : Nodes)
-    Result.Tasks.Add({Node->Key, *Node->Result});
+    Result.Tasks.Add({
+      Node->Key, Node->Descriptor.TelemetryId, *Node->Result});
   Result.Tasks.Sort([](const auto& A, const auto& B)
   {
     return A.Key < B.Key;

@@ -2,70 +2,48 @@
 
 #include "CoreMinimal.h"
 #include "MassCrowdBehaviorSource.h"
-#include "MassCrowdRuntimeBehavior.h"
 
-namespace CrowdBuiltinCapabilityIds
-{
-  inline constexpr FCrowdCapabilityId Move{1};
-  inline constexpr FCrowdCapabilityId Wander{2};
-  inline constexpr FCrowdCapabilityId MoveTo{3};
-  inline constexpr FCrowdCapabilityId Pursue{4};
-  inline constexpr FCrowdCapabilityId Haul{5};
-  inline constexpr FCrowdCapabilityId Attack{6};
-  inline constexpr FCrowdCapabilityId Guard{7};
-  inline constexpr FCrowdCapabilityId Flee{8};
-  inline constexpr FCrowdCapabilityId RangedAttack{9};
-  inline constexpr FCrowdCapabilityId NavLayer{10};
-  inline constexpr FCrowdCapabilityId Face{11};
-  inline constexpr FCrowdCapabilityId Formation{12};
-  inline constexpr FCrowdCapabilityId CarryCargo{13};
-  inline constexpr FCrowdCapabilityId React{14};
-}
-
-namespace CrowdBuiltinSourceTypeIds
-{
-  inline constexpr FCrowdBehaviorSourceTypeId MoveToSink{1001};
-  inline constexpr FCrowdBehaviorSourceTypeId SharedFlow{1002};
-  inline constexpr FCrowdBehaviorSourceTypeId FaceMovement{1101};
-  inline constexpr FCrowdBehaviorSourceTypeId FaceTarget{1102};
-  inline constexpr FCrowdBehaviorSourceTypeId Formation{1201};
-  inline constexpr FCrowdBehaviorSourceTypeId CarryCargo{1301};
-  inline constexpr FCrowdBehaviorSourceTypeId PickupInteraction{1401};
-  inline constexpr FCrowdBehaviorSourceTypeId DeliverInteraction{1402};
-  inline constexpr FCrowdBehaviorSourceTypeId AttackTarget{1501};
-  inline constexpr FCrowdBehaviorSourceTypeId HitReaction{1601};
-  inline constexpr FCrowdBehaviorSourceTypeId StunConstraint{1602};
-  inline constexpr FCrowdBehaviorSourceTypeId DeathConstraint{1603};
-}
-
-namespace CrowdBuiltinBehaviorSchemas
-{
-  inline constexpr uint32 Standard = 1;
-  inline constexpr FCrowdCapabilityProfileKey LegacyFullProfile{1};
-}
-
-struct FCrowdBuiltinBehaviorSourcePayload
-{
-  FVector Vector = FVector::ZeroVector;
-  FCrowdStableEntityRef TargetRef;
-  uint64 CommitId = 0;
-  uint32 PrimaryId = 0;
-  uint32 SecondaryId = 0;
-  int32 Quantity = 0;
-  uint32 Flags = 0;
-};
-
-static_assert(
-  std::is_trivially_copyable_v<FCrowdBuiltinBehaviorSourcePayload>);
-static_assert(
-  sizeof(FCrowdBuiltinBehaviorSourcePayload)
-  <= CrowdBehavior::MaxPayloadBytes);
-
-struct FCrowdBehaviorSourceEvaluationContext
+struct MASSCROWDRUNTIME_API FCrowdBehaviorSourceEvaluationContext
 {
   int64 FixedStepIndex = INDEX_NONE;
+  FVector Position = FVector::ZeroVector;
+  FVector Velocity = FVector::ZeroVector;
+  FVector Facing = FVector::ForwardVector;
   FCrowdResolvedCapabilitySet Capabilities;
   FCrowdBehaviorSourceInstance Instance;
+  TConstArrayView<FCrowdBehaviorContextRecord> ContextRecords;
+
+  const FCrowdBehaviorContextRecord* FindContext(
+    FCrowdBehaviorContextTypeId TypeId) const;
+};
+
+struct FCrowdBehaviorContextSchema
+{
+  FCrowdBehaviorContextTypeId TypeId;
+  uint16 Version = 0;
+  uint16 Size = 0;
+
+  bool IsValid() const
+  {
+    return TypeId.IsValid() && Version != 0
+      && Size <= CrowdBehavior::MaxContextRecordBytes;
+  }
+  bool operator==(const FCrowdBehaviorContextSchema& Other) const = default;
+};
+
+struct MASSCROWDRUNTIME_API FCrowdBehaviorEntityEvaluationContext
+{
+  FCrowdStableEntityRef EntityRef;
+  int64 FixedStepIndex = INDEX_NONE;
+  FVector Position = FVector::ZeroVector;
+  FVector Velocity = FVector::ZeroVector;
+  FVector Facing = FVector::ForwardVector;
+  TArray<FCrowdBehaviorContextRecord, TInlineAllocator<
+    CrowdBehavior::MaxContextRecordsPerEntity>> Records;
+  uint64 StableHash = 0;
+
+  bool IsValid() const;
+  void RecalculateStableHash();
 };
 
 class MASSCROWDRUNTIME_API FCrowdBehaviorContributionWriter
@@ -82,8 +60,14 @@ public:
   bool AddInteraction(FCrowdInteractionContribution Contribution);
   bool AddBusiness(FCrowdBusinessContribution Contribution);
   bool AddPresentation(FCrowdPresentationContribution Contribution);
+  bool SetNextState(const FCrowdBehaviorSourceState& State);
 
   bool Succeeded() const { return bSucceeded; }
+  bool HasNextState() const { return bHasNextState; }
+  const FCrowdBehaviorSourceState& GetNextState() const
+  {
+    return NextState;
+  }
 
 private:
   bool CanWrite(ECrowdBehaviorChannel Channel, int32 CurrentCount);
@@ -91,6 +75,8 @@ private:
   const FCrowdBehaviorSourceSpec& Spec;
   FCrowdBehaviorContributionKey Key;
   FCrowdBehaviorContributions& Out;
+  FCrowdBehaviorSourceState NextState;
+  bool bHasNextState = false;
   bool bSucceeded = true;
 };
 
@@ -133,6 +119,48 @@ private:
   bool bFrozen = false;
 };
 
+class MASSCROWDRUNTIME_API FCrowdBehaviorRegistryBuilder
+{
+public:
+  FCrowdBehaviorRegistryBuilder(
+    FCrowdCapabilityProfileRegistry& InProfiles,
+    FCrowdBehaviorSourceEvaluatorRegistry& InEvaluators,
+    TMap<FCrowdBehaviorContextTypeId, FCrowdBehaviorContextSchema>&
+      InContextSchemas)
+    : Profiles(InProfiles)
+    , Evaluators(InEvaluators)
+    , ContextSchemas(InContextSchemas)
+  {
+  }
+
+  bool RegisterProfile(FCrowdCapabilityProfile Profile);
+  bool RegisterSource(
+    const FCrowdBehaviorSourceSpec& Spec,
+    TSharedRef<const ICrowdBehaviorSourceEvaluator, ESPMode::ThreadSafe>
+      Evaluator);
+  bool RegisterContextSchema(const FCrowdBehaviorContextSchema& Schema);
+
+private:
+  FCrowdCapabilityProfileRegistry& Profiles;
+  FCrowdBehaviorSourceEvaluatorRegistry& Evaluators;
+  TMap<FCrowdBehaviorContextTypeId, FCrowdBehaviorContextSchema>&
+    ContextSchemas;
+};
+
+class MASSCROWDRUNTIME_API ICrowdBehaviorSourceProvider
+{
+public:
+  virtual ~ICrowdBehaviorSourceProvider() = default;
+  virtual FCrowdBehaviorProviderId GetProviderId() const = 0;
+  virtual bool Register(FCrowdBehaviorRegistryBuilder& Builder) const = 0;
+};
+
+MASSCROWDRUNTIME_API bool RegisterCrowdBehaviorSourceProvider(
+  TSharedRef<const ICrowdBehaviorSourceProvider, ESPMode::ThreadSafe>
+    Provider);
+MASSCROWDRUNTIME_API bool UnregisterCrowdBehaviorSourceProvider(
+  FCrowdBehaviorProviderId ProviderId);
+
 struct FCrowdBehaviorCapabilityBindingUpdate
 {
   int64 EffectiveFixedStep = INDEX_NONE;
@@ -147,6 +175,7 @@ struct FCrowdBehaviorPreparedEntity
 {
   FCrowdStableEntityRef EntityRef;
   uint64 BaseSourceSetHash = 0;
+  uint64 EvaluationContextHash = 0;
   FCrowdBehaviorSourceSet StagedSourceSet;
   FCrowdResolvedBehaviorChannels ResolvedChannels;
   TArray<FCrowdBehaviorSourceEvent> Events;
@@ -157,6 +186,7 @@ struct FCrowdBehaviorPreparedEntity
 struct FCrowdBehaviorPreparedBoundary
 {
   int64 FixedStepIndex = INDEX_NONE;
+  uint64 RegistryHash = 0;
   TArray<FCrowdBehaviorPreparedEntity> Entities;
   uint64 SourceSetHash = 0;
   uint64 CommandBatchHash = 0;
@@ -168,7 +198,7 @@ struct FCrowdBehaviorPreparedBoundary
 class MASSCROWDRUNTIME_API FCrowdBehaviorSourceRuntime
 {
 public:
-  bool InitializeBuiltins();
+  bool InitializeFromRegisteredProviders();
   void Reset();
 
   bool RegisterEntity(
@@ -180,6 +210,8 @@ public:
     int64 EffectiveFixedStep,
     FCrowdStableEntityRef EntityRef,
     const FCrowdCapabilityBinding& Binding);
+  bool SetEvaluationContext(
+    const FCrowdBehaviorEntityEvaluationContext& Context);
 
   bool PrepareBoundary(
     int64 FixedStepIndex,
@@ -197,6 +229,8 @@ public:
 
   const FCrowdBehaviorSourceSet* FindSourceSet(
     FCrowdStableEntityRef EntityRef) const;
+  bool ApplyReplicatedSourceSet(
+    const FCrowdBehaviorSourceSet& ReplicatedSet);
   const FCrowdResolvedBehaviorChannels* FindResolvedChannels(
     FCrowdStableEntityRef EntityRef) const;
   bool IsSourceActive(
@@ -214,30 +248,23 @@ public:
   {
     return Evaluators;
   }
+  uint64 GetRegistryHash() const { return RegistryHash; }
+  uint64 GetContextSchemaHash() const { return ContextSchemaHash; }
 
 private:
   FCrowdCapabilityProfileRegistry CapabilityProfiles;
   FCrowdBehaviorSourceEvaluatorRegistry Evaluators;
+  TMap<FCrowdBehaviorContextTypeId, FCrowdBehaviorContextSchema>
+    ContextSchemas;
+  TMap<FCrowdStableEntityRef, FCrowdBehaviorEntityEvaluationContext>
+    EvaluationContexts;
   TMap<FCrowdStableEntityRef, FCrowdBehaviorSourceSet> SourceSets;
   TMap<FCrowdStableEntityRef, FCrowdResolvedBehaviorChannels>
     LastResolvedChannels;
   TArray<FCrowdBehaviorSourceCommand> PendingCommands;
   TArray<FCrowdBehaviorCapabilityBindingUpdate> PendingBindingUpdates;
   TArray<FCrowdBehaviorSourceEvent> LastCommittedEvents;
+  uint64 RegistryHash = 0;
+  uint64 ContextSchemaHash = 0;
   bool bInitialized = false;
-};
-
-class MASSCROWDRUNTIME_API FCrowdLegacyBehaviorRecipe
-{
-public:
-  static bool BuildTransitionCommands(
-    const FCrowdRuntimeBehaviorContext& Context,
-    const FCrowdBehaviorSourceSet& CurrentSet,
-    FCrowdBehaviorControllerId ControllerId,
-    uint32& InOutNextCommandSequence,
-    uint32& InOutNextSourceSequence,
-    TArray<FCrowdBehaviorSourceCommand>& OutCommands);
-
-  static FCrowdBehaviorSourceTypeId GetPrimarySourceType(
-    ECrowdActiveBehavior Behavior);
 };

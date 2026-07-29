@@ -1,0 +1,34 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Mass Crowd StateTree Adapter",
+  "Description": "Optional StateTree command adapter for Mass Crowd Simulation.",
+  "Category": "AI",
+  "CreatedBy": "Mass Crowd Simulation",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "EnabledByDefault": false,
+  "Plugins": [
+    {
+      "Name": "MassCrowdSimulation",
+      "Enabled": true
+    },
+    {
+      "Name": "StateTree",
+      "Enabled": true
+    },
+    {
+      "Name": "GameplayStateTree",
+      "Enabled": true
+    }
+  ],
+  "Modules": [
+    {
+      "Name": "MassCrowdStateTreeAdapter",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

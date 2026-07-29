@@ -59,7 +59,7 @@ namespace
   }
 
   FCrowdMassGatherRecord MakeRecord(
-    const int32 AgentId, const uint32 ProfileKey)
+    const int32 AgentId, const uint32 InProfileKey)
   {
     FCrowdMassGatherRecord Record;
     Record.Identity.AgentId = AgentId;
@@ -71,7 +71,7 @@ namespace
     Record.AgentFacts.CapabilitySet.Add(ECrowdCapability::Move);
     Record.AgentFacts.DerivedBehaviorLabel =
       static_cast<uint32>(ECrowdActiveBehavior::Idle);
-    Record.AgentFacts.MovementProfileKey = ProfileKey;
+    Record.AgentFacts.MovementProfileKey = InProfileKey;
     Record.State.Position = FVector(
       static_cast<float>(AgentId * 100), 10.0f, 60.0f);
     Record.State.Velocity = FVector(30.0f, 0.0f, 0.0f);
@@ -80,7 +80,7 @@ namespace
     Record.State.bInitialized = true;
     Record.Properties.PhysicalRadiusCm = 42.0f;
     Record.Properties.MaximumSpeedCmps = 300.0f;
-    Record.Properties.CapabilityProfileKey = ProfileKey;
+    Record.Properties.CapabilityProfileKey = InProfileKey;
     Record.Guidance.SharedFlow = FCrowdGuidanceComposeKernel::BuildCandidate(
       AgentId, ECrowdGuidanceProvider::SharedFlow, 3,
       FVector(300.0f, 0.0f, 0.0f), Record.State.Position, 0.0f, true);

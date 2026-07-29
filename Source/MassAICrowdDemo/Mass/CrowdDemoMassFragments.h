@@ -26,12 +26,22 @@ struct FCrowdDemoMassProjectileFragment : public FMassFragment
 
   UPROPERTY(Transient) uint64 ProjectileId = 0;
   UPROPERTY(Transient) int32 SourceAgentId = INDEX_NONE;
+  UPROPERTY(Transient) int32 SourceLifecycleSerial = 0;
   UPROPERTY(Transient) int32 TargetAgentId = INDEX_NONE;
+  UPROPERTY(Transient) int32 TargetLifecycleSerial = 0;
+  UPROPERTY(Transient) int32 FireSequence = 0;
   UPROPERTY(Transient) int32 SpawnFixedStep = INDEX_NONE;
+  UPROPERTY(Transient) int32 AgeFixedSteps = 0;
+  UPROPERTY(Transient) int32 RemainingPierces = 0;
+  UPROPERTY(Transient) int32 LastHitTargetAgentId = INDEX_NONE;
+  UPROPERTY(Transient) uint32 SourceFactionId = 0;
   UPROPERTY(Transient) FVector PreviousPosition = FVector::ZeroVector;
   UPROPERTY(Transient) FVector Position = FVector::ZeroVector;
   UPROPERTY(Transient) FVector Velocity = FVector::ZeroVector;
   UPROPERTY(Transient) float RadiusCm = 12.0f;
+  UPROPERTY(Transient) uint32 NavLayer = 0;
+  UPROPERTY(Transient) uint32 CollisionProfileId = 1;
+  UPROPERTY(Transient) uint32 EffectProfileId = 1;
   UPROPERTY(Transient) bool bActive = false;
   UPROPERTY(Transient) bool bImpacted = false;
   UPROPERTY(Transient) bool bExpired = false;

@@ -1,5 +1,7 @@
 # 通用持续 Agent Sandbox 与插件化迁移前置计划
 
+[COMPUTED][HIGH] 文档状态：本文件保留A–L迁移目标和旧阶段顺序。当前实施状态由`PhasePlan.md`接管，Behavior Source设计与缺口由`EntityBehaviorSourceArchitecture.md`接管；以下早期停止边界不得覆盖日期更晚的现行状态。
+
 ## 1. 文档职责
 
 [INFERRED][HIGH] 本文件定义现有独立测试收敛、插件化提取、原工程迁移验证与最终通用持续 Agent Sandbox 的强制顺序；它描述目标和门控，不表示这些功能已经实现。长期运行与复制合同以`MassCrowdUnifiedRuntimeAndReplicationContract.md`为准。
@@ -37,7 +39,7 @@ MassAICrowdDemo Project Module
 └── continuous Sandbox专用Director/Pawn
 ```
 
-[COMPUTED][HIGH] 当前 Core/Runtime 运动、统一Behavior合同、静态Recast分层Surface Graph/Shared Flow、Networking Snapshot/lifecycle/late-join/relevancy协议、公共Presentation、Demo continuous lifecycle与20实体混合Sandbox已实现。旧Round统一、真实移动视区enter/exit、独立NavFlow与FriendlyLogistics产品场景仍未完成；上表后续职责不是当前完成状态。
+[COMPUTED][HIGH] Core/Runtime运动、静态Recast分层Surface Graph/Shared Flow、Networking Snapshot/lifecycle/late-join/relevancy协议、公共Presentation、Demo continuous lifecycle、NavFlow与FriendlyLogistics产品场景及20实体Mixed均已实现。真实移动视区enter/exit仍无独立双客户端证据；Behavior Source Resolver权威化、行为网络和StateTree端到端仍未完成。
 
 [INFERRED][HIGH] 依赖方向必须保持 `Demo/主工程 Adapter → 插件公开接口 → 纯 kernel`；插件不得反向 include Demo Coordinator、ScenarioConfigActor、测试地图或Saved诊断路径。
 
@@ -85,13 +87,13 @@ MassAICrowdDemo Project Module
 
 ## 8. 当前停止边界
 
-[COMPUTED][HIGH] 阶段G已实现独立continuous lifecycle，阶段I已实现NavMesh Flow与高低差地图；Player Pawn、GameplayCommand、混合业务Sandbox和主工程迁移仍未实施。
+[COMPUTED][HIGH] 阶段G已实现独立continuous lifecycle，阶段I已实现NavMesh Flow与高低差地图，20实体Mixed Sandbox已实现；Player Pawn、GameplayCommand、运行时通用混合Planner和主工程迁移仍未实施。
 
-[COMPUTED][HIGH] A–J历史能力阶段已完成；K/L继续冻结，不执行正式20/100/500或原工程迁移。[COMPUTED][HIGH] 当前产品化闭环P0已完成并停止在P1前，J的独立Demo组合不等于公共Runtime/Networking/Presentation已经闭环。
+[COMPUTED][HIGH] A–J历史能力阶段和P0–P5公共生命周期/基础网络/表现闭环已关闭；K的同一Behavior Source Mixed生产路径已依次通过20/100/500双端门。L原工程迁移仍未实施，且不在本轮范围。
 
 ## 9. 大量远程敌人的插件前置修正（2026-07-17）
 
-[COMPUTED][HIGH] 当前T8不是最终可迁移Projectile实现：权威状态仍在Pipeline数组，Mass projectile pool仅镜像状态，命中仍是每Projectile全量扫描Agent。
+[COMPUTED][HIGH] 本段原先记录的Pipeline数组权威、Mass镜像pool和每Projectile全量扫描已经被R5替换；当前T8使用Mass Fragment唯一权威、动态容量、网格Broadphase、相对/环境Sweep和通用Impact/Hit宿主提交。
 
 [INFERRED][HIGH] Projectile 与 Combat 必须遵守现有 `MassCrowdCore / MassCrowdRuntime / MassCrowdNetworking / MassCrowdPresentation / 宿主Business` 边界；不再发明另一套并行模块命名。依赖保持`宿主Adapter → 插件Public API → 纯kernel`。
 

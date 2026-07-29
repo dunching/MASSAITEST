@@ -2,6 +2,7 @@
 
 #include "Camera/CameraActor.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "CrowdDemoBehaviorSourceProvider.h"
 #include "CrowdDemoReplicator.h"
 #include "Engine/TargetPoint.h"
 #include "Engine/World.h"
@@ -11,6 +12,11 @@
 #include "MassCommonFragments.h"
 #include "Mass/CrowdDemoPresentationAdapter.h"
 #include "MassCrowdPresentationSubsystem.h"
+#include "MassCrowdBoundaryWorkGraph.h"
+#include "MassCrowdFacingFinalizeWork.h"
+#include "MassCrowdMovementFinalizeWork.h"
+#include "MassCrowdMovementPipelineWork.h"
+#include "MassCrowdParticlePipelineWork.h"
 #include "MassCrowdReplicationActor.h"
 #include "MassCrowdRuntimeFragments.h"
 #include "MassCrowdRuntimeSubsystem.h"
@@ -23,10 +29,80 @@
 namespace
 {
   constexpr double MixedFixedStepSeconds = 1.0 / 30.0;
-  constexpr int32 MixedPopulation = 20;
+  constexpr int32 DefaultMixedPopulation = 20;
+  constexpr int32 MaximumMixedPopulation = 500;
   constexpr int32 LifecycleIntervalSteps = 45;
   constexpr float MixedStartDelaySeconds = 5.0f;
   constexpr float MinimumSafeSeparationCm = 70.0f;
+  constexpr float MixedInteractionRadiusCm = 900.0f;
+  constexpr float MixedScaleInteractionRadiusCm = 2000.0f;
+
+  double DistanceSquaredToNavNode(
+    const FVector& Location,
+    const FCrowdNavSurfaceNode& Node)
+  {
+    const FVector Normal =
+      Node.SurfaceNormal.GetSafeNormal();
+    const double PlaneDistance =
+      FVector::DotProduct(
+        Location - Node.Vertices[0], Normal);
+    const FVector Projected =
+      Location - Normal * PlaneDistance;
+    bool bInside = true;
+    double WindingSign = 0.0;
+    for (int32 Index = 0;
+      Index < Node.Vertices.Num(); ++Index)
+    {
+      const FVector& A = Node.Vertices[Index];
+      const FVector& B =
+        Node.Vertices[
+          (Index + 1) % Node.Vertices.Num()];
+      const double Side = FVector::DotProduct(
+        FVector::CrossProduct(B - A, Projected - A),
+        Normal);
+      if (FMath::Abs(Side)
+        <= UE_DOUBLE_KINDA_SMALL_NUMBER)
+        continue;
+      if (WindingSign == 0.0)
+        WindingSign = Side;
+      else if ((Side > 0.0)
+        != (WindingSign > 0.0))
+      {
+        bInside = false;
+        break;
+      }
+    }
+    if (bInside)
+      return FMath::Square(PlaneDistance);
+
+    double BestDistanceSquared =
+      TNumericLimits<double>::Max();
+    for (int32 Index = 0;
+      Index < Node.Vertices.Num(); ++Index)
+    {
+      const FVector& A = Node.Vertices[Index];
+      const FVector& B =
+        Node.Vertices[
+          (Index + 1) % Node.Vertices.Num()];
+      BestDistanceSquared = FMath::Min(
+        BestDistanceSquared,
+        FVector::DistSquared(
+          Location,
+          FMath::ClosestPointOnSegment(
+            Location, A, B)));
+    }
+    return BestDistanceSquared;
+  }
+
+  int32 ResolveMixedPopulation()
+  {
+    int32 Population = DefaultMixedPopulation;
+    FParse::Value(
+      FCommandLine::Get(),
+      TEXT("CrowdDemoEntityCount="), Population);
+    return FMath::Clamp(
+      Population, 1, MaximumMixedPopulation);
+  }
 
   ACrowdDemoReplicator* FindMixedVisualHost(UWorld& World)
   {
@@ -43,6 +119,64 @@ namespace
     return Index < 32 ? uint32{1} << Index : 0;
   }
 
+  ECrowdActiveBehavior DeriveDiagnosticBehavior(
+    const FCrowdBehaviorSourceSet& SourceSet)
+  {
+    ECrowdActiveBehavior Result = ECrowdActiveBehavior::Idle;
+    uint8 ResultRank = 0;
+    const auto Promote = [&](
+      const uint8 Rank, const ECrowdActiveBehavior Label)
+    {
+      if (Rank <= ResultRank) return;
+      ResultRank = Rank;
+      Result = Label;
+    };
+    for (const FCrowdBehaviorSourceInstance& Instance :
+      SourceSet.Instances)
+    {
+      if (Instance.SourceTypeId
+          == CrowdStandardSources::MovementLock
+        && Instance.Handle.ControllerId
+          == CrowdDemoBehaviorControllerIds::Reaction
+        && Instance.Handle.SourceSequence == 2
+        && Instance.ExpireFixedStep == INDEX_NONE)
+        return ECrowdActiveBehavior::Dead;
+      if (Instance.SourceTypeId
+          == CrowdDemoSourceTypeIds::DeliverInteraction
+        || Instance.SourceTypeId
+          == CrowdDemoSourceTypeIds::CarryCargo)
+        Promote(9, ECrowdActiveBehavior::HaulDeliver);
+      else if (Instance.SourceTypeId
+          == CrowdDemoSourceTypeIds::PickupInteraction
+        || Instance.SourceTypeId
+          == CrowdStandardSources::ArriveAtLocation)
+        Promote(8, ECrowdActiveBehavior::HaulPickup);
+      else if (Instance.SourceTypeId
+          == CrowdDemoSourceTypeIds::AttackTarget)
+        Promote(7, ECrowdActiveBehavior::Attack);
+      else if (Instance.SourceTypeId
+          == CrowdStandardSources::PursueEntity)
+        Promote(6, ECrowdActiveBehavior::Pursue);
+      else if (Instance.SourceTypeId
+          == CrowdStandardSources::FleeFromEntity)
+        Promote(5, ECrowdActiveBehavior::Flee);
+      else if (Instance.SourceTypeId
+          == CrowdStandardSources::WanderSteering)
+        Promote(4, ECrowdActiveBehavior::Wander);
+      else if (Instance.SourceTypeId
+          == CrowdStandardSources::FollowEntity
+        || Instance.SourceTypeId
+          == CrowdStandardSources::FormationOffset)
+        Promote(3, ECrowdActiveBehavior::MoveTo);
+      else if (Instance.SourceTypeId
+          == CrowdStandardSources::MoveToLocation)
+        Promote(2, Instance.Priority == 99
+          ? ECrowdActiveBehavior::Guard
+          : ECrowdActiveBehavior::MoveTo);
+    }
+    return Result;
+  }
+
   uint64 FoldMixedHash(uint64 Hash, const uint64 Value)
   {
     for (int32 Byte = 0; Byte < 8; ++Byte)
@@ -51,6 +185,24 @@ namespace
         (Value >> (Byte * 8)) & 0xffull);
       Hash *= 1099511628211ull;
     }
+    return Hash;
+  }
+
+  uint64 CalculateMixedHostFactHash(
+    const FCrowdDemoMixedAgentState& State)
+  {
+    uint64 Hash = 14695981039346656037ull;
+    Hash = FoldMixedHash(Hash, State.StableEntityId);
+    Hash = FoldMixedHash(Hash, State.LifecycleSerial);
+    Hash = FoldMixedHash(Hash, State.MembershipKey);
+    Hash = FoldMixedHash(Hash, State.DerivedBehaviorLabel);
+    Hash = FoldMixedHash(Hash, State.Health);
+    Hash = FoldMixedHash(Hash, State.TargetProviderId);
+    Hash = FoldMixedHash(Hash, State.TargetStableEntityId);
+    Hash = FoldMixedHash(Hash, State.TargetLifecycleSerial);
+    Hash = FoldMixedHash(Hash, State.TaskProviderId);
+    Hash = FoldMixedHash(Hash, State.TaskStableEntityId);
+    Hash = FoldMixedHash(Hash, State.TaskLifecycleSerial);
     return Hash;
   }
 
@@ -219,6 +371,11 @@ void ACrowdDemoMixedSandboxCoordinator::BeginPlay()
   Super::BeginPlay();
   bCaptureRequested = FParse::Param(
     FCommandLine::Get(), TEXT("CrowdDemoCaptureMixedSandbox"));
+  if (UWorld* World = GetWorld())
+    if (UMassCrowdRuntimeSubsystem* Runtime =
+      World->GetSubsystem<UMassCrowdRuntimeSubsystem>())
+      BehaviorSourceRuntime =
+        &Runtime->GetBehaviorSourceRuntime();
   if (HasAuthority()) TryInitializeServer();
 }
 
@@ -357,7 +514,7 @@ bool ACrowdDemoMixedSandboxCoordinator::TryInitializeServer()
 
   Config = {};
   Config.bValid = 1;
-  Config.PopulationLimit = MixedPopulation;
+  Config.PopulationLimit = ResolveMixedPopulation();
   Config.SnapshotRevision = 1;
   Config.RelevantSetRevision = 1;
   Config.NavTopologyHash = Resource.TopologyHash;
@@ -382,7 +539,9 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
   UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
     World ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>() : nullptr;
   if (!EntitySubsystem || !RuntimeSubsystem || Config.bValid == 0
-    || Config.PopulationLimit != MixedPopulation) return false;
+    || Config.PopulationLimit <= 0
+    || Config.PopulationLimit > MaximumMixedPopulation)
+    return false;
   BehaviorSourceRuntime =
     &RuntimeSubsystem->GetBehaviorSourceRuntime();
 
@@ -404,7 +563,7 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
     InitializeSlotState(SlotIndex, 1);
     FCrowdCapabilityBinding Binding;
     Binding.ProfileKey =
-      CrowdBuiltinBehaviorSchemas::LegacyFullProfile;
+      CrowdDemoBehaviorSchemas::FullProfile;
     if (!BehaviorSourceRuntime->RegisterEntity(
         Slots[SlotIndex].Facts.StableEntityRef, Binding))
       return false;
@@ -462,29 +621,124 @@ void ACrowdDemoMixedSandboxCoordinator::InitializeSlotState(
   const FCrowdNavSurfaceGraph& Graph = *NavGraphHandle;
   const FCrowdNavSurfaceFlow* GoalFlow = nullptr;
   GetOrBuildFlow(Marker(TEXT("CrowdNavGoal"), Graph.Nodes[0].Center), GoalFlow);
+  if (Config.PopulationLimit > DefaultMixedPopulation)
+  {
+    constexpr double ScaleSpawnSpacingCm = 120.0;
+    FBox GroundBounds(EForceInit::ForceInit);
+    for (const FCrowdNavSurfaceNode& Node : Graph.Nodes)
+      if (Node.Center.Z < 200.0)
+        GroundBounds += Node.Center;
+    if (GroundBounds.IsValid)
+    {
+      const int32 ColumnCount = FMath::Max(
+        1, FMath::FloorToInt(
+          (GroundBounds.Max.X - GroundBounds.Min.X)
+          / ScaleSpawnSpacingCm) + 1);
+      const int32 RowCount = FMath::Max(
+        1, FMath::FloorToInt(
+          (GroundBounds.Max.Y - GroundBounds.Min.Y)
+          / ScaleSpawnSpacingCm) + 1);
+      const int32 CellCount = ColumnCount * RowCount;
+      for (int32 Offset = 0; Offset < CellCount; ++Offset)
+      {
+        const int32 Cell =
+          (SlotIndex - 1 + Offset) % CellCount;
+        FVector Candidate(
+          GroundBounds.Min.X
+            + static_cast<double>(Cell % ColumnCount)
+              * ScaleSpawnSpacingCm,
+          GroundBounds.Min.Y
+            + static_cast<double>(Cell / ColumnCount)
+              * ScaleSpawnSpacingCm,
+          0.0);
+        uint64 NodeId = 0;
+        uint32 NavLayer = 0;
+        if (!FCrowdNavSurfaceGraphKernel::AttachClosest(
+            Graph, Candidate, 350.0f, NodeId, NavLayer))
+          continue;
+        const int32 NodeIndex = Graph.FindNodeIndex(NodeId);
+        if (!Graph.Nodes.IsValidIndex(NodeIndex)
+          || (GoalFlow
+            && GoalFlow->Nodes[NodeIndex].IntegrationCostQ
+              == MAX_uint32))
+          continue;
+        Candidate.Z = Graph.Nodes[NodeIndex].Center.Z;
+        bool bSeparated = true;
+        for (int32 Other = 1; Other < Slots.Num(); ++Other)
+        {
+          if (Other != SlotIndex
+            && Slots[Other].bActive
+            && FVector::Distance(
+              Candidate, Slots[Other].Location)
+              < ScaleSpawnSpacingCm)
+          {
+            bSeparated = false;
+            break;
+          }
+        }
+        if (bSeparated)
+        {
+          Slot.Location = Candidate;
+          Slot.AttachedNavNodeId = NodeId;
+          Slot.InteractionLayer = NavLayer;
+          return;
+        }
+      }
+    }
+  }
   const int32 Start = (SlotIndex * 17) % Graph.Nodes.Num();
   for (int32 Offset = 0; Offset < Graph.Nodes.Num(); ++Offset)
   {
     const int32 NodeIndex = (Start + Offset) % Graph.Nodes.Num();
     if (GoalFlow && GoalFlow->Nodes[NodeIndex].IntegrationCostQ == MAX_uint32) continue;
-    const FVector Candidate = Graph.Nodes[NodeIndex].Center;
-    bool bSeparated = true;
-    for (int32 Other = 1; Other < SlotIndex; ++Other)
+    for (int32 Ring = 0; Ring <= 3; ++Ring)
     {
-      if (Slots[Other].bActive
-        && FVector::Distance(Candidate, Slots[Other].Location) < 160.0f)
+      const int32 RingPoints = Ring == 0 ? 1 : Ring * 6;
+      for (int32 RingPoint = 0;
+        RingPoint < RingPoints; ++RingPoint)
       {
-        bSeparated = false;
-        break;
+        FVector Candidate = Graph.Nodes[NodeIndex].Center;
+        if (Ring > 0)
+        {
+          const double Angle =
+            UE_TWO_PI * static_cast<double>(RingPoint)
+            / static_cast<double>(RingPoints);
+          Candidate += FVector(
+            FMath::Cos(Angle), FMath::Sin(Angle), 0.0)
+            * (80.0 * Ring);
+        }
+        bool bSeparated = true;
+        for (int32 Other = 1;
+          Other < Slots.Num(); ++Other)
+        {
+          if (Other != SlotIndex
+            && Slots[Other].bActive
+            && FVector::Distance(
+              Candidate, Slots[Other].Location)
+              < 160.0f)
+          {
+            bSeparated = false;
+            break;
+          }
+        }
+        if (bSeparated)
+        {
+          Slot.Location = Candidate;
+          Slot.AttachedNavNodeId =
+            Graph.Nodes[NodeIndex].StableNodeId;
+          Slot.InteractionLayer =
+            Graph.Nodes[NodeIndex].NavLayer;
+          return;
+        }
       }
     }
-    if (bSeparated)
-    {
-      Slot.Location = Candidate;
-      return;
-    }
   }
-  Slot.Location = Graph.Nodes[Start].Center;
+  Slot.Location = Graph.Nodes[Start].Center
+    + FVector(
+      static_cast<double>(SlotIndex) * 80.0,
+      0.0, 0.0);
+  Slot.AttachedNavNodeId = Graph.Nodes[Start].StableNodeId;
+  Slot.InteractionLayer = Graph.Nodes[Start].NavLayer;
 }
 
 FCrowdAgentFacts ACrowdDemoMixedSandboxCoordinator::MakeAgentFacts(
@@ -492,36 +746,31 @@ FCrowdAgentFacts ACrowdDemoMixedSandboxCoordinator::MakeAgentFacts(
   const uint32 LifecycleSerial) const
 {
   FCrowdAgentFacts Facts;
+  const int32 CohortRole = ((SlotIndex - 1) % 20) + 1;
   Facts.StableEntityRef = {1, static_cast<uint64>(SlotIndex), LifecycleSerial};
   Facts.FactionKey = static_cast<uint32>((SlotIndex % 3) + 1);
   Facts.CapabilitySet.Add(ECrowdCapability::Move);
   Facts.CapabilitySet.Add(ECrowdCapability::UseNavLayer);
-  if (SlotIndex <= 6)
+  Facts.DerivedBehaviorLabel =
+    static_cast<uint32>(ECrowdActiveBehavior::Idle);
+  if (CohortRole <= 6)
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Haul);
-    Facts.DerivedBehaviorLabel =
-      static_cast<uint32>(ECrowdActiveBehavior::HaulPickup);
   }
-  else if (SlotIndex <= 12)
+  else if (CohortRole <= 10)
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Pursue);
     Facts.CapabilitySet.Add(ECrowdCapability::Attack);
-    Facts.DerivedBehaviorLabel =
-      static_cast<uint32>(ECrowdActiveBehavior::Pursue);
   }
-  else if (SlotIndex <= 16)
+  else if (CohortRole <= 14)
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Guard);
     Facts.CapabilitySet.Add(ECrowdCapability::Flee);
-    Facts.DerivedBehaviorLabel =
-      static_cast<uint32>(ECrowdActiveBehavior::Guard);
   }
   else
   {
     Facts.CapabilitySet.Add(ECrowdCapability::Wander);
     Facts.CapabilitySet.Add(ECrowdCapability::MoveTo);
-    Facts.DerivedBehaviorLabel =
-      static_cast<uint32>(ECrowdActiveBehavior::Wander);
   }
   Facts.MovementProfileKey = 1;
   Facts.PresentationProfileKey = 1;
@@ -532,6 +781,9 @@ FCrowdAgentFacts ACrowdDemoMixedSandboxCoordinator::MakeAgentFacts(
 void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
 {
   const double StartSeconds = FPlatformTime::Seconds();
+  double EvaluationEndSeconds = StartSeconds;
+  double PrepareEndSeconds = StartSeconds;
+  double MovementEndSeconds = StartSeconds;
   ++FixedStepIndex;
   if (!RebuildSpatialSafety())
   {
@@ -541,30 +793,25 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       FixedStepIndex);
     return;
   }
-  const TArray<FSlotState> OriginalSlots = Slots;
-  const FCrowdDemoBusinessCommitLedger OriginalBusinessLedger =
+  TArray<FSlotState> StagedSlots = Slots;
+  FCrowdDemoBusinessCommitLedger StagedBusinessLedger =
     BusinessLedger;
-  const int32 OriginalBehaviorTransitionCount =
+  int32 StagedBehaviorTransitionCount =
     BehaviorTransitionCount;
-  const int32 OriginalDuplicateCommitCount =
+  int32 StagedDuplicateCommitCount =
     DuplicateCommitCount;
-  const uint32 OriginalSeenBehaviorBits = SeenBehaviorBits;
-  const int32 OriginalPendingCombatDeathSlot =
+  uint32 StagedSeenBehaviorBits = SeenBehaviorBits;
+  int32 StagedPendingCombatDeathSlot =
     PendingCombatDeathSlot;
   const int32 OriginalPendingSourceCommandCount =
     BehaviorSourceRuntime->GetPendingCommandCount();
-  for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
+  for (int32 SlotIndex = 1;
+    SlotIndex < StagedSlots.Num(); ++SlotIndex)
   {
-    if (Slots[SlotIndex].bActive && !EvaluateSlotBehavior(SlotIndex))
+    if (StagedSlots[SlotIndex].bActive
+      && !EvaluateSlotBehavior(
+        SlotIndex, StagedSlots))
     {
-      Slots = OriginalSlots;
-      BusinessLedger = OriginalBusinessLedger;
-      BehaviorTransitionCount =
-        OriginalBehaviorTransitionCount;
-      DuplicateCommitCount = OriginalDuplicateCommitCount;
-      SeenBehaviorBits = OriginalSeenBehaviorBits;
-      PendingCombatDeathSlot =
-        OriginalPendingCombatDeathSlot;
       BehaviorSourceRuntime->RollbackPendingCommandsTo(
         OriginalPendingSourceCommandCount);
       ++StaleRejectCount;
@@ -574,18 +821,12 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       return;
     }
   }
+  EvaluationEndSeconds = FPlatformTime::Seconds();
   FCrowdBehaviorPreparedBoundary PreparedBehavior;
   if (!BehaviorSourceRuntime->PrepareBoundary(
       FixedStepIndex, PreparedBehavior)
-    || !BehaviorSourceRuntime->ValidatePrepared(PreparedBehavior)
-    || !ApplyPreparedBehaviorBusiness(PreparedBehavior))
+    || !BehaviorSourceRuntime->ValidatePrepared(PreparedBehavior))
   {
-    Slots = OriginalSlots;
-    BusinessLedger = OriginalBusinessLedger;
-    BehaviorTransitionCount = OriginalBehaviorTransitionCount;
-    DuplicateCommitCount = OriginalDuplicateCommitCount;
-    SeenBehaviorBits = OriginalSeenBehaviorBits;
-    PendingCombatDeathSlot = OriginalPendingCombatDeathSlot;
     BehaviorSourceRuntime->RollbackPendingCommandsTo(
       OriginalPendingSourceCommandCount);
     ++StaleRejectCount;
@@ -594,25 +835,60 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       FixedStepIndex);
     return;
   }
+  for (const FCrowdBehaviorPreparedEntity& Entity
+    : PreparedBehavior.Entities)
+  {
+    const int32 SlotIndex =
+      static_cast<int32>(Entity.EntityRef.StableEntityId);
+    if (!StagedSlots.IsValidIndex(SlotIndex)
+      || !StagedSlots[SlotIndex].bActive
+      || StagedSlots[SlotIndex].Facts.StableEntityRef
+        != Entity.EntityRef)
+    {
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        OriginalPendingSourceCommandCount);
+      ++StaleRejectCount;
+      return;
+    }
+    const ECrowdActiveBehavior Label =
+      DeriveDiagnosticBehavior(Entity.StagedSourceSet);
+    if (StagedSlots[SlotIndex].Facts.DerivedBehaviorLabel
+      != static_cast<uint32>(Label))
+    {
+      ++StagedBehaviorTransitionCount;
+      ++StagedSlots[SlotIndex].TransitionRevision;
+    }
+    StagedSlots[SlotIndex].Facts.DerivedBehaviorLabel =
+      static_cast<uint32>(Label);
+    StagedSeenBehaviorBits |= BehaviorBit(Label);
+  }
+  if (!ApplyPreparedBehaviorBusiness(
+      PreparedBehavior, StagedSlots,
+      StagedBusinessLedger,
+      StagedDuplicateCommitCount,
+      StagedPendingCombatDeathSlot))
+  {
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      OriginalPendingSourceCommandCount);
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=source_prepare fixed_step=%lld"),
+      FixedStepIndex);
+    return;
+  }
+  PrepareEndSeconds = FPlatformTime::Seconds();
   TArray<FCrowdAgentFacts> PreparedFacts;
-  for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
-    if (Slots[SlotIndex].bActive)
-      PreparedFacts.Add(Slots[SlotIndex].Facts);
+  for (int32 SlotIndex = 1;
+    SlotIndex < StagedSlots.Num(); ++SlotIndex)
+    if (StagedSlots[SlotIndex].bActive)
+      PreparedFacts.Add(StagedSlots[SlotIndex].Facts);
   PreparedFacts.Sort([](const auto& A, const auto& B)
   {
     return A.StableEntityRef < B.StableEntityRef;
   });
-  if (!LifecycleWorld.ApplyAgentFactsCorrectionsAtBoundary(
+  if (!LifecycleWorld.ValidateAgentFactsCorrectionsAtBoundary(
       FixedStepIndex, PreparedFacts))
   {
-    Slots = OriginalSlots;
-    BusinessLedger = OriginalBusinessLedger;
-    BehaviorTransitionCount =
-      OriginalBehaviorTransitionCount;
-    DuplicateCommitCount = OriginalDuplicateCommitCount;
-    SeenBehaviorBits = OriginalSeenBehaviorBits;
-    PendingCombatDeathSlot =
-      OriginalPendingCombatDeathSlot;
     BehaviorSourceRuntime->RollbackPendingCommandsTo(
       OriginalPendingSourceCommandCount);
     ++StaleRejectCount;
@@ -621,53 +897,42 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       FixedStepIndex);
     return;
   }
-  if (!RunProductMovementBoundary(PreparedBehavior))
+  int32 StagedSafetyHolds = 0;
+  uint64 StagedBoundaryCommitHash = 0;
+  if (!RunProductMovementBoundary(
+      PreparedBehavior, StagedSlots,
+      StagedSafetyHolds, StagedBoundaryCommitHash))
   {
-    TArray<FCrowdAgentFacts> OriginalFacts;
-    for (int32 SlotIndex = 1;
-      SlotIndex < OriginalSlots.Num(); ++SlotIndex)
-      if (OriginalSlots[SlotIndex].bActive)
-        OriginalFacts.Add(
-          OriginalSlots[SlotIndex].Facts);
-    OriginalFacts.Sort([](const auto& A, const auto& B)
-    {
-      return A.StableEntityRef < B.StableEntityRef;
-    });
-    const bool bRolledBack =
-      LifecycleWorld.ApplyAgentFactsCorrectionsAtBoundary(
-        FixedStepIndex, OriginalFacts);
-    Slots = OriginalSlots;
-    BusinessLedger = OriginalBusinessLedger;
-    BehaviorTransitionCount =
-      OriginalBehaviorTransitionCount;
-    DuplicateCommitCount = OriginalDuplicateCommitCount;
-    SeenBehaviorBits = OriginalSeenBehaviorBits;
-    PendingCombatDeathSlot =
-      OriginalPendingCombatDeathSlot;
     BehaviorSourceRuntime->RollbackPendingCommandsTo(
       OriginalPendingSourceCommandCount);
     ++StaleRejectCount;
     UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=product_boundary fixed_step=%lld rollback=%d"),
-      FixedStepIndex, bRolledBack ? 1 : 0);
+      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=product_boundary fixed_step=%lld"),
+      FixedStepIndex);
     return;
   }
+  MovementEndSeconds = FPlatformTime::Seconds();
+  LifecycleWorld.ApplyValidatedAgentFactsCorrectionsAtBoundary(
+    FixedStepIndex, PreparedFacts);
   checkf(BehaviorSourceRuntime->CommitPrepared(PreparedBehavior),
     TEXT("Validated behavior source transaction changed before final apply"));
+  Slots = MoveTemp(StagedSlots);
+  BusinessLedger = MoveTemp(StagedBusinessLedger);
+  BehaviorTransitionCount = StagedBehaviorTransitionCount;
+  DuplicateCommitCount = StagedDuplicateCommitCount;
+  SeenBehaviorBits = StagedSeenBehaviorBits;
+  PendingCombatDeathSlot = StagedPendingCombatDeathSlot;
+  SafetyHoldCount += StagedSafetyHolds;
+  LastBoundaryCommitHash = StagedBoundaryCommitHash;
 
-  MinimumSeparationCm = TNumericLimits<float>::Max();
-  for (int32 A = 1; A < Slots.Num(); ++A)
-  {
-    if (!Slots[A].bActive) continue;
-    for (int32 B = A + 1; B < Slots.Num(); ++B)
-    {
-      if (!Slots[B].bActive
-        || FMath::Abs(Slots[A].Location.Z - Slots[B].Location.Z) > 150.0f) continue;
-      MinimumSeparationCm = FMath::Min(
-        MinimumSeparationCm,
-        FVector::Distance(Slots[A].Location, Slots[B].Location));
-    }
-  }
+  // Final Apply already rejects every unsafe candidate against the updated
+  // spatial index. Sample the exact minimum once per simulation second for
+  // telemetry instead of turning an audit metric into per-step production
+  // work; retain the minimum observed across the complete run.
+  if (FixedStepIndex <= 5 || FixedStepIndex % 30 == 0)
+    MinimumSeparationCm = FMath::Min(
+      MinimumSeparationCm,
+      SpatialSafety.CalculateMinimumSeparationCm());
 
   if (FixedStepIndex % LifecycleIntervalSteps == 0)
   {
@@ -708,110 +973,629 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     }
   }
   if (FixedStepIndex % 3 == 0) PublishProductStateFrame();
-  ServerStepMilliseconds.Add((FPlatformTime::Seconds() - StartSeconds) * 1000.0);
+  const double EndSeconds = FPlatformTime::Seconds();
+  const double TotalMilliseconds =
+    (EndSeconds - StartSeconds) * 1000.0;
+  ServerStepMilliseconds.Add(TotalMilliseconds);
+  if (Config.PopulationLimit == MaximumMixedPopulation
+    && TotalMilliseconds > 33.333)
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMixedSandboxSlowStep fixed_step=%lld evaluate_ms=%.3f prepare_ms=%.3f movement_ms=%.3f apply_publish_ms=%.3f total_ms=%.3f"),
+      FixedStepIndex,
+      (EvaluationEndSeconds - StartSeconds) * 1000.0,
+      (PrepareEndSeconds - EvaluationEndSeconds) * 1000.0,
+      (MovementEndSeconds - PrepareEndSeconds) * 1000.0,
+      (EndSeconds - MovementEndSeconds) * 1000.0,
+      TotalMilliseconds);
+  }
+  if (Config.PopulationLimit == MaximumMixedPopulation
+    && (FixedStepIndex <= 5 || FixedStepIndex % 150 == 0))
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMixedSandboxPhases fixed_step=%lld evaluate_ms=%.3f prepare_ms=%.3f movement_ms=%.3f apply_publish_ms=%.3f total_ms=%.3f"),
+      FixedStepIndex,
+      (EvaluationEndSeconds - StartSeconds) * 1000.0,
+      (PrepareEndSeconds - EvaluationEndSeconds) * 1000.0,
+      (MovementEndSeconds - PrepareEndSeconds) * 1000.0,
+      (EndSeconds - MovementEndSeconds) * 1000.0,
+      (EndSeconds - StartSeconds) * 1000.0);
+  }
   if (ServerStepMilliseconds.Num() > 2048) ServerStepMilliseconds.RemoveAt(0, 512);
 }
 
 bool ACrowdDemoMixedSandboxCoordinator::EvaluateSlotBehavior(
-  const int32 SlotIndex)
+  const int32 SlotIndex,
+  TArray<FSlotState>& InOutSlots)
 {
-  FSlotState& Slot = Slots[SlotIndex];
-  const ECrowdActiveBehavior Requested = SelectLegacyRecipeLabel(SlotIndex);
-  const FVector Objective = ChooseObjectiveLocation(SlotIndex, Requested);
-  const FCrowdStableEntityRef TargetRef = ChooseTargetRef(SlotIndex, Requested);
-  const float Distance = FVector::Distance(Slot.Location, Objective);
-
-  FCrowdRuntimeBehaviorContext Context;
-  Context.AgentFacts = Slot.Facts;
-  Context.RequestedBehavior = Requested;
-  Context.FixedStepIndex = FixedStepIndex;
-  Context.TransitionRevision = Slot.TransitionRevision;
-  Context.TargetRef = TargetRef;
-  Context.TargetLocation = Objective;
-  Context.ObjectiveKey = static_cast<uint32>(Requested) + 1;
-  Context.MovementProfileKey = 1;
-  Context.InteractionPayloadKey = static_cast<uint32>(Requested) + 1;
-  Context.InteractionQuantity = Requested == ECrowdActiveBehavior::Attack ? 25 : 1;
-  if (Requested == ECrowdActiveBehavior::HaulPickup
-    || Requested == ECrowdActiveBehavior::HaulDeliver)
+  const auto RejectBehavior = [this, SlotIndex](const TCHAR* Reason)
   {
-    Context.TaskRef = {2, static_cast<uint64>(SlotIndex), 1};
+    UE_LOG(LogTemp, Warning,
+      TEXT("CrowdDemoMixedSandboxBehaviorReject reason=%s slot=%d fixed_step=%lld"),
+      Reason, SlotIndex, FixedStepIndex);
+    return false;
+  };
+  FSlotState& Slot = InOutSlots[SlotIndex];
+  const int32 CohortBase = ((SlotIndex - 1) / 20) * 20;
+  const int32 CohortRole = ((SlotIndex - 1) % 20) + 1;
+  const auto ActiveRef = [&](const int32 Candidate)
+  {
+    return InOutSlots.IsValidIndex(Candidate)
+      && InOutSlots[Candidate].bActive
+      ? InOutSlots[Candidate].Facts.StableEntityRef
+      : FCrowdStableEntityRef{};
+  };
+  const auto DockingLocation = [&](const FName MarkerTag)
+  {
+    const FVector MarkerLocation =
+      Marker(MarkerTag, FVector::ZeroVector);
+    if (!NavGraphHandle.IsValid())
+      return MarkerLocation;
+    TArray<const FCrowdNavSurfaceNode*> Candidates;
+    for (const FCrowdNavSurfaceNode& Node : NavGraphHandle->Nodes)
+    {
+      const bool bScaleCandidate =
+        Config.PopulationLimit > DefaultMixedPopulation
+        && Node.Center.Z < 800.0;
+      if (bScaleCandidate
+        || FVector::Distance(Node.Center, MarkerLocation) <= 400.0)
+        Candidates.Add(&Node);
+    }
+    Candidates.Sort(
+      [&MarkerLocation](
+        const FCrowdNavSurfaceNode& A,
+        const FCrowdNavSurfaceNode& B)
+      {
+        const double DistanceA =
+          FVector::DistSquared(A.Center, MarkerLocation);
+        const double DistanceB =
+          FVector::DistSquared(B.Center, MarkerLocation);
+        return DistanceA != DistanceB
+          ? DistanceA < DistanceB
+          : A.StableNodeId < B.StableNodeId;
+      });
+    if (Candidates.IsEmpty())
+      return MarkerLocation;
+    const int32 MarkerOffset =
+      MarkerTag == TEXT("CrowdNavHigh")
+      ? Candidates.Num() / 2
+      : MarkerTag == TEXT("CrowdNavRouteB")
+        ? Candidates.Num() / 3
+        : 0;
+    return Candidates[
+      (MarkerOffset
+        + (CohortBase / 20 * 6 + CohortRole - 1) * 17)
+        % Candidates.Num()]
+      ->Center;
+  };
+
+  TArray<FCrowdDemoDesiredSource, TInlineAllocator<8>> Desired;
+  const auto AddStandard =
+    [&]<typename PayloadType>(
+      const FCrowdBehaviorControllerId ControllerId,
+      const uint32 Sequence,
+      const FCrowdBehaviorSourceTypeId TypeId,
+      const PayloadType& Payload,
+      const int32 LifetimeSteps = 0,
+      const int16 Priority = 0)
+  {
+    FCrowdDemoDesiredSource& Entry =
+      Desired.AddDefaulted_GetRef();
+    Entry.ControllerId = ControllerId;
+    Entry.SourceSequence = Sequence;
+    Entry.SourceTypeId = TypeId;
+    Entry.Priority = Priority;
+    Entry.LifetimeSteps = LifetimeSteps;
+    return Entry.Payload.Set(
+      CrowdStandardSources::PayloadSchema(TypeId), Payload);
+  };
+  const auto AddDemo =
+    [&](const FCrowdBehaviorControllerId ControllerId,
+      const uint32 Sequence,
+      const FCrowdBehaviorSourceTypeId TypeId,
+      const FCrowdDemoBehaviorSourcePayload& Payload,
+      const int32 LifetimeSteps = 0)
+  {
+    FCrowdDemoDesiredSource& Entry =
+      Desired.AddDefaulted_GetRef();
+    Entry.ControllerId = ControllerId;
+    Entry.SourceSequence = Sequence;
+    Entry.SourceTypeId = TypeId;
+    Entry.LifetimeSteps = LifetimeSteps;
+    return Entry.Payload.Set(
+      CrowdDemoBehaviorSchemas::Standard, Payload);
+  };
+  const auto AddFaceMovement = [&]()
+  {
+    FCrowdFaceMovementPayload Facing;
+    Facing.MinimumSpeedCmps = 1.0f;
+    return AddStandard(
+      CrowdDemoBehaviorControllerIds::Facing, 1,
+      CrowdStandardSources::FaceMovement, Facing);
+  };
+  const auto AddFaceEntity =
+    [&](const FCrowdStableEntityRef TargetRef)
+  {
+    FCrowdFaceEntityPayload Facing;
+    Facing.TargetRef = TargetRef;
+    return AddStandard(
+      CrowdDemoBehaviorControllerIds::Facing, 1,
+      CrowdStandardSources::FaceEntity, Facing);
+  };
+  const auto AddSpeedLimit = [&]()
+  {
+    FCrowdSpeedLimitPayload Limit;
+    // Keep the 500-agent gate on the same production pipeline without
+    // turning its small validation map into an artificial convergence
+    // stress test. Particle/local-predictive stress has dedicated kernels;
+    // this gate measures the full Standard Source composition path.
+    Limit.MaximumSpeedCmps =
+      Config.PopulationLimit >= 500 ? 10.0f : 500.0f;
+    Limit.AllowedNavLayerMask = MAX_uint64;
+    return AddStandard(
+      CrowdDemoBehaviorControllerIds::Navigation, 3,
+      CrowdStandardSources::SpeedLimit, Limit);
+  };
+
+  ECrowdActiveBehavior DiagnosticLabel = ECrowdActiveBehavior::Idle;
+  FVector Objective = Slot.Location;
+  FCrowdStableEntityRef TargetRef;
+  FCrowdStableEntityRef TaskRef;
+  FCrowdStableEntityRef FormationAnchorRef;
+  FVector FormationLocalOffset = FVector::ZeroVector;
+  bool bInteractionReady = false;
+  ECrowdBusinessCommitKind CommitKind =
+    ECrowdBusinessCommitKind::None;
+
+  if (Slot.Health <= 0)
+  {
+    DiagnosticLabel = ECrowdActiveBehavior::Dead;
+    FCrowdMovementLockPayload Lock;
+    if (!AddStandard(
+        CrowdDemoBehaviorControllerIds::Reaction, 2,
+        CrowdStandardSources::MovementLock, Lock))
+      return RejectBehavior(TEXT("death_lock"));
   }
-  const bool bAttackReady = Requested == ECrowdActiveBehavior::Attack
-    && Distance <= 180.0f
-    && FixedStepIndex - Slot.LastAttackFixedStep >= 30;
-  Context.bInteractionReady = bAttackReady
-    || ((Requested == ECrowdActiveBehavior::HaulPickup
-      || Requested == ECrowdActiveBehavior::HaulDeliver) && Distance <= 90.0f);
-
-  if (Context.bInteractionReady)
+  else if (CohortRole <= 6)
   {
-    ECrowdBusinessCommitKind CommitKind =
-      ECrowdBusinessCommitKind::None;
-    if (Requested == ECrowdActiveBehavior::HaulPickup)
-      CommitKind = ECrowdBusinessCommitKind::CargoPickup;
-    else if (Requested == ECrowdActiveBehavior::HaulDeliver)
-      CommitKind = ECrowdBusinessCommitKind::CargoDeliver;
-    else if (Requested == ECrowdActiveBehavior::Attack)
+    const bool bCarrying =
+      BusinessLedger.GetCargoCarrier(
+        static_cast<uint64>(SlotIndex))
+      == static_cast<uint64>(SlotIndex);
+    DiagnosticLabel = bCarrying
+      ? ECrowdActiveBehavior::HaulDeliver
+      : ECrowdActiveBehavior::HaulPickup;
+    Objective = bCarrying
+      ? DockingLocation(TEXT("CrowdNavHigh"))
+      : DockingLocation(TEXT("CrowdNavLower"));
+    FCrowdArriveAtLocationPayload Move;
+    Move.TargetLocation = FVector3f(Objective);
+    Move.MaximumSpeedCmps = 500.0f;
+    Move.AcceptanceRadiusCm = 80.0f;
+    Move.SlowdownRadiusCm = 300.0f;
+    if (!AddStandard(
+        CrowdDemoBehaviorControllerIds::Navigation, 1,
+        CrowdStandardSources::ArriveAtLocation, Move)
+      || !AddSpeedLimit()
+      || !AddFaceMovement())
+      return RejectBehavior(TEXT("logistics_sources"));
+    TaskRef = {2, static_cast<uint64>(SlotIndex), 1};
+    bInteractionReady =
+      FVector::Distance(Slot.Location, Objective)
+      <= (Config.PopulationLimit > DefaultMixedPopulation
+        ? MixedScaleInteractionRadiusCm
+        : MixedInteractionRadiusCm)
+      && FixedStepIndex - Slot.LastLogisticsFixedStep >= 30;
+    CommitKind = bCarrying
+      ? ECrowdBusinessCommitKind::CargoDeliver
+      : ECrowdBusinessCommitKind::CargoPickup;
+    if (bCarrying)
+    {
+      FCrowdDemoBehaviorSourcePayload Carry;
+      Carry.PrimaryId = 1;
+      Carry.SecondaryId = 1;
+      if (!AddDemo(
+          CrowdDemoBehaviorControllerIds::Presentation, 1,
+          CrowdDemoSourceTypeIds::CarryCargo, Carry))
+        return RejectBehavior(TEXT("carry_source"));
+    }
+  }
+  else if (CohortRole <= 10)
+  {
+    int32 TargetSlot = INDEX_NONE;
+    for (int32 Offset = 0; Offset < 4; ++Offset)
+    {
+      const int32 Candidate =
+        CohortBase + 11
+        + ((CohortRole - 7 + Offset) % 4);
+      if (ActiveRef(Candidate).IsValid())
+      {
+        TargetSlot = Candidate;
+        break;
+      }
+    }
+    TargetRef = ActiveRef(TargetSlot);
+    if (!TargetRef.IsValid())
+    {
+      // A lost target is a controller fact change, not an evaluator error.
+      // Omitting the dependent handles makes the stable diff stop them in
+      // this boundary before evaluation sees an absent context.
+      DiagnosticLabel = ECrowdActiveBehavior::Idle;
+      if (!AddSpeedLimit())
+        return RejectBehavior(TEXT("pursue_target_stop"));
+    }
+    else
+    {
+      Objective = InOutSlots[TargetSlot].Location;
+      const float Distance =
+        FVector::Distance(Slot.Location, Objective);
+      const float AttackInteractionRadiusCm =
+        Config.PopulationLimit > DefaultMixedPopulation
+        ? MixedScaleInteractionRadiusCm
+        : 180.0f;
+      const bool bAttackReady =
+        Distance <= AttackInteractionRadiusCm
+        && FixedStepIndex - Slot.LastAttackFixedStep >= 30;
+      DiagnosticLabel = Distance <= AttackInteractionRadiusCm
+        ? ECrowdActiveBehavior::Attack
+        : ECrowdActiveBehavior::Pursue;
+      FCrowdPursueEntityPayload Pursue;
+      Pursue.TargetRef = TargetRef;
+      Pursue.MaximumSpeedCmps = 500.0f;
+      Pursue.AcceptanceRadiusCm = 140.0f;
+      Pursue.MaximumPredictionSeconds = 0.25f;
+      FCrowdMaintainDistancePayload DistanceBand;
+      DistanceBand.TargetRef = TargetRef;
+      DistanceBand.MinimumDistanceCm = 130.0f;
+      DistanceBand.MaximumDistanceCm = 180.0f;
+      DistanceBand.HysteresisCm = 10.0f;
+      DistanceBand.MaximumCorrectionSpeedCmps = 150.0f;
+      if (!AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 1,
+          CrowdStandardSources::PursueEntity, Pursue)
+        || !AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 2,
+          CrowdStandardSources::MaintainDistance, DistanceBand)
+        || !AddSpeedLimit()
+        || !AddFaceEntity(TargetRef))
+        return RejectBehavior(TEXT("pursue_sources"));
+      bInteractionReady = bAttackReady;
       CommitKind = ECrowdBusinessCommitKind::CombatHit;
-    if (CommitKind != ECrowdBusinessCommitKind::None)
-      Context.ExternalCommitId =
-        FCrowdBehaviorCommitId::Make(
-          CommitKind, Context);
+      if (bAttackReady)
+      {
+        FCrowdMovementLockPayload Lock;
+        if (!AddStandard(
+            CrowdDemoBehaviorControllerIds::Reaction, 1,
+            CrowdStandardSources::MovementLock, Lock, 1))
+          return RejectBehavior(TEXT("attack_lock"));
+      }
+    }
   }
+  else if (CohortRole <= 14)
+  {
+    if (Slot.Health <= 50)
+    {
+      const int32 TargetSlot =
+        [&]()
+        {
+          for (int32 Offset = 0; Offset < 4; ++Offset)
+          {
+            const int32 Candidate =
+              CohortBase + 7
+              + ((CohortRole - 11 + Offset) % 4);
+            if (ActiveRef(Candidate).IsValid())
+              return Candidate;
+          }
+          return static_cast<int32>(INDEX_NONE);
+        }();
+      TargetRef = ActiveRef(TargetSlot);
+      if (!TargetRef.IsValid())
+      {
+        DiagnosticLabel = ECrowdActiveBehavior::Idle;
+        if (!AddSpeedLimit())
+          return RejectBehavior(TEXT("flee_target_stop"));
+      }
+      else
+      {
+        Objective = InOutSlots[TargetSlot].Location;
+        DiagnosticLabel = ECrowdActiveBehavior::Flee;
+        FCrowdFleeFromEntityPayload Flee;
+        Flee.TargetRef = TargetRef;
+        Flee.MaximumSpeedCmps = 500.0f;
+        Flee.SafeDistanceCm = 1000.0f;
+        Flee.MaximumPredictionSeconds = 0.25f;
+        if (!AddStandard(
+            CrowdDemoBehaviorControllerIds::Navigation, 1,
+            CrowdStandardSources::FleeFromEntity, Flee)
+          || !AddSpeedLimit()
+          || !AddFaceEntity(TargetRef))
+          return RejectBehavior(TEXT("flee_sources"));
+      }
+    }
+    else
+    {
+      DiagnosticLabel = ECrowdActiveBehavior::Guard;
+      Objective = Slot.Location;
+      FCrowdMoveToLocationPayload Move;
+      Move.TargetLocation = FVector3f(Objective);
+      Move.MaximumSpeedCmps = 350.0f;
+      Move.AcceptanceRadiusCm = 120.0f;
+      if (!AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 1,
+          CrowdStandardSources::MoveToLocation, Move,
+          0, 99)
+        || !AddSpeedLimit()
+        || !AddFaceMovement())
+        return RejectBehavior(TEXT("guard_sources"));
+    }
+  }
+  else if (CohortRole <= 16)
+  {
+    const bool bUseMoveTo =
+      ((FixedStepIndex / 300) + CohortRole) % 2 == 0;
+    DiagnosticLabel = bUseMoveTo
+      ? ECrowdActiveBehavior::MoveTo
+      : ECrowdActiveBehavior::Wander;
+    if (bUseMoveTo)
+    {
+      Objective = DockingLocation(TEXT("CrowdNavRouteB"));
+      FCrowdMoveToLocationPayload Move;
+      Move.TargetLocation = FVector3f(Objective);
+      Move.MaximumSpeedCmps = 400.0f;
+      Move.AcceptanceRadiusCm = 100.0f;
+      if (!AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 1,
+          CrowdStandardSources::MoveToLocation, Move))
+        return RejectBehavior(TEXT("roam_move"));
+    }
+    else
+    {
+      FCrowdWanderSteeringPayload Wander;
+      Wander.SpeedCmps = 300.0f;
+      Wander.ReselectIntervalSteps = 45;
+      if (!AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 1,
+          CrowdStandardSources::WanderSteering, Wander))
+        return RejectBehavior(TEXT("roam_wander"));
+    }
+    if (!AddSpeedLimit() || !AddFaceMovement())
+      return RejectBehavior(TEXT("roam_common"));
+  }
+  else
+  {
+    const int32 AnchorSlot =
+      [&]()
+      {
+        for (int32 Offset = 0; Offset < 2; ++Offset)
+        {
+          const int32 Candidate =
+            CohortBase + 15
+            + ((CohortRole - 17 + Offset) % 2);
+          if (ActiveRef(Candidate).IsValid())
+            return Candidate;
+        }
+        return static_cast<int32>(INDEX_NONE);
+      }();
+    TargetRef = ActiveRef(AnchorSlot);
+    FormationAnchorRef = TargetRef;
+    if (!TargetRef.IsValid())
+    {
+      DiagnosticLabel = ECrowdActiveBehavior::Idle;
+      if (!AddSpeedLimit())
+        return RejectBehavior(TEXT("escort_anchor_stop"));
+    }
+    else
+    {
+      Objective = InOutSlots[AnchorSlot].Location;
+      DiagnosticLabel = ECrowdActiveBehavior::MoveTo;
+      const int32 EscortIndex = CohortRole - 17;
+      FormationLocalOffset = FVector(
+        -160.0 - 80.0 * (EscortIndex / 2),
+        EscortIndex % 2 == 0 ? -100.0 : 100.0,
+        0.0);
+      FCrowdFollowEntityPayload Follow;
+      Follow.TargetRef = TargetRef;
+      Follow.LocalOffset = FVector3f(FormationLocalOffset);
+      Follow.MaximumSpeedCmps = 450.0f;
+      Follow.AcceptanceRadiusCm = 60.0f;
+      Follow.PositionGain = 1.5f;
+      FCrowdMaintainDistancePayload DistanceBand;
+      DistanceBand.TargetRef = TargetRef;
+      DistanceBand.MinimumDistanceCm = 120.0f;
+      DistanceBand.MaximumDistanceCm = 300.0f;
+      DistanceBand.HysteresisCm = 15.0f;
+      DistanceBand.MaximumCorrectionSpeedCmps = 100.0f;
+      FCrowdFormationOffsetPayload Formation;
+      Formation.PositionGain = 1.0f;
+      Formation.MaximumCorrectionSpeedCmps = 120.0f;
+      if (!AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 1,
+          CrowdStandardSources::FollowEntity, Follow)
+        || !AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 2,
+          CrowdStandardSources::MaintainDistance, DistanceBand)
+        || !AddSpeedLimit()
+        || !AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 4,
+          CrowdStandardSources::FormationOffset, Formation)
+        || !AddFaceMovement())
+        return RejectBehavior(TEXT("escort_sources"));
+    }
+  }
+
+  if (bInteractionReady
+    && CommitKind != ECrowdBusinessCommitKind::None)
+  {
+    FCrowdRuntimeBehaviorContext CommitContext;
+    CommitContext.AgentFacts = Slot.Facts;
+    CommitContext.RequestedBehavior = DiagnosticLabel;
+    CommitContext.FixedStepIndex = FixedStepIndex;
+    CommitContext.TransitionRevision = Slot.TransitionRevision;
+    CommitContext.TargetRef = TargetRef;
+    CommitContext.TaskRef = TaskRef;
+    CommitContext.TargetLocation = Objective;
+    CommitContext.InteractionPayloadKey =
+      static_cast<uint32>(DiagnosticLabel) + 1;
+    CommitContext.InteractionQuantity =
+      CommitKind == ECrowdBusinessCommitKind::CombatHit ? 25 : 1;
+    FCrowdDemoBehaviorSourcePayload Interaction;
+    Interaction.PrimaryId =
+      CommitKind == ECrowdBusinessCommitKind::CargoPickup
+      ? CrowdDemoBehaviorAdapterIds::CargoPickup
+      : CommitKind == ECrowdBusinessCommitKind::CargoDeliver
+        ? CrowdDemoBehaviorAdapterIds::CargoDeliver
+        : CrowdDemoBehaviorAdapterIds::CombatHit;
+    Interaction.SecondaryId =
+      CommitContext.InteractionPayloadKey;
+    Interaction.Quantity = CommitContext.InteractionQuantity;
+    Interaction.TargetRef =
+      CommitKind == ECrowdBusinessCommitKind::CombatHit
+      ? TargetRef : TaskRef;
+    Interaction.CommitId =
+      FCrowdBehaviorCommitId::Make(
+        CommitKind, CommitContext);
+    const FCrowdBehaviorSourceTypeId InteractionType =
+      CommitKind == ECrowdBusinessCommitKind::CargoPickup
+      ? CrowdDemoSourceTypeIds::PickupInteraction
+      : CommitKind == ECrowdBusinessCommitKind::CargoDeliver
+        ? CrowdDemoSourceTypeIds::DeliverInteraction
+        : CrowdDemoSourceTypeIds::AttackTarget;
+    if (!AddDemo(
+        CrowdDemoBehaviorControllerIds::Interaction, 1,
+        InteractionType, Interaction, 1))
+      return RejectBehavior(TEXT("interaction_source"));
+  }
+
+  if (Slot.HitReactionUntilFixedStep > FixedStepIndex)
+  {
+    FCrowdTimedImpulsePayload Impulse;
+    Impulse.InitialVelocity =
+      FVector3f(Slot.HitReactionVelocity);
+    Impulse.DecayMode = ECrowdImpulseDecayMode::Linear;
+    if (!AddStandard(
+        CrowdDemoBehaviorControllerIds::Reaction, 3,
+        CrowdStandardSources::TimedImpulse, Impulse,
+        static_cast<int32>(
+          Slot.HitReactionUntilFixedStep - FixedStepIndex)))
+      return RejectBehavior(TEXT("hit_reaction"));
+  }
+
   const FCrowdBehaviorSourceSet* CurrentSet =
     BehaviorSourceRuntime->FindSourceSet(
       Slot.Facts.StableEntityRef);
-  if (!CurrentSet) return false;
+  if (!CurrentSet)
+    return RejectBehavior(TEXT("source_set"));
   TArray<FCrowdBehaviorSourceCommand> Commands;
-  if (!FCrowdLegacyBehaviorRecipe::BuildTransitionCommands(
-      Context, *CurrentSet, {1},
-      Slot.NextSourceCommandSequence,
-      Slot.NextSourceSequence, Commands))
-    return false;
+  if (!FCrowdDemoSourceSetDiff::BuildDesiredSourceDiff(
+      FixedStepIndex, *CurrentSet, Desired, Commands))
+    return RejectBehavior(TEXT("source_diff"));
   for (const FCrowdBehaviorSourceCommand& Command : Commands)
     if (!BehaviorSourceRuntime->QueueCommand(Command))
-      return false;
-
-  if (Slot.Facts.DerivedBehaviorLabel != static_cast<uint32>(Requested))
+      return RejectBehavior(TEXT("queue_command"));
+  FCrowdBehaviorEntityEvaluationContext EvaluationContext;
+  EvaluationContext.EntityRef = Slot.Facts.StableEntityRef;
+  EvaluationContext.FixedStepIndex = FixedStepIndex;
+  EvaluationContext.Position = Slot.Location;
+  EvaluationContext.Velocity = Slot.Velocity;
+  EvaluationContext.Facing =
+    FRotator(0.0f, Slot.YawDegrees, 0.0f).Vector();
+  if (TargetRef.IsValid())
   {
-    ++BehaviorTransitionCount;
-    ++Slot.TransitionRevision;
+    const int32 TargetSlot =
+      static_cast<int32>(TargetRef.StableEntityId);
+    if (!InOutSlots.IsValidIndex(TargetSlot)
+      || !InOutSlots[TargetSlot].bActive
+      || InOutSlots[TargetSlot].Facts.StableEntityRef
+        != TargetRef)
+      return RejectBehavior(TEXT("target_context"));
+    FCrowdTargetKinematicsV1 Target;
+    Target.TargetRef = TargetRef;
+    Target.Position =
+      FVector3f(InOutSlots[TargetSlot].Location);
+    Target.Velocity =
+      FVector3f(InOutSlots[TargetSlot].Velocity);
+    Target.Facing = FVector3f(
+      FRotator(
+        0.0f,
+        InOutSlots[TargetSlot].YawDegrees,
+        0.0f).Vector());
+    Target.NavLayer =
+      InOutSlots[TargetSlot].InteractionLayer;
+    Target.FactRevision =
+      static_cast<uint64>(FixedStepIndex) + 1;
+    FCrowdBehaviorContextRecord& Record =
+      EvaluationContext.Records.AddDefaulted_GetRef();
+    if (!Record.Set(
+        CrowdStandardSources::TargetKinematicsContextType,
+        CrowdStandardSources::ContextSchemaVersion,
+        Target))
+      return RejectBehavior(TEXT("target_record"));
   }
-  SeenBehaviorBits |= BehaviorBit(Requested);
-  Slot.Facts.DerivedBehaviorLabel = static_cast<uint32>(Requested);
+  if (FormationAnchorRef.IsValid())
+  {
+    const int32 AnchorSlot =
+      static_cast<int32>(FormationAnchorRef.StableEntityId);
+    FCrowdFormationAnchorV1 Anchor;
+    Anchor.AnchorRef = FormationAnchorRef;
+    Anchor.Position = FVector3f(InOutSlots[AnchorSlot].Location);
+    Anchor.Velocity = FVector3f(InOutSlots[AnchorSlot].Velocity);
+    Anchor.Facing = FVector3f(
+      FRotator(
+        0.0f,
+        InOutSlots[AnchorSlot].YawDegrees,
+        0.0f).Vector());
+    Anchor.LocalSlotOffset = FVector3f(FormationLocalOffset);
+    Anchor.NavLayer = InOutSlots[AnchorSlot].InteractionLayer;
+    Anchor.FactRevision =
+      static_cast<uint64>(FixedStepIndex) + 1;
+    FCrowdBehaviorContextRecord& Record =
+      EvaluationContext.Records.AddDefaulted_GetRef();
+    if (!Record.Set(
+        CrowdStandardSources::FormationAnchorContextType,
+        CrowdStandardSources::ContextSchemaVersion,
+        Anchor))
+      return RejectBehavior(TEXT("formation_record"));
+  }
+  EvaluationContext.RecalculateStableHash();
+  if (!BehaviorSourceRuntime->SetEvaluationContext(EvaluationContext))
+    return RejectBehavior(TEXT("evaluation_context"));
+
   Slot.Facts.TargetRef = TargetRef;
-  Slot.Facts.BusinessTaskRef = Context.TaskRef;
-  Slot.Facts.MovementProfileKey = Context.MovementProfileKey;
+  Slot.Facts.BusinessTaskRef = TaskRef;
+  Slot.Facts.MovementProfileKey = 1;
 
   return true;
 }
 
 bool ACrowdDemoMixedSandboxCoordinator::ApplyPreparedBehaviorBusiness(
-  const FCrowdBehaviorPreparedBoundary& Prepared)
+  const FCrowdBehaviorPreparedBoundary& Prepared,
+  TArray<FSlotState>& InOutSlots,
+  FCrowdDemoBusinessCommitLedger& InOutLedger,
+  int32& InOutDuplicateCommitCount,
+  int32& InOutPendingCombatDeathSlot)
 {
   for (const FCrowdBehaviorPreparedEntity& Entity
     : Prepared.Entities)
   {
     const int32 SlotIndex =
       static_cast<int32>(Entity.EntityRef.StableEntityId);
-    if (!Slots.IsValidIndex(SlotIndex)
-      || !Slots[SlotIndex].bActive
-      || Slots[SlotIndex].Facts.StableEntityRef != Entity.EntityRef)
+    if (!InOutSlots.IsValidIndex(SlotIndex)
+      || !InOutSlots[SlotIndex].bActive
+      || InOutSlots[SlotIndex].Facts.StableEntityRef != Entity.EntityRef)
       return false;
-    FSlotState& Slot = Slots[SlotIndex];
+    FSlotState& Slot = InOutSlots[SlotIndex];
     for (const FCrowdBusinessContribution& Contribution
       : Entity.ResolvedChannels.Business)
     {
       FCrowdBusinessCommitRequest Request;
-      if (Contribution.Key.SourceTypeId
-        == CrowdBuiltinSourceTypeIds::PickupInteraction)
+      if (Contribution.AdapterId
+        == CrowdDemoBehaviorAdapterIds::CargoPickup)
         Request.Kind = ECrowdBusinessCommitKind::CargoPickup;
-      else if (Contribution.Key.SourceTypeId
-        == CrowdBuiltinSourceTypeIds::DeliverInteraction)
+      else if (Contribution.AdapterId
+        == CrowdDemoBehaviorAdapterIds::CargoDeliver)
         Request.Kind = ECrowdBusinessCommitKind::CargoDeliver;
-      else if (Contribution.Key.SourceTypeId
-        == CrowdBuiltinSourceTypeIds::AttackTarget)
+      else if (Contribution.AdapterId
+        == CrowdDemoBehaviorAdapterIds::CombatHit)
         Request.Kind = ECrowdBusinessCommitKind::CombatHit;
       else
         return false;
@@ -827,138 +1611,100 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyPreparedBehaviorBusiness(
         Request.TaskRef = Contribution.TargetRef;
 
       const ECrowdDemoBusinessCommitAcceptResult First =
-        BusinessLedger.Apply(Request);
+        InOutLedger.Apply(Request);
       const ECrowdDemoBusinessCommitAcceptResult Replay =
-        BusinessLedger.Apply(Request);
+        InOutLedger.Apply(Request);
       if (First != ECrowdDemoBusinessCommitAcceptResult::Applied
         || Replay != ECrowdDemoBusinessCommitAcceptResult::Duplicate)
         return false;
-      ++DuplicateCommitCount;
+      ++InOutDuplicateCommitCount;
       if (Request.Kind == ECrowdBusinessCommitKind::CombatHit)
       {
         Slot.LastAttackFixedStep = FixedStepIndex;
         const int32 TargetSlot = static_cast<int32>(
           Request.TargetRef.StableEntityId);
-        if (!Slots.IsValidIndex(TargetSlot)
-          || !Slots[TargetSlot].bActive)
+        if (!InOutSlots.IsValidIndex(TargetSlot)
+          || !InOutSlots[TargetSlot].bActive)
           return false;
-        Slots[TargetSlot].Health = FMath::Max(
-          0, Slots[TargetSlot].Health - Request.Quantity);
-        if (Slots[TargetSlot].Health == 0
-          && PendingCombatDeathSlot == INDEX_NONE)
-          PendingCombatDeathSlot = TargetSlot;
+        const int32 InstigatorSlot = static_cast<int32>(
+          Request.AgentRef.StableEntityId);
+        if (!InOutSlots.IsValidIndex(InstigatorSlot)
+          || !InOutSlots[InstigatorSlot].bActive)
+          return false;
+        InOutSlots[TargetSlot].HitReactionVelocity =
+          FVector::ZeroVector;
+        InOutSlots[TargetSlot].HitReactionUntilFixedStep =
+          FMath::Max(
+            InOutSlots[TargetSlot].HitReactionUntilFixedStep,
+            FixedStepIndex + 6);
+        InOutSlots[TargetSlot].Health = FMath::Max(
+          0, InOutSlots[TargetSlot].Health - Request.Quantity);
+        if (InOutSlots[TargetSlot].Health == 0
+          && InOutPendingCombatDeathSlot == INDEX_NONE)
+          InOutPendingCombatDeathSlot = TargetSlot;
+      }
+      else
+      {
+        Slot.LastLogisticsFixedStep = FixedStepIndex;
       }
     }
   }
   return true;
 }
 
-ECrowdActiveBehavior ACrowdDemoMixedSandboxCoordinator::SelectLegacyRecipeLabel(
-  const int32 SlotIndex) const
-{
-  const FSlotState& Slot = Slots[SlotIndex];
-  if (SlotIndex <= 6)
-  {
-    return BusinessLedger.GetCargoCarrier(static_cast<uint64>(SlotIndex))
-      == static_cast<uint64>(SlotIndex)
-      ? ECrowdActiveBehavior::HaulDeliver : ECrowdActiveBehavior::HaulPickup;
-  }
-  if (SlotIndex <= 12)
-  {
-    const FCrowdStableEntityRef Target = ChooseTargetRef(SlotIndex, ECrowdActiveBehavior::Pursue);
-    const int32 TargetSlot = static_cast<int32>(Target.StableEntityId);
-    return Slots.IsValidIndex(TargetSlot) && Slots[TargetSlot].bActive
-      && FVector::Distance(Slot.Location, Slots[TargetSlot].Location) <= 180.0f
-        ? ECrowdActiveBehavior::Attack : ECrowdActiveBehavior::Pursue;
-  }
-  if (SlotIndex <= 16)
-    return Slot.Health <= 50 ? ECrowdActiveBehavior::Flee : ECrowdActiveBehavior::Guard;
-
-  const ECrowdActiveBehavior Current = static_cast<ECrowdActiveBehavior>(
-    Slot.Facts.DerivedBehaviorLabel);
-  const FVector CurrentObjective = ChooseObjectiveLocation(SlotIndex, Current);
-  if (FVector::Distance(Slot.Location, CurrentObjective) <= 100.0f)
-  {
-    return Current == ECrowdActiveBehavior::MoveTo
-      ? ECrowdActiveBehavior::Wander : ECrowdActiveBehavior::MoveTo;
-  }
-  return Current == ECrowdActiveBehavior::MoveTo
-    ? ECrowdActiveBehavior::MoveTo : ECrowdActiveBehavior::Wander;
-}
-
-FVector ACrowdDemoMixedSandboxCoordinator::ChooseObjectiveLocation(
-  const int32 SlotIndex,
-  const ECrowdActiveBehavior Behavior) const
-{
-  if (Behavior == ECrowdActiveBehavior::HaulPickup)
-    return Marker(TEXT("CrowdNavLower"), FVector::ZeroVector);
-  if (Behavior == ECrowdActiveBehavior::HaulDeliver)
-    return Marker(TEXT("CrowdNavHigh"), FVector::ZeroVector);
-  if (Behavior == ECrowdActiveBehavior::Pursue
-    || Behavior == ECrowdActiveBehavior::Attack)
-  {
-    const FCrowdStableEntityRef Target = ChooseTargetRef(SlotIndex, Behavior);
-    const int32 TargetSlot = static_cast<int32>(Target.StableEntityId);
-    return Slots.IsValidIndex(TargetSlot)
-      ? Slots[TargetSlot].Location : Marker(TEXT("CrowdNavGoal"), FVector::ZeroVector);
-  }
-  if (Behavior == ECrowdActiveBehavior::Guard)
-    return Marker(TEXT("CrowdNavGoal"), FVector::ZeroVector);
-  if (Behavior == ECrowdActiveBehavior::Flee
-    || Behavior == ECrowdActiveBehavior::Wander)
-    return Marker(TEXT("CrowdNavRouteA"), FVector::ZeroVector);
-  return Marker(TEXT("CrowdNavRouteB"), FVector::ZeroVector);
-}
-
-FCrowdStableEntityRef ACrowdDemoMixedSandboxCoordinator::ChooseTargetRef(
-  const int32 SlotIndex,
-  const ECrowdActiveBehavior Behavior) const
-{
-  if (Behavior == ECrowdActiveBehavior::Pursue
-    || Behavior == ECrowdActiveBehavior::Attack)
-  {
-    for (int32 Offset = 0; Offset < 4; ++Offset)
-    {
-      const int32 Candidate = 13 + ((SlotIndex - 7 + Offset) % 4);
-      if (Slots.IsValidIndex(Candidate) && Slots[Candidate].bActive)
-        return Slots[Candidate].Facts.StableEntityRef;
-    }
-  }
-  if (Behavior == ECrowdActiveBehavior::Flee)
-  {
-    for (int32 Candidate = 7; Candidate <= 12; ++Candidate)
-      if (Slots[Candidate].bActive) return Slots[Candidate].Facts.StableEntityRef;
-  }
-  return {};
-}
-
 bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
-  const FCrowdBehaviorPreparedBoundary& PreparedBehavior)
+  const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
+  TArray<FSlotState>& InOutSlots,
+  int32& OutSafetyHolds,
+  uint64& OutCommitHash)
 {
+  const double ProductStartSeconds =
+    FPlatformTime::Seconds();
+  const auto RejectBoundary = [this](const TCHAR* Reason)
+  {
+    UE_LOG(LogTemp, Warning,
+      TEXT("CrowdDemoMixedSandboxBoundaryReject reason=%s fixed_step=%lld"),
+      Reason, FixedStepIndex);
+    return false;
+  };
   UWorld* World = GetWorld();
   UMassEntitySubsystem* EntitySubsystem =
     World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
   UMassCrowdRuntimeSubsystem* Runtime =
     World ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>() : nullptr;
   if (!EntitySubsystem || !Runtime || !NavGraphHandle.IsValid())
-    return false;
+    return RejectBoundary(TEXT("missing_runtime_or_nav"));
 
   TArray<FCrowdMassBoundaryAgentRecord> Gathered;
-  TMap<FCrowdStableEntityRef, FVector> Objectives;
-  TMap<FCrowdStableEntityRef,
-    TSharedPtr<const FCrowdNavSurfaceFlow, ESPMode::ThreadSafe>>
-    Flows;
-  TSet<FCrowdStableEntityRef> MovingRefs;
+  TArray<FVector> ResolvedVelocities;
+  TArray<FVector> ResolvedFacings;
+  TArray<float> ResolvedMaximumSpeeds;
+  TArray<uint32> ResolvedInteractionLayers;
+  ResolvedVelocities.SetNumZeroed(InOutSlots.Num());
+  ResolvedFacings.SetNumZeroed(InOutSlots.Num());
+  ResolvedMaximumSpeeds.Init(500.0f, InOutSlots.Num());
+  ResolvedInteractionLayers.SetNumZeroed(InOutSlots.Num());
   TArray<FCrowdMassCommitTarget> Targets;
-  TMap<FCrowdStableEntityRef, const FCrowdBehaviorPreparedEntity*>
-    PreparedBehaviorByEntity;
+  TArray<const FCrowdBehaviorPreparedEntity*>
+    PreparedBehaviorBySlot;
+  PreparedBehaviorBySlot.SetNumZeroed(InOutSlots.Num());
   for (const FCrowdBehaviorPreparedEntity& PreparedEntity
     : PreparedBehavior.Entities)
-    PreparedBehaviorByEntity.Add(
-      PreparedEntity.EntityRef, &PreparedEntity);
-  for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
   {
-    const FSlotState& Slot = Slots[SlotIndex];
+    const int32 PreparedSlotIndex =
+      static_cast<int32>(
+        PreparedEntity.EntityRef.StableEntityId);
+    if (!PreparedBehaviorBySlot.IsValidIndex(
+          PreparedSlotIndex)
+      || PreparedBehaviorBySlot[PreparedSlotIndex])
+      return RejectBoundary(TEXT("prepared_entity_index"));
+    PreparedBehaviorBySlot[PreparedSlotIndex] =
+      &PreparedEntity;
+  }
+  for (int32 SlotIndex = 1;
+    SlotIndex < InOutSlots.Num(); ++SlotIndex)
+  {
+    const FSlotState& Slot = InOutSlots[SlotIndex];
     if (!Slot.bActive) continue;
     FCrowdMassBoundaryAgentRecord& Record =
       Gathered.AddDefaulted_GetRef();
@@ -967,8 +1713,8 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
       Slot.Facts.StableEntityRef);
     Record.AgentFacts = Slot.Facts;
     Record.State.Position = Slot.Location;
-    Record.State.Velocity = FVector::ZeroVector;
-    Record.State.YawDegrees = 0.0f;
+    Record.State.Velocity = Slot.Velocity;
+    Record.State.YawDegrees = Slot.YawDegrees;
     Record.State.PlanRevision =
       static_cast<int32>(FixedStepIndex);
     Record.State.bInitialized = true;
@@ -979,58 +1725,97 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     Record.Properties.Mobility = 1.0f;
     Record.Properties.MaximumSpeedCmps = 500.0f;
     Record.Properties.CapabilityProfileKey = 1;
+    uint64 AttachedNodeId =
+      Slot.AttachedNavNodeId;
+    uint32 AttachedNavLayer =
+      Slot.InteractionLayer;
+    int32 AttachedNodeIndex =
+      NavGraphHandle->FindNodeIndex(AttachedNodeId);
+    if (!NavGraphHandle->Nodes.IsValidIndex(
+          AttachedNodeIndex)
+      || DistanceSquaredToNavNode(
+          Slot.Location,
+          NavGraphHandle->Nodes[AttachedNodeIndex])
+        > FMath::Square(350.0))
+    {
+      AttachedNodeIndex = INDEX_NONE;
+      if (FCrowdNavSurfaceGraphKernel::AttachClosest(
+          *NavGraphHandle, Slot.Location, 350.0f,
+          AttachedNodeId, AttachedNavLayer))
+        AttachedNodeIndex =
+          NavGraphHandle->FindNodeIndex(AttachedNodeId);
+    }
+    if (NavGraphHandle->Nodes.IsValidIndex(
+        AttachedNodeIndex))
+    {
+      InOutSlots[SlotIndex].AttachedNavNodeId =
+        AttachedNodeId;
+      InOutSlots[SlotIndex].InteractionLayer =
+        AttachedNavLayer;
+    }
+    ResolvedInteractionLayers[SlotIndex] =
+      AttachedNavLayer;
     Targets.Add({
       Slot.Facts.StableEntityRef,
       SlotIndex,
       Slot.Facts.StableEntityRef.LifecycleSerial});
 
-    const FCrowdBehaviorPreparedEntity* const* PreparedPtr =
-      PreparedBehaviorByEntity.Find(Slot.Facts.StableEntityRef);
-    if (!PreparedPtr || !*PreparedPtr) return false;
+    const FCrowdBehaviorPreparedEntity* PreparedPtr =
+      PreparedBehaviorBySlot[SlotIndex];
+    if (!PreparedPtr
+      || PreparedPtr->EntityRef
+        != Slot.Facts.StableEntityRef)
+      return RejectBoundary(TEXT("missing_prepared_entity"));
     const FCrowdBehaviorPreparedEntity& PreparedEntity =
-      **PreparedPtr;
-    FVector Objective = FVector::ZeroVector;
-    bool bHasMovementSource = false;
-    bool bHasAttackSource = false;
-    for (const FCrowdBehaviorSourceInstance& Instance
-      : PreparedEntity.StagedSourceSet.Instances)
+      *PreparedPtr;
+    const FCrowdResolvedBehaviorChannels& Resolved =
+      PreparedEntity.ResolvedChannels;
+    if (!Resolved.DesiredFacing.IsNearlyZero())
+      ResolvedFacings[SlotIndex] =
+        Resolved.DesiredFacing;
+    const float SpeedLimitCmps =
+      FMath::IsFinite(Resolved.SpeedLimitCmps)
+      ? FMath::Clamp(Resolved.SpeedLimitCmps, 0.0f, 500.0f)
+      : 500.0f;
+    FVector DesiredVelocity = Resolved.bMovementLocked
+      ? FVector::ZeroVector
+      : Resolved.DesiredVelocity.GetClampedToMaxSize(SpeedLimitCmps);
+    if ((Resolved.AllowedNavLayerMask
+        & (uint64{1} << FMath::Min<uint32>(
+          AttachedNavLayer, 63u))) == 0)
+      DesiredVelocity = FVector::ZeroVector;
+    if (!DesiredVelocity.IsNearlyZero()
+      && Resolved.MovementGoal.bHasGoal)
     {
-      if (Instance.SourceTypeId
-        == CrowdBuiltinSourceTypeIds::AttackTarget)
-        bHasAttackSource = true;
-      if (Instance.SourceTypeId
-        != CrowdBuiltinSourceTypeIds::MoveToSink)
-        continue;
-      FCrowdBuiltinBehaviorSourcePayload Payload;
-      if (!Instance.Payload.Get(
-          CrowdBuiltinBehaviorSchemas::Standard, Payload))
-        return false;
-      Objective = Payload.Vector;
-      bHasMovementSource = true;
+      const FCrowdNavSurfaceFlow* Flow = nullptr;
+      if (!GetOrBuildFlow(
+          Resolved.MovementGoal.Location, Flow,
+          Slot.CachedGoalNodeId,
+          &InOutSlots[SlotIndex].CachedGoalNodeId)
+        || !Flow)
+        DesiredVelocity = FVector::ZeroVector;
+      else
+      {
+        const int32 CurrentIndex =
+          AttachedNodeIndex;
+        if (CurrentIndex == INDEX_NONE
+          || !Flow->Nodes.IsValidIndex(CurrentIndex))
+          DesiredVelocity = FVector::ZeroVector;
+        else
+        {
+          FVector FlowDirection =
+            Flow->Nodes[CurrentIndex].Direction;
+          if (!FlowDirection.IsNearlyZero())
+            DesiredVelocity =
+              FlowDirection.GetSafeNormal()
+                * DesiredVelocity.Size();
+        }
+      }
     }
-    if (!bHasMovementSource
-      || bHasAttackSource
-      || !PreparedEntity.ResolvedChannels.Business.IsEmpty())
-      continue;
-    const FCrowdNavSurfaceFlow* IgnoredFlow = nullptr;
-    if (!GetOrBuildFlow(Objective, IgnoredFlow))
-      return false;
-    uint64 GoalNodeId = 0;
-    uint32 GoalLayer = 0;
-    if (!FCrowdNavSurfaceGraphKernel::AttachClosest(
-        *NavGraphHandle, Objective, 350.0f,
-        GoalNodeId, GoalLayer))
-      return false;
-    const FCrowdNavFlowHandle* Handle =
-      FlowHandleByGoalNode.Find(GoalNodeId);
-    const TSharedPtr<const FCrowdNavSurfaceFlow,
-      ESPMode::ThreadSafe> Flow =
-      Handle ? Runtime->ResolveFlow(*Handle) : nullptr;
-    if (!Flow.IsValid())
-      return false;
-    MovingRefs.Add(Slot.Facts.StableEntityRef);
-    Objectives.Add(Slot.Facts.StableEntityRef, Objective);
-    Flows.Add(Slot.Facts.StableEntityRef, Flow);
+    ResolvedVelocities[SlotIndex] =
+      DesiredVelocity;
+    ResolvedMaximumSpeeds[SlotIndex] =
+      Resolved.bMovementLocked ? 0.0f : SpeedLimitCmps;
   }
   FCrowdMassBoundarySnapshot Snapshot;
   FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
@@ -1039,142 +1824,342 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     Gathered,
     Snapshot);
   if (!Snapshot.bValid)
-    return false;
+    return RejectBoundary(TEXT("snapshot"));
+
+  FCrowdMassBoundaryWorkGraphInput PipelineInput;
+  PipelineInput.Movement.Guidance.FixedStepIndex =
+    Snapshot.FixedStepIndex;
+  PipelineInput.Movement.Guidance.PlanRevision =
+    Snapshot.PlanRevision;
+  PipelineInput.Movement.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+  PipelineInput.Movement.bRunLocalPredictive = true;
+  PipelineInput.Movement.LocalPredictiveSettings.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+  PipelineInput.Movement.LocalPredictiveSettings.TimeHorizonSeconds =
+    0.05f;
+  PipelineInput.Movement.LocalPredictiveSettings.SpatialCellSizeCm =
+    Config.PopulationLimit >= 500 ? 120.0f : 200.0f;
+  PipelineInput.Movement.LocalPredictiveSettings.JointIterationCount =
+    1;
+  bool bSourceSetChanged = false;
+  for (const FCrowdBehaviorPreparedEntity& Entity
+    : PreparedBehavior.Entities)
+  {
+    bSourceSetChanged |= !Entity.Events.IsEmpty();
+  }
+  if (!bSourceSetChanged)
+    PipelineInput.Movement.PreviousGrantStates =
+      MixedLocalPredictiveGrantStates;
+
+  FBox MovementBounds(EForceInit::ForceInit);
+  for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
+    MovementBounds += Agent.State.Position;
+  for (const FCrowdNavSurfaceNode& Node : NavGraphHandle->Nodes)
+    MovementBounds += Node.Center;
+  if (!MovementBounds.IsValid)
+    return RejectBoundary(TEXT("movement_bounds"));
+  PipelineInput.Movement.Environment.Revision =
+    Snapshot.PlanRevision;
+  PipelineInput.Movement.Environment.BoundsMin = FVector(
+    MovementBounds.Min.X - 2000.0,
+    MovementBounds.Min.Y - 2000.0, 0.0);
+  PipelineInput.Movement.Environment.BoundsMax = FVector(
+    MovementBounds.Max.X + 2000.0,
+    MovementBounds.Max.Y + 2000.0, 0.0);
+  PipelineInput.Movement.Environment.CellSizeCm = 150.0f;
+  PipelineInput.Movement.Environment.AgentInflateCm =
+    MinimumSafeSeparationCm * 0.5f;
+
+  PipelineInput.ParticleTemplate.Particle.FixedStepIndex =
+    Snapshot.FixedStepIndex;
+  PipelineInput.ParticleTemplate.Particle.PlanRevision =
+    Snapshot.PlanRevision;
+  PipelineInput.ParticleTemplate.Particle.Environment.FlowConfig =
+    PipelineInput.Movement.Environment;
+  PipelineInput.ParticleTemplate.Particle.Environment
+    .bConstrainToFlowBounds = true;
+  PipelineInput.ParticleTemplate.Particle.Settings.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+  PipelineInput.ParticleTemplate.Particle.Settings.IterationCount =
+    Config.PopulationLimit >= 500 ? 1 : 4;
+  PipelineInput.ParticleTemplate.Particle.Settings.SafetyIterationCount =
+    Config.PopulationLimit >= 500 ? 1 : 4;
+  PipelineInput.ParticleTemplate.Particle.Settings.PositionQuantumCm =
+    0.1f;
+  PipelineInput.ParticleTemplate.Particle.Settings.VelocityQuantumCmps =
+    0.1f;
+  PipelineInput.FacingSettings.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+
+  for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
+  {
+    const FCrowdStableEntityRef Ref =
+      Agent.AgentFacts.StableEntityRef;
+    const int32 SlotIndex =
+      Agent.Identity.AgentId;
+    if (!ResolvedVelocities.IsValidIndex(SlotIndex)
+      || !ResolvedMaximumSpeeds.IsValidIndex(SlotIndex)
+      || !ResolvedInteractionLayers.IsValidIndex(SlotIndex))
+      return RejectBoundary(TEXT("resolved_index"));
+    const FVector& DesiredVelocity =
+      ResolvedVelocities[SlotIndex];
+    const float MaximumSpeed =
+      ResolvedMaximumSpeeds[SlotIndex];
+    const uint32 InteractionLayer =
+      ResolvedInteractionLayers[SlotIndex];
+    if (DesiredVelocity.ContainsNaN()
+      || !FMath::IsFinite(MaximumSpeed)
+      || MaximumSpeed < 0.0f)
+      return RejectBoundary(TEXT("resolved_movement"));
+
+    FCrowdMassGatherRecord& GuidanceRecord =
+      PipelineInput.Movement.Guidance.Records
+        .AddDefaulted_GetRef();
+    GuidanceRecord.Identity = Agent.Identity;
+    GuidanceRecord.AgentFacts = Agent.AgentFacts;
+    GuidanceRecord.State = Agent.State;
+    GuidanceRecord.Properties = Agent.Properties;
+    const FVector& Facing =
+      ResolvedFacings[SlotIndex];
+    const float DesiredYawDegrees =
+      !Facing.IsNearlyZero()
+      ? Facing.Rotation().Yaw
+      : DesiredVelocity.IsNearlyZero()
+        ? Agent.State.YawDegrees
+        : DesiredVelocity.Rotation().Yaw;
+    GuidanceRecord.Guidance.TargetRegion =
+      FCrowdGuidanceComposeKernel::BuildCandidate(
+        Agent.Identity.AgentId,
+        ECrowdGuidanceProvider::TargetRegion,
+        Snapshot.PlanRevision,
+        DesiredVelocity,
+        Agent.State.Position
+          + DesiredVelocity
+            * static_cast<float>(MixedFixedStepSeconds),
+        DesiredYawDegrees,
+        true);
+
+    FCrowdMassMovementPipelineAgentOverlay& Overlay =
+      PipelineInput.Movement.AgentOverlays
+        .AddDefaulted_GetRef();
+    Overlay.AgentId = Agent.Identity.AgentId;
+    Overlay.InteractionLayer = InteractionLayer;
+    Overlay.PreviousBlockedAgeSteps =
+      InOutSlots[
+        static_cast<int32>(Ref.StableEntityId)]
+        .PreviousBlockedAgeSteps;
+    Overlay.MaximumSpeedCmps = MaximumSpeed;
+    Overlay.BoundaryLocation = Agent.State.Position;
+    Overlay.bVerticalOverride =
+      !FMath::IsNearlyZero(DesiredVelocity.Z);
+    Overlay.ProposedZ =
+      Agent.State.Position.Z
+      + DesiredVelocity.Z
+        * static_cast<float>(MixedFixedStepSeconds);
+    Overlay.VerticalVelocityCmps =
+      DesiredVelocity.Z;
+    Overlay.bParticleActive = true;
+
+    FCrowdParticleConstraintAgent& ParticleAgent =
+      PipelineInput.ParticleTemplate.Particle.Agents
+        .AddDefaulted_GetRef();
+    ParticleAgent.AgentId = Agent.Identity.AgentId;
+    ParticleAgent.InteractionLayer = InteractionLayer;
+    ParticleAgent.StartPosition = Agent.State.Position;
+    ParticleAgent.PredictedPosition = Agent.State.Position;
+    ParticleAgent.PhysicalRadiusCm =
+      Agent.Properties.PhysicalRadiusCm;
+    ParticleAgent.HardSafetyGapCm =
+      Agent.Properties.HardSafetyGapCm;
+    ParticleAgent.SoftMarginCm =
+      Agent.Properties.SoftMarginCm;
+    ParticleAgent.Mobility = Agent.Properties.Mobility;
+
+    FCrowdMassBoundaryFacingTemplate& FacingTemplate =
+      PipelineInput.FacingTemplates.AddDefaulted_GetRef();
+    FacingTemplate.Input.AgentId = Agent.Identity.AgentId;
+    FacingTemplate.Input.CurrentYawDegrees =
+      Agent.State.YawDegrees;
+    FacingTemplate.Input.Location = FVector2f(
+      Agent.State.Position.X, Agent.State.Position.Y);
+    if (!Facing.IsNearlyZero())
+    {
+      const FVector Target =
+        Agent.State.Position + Facing.GetSafeNormal() * 100.0;
+      FacingTemplate.Input.TargetLocation =
+        FVector2f(Target.X, Target.Y);
+      FacingTemplate.Input.bHasTarget = true;
+    }
+  }
 
   struct FMixedMovementWork
   {
     FCrowdMassCommitPlan Plan;
+    TArray<FCrowdLocalPredictiveGrantState> GrantStates;
+    TMap<int32, int32> BlockedAgeByAgentId;
+    double MovementMilliseconds = 0.0;
+    double ParticleMilliseconds = 0.0;
+    double FacingMilliseconds = 0.0;
     int32 SafetyHolds = 0;
+    int32 FailureCode = 0;
     bool bCompleted = false;
   };
   const TSharedRef<FMixedMovementWork, ESPMode::ThreadSafe> Work =
     MakeShared<FMixedMovementWork, ESPMode::ThreadSafe>();
-  const TSharedPtr<const FCrowdNavSurfaceGraph,
-    ESPMode::ThreadSafe> Graph = NavGraphHandle;
+  const double GatherEndSeconds =
+    FPlatformTime::Seconds();
   FCrowdMassBoundaryRunner Runner;
-  if (!Runner.Begin(Snapshot, 0.0)
-    || !Runner.AddTask(
-      {ECrowdBoundaryTaskStage::Movement, 0}, {},
-      [Snapshot, Graph, Flows, Objectives, MovingRefs, Work]()
+  if (!Runner.Begin(Snapshot, 0.0))
+    return RejectBoundary(TEXT("runner_begin"));
+  PipelineInput.ParticleTemplate.Snapshot =
+    MoveTemp(Snapshot);
+  if (!Runner.AddTask(
+      {{3}, {301}, 0}, {},
+      [PipelineInput = MoveTemp(PipelineInput),
+       ResolvedVelocities = MoveTemp(ResolvedVelocities),
+       Work]()
       {
-        TArray<FCrowdSpatialSafetyAgent> SafetyAgents;
-        SafetyAgents.Reserve(Snapshot.Agents.Num());
-        for (const FCrowdMassBoundaryAgentRecord& Agent
-          : Snapshot.Agents)
-          SafetyAgents.Add({
-            Agent.AgentFacts.StableEntityRef,
-            Agent.State.Position,
-            MinimumSafeSeparationCm * 0.5f});
-        FCrowdSpatialSafetyIndex Safety;
-        if (!Safety.Build(
-            SafetyAgents, MinimumSafeSeparationCm, 150.0f))
-          return FCrowdBoundaryTaskResult::Failure();
-
-        FCrowdMassCommitPlan Plan;
-        Plan.FixedStepIndex = Snapshot.FixedStepIndex;
-        Plan.PlanRevision = Snapshot.PlanRevision;
-        uint64 PlanHash = 14695981039346656037ull;
-        for (const FCrowdMassBoundaryAgentRecord& Agent
-          : Snapshot.Agents)
+        const double MovementStart = FPlatformTime::Seconds();
+        const FCrowdMassMovementPipelineWorkOutput Movement =
+          FCrowdMassMovementPipelineWork::Run(
+            PipelineInput.Movement);
+        const double MovementEnd = FPlatformTime::Seconds();
+        Work->MovementMilliseconds =
+          (MovementEnd - MovementStart) * 1000.0;
+        if (!Movement.bCompleted)
         {
-          FVector Position = Agent.State.Position;
-          FVector Velocity = FVector::ZeroVector;
-          const FCrowdStableEntityRef Ref =
-            Agent.AgentFacts.StableEntityRef;
-          if (MovingRefs.Contains(Ref))
-          {
-            const TSharedPtr<const FCrowdNavSurfaceFlow,
-              ESPMode::ThreadSafe>* Flow = Flows.Find(Ref);
-            const FVector* Objective = Objectives.Find(Ref);
-            if (!Flow || !Flow->IsValid() || !Objective)
-              return FCrowdBoundaryTaskResult::Failure();
-            uint64 CurrentNodeId = 0;
-            uint32 CurrentLayer = 0;
-            if (!FCrowdNavSurfaceGraphKernel::AttachClosest(
-                *Graph, Position, 350.0f,
-                CurrentNodeId, CurrentLayer))
-              return FCrowdBoundaryTaskResult::Failure();
-            const int32 CurrentIndex =
-              Graph->FindNodeIndex(CurrentNodeId);
-            if (CurrentIndex == INDEX_NONE
-              || !(*Flow)->Nodes.IsValidIndex(CurrentIndex)
-              || (*Flow)->Nodes[CurrentIndex].IntegrationCostQ
-                == MAX_uint32)
-              return FCrowdBoundaryTaskResult::Failure();
-            FVector Destination = *Objective;
-            const uint64 NextNodeId =
-              (*Flow)->Nodes[CurrentIndex].NextStableNodeId;
-            const int32 NextIndex =
-              Graph->FindNodeIndex(NextNodeId);
-            if (NextIndex != INDEX_NONE)
-              Destination = Graph->Nodes[NextIndex].Center;
-            const FVector Delta = Destination - Position;
-            const FVector Candidate = Position
-              + Delta.GetClampedToMaxSize(
-                500.0f * static_cast<float>(
-                  MixedFixedStepSeconds));
-            if (Safety.IsCandidateSafe(
-                Ref, Candidate,
-                MinimumSafeSeparationCm * 0.5f))
-            {
-              if (!Safety.Update(Ref, Candidate))
-                return FCrowdBoundaryTaskResult::Failure();
-              Position = Candidate;
-              Velocity = Delta.GetSafeNormal()
-                * 500.0f;
-            }
-            else
-            {
-              ++Work->SafetyHolds;
-            }
-          }
-          FCrowdMassCommitRecord& Record =
-            Plan.Records.AddDefaulted_GetRef();
-          Record.EntityRef = Ref;
-          Record.CapabilityProfileKey = 1;
-          Record.PlanRevision = Snapshot.PlanRevision;
-          Record.Movement.AgentId = Agent.Identity.AgentId;
-          Record.Movement.LifecycleSerial =
-            Ref.LifecycleSerial;
-          Record.Movement.Position = Position;
-          Record.Movement.Velocity = Velocity;
-          Record.Movement.YawDegrees = Velocity.IsNearlyZero()
-            ? Agent.State.YawDegrees
-            : Velocity.Rotation().Yaw;
-          uint64 MovementHash =
-            FoldMixedHash(14695981039346656037ull,
-              Ref.ProviderId);
-          MovementHash = FoldMixedHash(
-            MovementHash, Ref.StableEntityId);
-          MovementHash = FoldMixedHash(
-            MovementHash, Ref.LifecycleSerial);
-          MovementHash = FoldMixedHash(
-            MovementHash,
-            static_cast<uint64>(FMath::RoundToInt64(
-              Position.X * 10.0)));
-          MovementHash = FoldMixedHash(
-            MovementHash,
-            static_cast<uint64>(FMath::RoundToInt64(
-              Position.Y * 10.0)));
-          Record.Movement.StableHash = static_cast<uint32>(
-            MovementHash ^ (MovementHash >> 32));
-          if (Record.Movement.StableHash == 0)
-            Record.Movement.StableHash = 1;
-          Record.Movement.bValid = true;
-          PlanHash = FoldMixedHash(
-            PlanHash, Record.Movement.StableHash);
+          Work->FailureCode = 10;
+          return FCrowdBoundaryTaskResult::Failure();
         }
-        Plan.StableHash = PlanHash == 0 ? 1 : PlanHash;
-        Plan.bValid = true;
-        Work->Plan = MoveTemp(Plan);
+
+        FCrowdMassParticlePipelineWorkInput ParticleInput;
+        if (!FCrowdMassBoundaryWorkGraph::BuildParticleInput(
+            PipelineInput, Movement, ParticleInput))
+        {
+          Work->FailureCode = 11;
+          return FCrowdBoundaryTaskResult::Failure();
+        }
+
+        const double ParticleStart = FPlatformTime::Seconds();
+        const FCrowdMassParticlePipelineWorkOutput Particle =
+          FCrowdMassParticlePipelineWork::Run(ParticleInput);
+        const double ParticleEnd = FPlatformTime::Seconds();
+        Work->ParticleMilliseconds =
+          (ParticleEnd - ParticleStart) * 1000.0;
+        if (!Particle.bCompleted)
+        {
+          Work->FailureCode = 12;
+          return FCrowdBoundaryTaskResult::Failure();
+        }
+
+        FCrowdMassFacingFinalizeWorkInput FacingInput;
+        if (!FCrowdMassBoundaryWorkGraph::BuildFacingInput(
+            PipelineInput, Movement, Particle, FacingInput))
+        {
+          Work->FailureCode = 13;
+          return FCrowdBoundaryTaskResult::Failure();
+        }
+        const double FacingStart = FPlatformTime::Seconds();
+        const FCrowdMassFacingFinalizeWorkOutput FacingFinalize =
+          FCrowdMassFacingFinalizeWork::Run(FacingInput);
+        Work->FacingMilliseconds =
+          (FPlatformTime::Seconds() - FacingStart) * 1000.0;
+        if (!FacingFinalize.bCompleted)
+        {
+          Work->FailureCode = 14;
+          return FCrowdBoundaryTaskResult::Failure();
+        }
+
+        Work->Plan = FacingFinalize.Finalize.CommitPlan;
+        Work->GrantStates =
+          Movement.LocalPredictive.GrantStates;
+        for (const FCrowdLocalPredictiveResult& Result
+          : Movement.LocalPredictive.Results)
+          Work->BlockedAgeByAgentId.Add(
+            Result.AgentId, Result.NextBlockedAgeSteps);
+        for (const FCrowdMassCommitRecord& Record
+          : Work->Plan.Records)
+        {
+          const int32 AgentId =
+            Record.Movement.AgentId;
+          if (ResolvedVelocities.IsValidIndex(AgentId)
+            && !ResolvedVelocities[AgentId].IsNearlyZero()
+            && Record.Movement.Velocity.IsNearlyZero())
+            ++Work->SafetyHolds;
+        }
+        uint64 WorkHash =
+          FoldMixedHash(14695981039346656037ull,
+            Movement.StableHash);
+        WorkHash = FoldMixedHash(
+          WorkHash, Particle.StableHash);
+        WorkHash = FoldMixedHash(
+          WorkHash, FacingFinalize.StableHash);
+        WorkHash = FoldMixedHash(
+          WorkHash, Work->Plan.StableHash);
         Work->bCompleted = true;
-        return FCrowdBoundaryTaskResult::Success(PlanHash);
+        return FCrowdBoundaryTaskResult::Success(WorkHash);
       }))
-    return false;
+    return RejectBoundary(TEXT("runner_add"));
   if (!Runner.Dispatch() || !Runner.WaitAndDrain()
     || !Work->bCompleted
     )
-    return false;
+  {
+    UE_LOG(LogTemp, Warning,
+      TEXT("CrowdDemoMixedSandboxBoundaryWorkReject code=%d fixed_step=%lld"),
+      Work->FailureCode, FixedStepIndex);
+    return RejectBoundary(TEXT("runner_work"));
+  }
+  const double WorkEndSeconds =
+    FPlatformTime::Seconds();
+  const double SafetyStartSeconds = FPlatformTime::Seconds();
+
+  FCrowdMassMovementFinalizeWorkInput SafetyFinalizeInput;
+  SafetyFinalizeInput.FixedStepIndex = Work->Plan.FixedStepIndex;
+  SafetyFinalizeInput.PlanRevision = Work->Plan.PlanRevision;
+  SafetyFinalizeInput.Records.Reserve(Work->Plan.Records.Num());
+  for (const FCrowdMassCommitRecord& Record : Work->Plan.Records)
+  {
+    const int32 SlotIndex =
+      static_cast<int32>(Record.EntityRef.StableEntityId);
+    if (!InOutSlots.IsValidIndex(SlotIndex)
+      || !InOutSlots[SlotIndex].bActive
+      || InOutSlots[SlotIndex].Facts.StableEntityRef != Record.EntityRef)
+      return RejectBoundary(TEXT("safety_target"));
+    const FSlotState& Slot = InOutSlots[SlotIndex];
+    const bool bCandidateSafe =
+      SpatialSafety.IsCandidateSafe(
+        Record.EntityRef, Record.Movement.Position,
+        MinimumSafeSeparationCm * 0.5f);
+    const FVector SafePosition =
+      bCandidateSafe ? Record.Movement.Position : Slot.Location;
+    const FVector SafeVelocity =
+      bCandidateSafe ? Record.Movement.Velocity : FVector::ZeroVector;
+    if (!bCandidateSafe)
+      ++Work->SafetyHolds;
+    if (!ResolvedInteractionLayers.IsValidIndex(SlotIndex)
+      || !SpatialSafety.Update(
+        Record.EntityRef, SafePosition,
+        ResolvedInteractionLayers[SlotIndex]))
+      return RejectBoundary(TEXT("safety_update"));
+    SafetyFinalizeInput.Records.Add({
+      Record.EntityRef,
+      Record.Movement.AgentId,
+      Record.EntityRef.LifecycleSerial,
+      Record.CapabilityProfileKey,
+      SafePosition,
+      SafeVelocity,
+      Record.Movement.YawDegrees});
+  }
+  const FCrowdMassMovementFinalizeWorkOutput SafetyFinalize =
+    FCrowdMassMovementFinalizeWork::BuildCommitPlan(
+      SafetyFinalizeInput);
+  if (!SafetyFinalize.bCompleted
+    || !SafetyFinalize.CommitPlan.bValid)
+    return RejectBoundary(TEXT("safety_finalize"));
+  Work->Plan = SafetyFinalize.CommitPlan;
+  const double SafetyEndSeconds = FPlatformTime::Seconds();
+
   FCrowdBehaviorBoundaryMetadata BehaviorMetadata;
   for (const FCrowdBehaviorPreparedEntity& Entity
     : PreparedBehavior.Entities)
@@ -1189,7 +2174,7 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     PreparedBehavior.ResolvedChannelHash;
   if (!Runner.BuildAndSealCommit(
       Work->Plan, {}, Targets, 0.0, &BehaviorMetadata))
-    return false;
+    return RejectBoundary(TEXT("commit_envelope"));
 
   struct FResolvedWrite
   {
@@ -1205,38 +2190,72 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     const int32 SlotIndex =
       static_cast<int32>(Record.EntityRef.StableEntityId);
     FMassEntityHandle Entity;
-    if (!Slots.IsValidIndex(SlotIndex)
-      || !Slots[SlotIndex].bActive
-      || Slots[SlotIndex].Facts.StableEntityRef
+    if (!InOutSlots.IsValidIndex(SlotIndex)
+      || !InOutSlots[SlotIndex].bActive
+      || InOutSlots[SlotIndex].Facts.StableEntityRef
         != Record.EntityRef
       || !LifecycleWorld.TryGetEntityHandle(
         Record.EntityRef, Entity))
-      return false;
+      return RejectBoundary(TEXT("commit_target"));
     FTransformFragment* Transform =
       EntitySubsystem->GetMutableEntityManager()
         .GetFragmentDataPtr<FTransformFragment>(Entity);
     if (!Transform)
-      return false;
-    Writes.Add({&Slots[SlotIndex], Transform, &Record});
+      return RejectBoundary(TEXT("transform_fragment"));
+    Writes.Add({&InOutSlots[SlotIndex], Transform, &Record});
   }
   if (!Runner.MarkValidated(0.0))
-    return false;
+    return RejectBoundary(TEXT("mark_validated"));
   for (const FResolvedWrite& Write : Writes)
   {
     Write.Slot->Location =
       Write.Record->Movement.Position;
+    Write.Slot->Velocity =
+      Write.Record->Movement.Velocity;
+    Write.Slot->YawDegrees =
+      Write.Record->Movement.YawDegrees;
+    if (const int32* BlockedAge =
+      Work->BlockedAgeByAgentId.Find(
+        Write.Record->Movement.AgentId))
+      Write.Slot->PreviousBlockedAgeSteps =
+        *BlockedAge;
     Write.Transform->GetMutableTransform().SetLocation(
       Write.Record->Movement.Position);
+    Write.Transform->GetMutableTransform().SetRotation(
+      FRotator(
+        0.0f, Write.Record->Movement.YawDegrees, 0.0f)
+        .Quaternion());
   }
-  SafetyHoldCount += Work->SafetyHolds;
-  LastBoundaryCommitHash =
-    Runner.GetCommitEnvelope().StableHash;
-  return Runner.MarkCommitted(0.0);
+  MixedLocalPredictiveGrantStates =
+    MoveTemp(Work->GrantStates);
+  OutSafetyHolds = Work->SafetyHolds;
+  OutCommitHash = Runner.GetCommitEnvelope().StableHash;
+  checkf(Runner.MarkCommitted(0.0),
+    TEXT("Validated Mixed boundary failed during final apply"));
+  if (Config.PopulationLimit == MaximumMixedPopulation
+    && (FixedStepIndex <= 5 || FixedStepIndex % 150 == 0))
+  {
+    const double ProductEndSeconds =
+      FPlatformTime::Seconds();
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMixedSandboxMovementPhases fixed_step=%lld gather_ms=%.3f runner_ms=%.3f movement_ms=%.3f particle_ms=%.3f facing_ms=%.3f safety_finalize_ms=%.3f commit_ms=%.3f"),
+      FixedStepIndex,
+      (GatherEndSeconds - ProductStartSeconds) * 1000.0,
+      (WorkEndSeconds - GatherEndSeconds) * 1000.0,
+      Work->MovementMilliseconds,
+      Work->ParticleMilliseconds,
+      Work->FacingMilliseconds,
+      (SafetyEndSeconds - SafetyStartSeconds) * 1000.0,
+      (ProductEndSeconds - SafetyEndSeconds) * 1000.0);
+  }
+  return true;
 }
 
 bool ACrowdDemoMixedSandboxCoordinator::GetOrBuildFlow(
   const FVector& Objective,
-  const FCrowdNavSurfaceFlow*& OutFlow)
+  const FCrowdNavSurfaceFlow*& OutFlow,
+  const uint64 PreferredGoalNodeId,
+  uint64* const OutGoalNodeId)
 {
   OutFlow = nullptr;
   UWorld* World = GetWorld();
@@ -1245,10 +2264,31 @@ bool ACrowdDemoMixedSandboxCoordinator::GetOrBuildFlow(
   if (!Runtime || !NavGraphHandle.IsValid()) return false;
   const FCrowdNavGraphResource& Resource = Runtime->GetNavGraphResource();
   if (!Resource.IsReady() || Resource.Graph != NavGraphHandle) return false;
-  uint64 GoalNodeId = 0;
+  uint64 GoalNodeId = PreferredGoalNodeId;
   uint32 GoalLayer = 0;
-  if (!FCrowdNavSurfaceGraphKernel::AttachClosest(
-    *NavGraphHandle, Objective, 350.0f, GoalNodeId, GoalLayer)) return false;
+  const int32 PreferredIndex =
+    NavGraphHandle->FindNodeIndex(
+      PreferredGoalNodeId);
+  if (NavGraphHandle->Nodes.IsValidIndex(
+      PreferredIndex)
+    && DistanceSquaredToNavNode(
+      Objective,
+      NavGraphHandle->Nodes[PreferredIndex])
+      <= FMath::Square(350.0))
+  {
+    GoalLayer =
+      NavGraphHandle->Nodes[PreferredIndex].NavLayer;
+  }
+  else
+  {
+    GoalNodeId = 0;
+    if (!FCrowdNavSurfaceGraphKernel::AttachClosest(
+      *NavGraphHandle, Objective, 350.0f,
+      GoalNodeId, GoalLayer))
+      return false;
+  }
+  if (OutGoalNodeId)
+    *OutGoalNodeId = GoalNodeId;
   if (const FCrowdNavFlowHandle* Existing =
     FlowHandleByGoalNode.Find(GoalNodeId))
   {
@@ -1280,7 +2320,8 @@ bool ACrowdDemoMixedSandboxCoordinator::RebuildSpatialSafety()
     Agents.Add({
       Slot.Facts.StableEntityRef,
       Slot.Location,
-      MinimumSafeSeparationCm * 0.5f});
+      MinimumSafeSeparationCm * 0.5f,
+      Slot.InteractionLayer});
   }
   return SpatialSafety.Build(Agents, MinimumSafeSeparationCm, 150.0f);
 }
@@ -1369,9 +2410,9 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyLifecycleOperation(
     if (Result == ECrowdLifecycleBatchAcceptResult::Accepted)
     {
       InitializeSlotState(SlotIndex, Operation.LifecycleSerial);
-      FCrowdCapabilityBinding Binding;
-      Binding.ProfileKey =
-        CrowdBuiltinBehaviorSchemas::LegacyFullProfile;
+    FCrowdCapabilityBinding Binding;
+    Binding.ProfileKey =
+        CrowdDemoBehaviorSchemas::FullProfile;
       if (!BehaviorSourceRuntime->RegisterEntity(
           Slot.Facts.StableEntityRef, Binding))
         return false;
@@ -1413,6 +2454,9 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyLifecycleOperation(
   }
   if (Result != ECrowdLifecycleBatchAcceptResult::Accepted) return false;
 
+  if (Operation.Kind
+    != ECrowdDemoContinuousLifecycleOperationKind::Membership)
+    MixedLocalPredictiveGrantStates.Reset();
   NextLifecycleSequence = Operation.Sequence + 1;
   RelevantSetRevision = Operation.RelevantSetRevision;
   MaxObservedPopulation = FMath::Max(
@@ -1435,17 +2479,17 @@ FCrowdLifecycleBatchHeader ACrowdDemoMixedSandboxCoordinator::MakeBatchHeader(
 
 void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
 {
-  TArray<FCrowdDemoMixedAgentState> States;
   TArray<FCrowdReliableStateRecord> Records;
   TArray<FCrowdMovementCorrectionRecord> Corrections;
-  States.Reserve(Config.PopulationLimit);
   Records.Reserve(Config.PopulationLimit);
   Corrections.Reserve(Config.PopulationLimit);
+  constexpr int32 MaximumSourceSetRecordsPerFrame = 32;
+  int32 SourceSetRecordCount = 0;
   for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
   {
     const FSlotState& Slot = Slots[SlotIndex];
     if (!Slot.bActive) continue;
-    States.Add({
+    const FCrowdDemoMixedAgentState State{
       static_cast<uint64>(SlotIndex),
       Slot.Facts.StableEntityRef.LifecycleSerial,
       Slot.MembershipKey,
@@ -1457,26 +2501,89 @@ void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
       Slot.Facts.TargetRef.LifecycleSerial,
       Slot.Facts.BusinessTaskRef.ProviderId,
       Slot.Facts.BusinessTaskRef.StableEntityId,
-      Slot.Facts.BusinessTaskRef.LifecycleSerial});
-  }
-  for (const FCrowdDemoMixedAgentState& State : States)
-  {
-    FCrowdReliableStateRecord& Record =
-      Records.AddDefaulted_GetRef();
-    Record.Sequence = NextStateSequence++;
-    Record.Kind = ECrowdReliableStateKind::HostEvent;
-    Record.EntityRef = {
+      Slot.Facts.BusinessTaskRef.LifecycleSerial};
+    const FCrowdStableEntityRef ReplicatedEntityRef{
       1, State.StableEntityId, State.LifecycleSerial};
-    Record.Revision = static_cast<uint32>(
-      FMath::Max<int64>(1, FixedStepIndex));
-    EncodeMixedAgent(
-      State, FixedStepIndex, NextLifecycleSequence,
-      RelevantSetRevision, Record.Payload);
-    Record.StableHash =
-      FCrowdReplicationTransport::CalculateReliableRecordHash(Record);
+    const uint64 HostFactHash =
+      CalculateMixedHostFactHash(State);
+    const uint64* LastHostFactHash =
+      LastPublishedHostFactHashes.Find(ReplicatedEntityRef);
+    if (!LastHostFactHash || *LastHostFactHash != HostFactHash)
+    {
+      FCrowdReliableStateRecord& Record =
+        Records.AddDefaulted_GetRef();
+      Record.Sequence = NextStateSequence++;
+      Record.Kind = ECrowdReliableStateKind::HostEvent;
+      Record.EntityRef = ReplicatedEntityRef;
+      Record.Revision = static_cast<uint32>(
+        FMath::Max<int64>(1, FixedStepIndex));
+      EncodeMixedAgent(
+        State, FixedStepIndex, NextLifecycleSequence,
+        RelevantSetRevision, Record.Payload);
+      Record.StableHash =
+        FCrowdReplicationTransport::CalculateReliableRecordHash(Record);
+      LastPublishedHostFactHashes.Add(
+        ReplicatedEntityRef, HostFactHash);
+    }
+    const FCrowdBehaviorSourceSet* SourceSet =
+      BehaviorSourceRuntime
+        ? BehaviorSourceRuntime->FindSourceSet(
+          ReplicatedEntityRef)
+        : nullptr;
+    const FCrowdResolvedBehaviorChannels* Resolved =
+      BehaviorSourceRuntime
+        ? BehaviorSourceRuntime->FindResolvedChannels(
+          ReplicatedEntityRef)
+        : nullptr;
+    const uint32* LastPublishedRevision =
+      LastPublishedSourceSetRevisions.Find(ReplicatedEntityRef);
+    if (SourceSetRecordCount
+        < MaximumSourceSetRecordsPerFrame
+      && SourceSet && Resolved && Resolved->bValid
+      && (!LastPublishedRevision
+        || *LastPublishedRevision != SourceSet->Revision))
+    {
+      FCrowdBehaviorSourceSetReplicationRecord SourceRecord;
+      SourceRecord.RegistryHash =
+        BehaviorSourceRuntime->GetRegistryHash();
+      SourceRecord.ContextSchemaHash =
+        BehaviorSourceRuntime->GetContextSchemaHash();
+      SourceRecord.SourceSet = *SourceSet;
+      SourceRecord.SourceSet.Instances.RemoveAll(
+        [](const FCrowdBehaviorSourceInstance& Instance)
+        {
+          return Instance.ReplicationPolicy
+            != ECrowdBehaviorSourceReplicationPolicy::Predictable;
+        });
+      SourceRecord.SourceSet.RecalculateStableHash();
+      SourceRecord.ResolvedBehaviorHash = Resolved->StableHash;
+      SourceRecord.DerivedDiagnosticLabel =
+        State.DerivedBehaviorLabel;
+      TArray<uint8> SourcePayload;
+      if (!FCrowdReplicationCodec::EncodeBehaviorSourceSet(
+          SourceRecord, SourcePayload))
+      {
+        ++StaleRejectCount;
+        return;
+      }
+      FCrowdReliableStateRecord& ReplicatedSource =
+        Records.AddDefaulted_GetRef();
+      ReplicatedSource.Sequence = NextStateSequence++;
+      ReplicatedSource.Kind =
+        ECrowdReliableStateKind::BehaviorSourceSet;
+      ReplicatedSource.EntityRef = ReplicatedEntityRef;
+      ReplicatedSource.Revision = SourceSet->Revision;
+      ReplicatedSource.Payload = MoveTemp(SourcePayload);
+      ReplicatedSource.StableHash =
+        FCrowdReplicationTransport::CalculateReliableRecordHash(
+          ReplicatedSource);
+      LastPublishedSourceSetRevisions.Add(
+        ReplicatedEntityRef, SourceSet->Revision);
+      ++SourceSetRecordCount;
+    }
     FCrowdMovementCorrectionRecord& Correction =
       Corrections.AddDefaulted_GetRef();
-    Correction.EntityRef = Record.EntityRef;
+    Correction.EntityRef = ReplicatedEntityRef;
     Correction.Sequence = static_cast<uint64>(
       FMath::Max<int64>(1, FixedStepIndex + 1));
     Correction.FixedStepIndex = FixedStepIndex;
@@ -1491,7 +2598,8 @@ void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
     if (AMassCrowdReplicationActor* Channel = Pair.Value.Get())
     {
       Channel->PublishReliables(Records);
-      Channel->PublishMovementCorrections(Corrections);
+      if (!Channel->IsServerAwaitingBaselineAck())
+        Channel->PublishMovementCorrections(Corrections);
     }
   }
 }
@@ -1500,6 +2608,10 @@ void ACrowdDemoMixedSandboxCoordinator::RefreshReplicationChannels()
 {
   UWorld* World = GetWorld();
   if (!World) return;
+  for (auto It = ReplicationChannelEligibleSeconds.CreateIterator();
+    It; ++It)
+    if (!It.Key().IsValid())
+      It.RemoveCurrent();
   for (auto It = ReplicationChannels.CreateIterator(); It; ++It)
   {
     AMassCrowdReplicationActor* Channel = It.Value().Get();
@@ -1510,6 +2622,7 @@ void ACrowdDemoMixedSandboxCoordinator::RefreshReplicationChannels()
     }
     if (Channel->RequiresNewBaseline())
     {
+      LastPublishedSourceSetRevisions.Reset();
       Channel->Destroy();
       It.RemoveCurrent();
     }
@@ -1519,14 +2632,31 @@ void ACrowdDemoMixedSandboxCoordinator::RefreshReplicationChannels()
   {
     APlayerController* Controller = It->Get();
     if (!Controller || ReplicationChannels.Contains(Controller)) continue;
+    double* EligibleSeconds =
+      ReplicationChannelEligibleSeconds.Find(Controller);
+    if (!EligibleSeconds)
+    {
+      ReplicationChannelEligibleSeconds.Add(
+        Controller, World->GetTimeSeconds() + 1.0);
+      ForceNetUpdate();
+      continue;
+    }
+    if (World->GetTimeSeconds() < *EligibleSeconds)
+      continue;
     AMassCrowdReplicationActor* Channel =
       AMassCrowdReplicationActor::SpawnForController(*Controller);
     if (!Channel || !PublishBaseline(*Channel))
     {
       if (Channel) Channel->Destroy();
+      *EligibleSeconds = World->GetTimeSeconds() + 1.0;
+      UE_LOG(LogTemp, Warning,
+        TEXT("CrowdDemoMixedSandboxReplication stage=baseline_retry owner=%s"),
+        *GetNameSafe(Controller));
       continue;
     }
+    LastPublishedSourceSetRevisions.Reset();
     ReplicationChannels.Add(Controller, Channel);
+    ReplicationChannelEligibleSeconds.Remove(Controller);
   }
 }
 
@@ -1559,9 +2689,10 @@ bool ACrowdDemoMixedSandboxCoordinator::PublishBaseline(
   FCrowdRelevantSnapshotLimits Limits;
   Limits.MaxEntityCount = Config.PopulationLimit;
   Limits.MaxChunkCount = Config.PopulationLimit;
-  Limits.MaxEntitiesPerChunk = 8;
-  Limits.MaxChunkPayloadBytes = 4096;
-  Limits.MaxTotalPayloadBytes = 64 * 1024;
+  Limits.MaxEntitiesPerChunk =
+    FMath::Min(128, FMath::Max(1, Config.PopulationLimit));
+  Limits.MaxChunkPayloadBytes = 64 * 1024;
+  Limits.MaxTotalPayloadBytes = 16 * 1024 * 1024;
   Limits.AssemblyTimeoutSeconds = 10.0;
   FCrowdRelevantSnapshotHeader Header;
   TArray<FCrowdRelevantSnapshotChunk> Chunks;
@@ -1573,9 +2704,43 @@ bool ACrowdDemoMixedSandboxCoordinator::PublishBaseline(
     Limits,
     Header,
     Chunks))
+  {
+    UE_LOG(LogTemp, Warning,
+      TEXT("CrowdDemoMixedSandboxReplication stage=baseline_build_reject entities=%d population_limit=%d chunk_entities=%d"),
+      Entities.Num(), Config.PopulationLimit, Limits.MaxEntitiesPerChunk);
     return false;
-  return Channel.PublishBaseline(
-    Header, Chunks, FMath::Max<uint64>(1, NextStateSequence));
+  }
+  if (!Channel.PublishBaseline(
+    Header, Chunks, FMath::Max<uint64>(1, NextStateSequence)))
+  {
+    UE_LOG(LogTemp, Warning,
+      TEXT("CrowdDemoMixedSandboxReplication stage=baseline_publish_reject revision=%u entities=%d chunks=%d resume=%llu"),
+      Header.SnapshotRevision, Header.EntityCount, Header.ChunkCount,
+      FMath::Max<uint64>(1, NextStateSequence));
+    return false;
+  }
+  for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
+  {
+    const FSlotState& Slot = Slots[SlotIndex];
+    if (!Slot.bActive) continue;
+    const FCrowdDemoMixedAgentState State{
+      static_cast<uint64>(SlotIndex),
+      Slot.Facts.StableEntityRef.LifecycleSerial,
+      Slot.MembershipKey,
+      Slot.Location,
+      Slot.Facts.DerivedBehaviorLabel,
+      static_cast<uint8>(FMath::Clamp(Slot.Health, 0, 100)),
+      Slot.Facts.TargetRef.ProviderId,
+      Slot.Facts.TargetRef.StableEntityId,
+      Slot.Facts.TargetRef.LifecycleSerial,
+      Slot.Facts.BusinessTaskRef.ProviderId,
+      Slot.Facts.BusinessTaskRef.StableEntityId,
+      Slot.Facts.BusinessTaskRef.LifecycleSerial};
+    LastPublishedHostFactHashes.Add(
+      Slot.Facts.StableEntityRef,
+      CalculateMixedHostFactHash(State));
+  }
+  return true;
 }
 
 void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
@@ -1595,6 +2760,10 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
   if (Channel->GetCompletedBaselineRevision()
     != LastConsumedBaselineRevision)
   {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMixedSandboxBaselineApply stage=begin revision=%u entities=%d"),
+      Channel->GetCompletedBaselineRevision(),
+      Channel->GetCompletedBaselineEntities().Num());
     UMassEntitySubsystem* EntitySubsystem =
       World->GetSubsystem<UMassEntitySubsystem>();
     if (!EntitySubsystem || !LifecycleArchetype.IsValid())
@@ -1606,7 +2775,21 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
     int64 BaselineStep = INDEX_NONE;
     uint64 LifecycleResume = 0;
     uint32 BaselineRelevantRevision = 0;
-    for (FSlotState& Slot : Slots) Slot.bActive = false;
+    if (!BehaviorSourceRuntime)
+    {
+      Channel->RequestResync();
+      ++StaleRejectCount;
+      return;
+    }
+    for (FSlotState& Slot : Slots)
+    {
+      if (Slot.bActive && Slot.Facts.StableEntityRef.IsValid()
+        && BehaviorSourceRuntime->FindSourceSet(
+          Slot.Facts.StableEntityRef))
+        BehaviorSourceRuntime->RemoveEntity(
+          Slot.Facts.StableEntityRef);
+      Slot.bActive = false;
+    }
     for (const FCrowdRelevantSnapshotEntityPayload& Entity
       : Channel->GetCompletedBaselineEntities())
     {
@@ -1693,6 +2876,27 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
       ++StaleRejectCount;
       return;
     }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMixedSandboxBaselineApply stage=lifecycle_ready revision=%u"),
+      Channel->GetCompletedBaselineRevision());
+    for (int32 SlotIndex = 1;
+      SlotIndex < Slots.Num(); ++SlotIndex)
+    {
+      if (!Slots[SlotIndex].bActive) continue;
+      FCrowdCapabilityBinding Binding;
+      Binding.ProfileKey =
+        CrowdDemoBehaviorSchemas::FullProfile;
+      if (!BehaviorSourceRuntime->RegisterEntity(
+          Slots[SlotIndex].Facts.StableEntityRef, Binding))
+      {
+        Channel->RequestResync();
+        ++StaleRejectCount;
+        return;
+      }
+    }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMixedSandboxBaselineApply stage=sources_ready revision=%u"),
+      Channel->GetCompletedBaselineRevision());
     for (int32 SlotIndex = 1; SlotIndex < Slots.Num(); ++SlotIndex)
     {
       if (!Slots[SlotIndex].bActive) continue;
@@ -1718,6 +2922,9 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
     LastReceivedFixedStep = BaselineStep;
     NextLifecycleSequence = LifecycleResume;
     RelevantSetRevision = BaselineRelevantRevision;
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMixedSandboxBaselineApply stage=complete revision=%u fixed_step=%lld"),
+      LastConsumedBaselineRevision, LastReceivedFixedStep);
   }
 
   TArray<FCrowdReplicationApplyFrame> ApplyFrames;
@@ -1756,6 +2963,26 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
           if (!DecodeLifecycleOperation(Record.Payload, Operation)
             || !ApplyLifecycleOperation(Operation))
           {
+            ++StaleRejectCount;
+            return;
+          }
+        }
+        else if (Record.Kind
+          == ECrowdReliableStateKind::BehaviorSourceSet)
+        {
+          FCrowdBehaviorSourceSetReplicationRecord SourceRecord;
+          if (!BehaviorSourceRuntime
+            || !FCrowdReplicationCodec::DecodeBehaviorSourceSet(
+              Record.Payload,
+              BehaviorSourceRuntime->GetRegistryHash(),
+              BehaviorSourceRuntime->GetContextSchemaHash(),
+              SourceRecord)
+            || SourceRecord.SourceSet.EntityRef
+              != Record.EntityRef
+            || !BehaviorSourceRuntime->ApplyReplicatedSourceSet(
+              SourceRecord.SourceSet))
+          {
+            Channel->RequestResync();
             ++StaleRejectCount;
             return;
           }
@@ -1972,18 +3199,61 @@ void ACrowdDemoMixedSandboxCoordinator::LogCheckpoint()
   const ACrowdDemoReplicator* Replicator = World ? FindMixedVisualHost(*World) : nullptr;
   const int32 Visible = !HasAuthority() && Replicator
     ? Replicator->GetCrowdVisualInstanceCount() : 0;
+  float MinimumHaulObjectiveDistanceCm =
+    TNumericLimits<float>::Max();
+  float ClosestHaulObjectiveDistance2DCm =
+    TNumericLimits<float>::Max();
+  float ClosestHaulObjectiveHeightDeltaCm =
+    TNumericLimits<float>::Max();
+  float MaximumHaulObjectiveDistanceCm = 0.0f;
+  int32 MovingHaulAgentCount = 0;
+  for (int32 SlotIndex = 1;
+    SlotIndex <= 6 && Slots.IsValidIndex(SlotIndex);
+    ++SlotIndex)
+  {
+    const FSlotState& Slot = Slots[SlotIndex];
+    if (!Slot.bActive) continue;
+    const bool bCarrying =
+      BusinessLedger.GetCargoCarrier(
+        static_cast<uint64>(SlotIndex))
+      == static_cast<uint64>(SlotIndex);
+    const FVector Objective = Marker(
+      bCarrying ? TEXT("CrowdNavHigh") : TEXT("CrowdNavLower"),
+      FVector::ZeroVector);
+    const float Distance =
+      FVector::Distance(Slot.Location, Objective);
+    if (Distance < MinimumHaulObjectiveDistanceCm)
+    {
+      MinimumHaulObjectiveDistanceCm = Distance;
+      ClosestHaulObjectiveDistance2DCm =
+        FVector::Dist2D(Slot.Location, Objective);
+      ClosestHaulObjectiveHeightDeltaCm =
+        static_cast<float>(FMath::Abs(
+          Slot.Location.Z - Objective.Z));
+    }
+    MaximumHaulObjectiveDistanceCm = FMath::Max(
+      MaximumHaulObjectiveDistanceCm, Distance);
+    if (!Slot.Velocity.IsNearlyZero())
+      ++MovingHaulAgentCount;
+  }
   UE_LOG(LogTemp, Display,
-    TEXT("CrowdDemoMixedSandboxCheckpoint role=%s fixed_step=%lld state_sequence=%llu active=%d visible=%d transitions=%d pickups=%d deliveries=%d combat_quantity=%d commits=%d duplicate_commits=%d spawned=%d despawned=%d membership=%d max_population=%d safety_holds=%d min_separation_cm=%.2f stale_reject=%d entity_hash=%llu membership_hash=%llu commit_hash=%llu source=MassCrowdBoundaryRunner+MassCrowdNavRuntime+ApplyFrame"),
+    TEXT("CrowdDemoMixedSandboxCheckpoint role=%s fixed_step=%lld state_sequence=%llu active=%d visible=%d transitions=%d seen_behavior_bits=0x%08x pickups=%d deliveries=%d combat_quantity=%d commits=%d duplicate_commits=%d spawned=%d despawned=%d membership=%d max_population=%d safety_holds=%d min_separation_cm=%.2f haul_distance_cm=%.2f..%.2f haul_min_2d_cm=%.2f haul_min_z_cm=%.2f haul_moving=%d stale_reject=%d entity_hash=%llu membership_hash=%llu commit_hash=%llu source=MassCrowdBoundaryRunner+MassCrowdNavRuntime+ApplyFrame"),
     HasAuthority() ? TEXT("server") : TEXT("client"),
     HasAuthority() ? FixedStepIndex : LastReceivedFixedStep,
     HasAuthority() ? NextStateSequence - 1 : LastReceivedStateSequence,
     LifecycleWorld.GetActiveEntityCount(), Visible, BehaviorTransitionCount,
+    SeenBehaviorBits,
     BusinessLedger.GetPickupCount(), BusinessLedger.GetDeliveryCount(),
     BusinessLedger.GetCombatHitQuantity(13) + BusinessLedger.GetCombatHitQuantity(14)
       + BusinessLedger.GetCombatHitQuantity(15) + BusinessLedger.GetCombatHitQuantity(16),
     BusinessLedger.GetAppliedCommitCount(), DuplicateCommitCount,
     SpawnCount, DespawnCount, MembershipChangeCount, MaxObservedPopulation,
-    SafetyHoldCount, MinimumSeparationCm, StaleRejectCount,
+    SafetyHoldCount, MinimumSeparationCm,
+    MinimumHaulObjectiveDistanceCm,
+    MaximumHaulObjectiveDistanceCm,
+    ClosestHaulObjectiveDistance2DCm,
+    ClosestHaulObjectiveHeightDeltaCm,
+    MovingHaulAgentCount, StaleRejectCount,
     LifecycleWorld.CalculateEntitySetHash(),
     LifecycleWorld.CalculateMembershipHash(),
     LastBoundaryCommitHash);

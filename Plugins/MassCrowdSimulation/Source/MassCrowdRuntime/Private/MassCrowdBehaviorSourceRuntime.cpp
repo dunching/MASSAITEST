@@ -4,6 +4,12 @@ namespace
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
   constexpr uint64 FnvPrime64 = 1099511628211ull;
+  FCriticalSection ProviderRegistryMutex;
+  TMap<
+    FCrowdBehaviorProviderId,
+    TSharedPtr<const ICrowdBehaviorSourceProvider, ESPMode::ThreadSafe>>
+      RegisteredProviders;
+  bool bProviderRegistrationFrozen = false;
 
   template <typename T>
   void FoldUnsigned(uint64& Hash, const T Value)
@@ -22,190 +28,6 @@ namespace
     FoldUnsigned(Hash, Ref.StableEntityId);
     FoldUnsigned(Hash, Ref.LifecycleSerial);
   }
-
-  FCrowdBehaviorSourceSpec MakeSpec(
-    const FCrowdBehaviorSourceTypeId TypeId,
-    const uint16 ChannelMask,
-    const int16 Priority,
-    const ECrowdBehaviorSourceReplicationPolicy Replication,
-    const FCrowdCapabilityId Required = {},
-    const int32 MaxLifetimeSteps = 0,
-    const uint16 ExclusiveGroup = 0)
-  {
-    FCrowdBehaviorSourceSpec Spec;
-    Spec.TypeId = TypeId;
-    Spec.ChannelMask = ChannelMask;
-    Spec.DefaultPriority = Priority;
-    Spec.ReplicationPolicy = Replication;
-    Spec.PayloadSchemaId = CrowdBuiltinBehaviorSchemas::Standard;
-    Spec.MaxLifetimeSteps = MaxLifetimeSteps;
-    Spec.ExclusiveGroup = ExclusiveGroup;
-    if (Required.IsValid())
-    {
-      Spec.RequiredCapabilityCount = 1;
-      Spec.RequiredCapabilities[0] = Required;
-    }
-    return Spec;
-  }
-
-  bool ReadPayload(
-    const FCrowdBehaviorSourceEvaluationContext& Context,
-    FCrowdBuiltinBehaviorSourcePayload& OutPayload)
-  {
-    return Context.Instance.Payload.Get(
-      CrowdBuiltinBehaviorSchemas::Standard, OutPayload);
-  }
-
-  class FMovementEvaluator final : public ICrowdBehaviorSourceEvaluator
-  {
-  public:
-    explicit FMovementEvaluator(
-      const ECrowdBehaviorBlendMode InMode) : Mode(InMode) {}
-
-    virtual bool Evaluate(
-      const FCrowdBehaviorSourceEvaluationContext& Context,
-      FCrowdBehaviorContributionWriter& Writer) const override
-    {
-      FCrowdBuiltinBehaviorSourcePayload Payload;
-      if (!ReadPayload(Context, Payload)) return false;
-      FCrowdMovementContribution Value;
-      Value.BlendMode = Mode;
-      Value.WeightQ15 = Payload.PrimaryId > 0
-        ? static_cast<uint16>(FMath::Min<uint32>(
-          Payload.PrimaryId, CrowdBehavior::FullQ15Weight))
-        : CrowdBehavior::FullQ15Weight;
-      Value.DesiredVelocity = Payload.Vector;
-      return Writer.AddMovement(Value);
-    }
-
-  private:
-    ECrowdBehaviorBlendMode Mode;
-  };
-
-  class FFacingEvaluator final : public ICrowdBehaviorSourceEvaluator
-  {
-  public:
-    virtual bool Evaluate(
-      const FCrowdBehaviorSourceEvaluationContext& Context,
-      FCrowdBehaviorContributionWriter& Writer) const override
-    {
-      FCrowdBuiltinBehaviorSourcePayload Payload;
-      if (!ReadPayload(Context, Payload)) return false;
-      FCrowdFacingContribution Value;
-      Value.BlendMode = ECrowdBehaviorBlendMode::Override;
-      Value.DesiredDirection = Payload.Vector;
-      return Writer.AddFacing(Value);
-    }
-  };
-
-  class FConstraintEvaluator final : public ICrowdBehaviorSourceEvaluator
-  {
-  public:
-    explicit FConstraintEvaluator(const bool bInPermanent)
-      : bPermanent(bInPermanent) {}
-
-    virtual bool Evaluate(
-      const FCrowdBehaviorSourceEvaluationContext& Context,
-      FCrowdBehaviorContributionWriter& Writer) const override
-    {
-      FCrowdBuiltinBehaviorSourcePayload Payload;
-      if (!ReadPayload(Context, Payload)) return false;
-      FCrowdConstraintContribution Value;
-      Value.BlendMode = ECrowdBehaviorBlendMode::Override;
-      Value.SpeedLimitCmps = Payload.Vector.X >= 0.0
-        ? static_cast<float>(Payload.Vector.X) : 0.0f;
-      Value.AllowedNavLayerMask = Payload.CommitId != 0
-        ? Payload.CommitId : MAX_uint64;
-      Value.bLockMovement = bPermanent || (Payload.Flags & 1u) != 0;
-      return Writer.AddConstraint(Value);
-    }
-
-  private:
-    bool bPermanent = false;
-  };
-
-  class FPresentationEvaluator final
-    : public ICrowdBehaviorSourceEvaluator
-  {
-  public:
-    virtual bool Evaluate(
-      const FCrowdBehaviorSourceEvaluationContext& Context,
-      FCrowdBehaviorContributionWriter& Writer) const override
-    {
-      FCrowdBuiltinBehaviorSourcePayload Payload;
-      if (!ReadPayload(Context, Payload)
-        || Payload.PrimaryId == 0)
-        return false;
-      FCrowdPresentationContribution Value;
-      Value.PropertyId = Payload.PrimaryId;
-      Value.Value = Payload.SecondaryId;
-      return Writer.AddPresentation(Value);
-    }
-  };
-
-  class FInteractionBusinessEvaluator final
-    : public ICrowdBehaviorSourceEvaluator
-  {
-  public:
-    virtual bool Evaluate(
-      const FCrowdBehaviorSourceEvaluationContext& Context,
-      FCrowdBehaviorContributionWriter& Writer) const override
-    {
-      FCrowdBuiltinBehaviorSourcePayload Payload;
-      if (!ReadPayload(Context, Payload)
-        || Payload.PrimaryId == 0)
-        return false;
-      FCrowdInteractionContribution Interaction;
-      Interaction.IntentTypeId = Payload.PrimaryId;
-      Interaction.TargetRef = Payload.TargetRef;
-      Interaction.PayloadTypeId = Payload.SecondaryId;
-      Interaction.PayloadKey = Payload.Flags;
-      if (!Writer.AddInteraction(Interaction)) return false;
-      if (Payload.CommitId == 0) return true;
-      FCrowdBusinessContribution Business;
-      Business.AdapterId = Payload.PrimaryId;
-      Business.ExclusiveGroup = Context.Instance.ExclusiveGroup;
-      Business.CommitId = Payload.CommitId;
-      Business.InstigatorRef = Context.Instance.Handle.EntityRef;
-      Business.TargetRef = Payload.TargetRef;
-      Business.PayloadTypeId = Payload.SecondaryId;
-      Business.Quantity = Payload.Quantity;
-      return Writer.AddBusiness(Business);
-    }
-  };
-
-  class FAttackEvaluator final : public ICrowdBehaviorSourceEvaluator
-  {
-  public:
-    virtual bool Evaluate(
-      const FCrowdBehaviorSourceEvaluationContext& Context,
-      FCrowdBehaviorContributionWriter& Writer) const override
-    {
-      FCrowdBuiltinBehaviorSourcePayload Payload;
-      if (!ReadPayload(Context, Payload)
-        || !Payload.TargetRef.IsValid())
-        return false;
-      FCrowdInteractionContribution Interaction;
-      Interaction.IntentTypeId = Payload.PrimaryId != 0
-        ? Payload.PrimaryId : 1;
-      Interaction.TargetRef = Payload.TargetRef;
-      Interaction.PayloadTypeId = Payload.SecondaryId;
-      Interaction.PayloadKey = Payload.Flags;
-      if (!Writer.AddInteraction(Interaction)) return false;
-      if (Payload.CommitId == 0) return true;
-      FCrowdBusinessContribution Business;
-      Business.AdapterId = Payload.PrimaryId != 0
-        ? Payload.PrimaryId : 1;
-      Business.ExclusiveGroup = Context.Instance.ExclusiveGroup;
-      Business.CommitId = Payload.CommitId;
-      Business.InstigatorRef = Context.Instance.Handle.EntityRef;
-      Business.TargetRef = Payload.TargetRef;
-      Business.PayloadTypeId = Payload.SecondaryId != 0
-        ? Payload.SecondaryId : 1;
-      Business.Quantity = Payload.Quantity;
-      return Writer.AddBusiness(Business);
-    }
-  };
 
   uint64 CalculateBindingUpdateHash(
     const int64 FixedStep,
@@ -233,6 +55,7 @@ namespace
     uint64 Hash = FnvOffset64;
     FoldRef(Hash, Entity.EntityRef);
     FoldUnsigned(Hash, Entity.BaseSourceSetHash);
+    FoldUnsigned(Hash, Entity.EvaluationContextHash);
     FoldUnsigned(Hash, Entity.StagedSourceSet.StableHash);
     FoldUnsigned(Hash, Entity.ResolvedChannels.StableHash);
     FoldUnsigned(Hash, Entity.CommandBatchHash);
@@ -253,6 +76,7 @@ namespace
   {
     uint64 Hash = FnvOffset64;
     FoldUnsigned(Hash, static_cast<uint64>(Prepared.FixedStepIndex));
+    FoldUnsigned(Hash, Prepared.RegistryHash);
     FoldUnsigned(Hash, static_cast<uint32>(Prepared.Entities.Num()));
     FoldUnsigned(Hash, Prepared.SourceSetHash);
     FoldUnsigned(Hash, Prepared.CommandBatchHash);
@@ -261,6 +85,61 @@ namespace
       FoldUnsigned(Hash, Entity.StableHash);
     return Hash;
   }
+}
+
+const FCrowdBehaviorContextRecord*
+FCrowdBehaviorSourceEvaluationContext::FindContext(
+  const FCrowdBehaviorContextTypeId TypeId) const
+{
+  for (const FCrowdBehaviorContextRecord& Record : ContextRecords)
+    if (Record.TypeId == TypeId) return &Record;
+  return nullptr;
+}
+
+bool FCrowdBehaviorEntityEvaluationContext::IsValid() const
+{
+  if (!EntityRef.IsValid() || FixedStepIndex < 0
+    || Position.ContainsNaN() || Velocity.ContainsNaN()
+    || Facing.ContainsNaN() || Facing.IsNearlyZero()
+    || Records.Num() > CrowdBehavior::MaxContextRecordsPerEntity
+    || StableHash == 0)
+    return false;
+  FCrowdBehaviorContextTypeId Previous;
+  for (const FCrowdBehaviorContextRecord& Record : Records)
+  {
+    if (!Record.IsValid()
+      || (Previous.IsValid() && !(Previous < Record.TypeId)))
+      return false;
+    Previous = Record.TypeId;
+  }
+  FCrowdBehaviorEntityEvaluationContext Copy = *this;
+  Copy.RecalculateStableHash();
+  return Copy.StableHash == StableHash;
+}
+
+void FCrowdBehaviorEntityEvaluationContext::RecalculateStableHash()
+{
+  Records.Sort([](const auto& A, const auto& B)
+  {
+    return A.TypeId < B.TypeId;
+  });
+  uint64 Hash = FnvOffset64;
+  FoldRef(Hash, EntityRef);
+  FoldUnsigned(Hash, static_cast<uint64>(FixedStepIndex));
+  const FVector Values[] = {Position, Velocity, Facing};
+  for (const FVector& Value : Values)
+  {
+    FoldUnsigned(Hash, static_cast<uint32>(
+      FMath::RoundToInt(Value.X * 1000.0)));
+    FoldUnsigned(Hash, static_cast<uint32>(
+      FMath::RoundToInt(Value.Y * 1000.0)));
+    FoldUnsigned(Hash, static_cast<uint32>(
+      FMath::RoundToInt(Value.Z * 1000.0)));
+  }
+  FoldUnsigned(Hash, static_cast<uint32>(Records.Num()));
+  for (const FCrowdBehaviorContextRecord& Record : Records)
+    FoldUnsigned(Hash, Record.CalculateStableHash());
+  StableHash = Hash;
 }
 
 FCrowdBehaviorContributionWriter::FCrowdBehaviorContributionWriter(
@@ -354,6 +233,18 @@ bool FCrowdBehaviorContributionWriter::AddPresentation(
   return true;
 }
 
+bool FCrowdBehaviorContributionWriter::SetNextState(
+  const FCrowdBehaviorSourceState& State)
+{
+  bSucceeded = bSucceeded && !bHasNextState && State.IsValid()
+    && ((Spec.StateSchemaId == 0 && State.SchemaId == 0)
+      || Spec.StateSchemaId == State.SchemaId);
+  if (!bSucceeded) return false;
+  NextState = State;
+  bHasNextState = true;
+  return true;
+}
+
 bool FCrowdBehaviorSourceEvaluatorRegistry::Register(
   const FCrowdBehaviorSourceSpec& Spec,
   TSharedRef<const ICrowdBehaviorSourceEvaluator, ESPMode::ThreadSafe>
@@ -395,6 +286,51 @@ uint64 FCrowdBehaviorSourceEvaluatorRegistry::CalculateStableHash() const
   return bFrozen ? Specs.CalculateStableHash() : 0;
 }
 
+bool FCrowdBehaviorRegistryBuilder::RegisterProfile(
+  FCrowdCapabilityProfile Profile)
+{
+  return Profiles.Register(MoveTemp(Profile));
+}
+
+bool FCrowdBehaviorRegistryBuilder::RegisterSource(
+  const FCrowdBehaviorSourceSpec& Spec,
+  TSharedRef<const ICrowdBehaviorSourceEvaluator, ESPMode::ThreadSafe>
+    Evaluator)
+{
+  return Evaluators.Register(Spec, Evaluator);
+}
+
+bool FCrowdBehaviorRegistryBuilder::RegisterContextSchema(
+  const FCrowdBehaviorContextSchema& Schema)
+{
+  if (!Schema.IsValid() || ContextSchemas.Contains(Schema.TypeId))
+    return false;
+  ContextSchemas.Add(Schema.TypeId, Schema);
+  return true;
+}
+
+bool RegisterCrowdBehaviorSourceProvider(
+  TSharedRef<const ICrowdBehaviorSourceProvider, ESPMode::ThreadSafe>
+    Provider)
+{
+  const FCrowdBehaviorProviderId Id = Provider->GetProviderId();
+  if (!Id.IsValid()) return false;
+  FScopeLock Lock(&ProviderRegistryMutex);
+  if (bProviderRegistrationFrozen || RegisteredProviders.Contains(Id))
+    return false;
+  RegisteredProviders.Add(Id, Provider);
+  return true;
+}
+
+bool UnregisterCrowdBehaviorSourceProvider(
+  const FCrowdBehaviorProviderId ProviderId)
+{
+  FScopeLock Lock(&ProviderRegistryMutex);
+  return !bProviderRegistrationFrozen
+    && ProviderId.IsValid()
+    && RegisteredProviders.Remove(ProviderId) == 1;
+}
+
 bool FCrowdBehaviorCapabilityBindingUpdate::IsValid() const
 {
   return EffectiveFixedStep >= 0
@@ -404,117 +340,54 @@ bool FCrowdBehaviorCapabilityBindingUpdate::IsValid() const
       EffectiveFixedStep, EntityRef, Binding);
 }
 
-bool FCrowdBehaviorSourceRuntime::InitializeBuiltins()
+bool FCrowdBehaviorSourceRuntime::InitializeFromRegisteredProviders()
 {
   Reset();
-  FCrowdCapabilityProfile Profile;
-  Profile.Key = CrowdBuiltinBehaviorSchemas::LegacyFullProfile;
-  Profile.CapabilityIds = {
-    CrowdBuiltinCapabilityIds::Move,
-    CrowdBuiltinCapabilityIds::Wander,
-    CrowdBuiltinCapabilityIds::MoveTo,
-    CrowdBuiltinCapabilityIds::Pursue,
-    CrowdBuiltinCapabilityIds::Haul,
-    CrowdBuiltinCapabilityIds::Attack,
-    CrowdBuiltinCapabilityIds::Guard,
-    CrowdBuiltinCapabilityIds::Flee,
-    CrowdBuiltinCapabilityIds::RangedAttack,
-    CrowdBuiltinCapabilityIds::NavLayer,
-    CrowdBuiltinCapabilityIds::Face,
-    CrowdBuiltinCapabilityIds::Formation,
-    CrowdBuiltinCapabilityIds::CarryCargo,
-    CrowdBuiltinCapabilityIds::React};
-  if (!CapabilityProfiles.Register(MoveTemp(Profile))
-    || !CapabilityProfiles.Freeze())
-    return false;
-
-  const auto Register = [this](
-    const FCrowdBehaviorSourceSpec& Spec,
-    TSharedRef<const ICrowdBehaviorSourceEvaluator,
-      ESPMode::ThreadSafe> Evaluator)
+  TArray<
+    TPair<
+      FCrowdBehaviorProviderId,
+      TSharedPtr<const ICrowdBehaviorSourceProvider,
+        ESPMode::ThreadSafe>>> Providers;
   {
-    return Evaluators.Register(Spec, Evaluator);
-  };
-  if (!Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::MoveToSink,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Movement),
-      30, ECrowdBehaviorSourceReplicationPolicy::Predictable,
-      CrowdBuiltinCapabilityIds::MoveTo),
-      MakeShared<FMovementEvaluator, ESPMode::ThreadSafe>(
-        ECrowdBehaviorBlendMode::Override))
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::SharedFlow,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Movement),
-      10, ECrowdBehaviorSourceReplicationPolicy::Predictable,
-      CrowdBuiltinCapabilityIds::Move),
-      MakeShared<FMovementEvaluator, ESPMode::ThreadSafe>(
-        ECrowdBehaviorBlendMode::WeightedAdd))
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::Formation,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Movement),
-      20, ECrowdBehaviorSourceReplicationPolicy::Predictable,
-      CrowdBuiltinCapabilityIds::Formation),
-      MakeShared<FMovementEvaluator, ESPMode::ThreadSafe>(
-        ECrowdBehaviorBlendMode::Additive))
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::FaceMovement,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Facing),
-      10, ECrowdBehaviorSourceReplicationPolicy::Predictable,
-      CrowdBuiltinCapabilityIds::Face),
-      MakeShared<FFacingEvaluator, ESPMode::ThreadSafe>())
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::FaceTarget,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Facing),
-      20, ECrowdBehaviorSourceReplicationPolicy::Predictable,
-      CrowdBuiltinCapabilityIds::Face),
-      MakeShared<FFacingEvaluator, ESPMode::ThreadSafe>())
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::CarryCargo,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Presentation),
-      10, ECrowdBehaviorSourceReplicationPolicy::ResolvedOnly,
-      CrowdBuiltinCapabilityIds::CarryCargo),
-      MakeShared<FPresentationEvaluator, ESPMode::ThreadSafe>())
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::PickupInteraction,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Interaction)
-        | CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Business),
-      40, ECrowdBehaviorSourceReplicationPolicy::ServerOnly,
-      CrowdBuiltinCapabilityIds::Haul, 0, 1),
-      MakeShared<FInteractionBusinessEvaluator, ESPMode::ThreadSafe>())
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::DeliverInteraction,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Interaction)
-        | CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Business),
-      40, ECrowdBehaviorSourceReplicationPolicy::ServerOnly,
-      CrowdBuiltinCapabilityIds::Haul, 0, 1),
-      MakeShared<FInteractionBusinessEvaluator, ESPMode::ThreadSafe>())
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::AttackTarget,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Interaction)
-        | CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Business),
-      50, ECrowdBehaviorSourceReplicationPolicy::ServerOnly,
-      CrowdBuiltinCapabilityIds::Attack, 0, 2),
-      MakeShared<FAttackEvaluator, ESPMode::ThreadSafe>())
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::HitReaction,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Constraint),
-      100, ECrowdBehaviorSourceReplicationPolicy::ResolvedOnly,
-      CrowdBuiltinCapabilityIds::React, 30),
-      MakeShared<FConstraintEvaluator, ESPMode::ThreadSafe>(false))
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::StunConstraint,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Constraint),
-      110, ECrowdBehaviorSourceReplicationPolicy::ResolvedOnly,
-      {}, 300),
-      MakeShared<FConstraintEvaluator, ESPMode::ThreadSafe>(false))
-    || !Register(MakeSpec(
-      CrowdBuiltinSourceTypeIds::DeathConstraint,
-      CrowdBehaviorChannelBit(ECrowdBehaviorChannel::Constraint),
-      32760, ECrowdBehaviorSourceReplicationPolicy::ResolvedOnly),
-      MakeShared<FConstraintEvaluator, ESPMode::ThreadSafe>(true))
-    || !Evaluators.Freeze())
-    return false;
+    FScopeLock Lock(&ProviderRegistryMutex);
+    bProviderRegistrationFrozen = true;
+    for (const auto& Pair : RegisteredProviders)
+      Providers.Emplace(Pair.Key, Pair.Value);
+  }
+  Providers.Sort([](const auto& A, const auto& B)
+  {
+    return A.Key < B.Key;
+  });
+  FCrowdBehaviorRegistryBuilder Builder(
+    CapabilityProfiles, Evaluators, ContextSchemas);
+  for (const auto& Pair : Providers)
+    if (!Pair.Value.IsValid() || !Pair.Value->Register(Builder))
+      return false;
 
+  if (!CapabilityProfiles.Freeze() || !Evaluators.Freeze())
+    return false;
+  RegistryHash = FnvOffset64;
+  FoldUnsigned(RegistryHash, static_cast<uint32>(Providers.Num()));
+  for (const auto& Pair : Providers)
+    FoldUnsigned(RegistryHash, Pair.Key.Value);
+  FoldUnsigned(RegistryHash, CapabilityProfiles.CalculateStableHash());
+  FoldUnsigned(RegistryHash, Evaluators.CalculateStableHash());
+  TArray<FCrowdBehaviorContextTypeId> ContextKeys;
+  ContextSchemas.GetKeys(ContextKeys);
+  ContextKeys.Sort();
+  ContextSchemaHash = FnvOffset64;
+  FoldUnsigned(RegistryHash, static_cast<uint32>(ContextKeys.Num()));
+  FoldUnsigned(ContextSchemaHash, static_cast<uint32>(ContextKeys.Num()));
+  for (const FCrowdBehaviorContextTypeId Key : ContextKeys)
+  {
+    const FCrowdBehaviorContextSchema& Schema = ContextSchemas[Key];
+    FoldUnsigned(RegistryHash, Key.Value);
+    FoldUnsigned(RegistryHash, Schema.Version);
+    FoldUnsigned(RegistryHash, Schema.Size);
+    FoldUnsigned(ContextSchemaHash, Key.Value);
+    FoldUnsigned(ContextSchemaHash, Schema.Version);
+    FoldUnsigned(ContextSchemaHash, Schema.Size);
+  }
   bInitialized = true;
   return true;
 }
@@ -523,11 +396,15 @@ void FCrowdBehaviorSourceRuntime::Reset()
 {
   CapabilityProfiles = {};
   Evaluators = {};
+  ContextSchemas.Reset();
+  EvaluationContexts.Reset();
   SourceSets.Reset();
   LastResolvedChannels.Reset();
   PendingCommands.Reset();
   PendingBindingUpdates.Reset();
   LastCommittedEvents.Reset();
+  RegistryHash = 0;
+  ContextSchemaHash = 0;
   bInitialized = false;
 }
 
@@ -557,6 +434,7 @@ bool FCrowdBehaviorSourceRuntime::RemoveEntity(
   if (!bInitialized || SourceSets.Remove(EntityRef) != 1)
     return false;
   LastResolvedChannels.Remove(EntityRef);
+  EvaluationContexts.Remove(EntityRef);
   PendingCommands.RemoveAll([&](const auto& Command)
   {
     return Command.Handle.EntityRef == EntityRef;
@@ -599,6 +477,24 @@ bool FCrowdBehaviorSourceRuntime::QueueCapabilityBinding(
   return true;
 }
 
+bool FCrowdBehaviorSourceRuntime::SetEvaluationContext(
+  const FCrowdBehaviorEntityEvaluationContext& Context)
+{
+  if (!bInitialized || !Context.IsValid()
+    || !SourceSets.Contains(Context.EntityRef))
+    return false;
+  for (const FCrowdBehaviorContextRecord& Record : Context.Records)
+  {
+    const FCrowdBehaviorContextSchema* Schema =
+      ContextSchemas.Find(Record.TypeId);
+    if (!Schema || Schema->Version != Record.SchemaVersion
+      || Schema->Size != Record.Size)
+      return false;
+  }
+  EvaluationContexts.Add(Context.EntityRef, Context);
+  return true;
+}
+
 bool FCrowdBehaviorSourceRuntime::PrepareBoundary(
   const int64 FixedStepIndex,
   FCrowdBehaviorPreparedBoundary& OutPrepared) const
@@ -610,6 +506,7 @@ bool FCrowdBehaviorSourceRuntime::PrepareBoundary(
   SourceSets.GetKeys(EntityRefs);
   EntityRefs.Sort();
   OutPrepared.FixedStepIndex = FixedStepIndex;
+  OutPrepared.RegistryHash = RegistryHash;
   OutPrepared.Entities.Reserve(EntityRefs.Num());
   uint64 SourceSetHash = FnvOffset64;
   uint64 CommandHash = FnvOffset64;
@@ -688,8 +585,17 @@ bool FCrowdBehaviorSourceRuntime::PrepareBoundary(
       Prepared.StagedSourceSet.RecalculateStableHash();
     }
 
+    const FCrowdBehaviorEntityEvaluationContext* EntityContext =
+      EvaluationContexts.Find(EntityRef);
+    if (EntityContext
+      && (EntityContext->FixedStepIndex != FixedStepIndex
+        || !EntityContext->IsValid()))
+      return false;
+    Prepared.EvaluationContextHash = EntityContext
+      ? EntityContext->StableHash : FnvOffset64;
     FCrowdBehaviorContributions Contributions;
-    for (const FCrowdBehaviorSourceInstance& Instance
+    bool bStateChanged = false;
+    for (FCrowdBehaviorSourceInstance& Instance
       : Prepared.StagedSourceSet.Instances)
     {
       const FCrowdBehaviorSourceSpec* Spec =
@@ -699,13 +605,37 @@ bool FCrowdBehaviorSourceRuntime::PrepareBoundary(
       if (!Spec || !Evaluator.IsValid()) return false;
       FCrowdBehaviorSourceEvaluationContext Context;
       Context.FixedStepIndex = FixedStepIndex;
+      Context.Position = EntityContext
+        ? EntityContext->Position : FVector::ZeroVector;
+      Context.Velocity = EntityContext
+        ? EntityContext->Velocity : FVector::ZeroVector;
+      Context.Facing = EntityContext
+        ? EntityContext->Facing : FVector::ForwardVector;
       Context.Capabilities = Capabilities;
       Context.Instance = Instance;
+      if (EntityContext)
+        Context.ContextRecords = EntityContext->Records;
       FCrowdBehaviorContributionWriter Writer(
         *Spec, Instance, Contributions);
       if (!Evaluator->Evaluate(Context, Writer)
         || !Writer.Succeeded())
         return false;
+      if (Writer.HasNextState()
+        && !(Writer.GetNextState() == Instance.State))
+      {
+        Instance.State = Writer.GetNextState();
+        bStateChanged = true;
+      }
+    }
+    if (bStateChanged)
+    {
+      if (Prepared.StagedSourceSet.Revision == Current.Revision)
+      {
+        ++Prepared.StagedSourceSet.Revision;
+        if (Prepared.StagedSourceSet.Revision == 0)
+          Prepared.StagedSourceSet.Revision = 1;
+      }
+      Prepared.StagedSourceSet.RecalculateStableHash();
     }
     if (!FCrowdBehaviorResolver::Resolve(
         Contributions, Prepared.ResolvedChannels))
@@ -764,6 +694,7 @@ bool FCrowdBehaviorSourceRuntime::ValidatePrepared(
 {
   if (!bInitialized || !Prepared.bValid
     || Prepared.FixedStepIndex < 0
+    || Prepared.RegistryHash != RegistryHash
     || Prepared.Entities.Num() != SourceSets.Num()
     || Prepared.StableHash != CalculatePreparedBoundaryHash(Prepared))
     return false;
@@ -777,8 +708,14 @@ bool FCrowdBehaviorSourceRuntime::ValidatePrepared(
       return false;
     const FCrowdBehaviorSourceSet* Current =
       SourceSets.Find(Entity.EntityRef);
+    const FCrowdBehaviorEntityEvaluationContext* Context =
+      EvaluationContexts.Find(Entity.EntityRef);
+    const uint64 ExpectedContextHash = Context
+      && Context->FixedStepIndex == Prepared.FixedStepIndex
+      ? Context->StableHash : FnvOffset64;
     if (!Current
       || Current->StableHash != Entity.BaseSourceSetHash
+      || Entity.EvaluationContextHash != ExpectedContextHash
       || !Entity.StagedSourceSet.IsValid()
       || !Entity.ResolvedChannels.bValid
       || Entity.StableHash != CalculatePreparedEntityHash(Entity))
@@ -806,6 +743,40 @@ FCrowdBehaviorSourceRuntime::FindSourceSet(
   const FCrowdStableEntityRef EntityRef) const
 {
   return SourceSets.Find(EntityRef);
+}
+
+bool FCrowdBehaviorSourceRuntime::ApplyReplicatedSourceSet(
+  const FCrowdBehaviorSourceSet& ReplicatedSet)
+{
+  if (!bInitialized || !ReplicatedSet.IsValid())
+    return false;
+  FCrowdBehaviorSourceSet* Current =
+    SourceSets.Find(ReplicatedSet.EntityRef);
+  if (!Current
+    || Current->CapabilityBinding.ProfileKey
+      != ReplicatedSet.CapabilityBinding.ProfileKey)
+    return false;
+  if (ReplicatedSet.Revision < Current->Revision)
+    return false;
+  if (ReplicatedSet.Revision == Current->Revision)
+    return ReplicatedSet.StableHash == Current->StableHash;
+  for (const FCrowdBehaviorSourceInstance& Instance
+    : ReplicatedSet.Instances)
+  {
+    const FCrowdBehaviorSourceSpec* Spec =
+      Evaluators.FindSpec(Instance.SourceTypeId);
+    if (!Spec
+      || Spec->Version != Instance.SourceVersion
+      || Spec->PayloadSchemaId != Instance.Payload.SchemaId
+      || Spec->StateSchemaId != Instance.State.SchemaId
+      || Spec->ReplicationPolicy
+        != Instance.ReplicationPolicy
+      || Instance.ReplicationPolicy
+        != ECrowdBehaviorSourceReplicationPolicy::Predictable)
+      return false;
+  }
+  *Current = ReplicatedSet;
+  return true;
 }
 
 const FCrowdResolvedBehaviorChannels*
@@ -839,132 +810,4 @@ bool FCrowdBehaviorSourceRuntime::HasCommittedEvent(
         && Event.Kind == Kind
         && Event.FixedStepIndex >= MinimumFixedStep;
     });
-}
-
-FCrowdBehaviorSourceTypeId
-FCrowdLegacyBehaviorRecipe::GetPrimarySourceType(
-  const ECrowdActiveBehavior Behavior)
-{
-  switch (Behavior)
-  {
-  case ECrowdActiveBehavior::Wander:
-  case ECrowdActiveBehavior::MoveTo:
-  case ECrowdActiveBehavior::Pursue:
-  case ECrowdActiveBehavior::Guard:
-  case ECrowdActiveBehavior::Flee:
-    return CrowdBuiltinSourceTypeIds::MoveToSink;
-  case ECrowdActiveBehavior::HaulPickup:
-    return CrowdBuiltinSourceTypeIds::PickupInteraction;
-  case ECrowdActiveBehavior::HaulDeliver:
-    return CrowdBuiltinSourceTypeIds::DeliverInteraction;
-  case ECrowdActiveBehavior::Attack:
-    return CrowdBuiltinSourceTypeIds::AttackTarget;
-  case ECrowdActiveBehavior::Dead:
-    return CrowdBuiltinSourceTypeIds::DeathConstraint;
-  default:
-    return {};
-  }
-}
-
-bool FCrowdLegacyBehaviorRecipe::BuildTransitionCommands(
-  const FCrowdRuntimeBehaviorContext& Context,
-  const FCrowdBehaviorSourceSet& CurrentSet,
-  const FCrowdBehaviorControllerId ControllerId,
-  uint32& InOutNextCommandSequence,
-  uint32& InOutNextSourceSequence,
-  TArray<FCrowdBehaviorSourceCommand>& OutCommands)
-{
-  OutCommands.Reset();
-  if (!Context.AgentFacts.StableEntityRef.IsValid()
-    || Context.AgentFacts.StableEntityRef != CurrentSet.EntityRef
-    || !ControllerId.IsValid()
-    || InOutNextCommandSequence == 0
-    || InOutNextSourceSequence == 0
-    || Context.FixedStepIndex < 0)
-    return false;
-
-  for (const FCrowdBehaviorSourceInstance& Instance
-    : CurrentSet.Instances)
-  {
-    if (Instance.Handle.ControllerId != ControllerId) continue;
-    FCrowdBehaviorSourceCommand Stop;
-    Stop.EffectiveFixedStep = Context.FixedStepIndex;
-    Stop.Handle = Instance.Handle;
-    Stop.CommandSequence = InOutNextCommandSequence++;
-    Stop.Kind = ECrowdBehaviorSourceCommandKind::Stop;
-    Stop.SourceTypeId = Instance.SourceTypeId;
-    Stop.Payload = Instance.Payload;
-    OutCommands.Add(Stop);
-  }
-
-  if (Context.RequestedBehavior == ECrowdActiveBehavior::Idle)
-    return true;
-
-  FCrowdBuiltinBehaviorSourcePayload Payload;
-  Payload.Vector = Context.TargetLocation;
-  Payload.TargetRef = Context.TargetRef;
-  Payload.CommitId = Context.ExternalCommitId;
-  Payload.PrimaryId = static_cast<uint32>(
-    Context.InteractionPayloadKey != 0
-      ? Context.InteractionPayloadKey : 1);
-  Payload.SecondaryId = Context.InteractionPayloadKey != 0
-    ? Context.InteractionPayloadKey : 1;
-  Payload.Quantity = FMath::Max(1, Context.InteractionQuantity);
-  Payload.Flags =
-    Context.RequestedBehavior == ECrowdActiveBehavior::Dead ? 1u : 0u;
-
-  const auto AddStart = [&](
-    const FCrowdBehaviorSourceTypeId TypeId,
-    const FCrowdBuiltinBehaviorSourcePayload& CommandPayload,
-    const int32 Lifetime = 0)
-  {
-    FCrowdBehaviorSourceCommand Start;
-    Start.EffectiveFixedStep = Context.FixedStepIndex;
-    Start.Handle = {
-      CurrentSet.EntityRef, ControllerId, InOutNextSourceSequence++};
-    Start.CommandSequence = InOutNextCommandSequence++;
-    Start.Kind = ECrowdBehaviorSourceCommandKind::Start;
-    Start.SourceTypeId = TypeId;
-    Start.LifetimeSteps = Lifetime;
-    if (!Start.Payload.Set(
-        CrowdBuiltinBehaviorSchemas::Standard, CommandPayload))
-      return false;
-    OutCommands.Add(Start);
-    return true;
-  };
-
-  if (Context.RequestedBehavior == ECrowdActiveBehavior::Dead)
-  {
-    Payload.Vector.X = 0.0;
-    Payload.Flags |= 1u;
-    return AddStart(
-      CrowdBuiltinSourceTypeIds::DeathConstraint, Payload);
-  }
-
-  FCrowdBuiltinBehaviorSourcePayload MovementPayload = Payload;
-  MovementPayload.CommitId = 0;
-  MovementPayload.PrimaryId = CrowdBehavior::FullQ15Weight;
-  MovementPayload.SecondaryId = 0;
-  MovementPayload.Quantity = 0;
-  MovementPayload.Flags = 0;
-  if (!AddStart(
-      CrowdBuiltinSourceTypeIds::MoveToSink, MovementPayload)
-    || !AddStart(
-      Context.TargetRef.IsValid()
-        ? CrowdBuiltinSourceTypeIds::FaceTarget
-        : CrowdBuiltinSourceTypeIds::FaceMovement,
-      MovementPayload))
-    return false;
-
-  const FCrowdBehaviorSourceTypeId PrimaryType =
-    GetPrimarySourceType(Context.RequestedBehavior);
-  if (PrimaryType == CrowdBuiltinSourceTypeIds::PickupInteraction
-    || PrimaryType == CrowdBuiltinSourceTypeIds::DeliverInteraction
-    || PrimaryType == CrowdBuiltinSourceTypeIds::AttackTarget)
-  {
-    if (PrimaryType != CrowdBuiltinSourceTypeIds::AttackTarget)
-      Payload.TargetRef = Context.TaskRef;
-    if (!AddStart(PrimaryType, Payload)) return false;
-  }
-  return true;
 }

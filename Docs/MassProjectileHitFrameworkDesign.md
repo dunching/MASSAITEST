@@ -1,5 +1,7 @@
 # Mass Projectile、空间碰撞与通用命中接口设计
 
+[COMPUTED][HIGH] 文档状态：本文件的合同已经在当前Demo生产路径实现；2026-07-17的“插件未开始、数组权威、固定32槽、全量扫描”全部是历史审计，不是当前源码状态。Behavior Source状态由`EntityBehaviorSourceArchitecture.md`单独管理。
+
 ## 1. 文档职责
 
 [INFERRED][HIGH] 本文件是“大量远程敌人、真正的 Mass projectile entity、稳定空间查询、通用命中/被命中接口和插件迁移”的权威设计事实源。
@@ -8,9 +10,9 @@
 
 ## 2. 已确认的当前事实与修正原因
 
-[COMPUTED][HIGH] 当前Demo的权威 projectile 状态仍保存在`UCrowdDemoRoundSimPipelineSubsystem::PreparedProjectiles`数组中；`UCrowdDemoMassSubsystem`预建32个`FCrowdDemoMassProjectileFragment`实体，并通过`MirrorProjectileStates()`把数组中的Active状态复制过去。因此当前实现是“数组权威 + Mass实体镜像”，不是entity-native projectile simulation。
+[COMPUTED][HIGH] 当前Demo的Projectile位置、速度、发射者、生命周期、NavLayer、Collision/Effect Profile、Pierce与状态只保存在`FCrowdDemoMassProjectileFragment`并由Mass Subsystem gather/apply；容量通过配置动态准备。`PreparedProjectiles`、`MirrorProjectileStates()`和固定32槽路径已从Source删除。
 
-[COMPUTED][HIGH] 当前 projectile collision 对每颗Active projectile遍历全部存活Agent，再执行previous→proposed segment-sphere窄相检测；它具备高速swept命中和稳定最早hit决胜，但没有Agent broadphase、环境障碍命中、移动目标相对sweep或大量投射物WORK预算证据。
+[COMPUTED][HIGH] 当前Projectile kernel按量化网格构建移动目标Swept Bounds，查询候选后执行相对Sweep；环境体使用稳定SurfaceId和扩张AABB Sweep。相同TOI按稳定目标引用决胜，并显式过滤Faction、NavLayer和已命中目标；专项断言候选数而不是执行Projectile×Agent全扫描。
 
 [COMPUTED][HIGH] `MassAIExample/BulletHellExample`证明了轻量Mass bullet entity、Signal生命周期和二维层级HashGrid候选查询；它的当前点半径命中可能高速穿透，不能直接作为最终窄相算法。
 
@@ -209,11 +211,11 @@ Demo Adapter或原工程 Adapter
 
 [INFERRED][HIGH] 大量远程敌人验收必须同时证明：没有全量`Projectile×Agent`扫描、没有每Projectile持续复制Actor、没有每Mass目标常驻碰撞Proxy Actor、WORK阶段无UObject访问、server gameplay hit唯一、客户端视觉完整、20/100/500下无命中漏失或重复伤害。
 
-## 11. 当前停止边界
+## 11. 当前实现边界
 
-[COMPUTED][HIGH] 本文件只修正设计与文档事实；当前Source中的数组权威Projectile、32实体镜像pool、全Agent扫描和原工程Actor/VisualId桥均尚未替换。
+[COMPUTED][HIGH] 本仓库Demo已完成Mass权威Projectile、动态容量、网格Broadphase、相对/环境Sweep、`FCrowdImpactFact`、`FCrowdHitFact`、`ICrowdHostHitResolver`、宿主唯一伤害提交、Pierce与Faction/NavLayer过滤。T8专项当前13/13通过。
 
-[INFERRED][HIGH] 在T3/T4/T6等现有Small测试大致收敛前，不开始插件代码迁移；但后续插件化不得再把当前T8实现原样封装成最终Projectile模块。
+[INFERRED][HIGH] 原工程Actor/VisualId桥仍未修改，因为本轮范围明确限于本仓库及Demo。20/100/500 Mixed规模门也不等于代表性并发Projectile规模门；后者仍是R7未关闭组合项。
 
 ## 12. 2026-07-17 前置门执行结果
 
@@ -223,7 +225,7 @@ Demo Adapter或原工程 Adapter
 
 [COMPUTED][HIGH] T3 8452首次真实单轮暴露生产合同缺失；该停止项现已修复。8455使用稳定10+10 cohort、两套相反Shared Flow和中心/完成平面达到20/20、throughput difference=0、final deadlock=0，安全、双端hash与rollback均通过；8456录像完成群体级人工审片。
 
-[COMPUTED][HIGH] 插件仍未开始：没有创建任何插件Module或最小宿主，没有实现StableEntityRef/Spatial Grid/Entity-native Projectile/Ledger，没有切换T8，也没有删除任何旧路径。T4已由8460/8461关闭，当前剩余前置门为T6A/T6S/T6M；Moving Target、Wall Blocking、20/100/500 projectile规模与DebugGame均未运行。
+[COMPUTED][HIGH] 这是2026-07-17历史快照：当时Projectile专项尚未开始，且当时尚无对应插件Module或最小宿主。当前代码已完成entity-native Mass权威状态、稳定Spatial Broadphase、移动目标/环境命中和宿主Hit Adapter；只有代表性并发Projectile规模门仍未执行。
 
 [INFERRED][HIGH] 正确下一步是按顺序验收T6A、T6S和T6M；插件生产迁移只能在三个异构场景无已知硬失败后重新开始。
 

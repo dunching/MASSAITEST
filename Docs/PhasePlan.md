@@ -1,8 +1,46 @@
 # MassAI Crowd Demo 当前阶段计划
 
+## 2026-07-28 现行 S0–S6 Standard Sources与生产消费
+
+[COMPUTED][HIGH] 本节是Standard Sources当前事实表。R0–R7保留为已经完成的开放框架、Scheduler、网络与Projectile基线；S0–S6现已全部关闭。
+
+S0. [x] [COMPUTED][HIGH] 已在`MassCrowdStandardSourcesDesign.md`锁定扩展类比、模块边界、通用/产品Source归属、Context/State、组合原则、当前偏差和验收边界。
+
+S1. [x] [COMPUTED][HIGH] Mixed已把Resolved Movement/Facing/Constraint接入`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`，Business请求与Movement独立，所有Movement/Business/Slot结果在完整Prepare/Validate后一次Final Apply。Local Predictive与Particle新增InteractionLayer过滤以避免桥上桥下实体互相约束。Development Editor `-DisableUnity`、`MassCrowd.Core` 13/13、`CrowdDemo.MixedSandbox.J` 3/3通过；8010服务端在step841以pickup/delivery=`2/2`、combat=`50`、spawn/despawn=`4/4`、最小同层间距=`72.72cm`、零违规通过，8011双端门也通过。
+
+S2. [x] [COMPUTED][HIGH] 已新增随插件交付且单向依赖Core/Runtime的`MassCrowdStandardSources`模块；Provider=`100`、公共ID范围、13个TypeId、`TargetKinematics`/`FormationAnchor` v1 Context和Registry Hash均已注册并冻结。Runtime/Core源码无Standard模块反向依赖或TypeId特判。
+
+S3. [x] [COMPUTED][HIGH] 已实现`MoveToLocation`、`ArriveAtLocation`、`FollowEntity`、`PursueEntity`、`FleeFromEntity`、`MaintainDistance`、`FaceMovement/FaceEntity`和`MovementLock/SpeedLimit`自主Evaluator；目标Context校验、预测上限、迟滞State、Goal Hash、Facing独立输出和Constraint均有定向自动化。
+
+S4. [x] [COMPUTED][HIGH] Demo Provider只保留SharedFlow桥、CarryCargo及Pickup/Deliver/Attack产品Source；Mixed按Navigation/Facing/Interaction/Presentation/Reaction五Controller维护稳定期望集合Diff，无变化不发命令。Movement/Facing只消费Resolved Channels，Attack不再隐式锁移。
+
+S5. [x] [COMPUTED][HIGH] 已实现确定性方向表/PRNG的`WanderSteering`、锚点局部槽位修正`FormationOffset`和线性衰减`TimedImpulse`。Escort与Pursue+Attack组合进入Mixed；专项证明HitReaction及一帧Attack Lock结束后持久Handle/Payload/State逐字保持。
+
+S6. [x] [COMPUTED][HIGH] StandardSources定向8/8、Mixed组合5/5、第三方三复制策略Fixture、完整`MassCrowd 61/61`与`CrowdDemo 125/125`通过。Development/DebugGame的`-ForceUnity`与`-DisableUnity`四构建通过；当前同一Mixed Source/Resolver/Boundary/Networking路径的20/100/500双端门服务端p95=`1.593/8.772/27.587ms`，最小同层间距=`70.14/70.01/70.00cm`，客户端p95=`4.801/4.951/4.822ms`。8383/8384/8379分别在step600/630/630达到active/visible=`20/20`、`100/100`、`500/500`，双端Entity/Membership Hash一致且零resync、零安全违规。
+
+## 2026-07-28 现行 R0–R7 重构
+
+[INFERRED][HIGH] 本节取代旧B0–B7并记录已经关闭的基础框架阶段；当前未关闭实施顺序以上方S0–S6为准。下文A–J、P0–P5和B0–B7均为历史能力或迁移基线。
+
+R0. [x] [COMPUTED][HIGH] 已重写架构事实源、阶段计划、检查表和恢复入口，明确旧B0–B7不再是完成口径；当前未提交文档修改被保留。
+
+R1. [x] [COMPUTED][HIGH] Provider/Registry Builder、标准运动Context、8×96字节扩展Context、96字节实例状态、Next State Writer和Registry Hash已落地；独立`MassCrowdBehaviorFixture`只依赖Public API，覆盖仓库核心未知TypeId、注册/冻结、状态、六通道和网络回放。
+
+R2. [x] [COMPUTED][HIGH] 领域Capability、Spec与Evaluator已迁到Demo Provider；Demo控制器使用稳定期望集合Diff，Mixed生产移动消费Resolver的`DesiredVelocity`，生产路径不再按具体SourceTypeId恢复业务语义。该框架门不证明完整Movement Pipeline或StandardSources自主Evaluator，后者由S1–S6关闭。
+
+R3. [x] [COMPUTED][HIGH] 公共Scheduler使用稳定Stage/Task/Scope与资源Schema描述DAG；Patch Adapter按稳定键排序，Round与Mixed在完整Prepare/Validate后执行返回`void`的Final Apply，失败零写入由自动化覆盖。
+
+R4. [x] [COMPUTED][HIGH] Behavior Source Command/Set Codec v3已携带Registry Hash、Context/State Schema和实例状态，并接入Mixed生产可靠状态、late join与resync；超过单batch容量的可靠记录按既有总上限稳定分批。
+
+R5. [x] [COMPUTED][HIGH] Projectile状态已由动态容量的Mass Fragment唯一保存；旧`PreparedProjectiles`、`MirrorProjectileStates()`和固定32槽路径已删除。T8使用网格Broadphase、移动目标相对Sweep、环境Sweep、通用Impact/Hit事实与宿主唯一提交，并覆盖最早命中、墙体优先、阵营/NavLayer过滤和Pierce。
+
+R6. [x] [COMPUTED][HIGH] `MassCrowdStateTreeAdapter`已移到默认禁用的兄弟插件；主`MassCrowdSimulation.uplugin`及其模块不再声明StateTree/GameplayStateTree/Adapter依赖，独立启用Smoke已通过。
+
+R7. [x] [COMPUTED][HIGH] 同一Mixed Source/Resolver/Boundary/Networking路径已依次通过20、100、500双端门；`CrowdDemo.Integration.R7.ThirdPartySourceMassProjectile20`又在同一组合门中让20个第三方Fixture Source、持久Movement/Cargo/Business Source、临时HitReaction压制与恢复、20实体移动安全阶段和10发并发Mass Projectile共同运行。Projectile通过生产Mass Fragment Store、网格Broadphase和Sweep完成10/10精确命中；压制结束后持久Source保持20/20。最终Development/DebugGame、Unity/`-DisableUnity`、`MassCrowd 51/51`与`CrowdDemo 123/123`全部通过。
+
 ## 历史能力阶段与当前产品化顺序
 
-[COMPUTED][HIGH] A–J是已经完成并保留证据的历史能力阶段；本次B0–B7授权同时完成K的20/100/500验证，L原工程迁移仍冻结。历史阶段不等同于Runtime、Networking和Presentation公共产品路径已经闭环。
+[COMPUTED][HIGH] A–J是已经完成并保留证据的历史能力阶段；8210/8215补充了旧Round路径的100/500基线，但没有完成同一Behavior Source生产路径的20/100/500。L原工程迁移仍冻结。历史阶段和旧Round规模证据不等同于Behavior Source端到端产品闭环。
 
 A. [x] [COMPUTED][HIGH] 通用 Runtime/Replication 合同文档冻结。
 B. [x] [COMPUTED][HIGH] StableEntityRef + Capability + Behavior POD。
@@ -14,10 +52,10 @@ G. [x] [COMPUTED][HIGH] Demo continuous lifecycle 场景。
 H. [x] [COMPUTED][HIGH] Logistics/Combat 通过同一 Behavior 接口接入。
 I. [x] [COMPUTED][HIGH] NavMesh Surface Graph + Shared Flow。
 J. [x] [COMPUTED][HIGH] 混合行为 Sandbox。
-K. [x] [COMPUTED][HIGH] 20/100/500。
+K. [x] [COMPUTED][HIGH] 同一Behavior Source生产路径的20/100/500双端技术门已依次通过；20实体第三方Fixture Source与10发并发Mass Projectile组合门也已通过。
 L. [ ] [INFERRED][HIGH] 原工程最小宿主与生产迁移。
 
-[COMPUTED][HIGH] 当前已完成 A–K；L迁移未执行。
+[COMPUTED][HIGH] 当前已完成A–K的同路径规模技术门；L原工程迁移未执行，也不在本轮范围。
 
 [INFERRED][HIGH] 当前唯一实施顺序改为以下产品化闭环；各阶段保持独立边界，但按用户修订合同连续执行，不再要求逐阶段人工授权：
 
@@ -28,22 +66,22 @@ P3. [x] [COMPUTED][HIGH] owner-only replication actor、late-join baseline、可
 P4. [x] [COMPUTED][HIGH] 插件新增可复用事务Store，覆盖Claim/Pickup/Deliver/Cancel/Requeue、死亡后无Carrier cargo恢复和fallback sink；专用`CrowdDemo_FriendlyLogisticsSmall`地图以20个真实Mass实体通过稳定竞争、数量守恒、幂等、退避、取消及公共channel late join。8154双端hash=`3180435972084878253`，客户端Cargo attach/detach=`2/2`、最终实例=`20`，携货与交付近景证据已保存。
 P5. [x] [COMPUTED][HIGH] J、Continuous与旧Round的实体状态均统一到公共Networking/Presentation。旧Round bootstrap、correction、ResultHeader和projectile event使用owner-only公共channel，20条latest-wins correction按帧有界聚合；客户端实体ISM只由Presentation subsystem/sink管理。8151 T2、8153 J和8157双客户端late join通过，J step600双端hash一致且无硬错误。
 
-[COMPUTED][HIGH] 当前准确状态是P0–P5与B0–B7全部关闭；K以20实体混合/T8、100实体SoftPressure和500实体Obstacle完成正式运行，L原工程迁移与动态NavMesh topology更新仍未实施。
+[COMPUTED][HIGH] 下节B0–B7仅是2026-07-28较早历史快照；其“未关闭”描述不得覆盖本文顶部R0–R7现状。P0–P5保持关闭，K的同路径规模门已补齐；L和动态NavMesh topology更新仍未关闭。
 
 ## B0–B7 Behavior Source 重构（2026-07-28）
 
 B0. [x] [COMPUTED][HIGH] 脏工作区与P0–P5成果已保存为提交`ddb4740`并推送。
 B1. [x] [COMPUTED][HIGH] Capability Profile/Modifier、稳定Source POD、容量与Hash已实现。
-B2. [x] [COMPUTED][HIGH] 冻结Registry、内置Evaluator、六通道确定性Resolver与诊断已实现。
-B3. [x] [COMPUTED][HIGH] Legacy Recipe把旧标签展开为多Source；Provider生产控制权已删除。
-B4. [x] [COMPUTED][HIGH] Source staging/Resolved Channels接入P1 Boundary，Envelope升级v3并验证失败零写入。
-B5. [x] [COMPUTED][HIGH] Mixed Sandbox的移动/Facing/物流/攻击/HitReaction组合改走Runtime World Store；旧Round移动安全内核保持Resolver后的强制阶段，原场景自动化用于迁移等价门。
-B6. [x] [COMPUTED][HIGH] 可选StateTree Adapter与物流中断恢复链路已实现。
-B7. [x] [COMPUTED][HIGH] 权威ActiveBehavior字段、中心CanActivate、Provider API和网络Behavior字节已删除；协议统一升级并拒绝v1。
+B2. [ ] [COMPUTED][HIGH] 冻结Registry、内置Evaluator、六通道结构和确定性排序已实现；Presentation Additive及完整Blend/冲突/溢出专项测试未关闭。
+B3. [ ] [COMPUTED][HIGH] Legacy Recipe与Provider权威接口删除已完成；Mixed生产Movement/Facing仍未消费Resolver结果，Recipe仍逐步Stop/Start整组Source。
+B4. [ ] [COMPUTED][HIGH] Source staging、Prepared Hash与Envelope v3已实现；Mixed仍在Movement校验前写Business/AgentFacts并在失败后回滚，不满足Final Apply不可失败。
+B5. [ ] [COMPUTED][HIGH] 20实体Mixed已组合Runtime World Store、物流、攻击、受击约束、Nav和Presentation；基础移动、Formation、追击/攻击、物流、HitReaction/Death尚未全部统一到Resolved Channels生产入口。
+B6. [ ] [COMPUTED][HIGH] 可选StateTree Adapter与物流中断恢复数据链已实现；专项测试未执行真实StateTree Task中断、重入和重复Event。
+B7. [ ] [COMPUTED][HIGH] 权威ActiveBehavior、中心CanActivate、Provider API和网络Behavior字节已删除，v1拒绝/v2 Codec已实现；行为Codec生产接线、late join Source baseline、Predictable/ResolvedOnly、Hash resync及最终人工/PIE/规模门未关闭。
 
-[COMPUTED][HIGH] B0–B7最终门：DebugGame `-DisableUnity`与Development `-ForceUnity`成功，`MassCrowd 50/50`、`CrowdDemo 115/115`成功；8216 T8的攻击/投射/伤害=`50/50/50`且双端Hash一致；8210的100实体SoftPressure性能门成功；8215的500实体Obstacle连续5轮双端Checkpoint成功、障碍穿透和revision gap均为0。
+[COMPUTED][HIGH] 当前证据基线：DebugGame `-DisableUnity`、Development `-ForceUnity`、`MassCrowd 50/50`与`CrowdDemo 115/115`成功；8216 T8攻击/投射/伤害=`50/50/50`且双端Hash一致；8210的100实体SoftPressure和8215的500实体Obstacle分别是旧Round性能/网络/安全基线，不是Behavior Source 100/500关闭证据。
 
-## 已完成
+## 已完成（历史阶段记录；不覆盖上述现行B0–B7状态）
 
 - [x] [COMPUTED][HIGH] 建立`MassCrowdSimulation`插件、Core/Runtime/Networking/Presentation/Tests五模块、公共合同和边界扫描；Development无依赖警告编译及插件边界1/1自动化通过。
 - [x] [COMPUTED][HIGH] Shared Flow已提取为`MassCrowdCore`原生纯内核并接入Runtime生产WORK；权威Flow资源和动态anchor使用Runtime合同、暂由Demo Pipeline托管，Demo算法结构只保留迁移期field/sample镜像。SF1 golden hash、旧/Core/Runtime等价fixture、输入乱序和动态anchor均通过。
@@ -141,6 +179,6 @@ B7. [x] [COMPUTED][HIGH] 权威ActiveBehavior字段、中心CanActivate、Provid
 - [x] [COMPUTED][HIGH] P5关闭：J、Continuous与Round继续消费公共Networking/Presentation路径；7939、7946、7948–7951无硬错误。
 - [x] [COMPUTED][HIGH] 累计门：Development/DebugGame `-DisableUnity`、MassCrowd 43/43、CrowdDemo 115/115、插件反向依赖扫描和`git diff --check`通过。
 
-[COMPUTED][HIGH] 该P0–P5关闭检查点当时停止在K前；本次B0–B7授权已完成K的20/100/500正式运行，L原工程迁移继续冻结。
+[COMPUTED][HIGH] 该P0–P5关闭检查点当时停止在K前；随后只完成20实体Behavior Source Mixed和旧Round 100/500分路径基线。K的同路径Behavior Source规模门与L原工程迁移继续开放。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

@@ -13,14 +13,6 @@
     {
       "Name": "MassGameplay",
       "Enabled": true
-    },
-    {
-      "Name": "StateTree",
-      "Enabled": true
-    },
-    {
-      "Name": "GameplayStateTree",
-      "Enabled": true
     }
   ],
   "Modules": [
@@ -35,6 +27,11 @@
       "LoadingPhase": "Default"
     },
     {
+      "Name": "MassCrowdStandardSources",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
       "Name": "MassCrowdNetworking",
       "Type": "Runtime",
       "LoadingPhase": "Default"
@@ -45,14 +42,9 @@
       "LoadingPhase": "Default"
     },
     {
-      "Name": "MassCrowdStateTreeAdapter",
-      "Type": "Runtime",
-      "LoadingPhase": "Default"
-    },
-    {
       "Name": "MassCrowdTests",
       "Type": "DeveloperTool",
-      "LoadingPhase": "PostEngineInit"
+      "LoadingPhase": "PreDefault"
     }
   ]
 }

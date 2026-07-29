@@ -1,10 +1,22 @@
 # MassAI Crowd Demo 当前架构
 
+## 0. 2026-07-28 R基线源码事实
+
+[COMPUTED][HIGH] Runtime当前新增了公共`ICrowdBehaviorSourceProvider`、`FCrowdBehaviorRegistryBuilder`、稳定Provider/Context ID、冻结时Registry Hash、标准位置/速度/Facing Context、最多8项96字节扩展Context、96字节实例状态以及Writer Next State。
+
+[COMPUTED][HIGH] 当前Runtime通过开放Provider注册并冻结Registry，领域Source由Demo Provider拥有；Mixed读取Resolved Movement/Facing，公共Scheduler使用通用Stage/Task/Scope键；Projectile由Mass Fragment唯一持有，旧数组/镜像路径已删除；StateTree Adapter已拆为默认禁用兄弟插件。
+
+[COMPUTED][HIGH] 当前已有随`MassCrowdSimulation`加载的`MassCrowdStandardSources` Runtime模块，Provider ID=`100`。模块提供13种稳定TypeId的自主Evaluator、TargetKinematics/FormationAnchor v1 POD Context、MaintainDistance/Wander持久State；`MassCrowdRuntime`和`MassCrowdCore`均不反向依赖该模块或特判其TypeId。
+
+[COMPUTED][HIGH] Mixed Movement Worker消费Resolved Movement Goal/Velocity/Facing/Constraint，执行`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`并在Prepared Boundary中一次提交Movement、Business与Slot状态；Business数组非空不再跳过移动。Local Predictive与Particle按InteractionLayer过滤跨层邻居。Presentation Resolver按Property保留最高优先级Override和稳定排序的全部Additive记录。
+
+[INFERRED][HIGH] 开放Behavior框架、通用Scheduler、行为网络v3和Mass权威Projectile的R0–R7基础门已经关闭；通用Source库、Demo组合迁移和同路径20/100/500生产门已落地。现行构建、自动化和网络门状态以`PhasePlan.md`为准。
+
 ## 1. 文档职责
 
 [COMPUTED][HIGH] 本文件只描述当前生产代码、数据所有权和已验证边界。阶段计划查阅`PhasePlan.md`，验收状态查阅`FeatureChecklist.md`与`TestScenarioMatrix.md`，退出实验与旧端口查阅`Docs/History`。
 
-[INFERRED][HIGH] 生产运行、行为组合、持续生命周期与复制的长期合同以`MassCrowdUnifiedRuntimeAndReplicationContract.md`为唯一事实源；本文中的 Round、Scenario 和 testcase 均是当前 Demo 实现事实，不是插件最终产品 API。
+[INFERRED][HIGH] 生产运行、持续生命周期与复制的长期合同以`MassCrowdUnifiedRuntimeAndReplicationContract.md`为事实源；Behavior Source详细合同与现行关闭状态以`EntityBehaviorSourceArchitecture.md`为事实源。本文中的Round、Scenario和testcase均是Demo实现事实，不是插件最终产品API。
 
 ## 1.1 当前能力与未来目标
 
@@ -14,9 +26,15 @@
 
 [COMPUTED][HIGH] P0–P5公共产品闭环已完成：旧Round接入P1 Orchestrator与P3 channel/Presentation，J已删除O(N)安全检查，`NavFlowProductSmall`与专用`FriendlyLogisticsSmall`场景均通过。
 
+[COMPUTED][HIGH] Behavior Source核心模型和World Store已进入Mixed生产路径：Movement Goal/Facing/Constraint消费Resolver输出并进入完整Movement/Particle/Facing安全链；边界使用完整Prepare/Validate后Final Apply；Source Codec v3进入可靠状态、late join与resync。StandardSources自主Evaluator、Demo五Controller稳定Diff、目标丢失Stop、临时压制精确恢复及同路径20/100/500服务端门均已有当前证据。真实StateTree业务Task不属于现行框架门。
+
+[INFERRED][HIGH] P0–P5历史关闭结论继续成立；同路径20/100/500与第三方Source/并发Projectile同场组合门均已有当前证据。
+
 [INFERRED][HIGH] 未来目标必须复用同一生产 Runtime、Networking 和 Presentation；Demo Round 协议只能成为生产协议的测试适配器，不能先维持一套测试协议、再另行替换成不兼容的生产协议。
 
-## 1.2 源码只读审计矩阵（2026-07-22）
+## 1.2 历史源码只读审计矩阵（2026-07-22；非当前状态）
+
+[COMPUTED][HIGH] 本节冻结2026-07-22审计快照，表内“缺失/后续归属”不得作为当前状态引用；当前状态以1.1节、`EntityBehaviorSourceArchitecture.md`和文件末尾日期更晚的检查点为准。
 
 | 当前对象 | 当前职责 | 生产可复用 | Demo 专用 | 缺失/跑偏 | 后续归属 |
 |---|---|---|---|---|---|
@@ -341,7 +359,7 @@ RoundPlanApply
 
 [COMPUTED][HIGH] 阶段 I 新增`CrowdNavSurfaceGraph`与`MassCrowdNavSurfaceGraphExtractor`：Core以量化几何生成稳定节点/拓扑hash，layer-specific与closest-polygon attachment避免大多边形质心误判，Shared Flow以预构建反向邻接执行稳定Dijkstra；Runtime提取静态Recast tile/poly/portal并拒绝缺失、过窄、过陡或跨越落差的连接。8800真实地图运行通过98 nodes、234 directed edges、38 tiles、4 extracted/graph layers、13 overlap、76 reachable sloped edges、8/8 reachable markers、drop unreachable，topology hash=`9799951363989120452`；Development/DebugGame、定向3/3、MassCrowd 27/27与CrowdDemo 112/112通过。[INFERRED][HIGH] I本身没有把continuous lifecycle、Behavior、Combat或Logistics组合进probe；该组合由J完成。
 
-[COMPUTED][HIGH] 阶段 J 新增`ACrowdDemoMixedSandboxCoordinator`：GameMode在固定Round spawn前分支，20个真实Mass实体按30Hz boundary运行；行为由距离、Cargo carrier、Health与当前目标事实驱动，在HaulPickup/Deliver、Pursue/Attack、Guard/Flee及Wander/MoveTo间切换。所有移动目标attachment消费I的Recast图与Shared Flow，业务提交消费H provider/ledger并对同一CommitId即时重放验证幂等，死亡/业务回收与行为cohort变化消费E/F lifecycle batches。客户端用bounded状态包校正完整AgentFacts并增量维护普通/HitFlash ISM。8804 step600的Server/Client entity hash=`13154923896226232907`、membership hash=`13094526216572312548`一致；active/visible=`20/20`，最小同层间距=`71.51cm`且stale reject=0。[INFERRED][HIGH] 这是P0前的历史检查点；现行停止点以本文件“P1–P5产品化执行检查点”末条为准，K/L继续冻结。
+[COMPUTED][HIGH] 阶段 J 新增`ACrowdDemoMixedSandboxCoordinator`：GameMode在固定Round spawn前分支，20个真实Mass实体按30Hz boundary运行；行为由距离、Cargo carrier、Health与当前目标事实驱动，在HaulPickup/Deliver、Pursue/Attack、Guard/Flee及Wander/MoveTo间切换。所有移动目标attachment消费I的Recast图与Shared Flow，业务提交消费H provider/ledger并对同一CommitId即时重放验证幂等，死亡/业务回收与行为cohort变化消费E/F lifecycle batches。客户端用bounded状态包校正完整AgentFacts并增量维护普通/HitFlash ISM。8804 step600的Server/Client entity hash=`13154923896226232907`、membership hash=`13094526216572312548`一致；active/visible=`20/20`，最小同层间距=`71.51cm`且stale reject=0。[INFERRED][HIGH] 这是P0前的历史检查点；当前状态以本文1.1节、`EntityBehaviorSourceArchitecture.md`和`PhasePlan.md`为准。
 
 ## 2026-07-28 产品路径复核增量
 

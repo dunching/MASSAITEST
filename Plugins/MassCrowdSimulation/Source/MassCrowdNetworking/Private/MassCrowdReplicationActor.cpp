@@ -106,7 +106,7 @@ bool AMassCrowdReplicationActor::PublishReliables(
   const TConstArrayView<FCrowdReliableStateRecord> Records)
 {
   if (!HasAuthority() || Records.IsEmpty()
-    || Records.Num() > Limits.MaxReliableRecordsPerBatch)
+    || Records.Num() > Limits.MaxBufferedReliableRecords)
     return false;
   uint64 ExpectedSequence = Records[0].Sequence;
   for (const FCrowdReliableStateRecord& Record : Records)
@@ -125,7 +125,15 @@ bool AMassCrowdReplicationActor::PublishReliables(
     return true;
   }
   if (ServerState.RequiresNewBaseline()) return false;
-  SendReliableBatch(Records);
+  for (int32 Begin = 0; Begin < Records.Num();
+    Begin += Limits.MaxReliableRecordsPerBatch)
+  {
+    SendReliableBatch(MakeArrayView(
+      Records.GetData() + Begin,
+      FMath::Min(
+        Limits.MaxReliableRecordsPerBatch,
+        Records.Num() - Begin)));
+  }
   return true;
 }
 
@@ -210,7 +218,7 @@ void AMassCrowdReplicationActor::ClientBaselineBegin_Implementation(
   if (ClientState.AcceptBaselineBegin(
     {Revision, ResumeSequence, StableHash}, NowSeconds())
     == ECrowdReplicationAcceptResult::Rejected)
-    HandleClientFailure();
+    HandleClientFailure(TEXT("baseline_begin"));
 }
 
 void AMassCrowdReplicationActor::ClientSnapshotHeader_Implementation(
@@ -219,7 +227,7 @@ void AMassCrowdReplicationActor::ClientSnapshotHeader_Implementation(
   const auto Result = ClientState.AcceptSnapshotHeader(Header, NowSeconds());
   if (Result == ECrowdReplicationAcceptResult::Rejected
     || Result == ECrowdReplicationAcceptResult::ResyncRequired)
-    HandleClientFailure();
+    HandleClientFailure(TEXT("snapshot_header"));
 }
 
 void AMassCrowdReplicationActor::ClientSnapshotChunk_Implementation(
@@ -228,7 +236,7 @@ void AMassCrowdReplicationActor::ClientSnapshotChunk_Implementation(
   const auto Result = ClientState.AcceptSnapshotChunk(Chunk, NowSeconds());
   if (Result == ECrowdReplicationAcceptResult::Rejected
     || Result == ECrowdReplicationAcceptResult::ResyncRequired)
-    HandleClientFailure();
+    HandleClientFailure(TEXT("snapshot_chunk"));
 }
 
 void AMassCrowdReplicationActor::ClientBaselineEnd_Implementation(
@@ -244,7 +252,7 @@ void AMassCrowdReplicationActor::ClientBaselineEnd_Implementation(
       CompletedBaselineRevision,
       CompletedResumeSequence))
   {
-    HandleClientFailure();
+    HandleClientFailure(TEXT("baseline_end"));
     return;
   }
   bClientReady = true;
@@ -280,7 +288,7 @@ void AMassCrowdReplicationActor::ClientReliableState_Implementation(
   const auto Result = ClientState.AcceptReliableBatch(Batch);
   if (Result == ECrowdReplicationAcceptResult::Rejected
     || Result == ECrowdReplicationAcceptResult::ResyncRequired)
-    HandleClientFailure();
+    HandleClientFailure(TEXT("reliable_single"));
 }
 
 void AMassCrowdReplicationActor::ClientReliableStateBatch_Implementation(
@@ -306,7 +314,7 @@ void AMassCrowdReplicationActor::ClientReliableStateBatch_Implementation(
     || PayloadOffsets[0] != 0
     || PayloadOffsets.Last() != PayloadBytes.Num())
   {
-    HandleClientFailure();
+    HandleClientFailure(TEXT("reliable_batch_shape"));
     return;
   }
   FCrowdReliableStateBatch Batch;
@@ -319,7 +327,7 @@ void AMassCrowdReplicationActor::ClientReliableStateBatch_Implementation(
     if (Begin < 0 || End < Begin || End > PayloadBytes.Num()
       || End - Begin > Limits.MaxReliablePayloadBytesPerRecord)
     {
-      HandleClientFailure();
+      HandleClientFailure(TEXT("reliable_batch_payload"));
       return;
     }
     FCrowdReliableStateRecord& Record =
@@ -339,7 +347,7 @@ void AMassCrowdReplicationActor::ClientReliableStateBatch_Implementation(
   const auto Result = ClientState.AcceptReliableBatch(Batch);
   if (Result == ECrowdReplicationAcceptResult::Rejected
     || Result == ECrowdReplicationAcceptResult::ResyncRequired)
-    HandleClientFailure();
+    HandleClientFailure(TEXT("reliable_batch_accept"));
 }
 
 void AMassCrowdReplicationActor::ClientMovementCorrection_Implementation(
@@ -363,7 +371,7 @@ void AMassCrowdReplicationActor::ClientMovementCorrection_Implementation(
   Correction.StableHash = StableHash;
   const auto Result = ClientState.AcceptMovementCorrection(Correction);
   if (Result == ECrowdReplicationAcceptResult::ResyncRequired)
-    HandleClientFailure();
+    HandleClientFailure(TEXT("correction_single"));
 }
 
 void AMassCrowdReplicationActor::ClientMovementCorrectionBatch_Implementation(
@@ -388,7 +396,7 @@ void AMassCrowdReplicationActor::ClientMovementCorrectionBatch_Implementation(
     || YawDegrees.Num() != Count
     || StableHashes.Num() != Count)
   {
-    HandleClientFailure();
+    HandleClientFailure(TEXT("correction_batch_shape"));
     return;
   }
   TArray<FCrowdMovementCorrectionRecord> Corrections;
@@ -413,7 +421,7 @@ void AMassCrowdReplicationActor::ClientMovementCorrectionBatch_Implementation(
   if (Result == ECrowdReplicationAcceptResult::ResyncRequired
     || Result == ECrowdReplicationAcceptResult::Rejected)
   {
-    HandleClientFailure();
+    HandleClientFailure(TEXT("correction_batch_accept"));
     return;
   }
   UE_LOG(LogTemp, Verbose,
@@ -454,11 +462,13 @@ double AMassCrowdReplicationActor::NowSeconds() const
   return World ? World->GetTimeSeconds() : 0.0;
 }
 
-void AMassCrowdReplicationActor::HandleClientFailure()
+void AMassCrowdReplicationActor::HandleClientFailure(
+  const TCHAR* Stage)
 {
   bClientReady = false;
   UE_LOG(LogTemp, Error,
-    TEXT("MassCrowdReplicationChannel role=client stage=resync_required"));
+    TEXT("MassCrowdReplicationChannel role=client stage=resync_required source=%s"),
+    Stage);
   ServerRequestResync();
 }
 

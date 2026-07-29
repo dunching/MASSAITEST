@@ -246,6 +246,25 @@ bool FCrowdCapabilityProfileRegistry::Resolve(
   return OutCapabilities.IsValid();
 }
 
+uint64 FCrowdCapabilityProfileRegistry::CalculateStableHash() const
+{
+  if (!bFrozen) return 0;
+  TArray<FCrowdCapabilityProfileKey> Keys;
+  Profiles.GetKeys(Keys);
+  Keys.Sort();
+  uint64 Hash = FnvOffset64;
+  FoldUnsigned(Hash, static_cast<uint32>(Keys.Num()));
+  for (const FCrowdCapabilityProfileKey Key : Keys)
+  {
+    const FCrowdCapabilityProfile& Profile = Profiles[Key];
+    FoldUnsigned(Hash, Key.Value);
+    FoldUnsigned(Hash, static_cast<uint32>(Profile.CapabilityIds.Num()));
+    for (const FCrowdCapabilityId Id : Profile.CapabilityIds)
+      FoldUnsigned(Hash, Id.Value);
+  }
+  return Hash;
+}
+
 bool FCrowdBehaviorSourcePayload::operator==(
   const FCrowdBehaviorSourcePayload& Other) const
 {
@@ -259,6 +278,37 @@ uint64 FCrowdBehaviorSourcePayload::CalculateStableHash() const
   if (!IsValid()) return 0;
   uint64 Hash = FnvOffset64;
   FoldUnsigned(Hash, SchemaId);
+  FoldUnsigned(Hash, Size);
+  for (uint16 Index = 0; Index < Size; ++Index)
+    FoldUnsigned(Hash, Bytes[Index]);
+  return Hash;
+}
+
+bool FCrowdBehaviorSourceState::operator==(
+  const FCrowdBehaviorSourceState& Other) const
+{
+  return SchemaId == Other.SchemaId
+    && Size == Other.Size
+    && FMemory::Memcmp(Bytes, Other.Bytes, Size) == 0;
+}
+
+uint64 FCrowdBehaviorSourceState::CalculateStableHash() const
+{
+  if (!IsValid()) return 0;
+  uint64 Hash = FnvOffset64;
+  FoldUnsigned(Hash, SchemaId);
+  FoldUnsigned(Hash, Size);
+  for (uint16 Index = 0; Index < Size; ++Index)
+    FoldUnsigned(Hash, Bytes[Index]);
+  return Hash;
+}
+
+uint64 FCrowdBehaviorContextRecord::CalculateStableHash() const
+{
+  if (!IsValid()) return 0;
+  uint64 Hash = FnvOffset64;
+  FoldUnsigned(Hash, TypeId.Value);
+  FoldUnsigned(Hash, SchemaVersion);
   FoldUnsigned(Hash, Size);
   for (uint16 Index = 0; Index < Size; ++Index)
     FoldUnsigned(Hash, Bytes[Index]);
@@ -296,6 +346,7 @@ uint64 FCrowdBehaviorSourceSpec::CalculateStableHash() const
   FoldUnsigned(Hash, ExclusiveGroup);
   FoldUnsigned(Hash, static_cast<uint32>(MaxLifetimeSteps));
   FoldUnsigned(Hash, PayloadSchemaId);
+  FoldUnsigned(Hash, StateSchemaId);
   FoldUnsigned(Hash, static_cast<uint8>(ReplicationPolicy));
   FoldUnsigned(Hash, RequiredCapabilityCount);
   for (uint8 Index = 0; Index < RequiredCapabilityCount; ++Index)
@@ -377,7 +428,8 @@ bool FCrowdBehaviorSourceInstance::IsValid() const
       || ExpireFixedStep > LastUpdateFixedStep)
     && ReplicationPolicy
       < ECrowdBehaviorSourceReplicationPolicy::Count
-    && Payload.IsValid();
+    && Payload.IsValid()
+    && State.IsValid();
 }
 
 uint64 FCrowdBehaviorSourceInstance::CalculateStableHash() const
@@ -396,6 +448,7 @@ uint64 FCrowdBehaviorSourceInstance::CalculateStableHash() const
   FoldUnsigned(Hash, static_cast<uint64>(ExpireFixedStep));
   FoldUnsigned(Hash, static_cast<uint8>(ReplicationPolicy));
   FoldUnsigned(Hash, Payload.CalculateStableHash());
+  FoldUnsigned(Hash, State.CalculateStableHash());
   return Hash;
 }
 
@@ -562,6 +615,7 @@ bool FCrowdBehaviorSourceStateMachine::Apply(
         ? Command.EffectiveFixedStep + Lifetime : INDEX_NONE;
       Added.ReplicationPolicy = Spec->ReplicationPolicy;
       Added.Payload = Command.Payload;
+      Added.State.SchemaId = Spec->StateSchemaId;
       CandidateEvents.Add({ECrowdBehaviorSourceEventKind::Started,
         FixedStepIndex, Added.Handle, Added.SourceTypeId});
     }
@@ -607,10 +661,15 @@ bool FCrowdBehaviorSourceStateMachine::Apply(
       Candidate.Instances[Index];
     const FCrowdBehaviorSourceSpec* Spec = Specs.Find(
       Instance.SourceTypeId);
+    if (!Spec
+      || Instance.SourceVersion != Spec->Version
+      || Instance.Payload.SchemaId != Spec->PayloadSchemaId
+      || Instance.State.SchemaId != Spec->StateSchemaId)
+      return false;
     const bool bExpired = Instance.ExpireFixedStep != INDEX_NONE
       && Instance.ExpireFixedStep <= FixedStepIndex;
     const bool bCapabilityRevoked =
-      !Spec || !HasRequiredCapabilities(*Spec, Capabilities);
+      !HasRequiredCapabilities(*Spec, Capabilities);
     if (!bExpired && !bCapabilityRevoked) continue;
     CandidateEvents.Add({
       bExpired ? ECrowdBehaviorSourceEventKind::Expired
@@ -676,21 +735,29 @@ bool FCrowdBehaviorResolver::Resolve(
   {
     if (!Value.Key.IsValid()
       || !IsFiniteVector(Value.DesiredVelocity)
+      || !Value.Goal.IsValid()
       || (Value.BlendMode != ECrowdBehaviorBlendMode::Override
         && Value.BlendMode != ECrowdBehaviorBlendMode::WeightedAdd
         && Value.BlendMode != ECrowdBehaviorBlendMode::Additive)
       || (Value.BlendMode == ECrowdBehaviorBlendMode::WeightedAdd
-        && Value.WeightQ15 == 0))
+        && Value.WeightQ15 == 0)
+      || (Value.BlendMode != ECrowdBehaviorBlendMode::Override
+        && Value.Goal.bHasGoal))
       return false;
     FoldContributionKey(MovementHash, Value.Key);
     FoldUnsigned(MovementHash, static_cast<uint8>(Value.BlendMode));
     FoldUnsigned(MovementHash, Value.WeightQ15);
     FoldVector(MovementHash, Value.DesiredVelocity);
+    FoldUnsigned(MovementHash, static_cast<uint8>(Value.Goal.bHasGoal));
+    FoldVector(MovementHash, Value.Goal.Location);
+    FoldRef(MovementHash, Value.Goal.TargetRef);
+    FoldUnsigned(MovementHash, Value.Goal.FactRevision);
     if (Value.BlendMode == ECrowdBehaviorBlendMode::Override)
     {
       if (!bHasOverride)
       {
         BaseVelocity = Value.DesiredVelocity;
+        OutResolved.MovementGoal = Value.Goal;
         bHasOverride = true;
       }
     }
@@ -844,20 +911,25 @@ bool FCrowdBehaviorResolver::Resolve(
   OutResolved.Business = MoveTemp(Business);
 
   uint64 PresentationHash = FnvOffset64;
-  TSet<uint32> SeenPresentationProperties;
+  TSet<uint32> SeenPresentationOverrides;
   for (const FCrowdPresentationContribution& Value : Presentation)
   {
     if (!Value.Key.IsValid()
-      || Value.BlendMode != ECrowdBehaviorBlendMode::Override
+      || (Value.BlendMode != ECrowdBehaviorBlendMode::Override
+        && Value.BlendMode != ECrowdBehaviorBlendMode::Additive)
       || Value.PropertyId == 0)
       return false;
     FoldContributionKey(PresentationHash, Value.Key);
+    FoldUnsigned(
+      PresentationHash, static_cast<uint8>(Value.BlendMode));
     FoldUnsigned(PresentationHash, Value.PropertyId);
     FoldUnsigned(PresentationHash, Value.Value);
-    if (!SeenPresentationProperties.Contains(Value.PropertyId))
+    if (Value.BlendMode == ECrowdBehaviorBlendMode::Additive)
+      OutResolved.Presentation.Add(Value);
+    else if (!SeenPresentationOverrides.Contains(Value.PropertyId))
     {
       OutResolved.Presentation.Add(Value);
-      SeenPresentationProperties.Add(Value.PropertyId);
+      SeenPresentationOverrides.Add(Value.PropertyId);
     }
   }
 
@@ -875,6 +947,12 @@ bool FCrowdBehaviorResolver::Resolve(
   FoldUnsigned(StableHash, BusinessHash);
   FoldUnsigned(StableHash, PresentationHash);
   FoldVector(StableHash, OutResolved.DesiredVelocity);
+  FoldUnsigned(
+    StableHash,
+    static_cast<uint8>(OutResolved.MovementGoal.bHasGoal));
+  FoldVector(StableHash, OutResolved.MovementGoal.Location);
+  FoldRef(StableHash, OutResolved.MovementGoal.TargetRef);
+  FoldUnsigned(StableHash, OutResolved.MovementGoal.FactRevision);
   FoldVector(StableHash, OutResolved.DesiredFacing);
   FoldFloat(StableHash, OutResolved.SpeedLimitCmps);
   FoldUnsigned(StableHash, OutResolved.AllowedNavLayerMask);

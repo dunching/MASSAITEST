@@ -10,6 +10,7 @@
 struct FCrowdMassMovementPipelineAgentOverlay
 {
   int32 AgentId = INDEX_NONE;
+  uint32 InteractionLayer = 0;
   int32 PreviousBlockedAgeSteps = 0;
   float MaximumSpeedCmps = 0.0f;
   bool bFreezeAtBoundaryLocation = false;

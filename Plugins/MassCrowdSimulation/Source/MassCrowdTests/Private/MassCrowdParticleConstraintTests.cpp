@@ -90,6 +90,39 @@ bool FMassCrowdParticleConstraintDeterminismTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdParticleConstraintInteractionLayerTest,
+  "MassCrowd.Core.ParticleConstraint.InteractionLayer",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdParticleConstraintInteractionLayerTest::RunTest(
+  const FString& Parameters)
+{
+  TArray<FCrowdParticleConstraintAgent> Agents = {
+    MakeAgent(1, FVector(-80, 0, 60), FVector::ZeroVector),
+    MakeAgent(2, FVector(80, 0, 460), FVector::ZeroVector)};
+  Agents[0].InteractionLayer = 3;
+  Agents[1].InteractionLayer = 4;
+  TArray<FCrowdParticleConstraintPair> Pairs;
+  TArray<FCrowdParticleConstraintResult> Results;
+  FCrowdParticleConstraintSummary Summary;
+  FCrowdParticleConstraintSettings Settings;
+  FCrowdParticleConstraintKernel::Solve(
+    Agents, MakeOpenEnvironment(), Settings,
+    Pairs, Results, Summary);
+  TestTrue(TEXT("layered solve valid"), Summary.bValid);
+  TestEqual(TEXT("different layers do not generate pairs"),
+    Pairs.Num(), 0);
+  TestEqual(TEXT("layered result count"), Results.Num(), 2);
+  TestTrue(TEXT("first prediction preserved"),
+    Results[0].CorrectedPosition.Equals(
+      Agents[0].PredictedPosition, 0.0f));
+  TestTrue(TEXT("second prediction preserved"),
+    Results[1].CorrectedPosition.Equals(
+      Agents[1].PredictedPosition, 0.0f));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FMassCrowdParticleSettlingTrackerTest,
   "MassCrowd.Core.ParticleConstraint.SettlingTracker",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

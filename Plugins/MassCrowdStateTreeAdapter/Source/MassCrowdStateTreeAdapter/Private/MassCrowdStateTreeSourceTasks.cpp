@@ -53,9 +53,8 @@ bool FCrowdStateTreeCommandBuilder::Build(
   OutCommand.SourceTypeId = Request.SourceTypeId;
   OutCommand.Priority = static_cast<int16>(Request.Priority);
   OutCommand.LifetimeSteps = Request.LifetimeSteps;
-  return OutCommand.Payload.Set(
-    CrowdBuiltinBehaviorSchemas::Standard, Request.Payload)
-    && OutCommand.IsValid();
+  OutCommand.Payload = Request.Payload;
+  return OutCommand.IsValid();
 }
 
 FCrowdStateTreeSourceCommandTask::
@@ -85,17 +84,9 @@ EStateTreeRunStatus FCrowdStateTreeSourceCommandTask::EnterState(
   Request.SourceTypeId = {Data.SourceTypeId};
   Request.Priority = Data.Priority;
   Request.LifetimeSteps = Data.LifetimeSteps;
-  Request.Payload.Vector = Data.Vector;
-  Request.Payload.TargetRef = {
-    Data.TargetProviderId,
-    static_cast<uint64>(Data.TargetStableEntityId),
-    Data.TargetLifecycleSerial};
-  Request.Payload.CommitId =
-    Data.CommitId > 0 ? static_cast<uint64>(Data.CommitId) : 0;
-  Request.Payload.PrimaryId = Data.PrimaryId;
-  Request.Payload.SecondaryId = Data.SecondaryId;
-  Request.Payload.Quantity = Data.Quantity;
-  Request.Payload.Flags = Data.Flags;
+  if (!Request.Payload.SetBytes(
+      Data.PayloadSchemaId, Data.PayloadBytes))
+    return EStateTreeRunStatus::Failed;
   FCrowdBehaviorSourceCommand Command;
   return FCrowdStateTreeCommandBuilder::Build(Request, Command)
     && Runtime->GetBehaviorSourceRuntime().QueueCommand(Command)

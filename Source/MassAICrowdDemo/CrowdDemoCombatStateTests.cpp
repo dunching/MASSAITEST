@@ -869,9 +869,13 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ProcessorSource.Contains(TEXT(
       "ApplyCombatAgentState(\n"
       "          CombatAgent.Combat")));
-  TestTrue(TEXT("final boundary writer publishes delayed projectile state"),
+  TestTrue(TEXT("final boundary writer publishes Mass-authoritative projectile state"),
     ProcessorSource.Contains(TEXT(
-      "Pipeline.GetPreparedProjectiles() = CombatCommit->Projectiles")));
+      "Pipeline.ApplyProjectileFinalState(")));
+  TestFalse(TEXT("pipeline no longer owns projectile authority array"),
+    PipelineSource.Contains(TEXT("PreparedProjectiles")));
+  TestFalse(TEXT("projectile mirror compatibility path is deleted"),
+    MassSubsystemSource.Contains(TEXT("MirrorProjectileStates")));
 
   TestFalse(TEXT("particle processor has no Mass query seam"),
     ProcessorSource.Contains(

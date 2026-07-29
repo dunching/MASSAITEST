@@ -58,8 +58,8 @@ enum class ECrowdCapability : uint8
   Count
 };
 
-// Migration-only labels accepted by FCrowdLegacyBehaviorRecipe. Runtime
-// authority lives in the behavior source set, never in this enum.
+// Migration-only diagnostic labels. Product recipes may translate them into
+// Source commands; Runtime authority lives in the Source set, never here.
 enum class ECrowdActiveBehavior : uint8
 {
   Idle = 0,

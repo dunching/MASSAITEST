@@ -113,16 +113,37 @@ bool FCrowdMassLifecycleWorld::ApplyAgentFactsCorrectionsAtBoundary(
   const int64 FixedStepIndex,
   const TConstArrayView<FCrowdAgentFacts> CorrectedFacts)
 {
+  if (!ValidateAgentFactsCorrectionsAtBoundary(
+      FixedStepIndex, CorrectedFacts))
+    return false;
+  ApplyValidatedAgentFactsCorrectionsAtBoundary(
+    FixedStepIndex, CorrectedFacts);
+  return true;
+}
+
+bool FCrowdMassLifecycleWorld::ValidateAgentFactsCorrectionsAtBoundary(
+  const int64 FixedStepIndex,
+  const TConstArrayView<FCrowdAgentFacts> CorrectedFacts) const
+{
   if (!bInitialized || CorrectedFacts.IsEmpty()
     || FixedStepIndex < LastAppliedFixedStep)
     return false;
   for (const FCrowdAgentFacts& Facts : CorrectedFacts)
     if (!DeltaState.Contains(Facts.StableEntityRef))
       return false;
-  if (!RuntimeStore.ApplyAgentFactsCorrectionsAtomic(CorrectedFacts))
-    return false;
+  return RuntimeStore.ValidateAgentFactsCorrections(CorrectedFacts);
+}
+
+void FCrowdMassLifecycleWorld::
+ApplyValidatedAgentFactsCorrectionsAtBoundary(
+  const int64 FixedStepIndex,
+  const TConstArrayView<FCrowdAgentFacts> CorrectedFacts)
+{
+  check(ValidateAgentFactsCorrectionsAtBoundary(
+    FixedStepIndex, CorrectedFacts));
+  RuntimeStore.ApplyValidatedAgentFactsCorrections(
+    CorrectedFacts);
   LastAppliedFixedStep = FixedStepIndex;
-  return true;
 }
 
 uint64 FCrowdMassLifecycleWorld::CalculateEntitySetHash() const

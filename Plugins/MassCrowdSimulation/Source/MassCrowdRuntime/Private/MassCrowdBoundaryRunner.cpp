@@ -4,12 +4,10 @@ bool FCrowdMassBoundaryRunner::Begin(
   const FCrowdMassBoundarySnapshot& InSnapshot,
   const double GatherMilliseconds)
 {
-  if (bDispatched || bWaited || Snapshot.bValid)
+  if (bDispatched || bWaited
+    || Orchestrator.GetSnapshot().bValid)
     return false;
-  if (!Orchestrator.Begin(InSnapshot, GatherMilliseconds))
-    return false;
-  Snapshot = InSnapshot;
-  return true;
+  return Orchestrator.Begin(InSnapshot, GatherMilliseconds);
 }
 
 bool FCrowdMassBoundaryRunner::AddTask(
@@ -22,6 +20,15 @@ bool FCrowdMassBoundaryRunner::AddTask(
     return false;
   return Orchestrator.AddTask(
     Key, Prerequisites, MoveTemp(Body), bRequireOffGameThread);
+}
+
+bool FCrowdMassBoundaryRunner::AddTask(
+  FCrowdBoundaryTaskDescriptor Descriptor,
+  FCrowdBoundaryTaskBody&& Body)
+{
+  if (bDispatched || bWaited)
+    return false;
+  return Orchestrator.AddTask(MoveTemp(Descriptor), MoveTemp(Body));
 }
 
 bool FCrowdMassBoundaryRunner::Dispatch()
@@ -72,16 +79,28 @@ bool FCrowdMassBoundaryRunner::ValidatePreparedPatches(
   if (TargetRefs != Expected)
     return false;
 
-  TSet<FName> AdapterIds;
-  for (const FCrowdBoundaryPreparedPatch& Patch : PreparedPatches)
+  for (int32 PatchIndex = 0;
+    PatchIndex < PreparedPatches.Num(); ++PatchIndex)
   {
-    if (!Patch.bValid || Patch.AdapterId.IsNone()
+    const FCrowdBoundaryPreparedPatch& Patch =
+      PreparedPatches[PatchIndex];
+    bool bDuplicateKey = false;
+    for (int32 PreviousIndex = 0;
+      PreviousIndex < PatchIndex; ++PreviousIndex)
+    {
+      const FCrowdBoundaryPreparedPatch& Previous =
+        PreparedPatches[PreviousIndex];
+      bDuplicateKey |= Previous.ApplyPhase == Patch.ApplyPhase
+        && Previous.AdapterId == Patch.AdapterId
+        && Previous.PatchKey == Patch.PatchKey;
+    }
+    if (!Patch.bValid || !Patch.ApplyPhase.IsValid()
+      || !Patch.AdapterId.IsValid() || !Patch.PatchKey.IsValid()
       || Patch.StableHash == 0
       || Patch.FixedStepIndex != Snapshot.FixedStepIndex
       || Patch.PlanRevision != Snapshot.PlanRevision
-      || AdapterIds.Contains(Patch.AdapterId))
+      || bDuplicateKey)
       return false;
-    AdapterIds.Add(Patch.AdapterId);
     TArray<FCrowdStableEntityRef> PatchRefs = Patch.EntityRefs;
     PatchRefs.Sort();
     if (PatchRefs != Expected)
@@ -97,6 +116,8 @@ bool FCrowdMassBoundaryRunner::BuildAndSealCommit(
   const double MergeMilliseconds,
   const FCrowdBehaviorBoundaryMetadata* BehaviorMetadata)
 {
+  const FCrowdMassBoundarySnapshot& Snapshot =
+    Orchestrator.GetSnapshot();
   if (!bWaited
     || !FCrowdMassRuntimeBridge::ValidateCommitTargets(
       MovementPlan, Targets)

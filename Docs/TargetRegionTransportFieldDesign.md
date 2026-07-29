@@ -1,12 +1,14 @@
 # Target Region Transport Field 设计
 
+[COMPUTED][HIGH] 文档状态：本文件是Target Region Transport算法合同与历史证据，不负责Behavior Source阶段状态。当前生产接入与验收以`CurrentArchitecture.md`、`FeatureChecklist.md`和`TestScenarioMatrix.md`为准。
+
 ## 1. 设计职责
 
 [INFERRED][HIGH] 本文件定义 T5 Target-relative Polar Region Transport 的当前权威合同；旧 Polar Density left/current/right guidance 仅为历史实验，不再是生产架构。
 
 [INFERRED][HIGH] 本模块是“围绕目标进行区域人口分布”的可选宏观Guidance Provider，不是普通群体移动、窄口通行或自由游荡的通用必经层。未启用本能力时，实体直接消费其他宏观guidance，并继续使用同一Local Predictive与Particle安全链。
 
-[COMPUTED][HIGH] 纯算法现已提取到`MassCrowdCore`的`FCrowdTargetRegionTransportKernel`；迁移保护期内Demo生产仍使用独立`FCrowdDemoTargetRegionTransportKernel`。两者的Topology、Demand、Plan、validation、quota execution、Guidance和claim replacement结果/hash已由独立fixture验证一致，Mass processors尚未迁移。
+[COMPUTED][HIGH] 纯算法已提取到`MassCrowdCore`的`FCrowdTargetRegionTransportKernel`，Runtime生产WORK已接入Core kernel；旧Demo kernel不再拥有生产权威。Topology、Demand、Plan、validation、quota execution、Guidance和claim replacement结果/hash已有迁移等价fixture。
 
 ## 2. 数据分层
 

@@ -79,7 +79,7 @@ namespace
     {
       OutPatch = {};
       if (!Snapshot.bValid) return false;
-      OutPatch.AdapterId = TEXT("Test");
+      OutPatch.AdapterId = {100};
       OutPatch.FixedStepIndex = Snapshot.FixedStepIndex;
       OutPatch.PlanRevision = Snapshot.PlanRevision;
       for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
@@ -119,6 +119,83 @@ namespace
   private:
     int32& AppliedValue;
   };
+
+  class FOrderedCommitAdapter final : public ICrowdBoundaryCommitAdapter
+  {
+  public:
+    FOrderedCommitAdapter(
+      const uint32 InPhase,
+      const uint32 InAdapterId,
+      const uint64 InPatchKey,
+      const bool bInValidate,
+      TArray<uint32>& InApplyOrder)
+      : Phase(InPhase)
+      , AdapterId(InAdapterId)
+      , PatchKey(InPatchKey)
+      , bValidate(bInValidate)
+      , ApplyOrder(InApplyOrder)
+    {
+    }
+
+    virtual bool Prepare(
+      const FCrowdMassBoundarySnapshot& Snapshot,
+      FCrowdBoundaryPreparedPatch& OutPatch) const override
+    {
+      OutPatch = {};
+      OutPatch.ApplyPhase = {Phase};
+      OutPatch.AdapterId = {AdapterId};
+      OutPatch.PatchKey = {PatchKey};
+      OutPatch.FixedStepIndex = Snapshot.FixedStepIndex;
+      OutPatch.PlanRevision = Snapshot.PlanRevision;
+      for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
+        OutPatch.EntityRefs.Add(Agent.AgentFacts.StableEntityRef);
+      OutPatch.StableHash =
+        (static_cast<uint64>(Phase) << 48)
+        ^ (static_cast<uint64>(AdapterId) << 16)
+        ^ PatchKey;
+      OutPatch.Payload =
+        MakeShared<FTestPreparedPayload, ESPMode::ThreadSafe>(1);
+      OutPatch.bValid = OutPatch.StableHash != 0;
+      return OutPatch.bValid;
+    }
+
+    virtual bool ValidatePrepared(
+      const FCrowdBoundaryPreparedPatch& Patch,
+      TConstArrayView<FCrowdMassCommitTarget> Targets) const override
+    {
+      return bValidate && Patch.bValid
+        && Patch.EntityRefs.Num() == Targets.Num();
+    }
+
+    virtual void ApplyPrepared(
+      const FCrowdBoundaryPreparedPatch& Patch,
+      FCrowdBoundaryApplyContext& Context) const override
+    {
+      check(Patch.AdapterId.Value == AdapterId);
+      ApplyOrder.Add(AdapterId);
+    }
+
+  private:
+    uint32 Phase = 0;
+    uint32 AdapterId = 0;
+    uint64 PatchKey = 0;
+    bool bValidate = false;
+    TArray<uint32>& ApplyOrder;
+  };
+
+  TArray<FCrowdMassCommitTarget> MakeTargets(
+    const FCrowdMassBoundarySnapshot& Snapshot)
+  {
+    TArray<FCrowdMassCommitTarget> Targets;
+    for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
+    {
+      FCrowdMassCommitTarget& Target = Targets.AddDefaulted_GetRef();
+      Target.EntityRef = Agent.AgentFacts.StableEntityRef;
+      Target.AgentId = Agent.Identity.AgentId;
+      Target.LifecycleSerial = Target.EntityRef.LifecycleSerial;
+    }
+    return Targets;
+  }
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -136,21 +213,21 @@ bool FMassCrowdBoundaryOrchestratorDependencyTest::RunTest(
   TestTrue(TEXT("begin accepts immutable snapshot"),
     Orchestrator.Begin(Snapshot, 0.25));
   TestTrue(TEXT("business task queued"), Orchestrator.AddTask(
-    {ECrowdBoundaryTaskStage::BusinessPrepare, 0}, {},
+    {{1}, {101}, 0}, {},
     [] { return FCrowdBoundaryTaskResult::Success(11); }));
   TestTrue(TEXT("flow task queued"), Orchestrator.AddTask(
-    {ECrowdBoundaryTaskStage::SharedFlow, 1}, {},
+    {{2}, {201}, 1}, {},
     [] { return FCrowdBoundaryTaskResult::Success(12); }));
   const FCrowdBoundaryTaskKey DemandPrerequisites[] = {
-    {ECrowdBoundaryTaskStage::BusinessPrepare, 0},
-    {ECrowdBoundaryTaskStage::SharedFlow, 1}};
+    {{1}, {101}, 0},
+    {{2}, {201}, 1}};
   TestTrue(TEXT("dependent demand queued"), Orchestrator.AddTask(
-    {ECrowdBoundaryTaskStage::TargetDemand, 1}, DemandPrerequisites,
+    {{2}, {203}, 1}, DemandPrerequisites,
     [] { return FCrowdBoundaryTaskResult::Success(13); }));
   const FCrowdBoundaryTaskKey MovementPrerequisites[] = {
-    {ECrowdBoundaryTaskStage::TargetDemand, 1}};
+    {{2}, {203}, 1}};
   TestTrue(TEXT("terminal movement queued"), Orchestrator.AddTask(
-    {ECrowdBoundaryTaskStage::Movement, 0}, MovementPrerequisites,
+    {{3}, {301}, 0}, MovementPrerequisites,
     [] { return FCrowdBoundaryTaskResult::Success(14); }));
   TestTrue(TEXT("graph dispatches once"), Orchestrator.Dispatch());
   FPlatformProcess::SleepNoStats(0.01f);
@@ -186,12 +263,12 @@ bool FMassCrowdBoundaryOrchestratorFailureTest::RunTest(
   FCrowdMassBoundaryOrchestrator Orchestrator;
   TestTrue(TEXT("begin succeeds"), Orchestrator.Begin(Snapshot, 0.0));
   TestTrue(TEXT("failing task queued"), Orchestrator.AddTask(
-    {ECrowdBoundaryTaskStage::BusinessPrepare, 0}, {},
+    {{1}, {101}, 0}, {},
     [] { return FCrowdBoundaryTaskResult::Failure(); }));
   const FCrowdBoundaryTaskKey Prerequisites[] = {
-    {ECrowdBoundaryTaskStage::BusinessPrepare, 0}};
+    {{1}, {101}, 0}};
   TestTrue(TEXT("dependent task queued"), Orchestrator.AddTask(
-    {ECrowdBoundaryTaskStage::Movement, 0}, Prerequisites,
+    {{3}, {301}, 0}, Prerequisites,
     [] { return FCrowdBoundaryTaskResult::Success(99); }));
   TestTrue(TEXT("valid graph dispatches"), Orchestrator.Dispatch());
   TestFalse(TEXT("failed prerequisite rejects terminal transaction"),
@@ -200,6 +277,104 @@ bool FMassCrowdBoundaryOrchestratorFailureTest::RunTest(
     ECrowdBoundaryTransactionState::Failed);
   TestFalse(TEXT("failed transaction cannot seal plan"),
     Orchestrator.SealMergedPlan(MakeCommitPlan(Snapshot), 0.0));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdBoundaryGenericDescriptorTest,
+  "MassCrowd.Runtime.BoundaryOrchestrator.GenericDescriptorContracts",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdBoundaryGenericDescriptorTest::RunTest(
+  const FString& Parameters)
+{
+  const FCrowdMassBoundarySnapshot Snapshot = MakeBoundarySnapshot();
+  FCrowdBoundaryTaskDescriptor Producer;
+  Producer.Key = {{41}, {9001}, 77};
+  Producer.Output = {{501}, 3, 7001, 16, 0xabc, true};
+  Producer.TelemetryId = 9101;
+
+  FCrowdBoundaryTaskDescriptor Consumer;
+  Consumer.Key = {{99}, {12345}, 88};
+  Consumer.Prerequisites.Add(Producer.Key);
+  Consumer.Inputs.Add({{501}, 3, 7001, 0xabc});
+  Consumer.Output = {{777}, 9, 8002, 8, 0xdef, false};
+  Consumer.TelemetryId = 9102;
+
+  FCrowdMassBoundaryOrchestrator Valid;
+  TestTrue(TEXT("generic descriptor transaction begins"),
+    Valid.Begin(Snapshot, 0.0));
+  TestTrue(TEXT("arbitrary producer accepted"), Valid.AddTask(
+    Producer,
+    [] { return FCrowdBoundaryTaskResult::Success(0xabc); }));
+  TestTrue(TEXT("arbitrary consumer accepted"), Valid.AddTask(
+    Consumer,
+    [] { return FCrowdBoundaryTaskResult::Success(0xdef); }));
+  TestTrue(TEXT("schema-compatible DAG dispatches"), Valid.Dispatch());
+  TestTrue(TEXT("schema-compatible DAG drains"), Valid.WaitAndDrain());
+  const FCrowdBoundaryOrchestratorResult Result = Valid.BuildResult();
+  TestEqual(TEXT("telemetry id follows stable task descriptor"),
+    Result.Tasks.Last().TelemetryId, 9102u);
+
+  FCrowdMassBoundaryOrchestrator Mismatch;
+  TestTrue(TEXT("mismatch transaction begins"),
+    Mismatch.Begin(Snapshot, 0.0));
+  TestTrue(TEXT("mismatch producer accepted before graph seal"),
+    Mismatch.AddTask(
+      Producer,
+      [] { return FCrowdBoundaryTaskResult::Success(0xabc); }));
+  Consumer.Inputs[0].SchemaId += 1;
+  TestTrue(TEXT("mismatch consumer is structurally valid"),
+    Mismatch.AddTask(
+      Consumer,
+      [] { return FCrowdBoundaryTaskResult::Success(0xdef); }));
+  TestFalse(TEXT("schema mismatch fails graph atomically"),
+    Mismatch.Dispatch());
+  TestEqual(TEXT("mismatch state is failed"),
+    Mismatch.GetState(), ECrowdBoundaryTransactionState::Failed);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdBoundaryPatchTransactionTest,
+  "MassCrowd.Runtime.BoundaryOrchestrator.PatchTransaction",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdBoundaryPatchTransactionTest::RunTest(
+  const FString& Parameters)
+{
+  const FCrowdMassBoundarySnapshot Snapshot = MakeBoundarySnapshot();
+  const TArray<FCrowdMassCommitTarget> Targets = MakeTargets(Snapshot);
+  TArray<uint32> ApplyOrder;
+  FOrderedCommitAdapter Late(3, 300, 1, true, ApplyOrder);
+  FOrderedCommitAdapter Early(1, 200, 1, true, ApplyOrder);
+  FOrderedCommitAdapter Invalid(2, 100, 1, false, ApplyOrder);
+
+  FCrowdBoundaryPatchTransaction Rejected;
+  TestTrue(TEXT("late adapter registered"), Rejected.AddAdapter(Late));
+  TestTrue(TEXT("invalid adapter registered"), Rejected.AddAdapter(Invalid));
+  TestTrue(TEXT("early adapter registered"), Rejected.AddAdapter(Early));
+  TestTrue(TEXT("all adapters prepare without writes"),
+    Rejected.PrepareAll(Snapshot));
+  TestEqual(TEXT("prepare performs zero writes"), ApplyOrder.Num(), 0);
+  TestFalse(TEXT("one adapter rejection rejects complete set"),
+    Rejected.ValidateAll(Targets));
+  TestEqual(TEXT("failed validation performs zero writes"),
+    ApplyOrder.Num(), 0);
+
+  FCrowdBoundaryPatchTransaction Accepted;
+  TestTrue(TEXT("late valid adapter registered"), Accepted.AddAdapter(Late));
+  TestTrue(TEXT("early valid adapter registered"), Accepted.AddAdapter(Early));
+  TestTrue(TEXT("valid patch set prepared"), Accepted.PrepareAll(Snapshot));
+  TestTrue(TEXT("valid patch set validated"), Accepted.ValidateAll(Targets));
+  FCrowdBoundaryApplyContext Context;
+  Context.FixedStepIndex = Snapshot.FixedStepIndex;
+  Context.PlanRevision = Snapshot.PlanRevision;
+  Accepted.ApplyAll(Context);
+  TestEqual(TEXT("both patches applied"), ApplyOrder.Num(), 2);
+  TestEqual(TEXT("apply order uses phase before registration order"),
+    ApplyOrder[0], 200u);
+  TestEqual(TEXT("later phase applies last"), ApplyOrder[1], 300u);
   return true;
 }
 
@@ -259,9 +434,9 @@ bool FMassCrowdBoundaryCommitEnvelopeTest::RunTest(
   FCrowdBoundaryPreparedPatch PatchB;
   TestTrue(TEXT("first patch prepared"), Adapter.Prepare(Snapshot, PatchA));
   TestTrue(TEXT("second patch prepared"), Adapter.Prepare(Snapshot, PatchB));
-  PatchA.AdapterId = TEXT("Visual");
+  PatchA.AdapterId = {200};
   PatchA.StableHash = 0x1111;
-  PatchB.AdapterId = TEXT("Combat");
+  PatchB.AdapterId = {100};
   PatchB.StableHash = 0x2222;
 
   const FCrowdBoundaryPreparedPatch Forward[] = {PatchA, PatchB};
@@ -277,7 +452,7 @@ bool FMassCrowdBoundaryCommitEnvelopeTest::RunTest(
   TestEqual(TEXT("patch registration order does not change plan hash"),
     ForwardEnvelope.StableHash, ReverseEnvelope.StableHash);
   TestEqual(TEXT("descriptors are sorted"), ForwardEnvelope.Patches[0].AdapterId,
-    FName(TEXT("Combat")));
+    FCrowdBoundaryAdapterId{100});
 
   PatchB.StableHash += 1;
   const FCrowdBoundaryPreparedPatch Changed[] = {PatchA, PatchB};
@@ -316,7 +491,7 @@ bool FMassCrowdBoundaryCommitEnvelopeTest::RunTest(
   FCrowdMassBoundaryOrchestrator Orchestrator;
   TestTrue(TEXT("orchestrator begins"), Orchestrator.Begin(Snapshot, 0.0));
   TestTrue(TEXT("terminal task queued"), Orchestrator.AddTask(
-    {ECrowdBoundaryTaskStage::Movement, 0}, {},
+    {{3}, {301}, 0}, {},
     [] { return FCrowdBoundaryTaskResult::Success(7); }));
   TestTrue(TEXT("orchestrator dispatches"), Orchestrator.Dispatch());
   FPlatformProcess::SleepNoStats(0.01f);
@@ -356,7 +531,7 @@ bool FMassCrowdBoundaryRunnerAtomicValidationTest::RunTest(
   FCrowdMassBoundaryRunner Runner;
   TestTrue(TEXT("runner begins"), Runner.Begin(Snapshot, 0.0));
   TestTrue(TEXT("runner queues a worker"), Runner.AddTask(
-    {ECrowdBoundaryTaskStage::Movement, 0}, {},
+    {{3}, {301}, 0}, {},
     [] { return FCrowdBoundaryTaskResult::Success(17); }));
   TestTrue(TEXT("runner dispatches exactly once"), Runner.Dispatch());
   TestFalse(TEXT("second dispatch rejected"), Runner.Dispatch());
@@ -375,7 +550,7 @@ bool FMassCrowdBoundaryRunnerAtomicValidationTest::RunTest(
   FCrowdMassBoundaryRunner ValidRunner;
   TestTrue(TEXT("valid runner begins"), ValidRunner.Begin(Snapshot, 0.0));
   TestTrue(TEXT("valid runner queues worker"), ValidRunner.AddTask(
-    {ECrowdBoundaryTaskStage::Movement, 0}, {},
+    {{3}, {301}, 0}, {},
     [] { return FCrowdBoundaryTaskResult::Success(18); }));
   TestTrue(TEXT("valid runner dispatches"), ValidRunner.Dispatch());
   TestTrue(TEXT("valid runner waits"), ValidRunner.WaitAndDrain());

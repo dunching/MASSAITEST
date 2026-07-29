@@ -117,4 +117,33 @@ bool FMassCrowdLocalPredictiveDeterminismTest::RunTest(
   return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdLocalPredictiveInteractionLayerTest,
+  "MassCrowd.Core.LocalPredictive.InteractionLayer",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdLocalPredictiveInteractionLayerTest::RunTest(
+  const FString& Parameters)
+{
+  TArray<FCrowdLocalPredictiveAgent> Agents = {
+    MakeAgent(1, FVector2f(-80, 0), FVector2f(200, 0)),
+    MakeAgent(2, FVector2f(80, 0), FVector2f(-200, 0))};
+  Agents[0].InteractionLayer = 3;
+  Agents[1].InteractionLayer = 4;
+  const FSolveResult Result = Solve(Agents);
+  TestTrue(TEXT("layered solve valid"), Result.Summary.bValid);
+  TestEqual(TEXT("different layers do not generate candidates"),
+    Result.Summary.CandidatePairCount, 0);
+  TestEqual(TEXT("different layers do not generate conflicts"),
+    Result.Summary.ConflictPairCount, 0);
+  TestEqual(TEXT("layered result count"), Result.Results.Num(), 2);
+  TestTrue(TEXT("first preferred velocity preserved"),
+    Result.Results[0].Velocity.Equals(
+      Agents[0].PreferredVelocity, 0.0f));
+  TestTrue(TEXT("second preferred velocity preserved"),
+    Result.Results[1].Velocity.Equals(
+      Agents[1].PreferredVelocity, 0.0f));
+  return true;
+}
+
 #endif
