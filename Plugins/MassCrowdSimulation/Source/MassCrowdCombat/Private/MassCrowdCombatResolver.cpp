@@ -23,7 +23,9 @@ namespace
       return A.Impact.TimeOfImpactQ < B.Impact.TimeOfImpactQ;
     if (A.Impact.Target != B.Impact.Target)
       return A.Impact.Target < B.Impact.Target;
-    return A.Impact.ProjectileId < B.Impact.ProjectileId;
+    if (A.Impact.ImpactTypeId != B.Impact.ImpactTypeId)
+      return A.Impact.ImpactTypeId < B.Impact.ImpactTypeId;
+    return A.Impact.ImpactId < B.Impact.ImpactId;
   }
 }
 
@@ -107,7 +109,9 @@ bool FCrowdCombatResolver::Resolve(
       return A.TimeOfImpactQ < B.TimeOfImpactQ;
     if (A.Target != B.Target)
       return A.Target < B.Target;
-    return A.ProjectileId < B.ProjectileId;
+    if (A.ImpactTypeId != B.ImpactTypeId)
+      return A.ImpactTypeId < B.ImpactTypeId;
+    return A.ImpactId < B.ImpactId;
   });
   TSet<uint64> SeenImpactHashes;
   for (const FCrowdImpactFact& Impact : SortedImpacts)

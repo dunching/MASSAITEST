@@ -162,7 +162,7 @@ namespace
         && Register(CrowdBuiltinSourceTypeIds::DeliverInteraction,
           InteractionBusiness, CrowdBuiltinCapabilityIds::Haul,
           40, 0, 1)
-        && Register(CrowdBuiltinSourceTypeIds::AttackTarget,
+        && Register(CrowdBuiltinSourceTypeIds::BusinessProbe,
           InteractionBusiness, CrowdBuiltinCapabilityIds::Attack,
           50, 0, 2)
         && Register(CrowdBuiltinSourceTypeIds::HitReaction,

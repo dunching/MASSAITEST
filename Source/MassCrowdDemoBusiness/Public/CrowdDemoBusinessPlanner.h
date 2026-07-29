@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CrowdDemoAttackPlanner.h"
 #include "CrowdDemoBusinessSourceProvider.h"
 
 struct FCrowdDemoBusinessScenarioId
@@ -41,6 +42,7 @@ namespace CrowdDemoBusinessScenarios
   inline constexpr FCrowdDemoBusinessScenarioId FriendlyLogistics{20003};
   inline constexpr FCrowdDemoBusinessScenarioId VatShowcase{20004};
   inline constexpr FCrowdDemoBusinessScenarioId RangedProjectile{20005};
+  inline constexpr FCrowdDemoBusinessScenarioId MixedCombat{20006};
 }
 
 namespace CrowdDemoBusinessPlanners
@@ -52,6 +54,7 @@ namespace CrowdDemoBusinessPlanners
   inline constexpr FCrowdDemoBusinessPlannerId Escort{21005};
   inline constexpr FCrowdDemoBusinessPlannerId VatShowcase{21006};
   inline constexpr FCrowdDemoBusinessPlannerId RangedAttack{21007};
+  inline constexpr FCrowdDemoBusinessPlannerId MixedCombat{21008};
 }
 
 namespace CrowdDemoBusinessObjectives
@@ -68,6 +71,7 @@ namespace CrowdDemoBusinessActions
   inline constexpr uint32 Cancel = 23003;
   inline constexpr uint32 Fire = 23004;
   inline constexpr uint32 InjectHit = 23005;
+  inline constexpr uint32 Attack = 23006;
 }
 
 struct FCrowdDemoPlannerAssignment
@@ -87,6 +91,8 @@ struct MASSCROWDDEMOBUSINESS_API FCrowdDemoPlannerAgentFact
   FCrowdStableEntityRef EntityRef;
   FCrowdDemoPlannerAssignment Assignment;
   FCrowdCapabilitySet Capabilities;
+  uint32 FactionId = 0;
+  uint32 AttackProfileId = 0;
   FVector Position = FVector::ZeroVector;
   FVector Velocity = FVector::ZeroVector;
   FVector Facing = FVector::ForwardVector;
@@ -98,6 +104,7 @@ struct MASSCROWDDEMOBUSINESS_API FCrowdDemoPlannerAgentFact
   FVector HitReactionVelocity = FVector::ZeroVector;
   uint32 InteractionLayer = 0;
   uint32 TransitionRevision = 1;
+  FCrowdDemoAttackState AttackState;
   bool bCarrying = false;
   bool bActive = true;
 

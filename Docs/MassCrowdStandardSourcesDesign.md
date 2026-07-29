@@ -50,7 +50,7 @@ MassAICrowdDemo Provider
 | `MovementLock`/`SpeedLimit` | [INFERRED][HIGH] StandardSources | 输出通用Constraint。 |
 | `TimedImpulse`/`Knockback` | [INFERRED][MED] StandardSources | 输出有期限高优先级运动贡献；最终结果仍经过安全流水线。 |
 | `WanderSteering` | [INFERRED][MED] StandardSources | 只负责确定性漫游状态与运动；可通行候选/Nav采样由宿主Context提供。 |
-| `AttackTarget` | [INFERRED][HIGH] Demo/产品Provider | 攻击合法性、Commit和伤害属于宿主业务。 |
+| `Attack Intent` | [COMPUTED][HIGH] Demo/产品Planner与Host Adapter | 攻击合法性、阶段、Commit和伤害属于宿主业务；它不是Behavior Source。 |
 | `Pickup`/`Deliver` | [INFERRED][HIGH] Demo/产品Provider | 依赖物流账本和宿主原子提交。 |
 | `Escort` | [INFERRED][HIGH] Demo/产品Recipe | 由FollowEntity、MaintainDistance、FormationOffset和Facing组合。 |
 | `Death` | [INFERRED][HIGH] 分层 | 通用永久MovementLock可复用；死亡、掉落和销毁语义属于宿主。 |
@@ -69,7 +69,7 @@ MassAICrowdDemo Provider
 
 ## 5. 组合合同
 
-[INFERRED][HIGH] 追击攻击的期望集合为`PursueEntity + MaintainDistance + FaceEntity + AttackTarget`；其中前三项是通用运动/朝向Source，最后一项是产品业务Source。
+[COMPUTED][HIGH] 追击攻击的现行组合为`PursueEntity + MaintainDistance + FaceEntity`，产品Planner另行产生一帧Attack Intent，并只在Commit步增加`MovementLock`。旧`AttackTarget` Source已在T9迁移中删除，攻击提交不再伪装成Behavior贡献。
 
 [INFERRED][HIGH] 护送的期望集合为`FollowEntity + MaintainDistance + FormationOffset + FaceMovement`；遭遇战、受击或短暂交互只增加临时Source，不删除护送集合。
 

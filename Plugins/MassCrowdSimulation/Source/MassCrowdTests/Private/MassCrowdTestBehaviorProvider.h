@@ -30,7 +30,7 @@ namespace CrowdBuiltinSourceTypeIds
   inline constexpr FCrowdBehaviorSourceTypeId CarryCargo{91301};
   inline constexpr FCrowdBehaviorSourceTypeId PickupInteraction{91401};
   inline constexpr FCrowdBehaviorSourceTypeId DeliverInteraction{91402};
-  inline constexpr FCrowdBehaviorSourceTypeId AttackTarget{91501};
+  inline constexpr FCrowdBehaviorSourceTypeId BusinessProbe{91501};
   inline constexpr FCrowdBehaviorSourceTypeId HitReaction{91601};
   inline constexpr FCrowdBehaviorSourceTypeId StunConstraint{91602};
   inline constexpr FCrowdBehaviorSourceTypeId DeathConstraint{91603};

@@ -16,6 +16,7 @@ namespace CrowdDemoBusinessPlannerTestsPrivate
     Snapshot.FixedStepIndex = 60;
     Snapshot.FactRevision = 61;
     Snapshot.Settings.PopulationLimit = 20;
+    Snapshot.Settings.InteractionRadiusCm = 10000.0f;
     for (int32 SlotIndex = 1; SlotIndex <= 20; ++SlotIndex)
     {
       FCrowdDemoPlannerAgentFact Agent;
@@ -27,6 +28,7 @@ namespace CrowdDemoBusinessPlannerTestsPrivate
         static_cast<double>(SlotIndex) * 100.0, 0.0, 0.0);
       Agent.Facing = FVector::ForwardVector;
       Agent.TransitionRevision = 1;
+      Agent.LastAttackFixedStep = -1000;
       if (Agent.Assignment.PlannerId
         == CrowdDemoBusinessPlanners::Logistics)
       {
@@ -149,6 +151,15 @@ bool FCrowdDemoBusinessPlannerDeterminismTest::RunTest(
     ForwardBatch.Decisions.Num(), 20);
   TestEqual(TEXT("decision order independent"),
     ForwardBatch.StableHash, ReverseBatch.StableHash);
+  int32 AttackIntentCount = 0;
+  for (const FCrowdDemoPlannerDecision& Decision
+    : ForwardBatch.Decisions)
+    for (const FCrowdDemoHostIntent& Intent
+      : Decision.HostIntents)
+      AttackIntentCount += Intent.ActionTypeId
+        == CrowdDemoBusinessActions::Attack ? 1 : 0;
+  TestTrue(TEXT("classic pursue attack uses host intent"),
+    AttackIntentCount > 0);
 
   FCrowdDemoPlanningSnapshot MissingObjective = Forward;
   MissingObjective.Objectives.RemoveAt(0);
@@ -231,6 +242,145 @@ bool FCrowdDemoRangedAttackBusinessPlannerTest::RunTest(
     Intents.IsEmpty());
   TestNotEqual(TEXT("stable projectile id exists"),
     FirstProjectileId, 0ull);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoGenericAttackPlannerTest,
+  "CrowdDemo.BusinessPlanner.GenericAttackProfilesAndReplay",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoGenericAttackPlannerTest::RunTest(
+  const FString& Parameters)
+{
+  TArray<FCrowdDemoAttackProfileV1> Profiles;
+  const auto AddProfile = [&Profiles](
+    const uint32 ProfileId, const uint32 PayloadTypeId,
+    const ECrowdDemoAttackArchetype Archetype,
+    const float Range)
+  {
+    FCrowdDemoAttackProfileV1& Profile =
+      Profiles.AddDefaulted_GetRef();
+    Profile.ProfileId = ProfileId;
+    Profile.PayloadTypeId = PayloadTypeId;
+    Profile.EffectProfileId = 1;
+    Profile.Archetype = Archetype;
+    Profile.WindupFixedSteps = 1;
+    Profile.RecoveryFixedSteps = 1;
+    Profile.CooldownFixedSteps = 1;
+    Profile.MaximumDistanceCm = Range;
+    Profile.QueryRadiusCm = 20.0f;
+    Profile.MuzzleForwardOffsetCm = 10.0f;
+    Profile.ProjectileSpeedCmps =
+      Archetype == ECrowdDemoAttackArchetype::Ranged
+        ? 1000.0f : 0.0f;
+    Profile.Damage = 20;
+  };
+  AddProfile(
+    CrowdDemoAttackProfileIds::Melee,
+    CrowdDemoAttackPayloadTypeIds::Melee,
+    ECrowdDemoAttackArchetype::Melee, 300.0f);
+  AddProfile(
+    CrowdDemoAttackProfileIds::MidRange,
+    CrowdDemoAttackPayloadTypeIds::MidRange,
+    ECrowdDemoAttackArchetype::MidRange, 600.0f);
+  AddProfile(
+    CrowdDemoAttackProfileIds::Ranged,
+    CrowdDemoAttackPayloadTypeIds::Ranged,
+    ECrowdDemoAttackArchetype::Ranged, 1000.0f);
+
+  TArray<FCrowdDemoAttackAgent> Forward;
+  for (int32 Pair = 0; Pair < 3; ++Pair)
+  {
+    const float Range = Pair == 0 ? 200.0f
+      : Pair == 1 ? 500.0f : 900.0f;
+    const uint32 ProfileId = Pair == 0
+      ? CrowdDemoAttackProfileIds::Melee
+      : Pair == 1
+        ? CrowdDemoAttackProfileIds::MidRange
+        : CrowdDemoAttackProfileIds::Ranged;
+    FCrowdDemoAttackAgent& Source =
+      Forward.AddDefaulted_GetRef();
+    Source.EntityRef = {
+      1, static_cast<uint64>(Pair + 1), 1};
+    Source.FactionId = 1;
+    Source.AttackProfileId = ProfileId;
+    Source.Position = FVector(0.0, Pair * 5000.0, 0.0);
+    Source.Facing = FVector::ForwardVector;
+    FCrowdDemoAttackAgent& Target =
+      Forward.AddDefaulted_GetRef();
+    Target.EntityRef = {
+      1, static_cast<uint64>(Pair + 11), 1};
+    Target.FactionId = 2;
+    Target.AttackProfileId = ProfileId;
+    Target.Position = FVector(Range, Pair * 5000.0, 0.0);
+    Target.Facing = -FVector::ForwardVector;
+  }
+  TArray<FCrowdDemoAttackAgent> Reverse = Forward;
+  Algo::Reverse(Reverse);
+  TArray<FCrowdDemoAttackIntent> ForwardIntents;
+  TArray<FCrowdDemoAttackIntent> ReverseIntents;
+  FCrowdDemoAttackPlanSummary ForwardSummary;
+  FCrowdDemoAttackPlanSummary ReverseSummary;
+  TestTrue(TEXT("forward acquire"),
+    FCrowdDemoAttackPlanner::Advance(
+      9, 0, Profiles, Forward,
+      ForwardIntents, ForwardSummary));
+  TestTrue(TEXT("reverse acquire"),
+    FCrowdDemoAttackPlanner::Advance(
+      9, 0, Profiles, Reverse,
+      ReverseIntents, ReverseSummary));
+  TestTrue(TEXT("forward commit"),
+    FCrowdDemoAttackPlanner::Advance(
+      9, 1, Profiles, Forward,
+      ForwardIntents, ForwardSummary));
+  TestTrue(TEXT("reverse commit"),
+    FCrowdDemoAttackPlanner::Advance(
+      9, 1, Profiles, Reverse,
+      ReverseIntents, ReverseSummary));
+  TestEqual(TEXT("all six agents commit"), ForwardIntents.Num(), 6);
+  TestEqual(TEXT("reverse intent count"),
+    ReverseIntents.Num(), ForwardIntents.Num());
+  for (int32 Index = 0;
+    Index < ForwardIntents.Num(); ++Index)
+  {
+    TestEqual(TEXT("stable impact id"),
+      ReverseIntents[Index].ImpactId,
+      ForwardIntents[Index].ImpactId);
+    TestEqual(TEXT("stable payload type"),
+      ReverseIntents[Index].PayloadTypeId,
+      ForwardIntents[Index].PayloadTypeId);
+  }
+
+  const FCrowdStableEntityRef DeadTarget = {1, 11, 1};
+  for (FCrowdDemoAttackAgent& Agent : Forward)
+  {
+    if (Agent.EntityRef == DeadTarget)
+    {
+      Agent.Health = 0;
+      Agent.bAlive = false;
+    }
+  }
+  TestTrue(TEXT("dead target invalidates lock"),
+    FCrowdDemoAttackPlanner::Advance(
+      9, 2, Profiles, Forward,
+      ForwardIntents, ForwardSummary));
+  const FCrowdDemoAttackAgent* Source = Forward.FindByPredicate(
+    [](const FCrowdDemoAttackAgent& Agent)
+    {
+      return Agent.EntityRef
+        == FCrowdStableEntityRef{1, 1, 1};
+    });
+  TestNotNull(TEXT("melee source remains"), Source);
+  if (Source)
+  {
+    TestTrue(TEXT("dead target reference cleared"),
+      Source->State.TargetRef.IsUnset()
+        && Source->State.LockedTargetRef.IsUnset());
+  }
+  TestTrue(TEXT("invalid lifecycle counted"),
+    ForwardSummary.InvalidTargetLifecycleCount > 0);
   return true;
 }
 

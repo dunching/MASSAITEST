@@ -195,7 +195,9 @@ HitFlashProfileKey
 
 ### T9 Mixed Combat Integration Small
 
-[INFERRED][HIGH] T9 只在 T7、T8 分别通过后设计，用于混合 Melee/MidRange/Ranged、移动目标、死亡与群体重新运输；它不是首版实现门，也不得替代 T7/T8 的归因性验收。
+[COMPUTED][HIGH] T9已在T7、T8独立门之后实现，用于混合Melee/MidRange/Ranged、移动目标、死亡、目标重选与TargetRegion/Flow计划重建；它没有替代T7/T8归因性验收。
+
+[COMPUTED][HIGH] 8517双端Small固定20实体10对10、每方4/2/4三类攻击者并通过：三类intent=`61/31/21`、impact/damage/death=`62/61/9`、target switch/region rebuild=`227/227`、referenced dead=`0`、Projectile守恒且duplicate=`0`、双端实体/成员Hash一致，fixed-step p95=`2.910ms`。
 
 ## 11. 明确停止与禁止外推
 
@@ -235,6 +237,6 @@ HitFlashProfileKey
 
 [COMPUTED][HIGH] 8755 T7技术回归为20 agents/20 visible、fixed-step p95=`2.452ms`；旧身份布局8756 T8得到spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client hash一致为`2730049702/4215166500/4204062592`，fixed-step p95=`2.247ms`。该组Hash属于历史Schema，不作为现行黄金值；本切片没有重录T7/T8人工视频，也不外推移动目标、100/500或entity-native projectile能力。
 
-[COMPUTED][HIGH] 现行真实StableEntityRef合同由8365 T8黄金门关闭：spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client attack/projectile/event hash精确为`3512277419/488896174/4204062592`。`RunCrowdDemo.ps1 -RangedProjectileGolden`会拒绝任一计数、双端匹配或黄金Hash漂移。
+[COMPUTED][HIGH] 8365的真实StableEntityRef合同曾使用attack/projectile/event=`3512277419/488896174/4204062592`；T9统一攻击状态机后，现行版本化黄金值为`41852579/488896174/4204062592`。`RunCrowdDemo.ps1 -RangedProjectileGolden`会拒绝任一功能计数、双端匹配或第1轮黄金Hash漂移。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

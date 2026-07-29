@@ -13,6 +13,7 @@
 #include "HighResScreenshot.h"
 #include "MassCommonFragments.h"
 #include "Mass/CrowdDemoPresentationAdapter.h"
+#include "Mass/CrowdDemoProjectileAdapters.h"
 #include "MassCrowdPresentationSubsystem.h"
 #include "MassCrowdBoundaryWorkGraph.h"
 #include "MassCrowdFacingFinalizeWork.h"
@@ -42,8 +43,10 @@ namespace
   constexpr uint32 MixedProjectileProfileId = 9901;
   constexpr uint32 MixedProjectileCollisionProfileId = 9901;
   constexpr uint32 MixedProjectileEffectProfileId = 9901;
+  constexpr uint32 MixedPresentationProfileKey = 1001;
   constexpr uint32 MixedProjectilePayloadTypeId = 9901;
   constexpr uint32 MixedProjectilePayloadSchemaId = 9901;
+  constexpr uint32 MixedAgentPayloadVersion = 2;
 
   struct FMixedProjectileDamagePayload
   {
@@ -52,6 +55,63 @@ namespace
 
   static_assert(
     std::is_trivially_copyable_v<FMixedProjectileDamagePayload>);
+
+  TArray<FCrowdDemoAttackProfileV1>
+  BuildMixedCombatAttackProfiles()
+  {
+    TArray<FCrowdDemoAttackProfileV1> Profiles;
+    FCrowdDemoAttackProfileV1& Melee =
+      Profiles.AddDefaulted_GetRef();
+    Melee.ProfileId = CrowdDemoAttackProfileIds::Melee;
+    Melee.PayloadTypeId =
+      CrowdDemoAttackPayloadTypeIds::Melee;
+    Melee.EffectProfileId = 1;
+    Melee.Archetype = ECrowdDemoAttackArchetype::Melee;
+    Melee.WindupFixedSteps = 6;
+    Melee.RecoveryFixedSteps = 8;
+    Melee.CooldownFixedSteps = 18;
+    Melee.MinimumDistanceCm = 0.0f;
+    Melee.MaximumDistanceCm = 300.0f;
+    Melee.QueryRadiusCm = 80.0f;
+    Melee.MuzzleForwardOffsetCm = 42.0f;
+    Melee.Damage = 20;
+
+    FCrowdDemoAttackProfileV1& MidRange =
+      Profiles.AddDefaulted_GetRef();
+    MidRange.ProfileId =
+      CrowdDemoAttackProfileIds::MidRange;
+    MidRange.PayloadTypeId =
+      CrowdDemoAttackPayloadTypeIds::MidRange;
+    MidRange.EffectProfileId = 1;
+    MidRange.Archetype =
+      ECrowdDemoAttackArchetype::MidRange;
+    MidRange.WindupFixedSteps = 10;
+    MidRange.RecoveryFixedSteps = 10;
+    MidRange.CooldownFixedSteps = 24;
+    MidRange.MinimumDistanceCm = 300.0f;
+    MidRange.MaximumDistanceCm = 650.0f;
+    MidRange.QueryRadiusCm = 90.0f;
+    MidRange.MuzzleForwardOffsetCm = 42.0f;
+    MidRange.Damage = 20;
+
+    FCrowdDemoAttackProfileV1& Ranged =
+      Profiles.AddDefaulted_GetRef();
+    Ranged.ProfileId = CrowdDemoAttackProfileIds::Ranged;
+    Ranged.PayloadTypeId =
+      CrowdDemoAttackPayloadTypeIds::Ranged;
+    Ranged.EffectProfileId = 1;
+    Ranged.Archetype = ECrowdDemoAttackArchetype::Ranged;
+    Ranged.WindupFixedSteps = 15;
+    Ranged.RecoveryFixedSteps = 12;
+    Ranged.CooldownFixedSteps = 30;
+    Ranged.MinimumDistanceCm = 600.0f;
+    Ranged.MaximumDistanceCm = 1000.0f;
+    Ranged.QueryRadiusCm = 12.0f;
+    Ranged.MuzzleForwardOffsetCm = 70.0f;
+    Ranged.ProjectileSpeedCmps = 1800.0f;
+    Ranged.Damage = 20;
+    return Profiles;
+  }
 
   double DistanceSquaredToNavNode(
     const FVector& Location,
@@ -155,6 +215,19 @@ namespace
     Hash = FoldMixedHash(Hash, State.MembershipKey);
     Hash = FoldMixedHash(Hash, State.DerivedBehaviorLabel);
     Hash = FoldMixedHash(Hash, State.Health);
+    Hash = FoldMixedHash(Hash, State.FactionId);
+    Hash = FoldMixedHash(Hash, State.AttackProfileId);
+    Hash = FoldMixedHash(Hash, State.AttackPhase);
+    Hash = FoldMixedHash(
+      Hash, static_cast<uint64>(
+        State.AttackPhaseEnterFixedStep));
+    Hash = FoldMixedHash(
+      Hash, static_cast<uint64>(
+        State.AttackCooldownEndFixedStep));
+    Hash = FoldMixedHash(Hash, State.AttackFireSequence);
+    Hash = FoldMixedHash(Hash, State.AttackTargetProviderId);
+    Hash = FoldMixedHash(Hash, State.AttackTargetStableEntityId);
+    Hash = FoldMixedHash(Hash, State.AttackTargetLifecycleSerial);
     Hash = FoldMixedHash(Hash, State.TargetProviderId);
     Hash = FoldMixedHash(Hash, State.TargetStableEntityId);
     Hash = FoldMixedHash(Hash, State.TargetLifecycleSerial);
@@ -165,8 +238,18 @@ namespace
     Hash = FoldMixedHash(Hash, State.ProjectileSpawnedCount);
     Hash = FoldMixedHash(Hash, State.ProjectileImpactCount);
     Hash = FoldMixedHash(Hash, State.ProjectileDamageCount);
+    Hash = FoldMixedHash(Hash, State.ProjectileExpiredCount);
+    Hash = FoldMixedHash(Hash, State.ProjectileActiveCount);
     Hash = FoldMixedHash(Hash, State.ProjectileDuplicateCount);
     Hash = FoldMixedHash(Hash, State.ProjectileTraceHash);
+    Hash = FoldMixedHash(Hash, State.AttackIntentCount);
+    Hash = FoldMixedHash(Hash, State.AttackImpactCount);
+    Hash = FoldMixedHash(Hash, State.AttackDamageCount);
+    Hash = FoldMixedHash(Hash, State.AttackDeathCount);
+    Hash = FoldMixedHash(Hash, State.AttackTargetSwitchCount);
+    Hash = FoldMixedHash(Hash, State.MeleeAttackIntentCount);
+    Hash = FoldMixedHash(Hash, State.MidRangeAttackIntentCount);
+    Hash = FoldMixedHash(Hash, State.RangedAttackIntentCount);
     return Hash;
   }
 
@@ -210,6 +293,7 @@ namespace
     TArray<uint8>& OutBytes)
   {
     OutBytes.Reset();
+    WriteU32(OutBytes, MixedAgentPayloadVersion);
     WriteU64(OutBytes, static_cast<uint64>(FixedStepIndex));
     WriteU64(OutBytes, LifecycleResumeSequence);
     WriteU32(OutBytes, InRelevantSetRevision);
@@ -224,6 +308,17 @@ namespace
       FMath::RoundToInt(State.Location.Z * 10.0)));
     WriteU32(OutBytes, State.DerivedBehaviorLabel);
     OutBytes.Add(State.Health);
+    WriteU32(OutBytes, State.FactionId);
+    WriteU32(OutBytes, State.AttackProfileId);
+    OutBytes.Add(State.AttackPhase);
+    WriteU64(OutBytes, static_cast<uint64>(
+      State.AttackPhaseEnterFixedStep));
+    WriteU64(OutBytes, static_cast<uint64>(
+      State.AttackCooldownEndFixedStep));
+    WriteU32(OutBytes, State.AttackFireSequence);
+    WriteU32(OutBytes, State.AttackTargetProviderId);
+    WriteU64(OutBytes, State.AttackTargetStableEntityId);
+    WriteU32(OutBytes, State.AttackTargetLifecycleSerial);
     WriteU32(OutBytes, State.TargetProviderId);
     WriteU64(OutBytes, State.TargetStableEntityId);
     WriteU32(OutBytes, State.TargetLifecycleSerial);
@@ -239,8 +334,28 @@ namespace
     WriteU32(OutBytes, static_cast<uint32>(
       State.ProjectileDamageCount));
     WriteU32(OutBytes, static_cast<uint32>(
+      State.ProjectileExpiredCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.ProjectileActiveCount));
+    WriteU32(OutBytes, static_cast<uint32>(
       State.ProjectileDuplicateCount));
     WriteU64(OutBytes, State.ProjectileTraceHash);
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.AttackIntentCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.AttackImpactCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.AttackDamageCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.AttackDeathCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.AttackTargetSwitchCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.MeleeAttackIntentCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.MidRangeAttackIntentCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.RangedAttackIntentCount));
   }
 
   bool DecodeMixedAgent(
@@ -259,9 +374,24 @@ namespace
     uint32 ProjectileSpawned = 0;
     uint32 ProjectileImpacted = 0;
     uint32 ProjectileDamage = 0;
+    uint32 ProjectileExpired = 0;
+    uint32 ProjectileActive = 0;
     uint32 ProjectileDuplicates = 0;
+    uint64 AttackPhaseEnterStep = 0;
+    uint64 AttackCooldownEndStep = 0;
+    uint32 AttackIntent = 0;
+    uint32 AttackImpact = 0;
+    uint32 AttackDamage = 0;
+    uint32 AttackDeath = 0;
+    uint32 AttackTargetSwitch = 0;
+    uint32 MeleeAttackIntent = 0;
+    uint32 MidRangeAttackIntent = 0;
+    uint32 RangedAttackIntent = 0;
+    uint32 PayloadVersion = 0;
     int32 Offset = 0;
-    if (!ReadU64(Bytes, Offset, Step)
+    if (!ReadU32(Bytes, Offset, PayloadVersion)
+      || PayloadVersion != MixedAgentPayloadVersion
+      || !ReadU64(Bytes, Offset, Step)
       || !ReadU64(Bytes, Offset, OutLifecycleResumeSequence)
       || !ReadU32(Bytes, Offset, OutRelevantSetRevision)
       || !ReadU64(Bytes, Offset, OutState.StableEntityId)
@@ -275,7 +405,18 @@ namespace
     if (!ReadU32(Bytes, Offset, OutState.DerivedBehaviorLabel))
       return false;
     OutState.Health = Bytes[Offset++];
-    if (!ReadU32(Bytes, Offset, OutState.TargetProviderId)
+    if (!ReadU32(Bytes, Offset, OutState.FactionId)
+      || !ReadU32(Bytes, Offset, OutState.AttackProfileId)
+      || Offset >= Bytes.Num())
+      return false;
+    OutState.AttackPhase = Bytes[Offset++];
+    if (!ReadU64(Bytes, Offset, AttackPhaseEnterStep)
+      || !ReadU64(Bytes, Offset, AttackCooldownEndStep)
+      || !ReadU32(Bytes, Offset, OutState.AttackFireSequence)
+      || !ReadU32(Bytes, Offset, OutState.AttackTargetProviderId)
+      || !ReadU64(Bytes, Offset, OutState.AttackTargetStableEntityId)
+      || !ReadU32(Bytes, Offset, OutState.AttackTargetLifecycleSerial)
+      || !ReadU32(Bytes, Offset, OutState.TargetProviderId)
       || !ReadU64(Bytes, Offset, OutState.TargetStableEntityId)
       || !ReadU32(Bytes, Offset, OutState.TargetLifecycleSerial)
       || !ReadU32(Bytes, Offset, OutState.TaskProviderId)
@@ -285,8 +426,18 @@ namespace
       || !ReadU32(Bytes, Offset, ProjectileSpawned)
       || !ReadU32(Bytes, Offset, ProjectileImpacted)
       || !ReadU32(Bytes, Offset, ProjectileDamage)
+      || !ReadU32(Bytes, Offset, ProjectileExpired)
+      || !ReadU32(Bytes, Offset, ProjectileActive)
       || !ReadU32(Bytes, Offset, ProjectileDuplicates)
       || !ReadU64(Bytes, Offset, OutState.ProjectileTraceHash)
+      || !ReadU32(Bytes, Offset, AttackIntent)
+      || !ReadU32(Bytes, Offset, AttackImpact)
+      || !ReadU32(Bytes, Offset, AttackDamage)
+      || !ReadU32(Bytes, Offset, AttackDeath)
+      || !ReadU32(Bytes, Offset, AttackTargetSwitch)
+      || !ReadU32(Bytes, Offset, MeleeAttackIntent)
+      || !ReadU32(Bytes, Offset, MidRangeAttackIntent)
+      || !ReadU32(Bytes, Offset, RangedAttackIntent)
       || Offset != Bytes.Num())
       return false;
     OutFixedStepIndex = static_cast<int64>(Step);
@@ -302,8 +453,32 @@ namespace
       static_cast<int32>(ProjectileImpacted);
     OutState.ProjectileDamageCount =
       static_cast<int32>(ProjectileDamage);
+    OutState.ProjectileExpiredCount =
+      static_cast<int32>(ProjectileExpired);
+    OutState.ProjectileActiveCount =
+      static_cast<int32>(ProjectileActive);
     OutState.ProjectileDuplicateCount =
       static_cast<int32>(ProjectileDuplicates);
+    OutState.AttackPhaseEnterFixedStep =
+      static_cast<int64>(AttackPhaseEnterStep);
+    OutState.AttackCooldownEndFixedStep =
+      static_cast<int64>(AttackCooldownEndStep);
+    OutState.AttackIntentCount =
+      static_cast<int32>(AttackIntent);
+    OutState.AttackImpactCount =
+      static_cast<int32>(AttackImpact);
+    OutState.AttackDamageCount =
+      static_cast<int32>(AttackDamage);
+    OutState.AttackDeathCount =
+      static_cast<int32>(AttackDeath);
+    OutState.AttackTargetSwitchCount =
+      static_cast<int32>(AttackTargetSwitch);
+    OutState.MeleeAttackIntentCount =
+      static_cast<int32>(MeleeAttackIntent);
+    OutState.MidRangeAttackIntentCount =
+      static_cast<int32>(MidRangeAttackIntent);
+    OutState.RangedAttackIntentCount =
+      static_cast<int32>(RangedAttackIntent);
     return true;
   }
 
@@ -365,6 +540,8 @@ ACrowdDemoMixedSandboxCoordinator::ACrowdDemoMixedSandboxCoordinator()
 void ACrowdDemoMixedSandboxCoordinator::BeginPlay()
 {
   Super::BeginPlay();
+  bMixedCombatIntegration = FParse::Param(
+    FCommandLine::Get(), TEXT("CrowdDemoMixedCombatIntegration"));
   bCaptureRequested = FParse::Param(
     FCommandLine::Get(), TEXT("CrowdDemoCaptureMixedSandbox"));
   if (UWorld* World = GetWorld())
@@ -519,7 +696,10 @@ bool ACrowdDemoMixedSandboxCoordinator::TryInitializeServer()
 
   Config = {};
   Config.bValid = 1;
-  Config.PopulationLimit = ResolveMixedPopulation();
+  Config.bMixedCombatIntegration =
+    bMixedCombatIntegration ? 1 : 0;
+  Config.PopulationLimit = bMixedCombatIntegration
+    ? 20 : ResolveMixedPopulation();
   Config.SnapshotRevision = 1;
   Config.RelevantSetRevision = 1;
   Config.NavTopologyHash = Resource.TopologyHash;
@@ -547,6 +727,8 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
     || Config.PopulationLimit <= 0
     || Config.PopulationLimit > MaximumMixedPopulation)
     return false;
+  bMixedCombatIntegration =
+    Config.bMixedCombatIntegration != 0;
   BehaviorSourceRuntime =
     &RuntimeSubsystem->GetBehaviorSourceRuntime();
   if (!BusinessPlannerRegistry.IsFrozen()
@@ -599,13 +781,24 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
 
   FixedStepIndex = 0;
   ProjectileExpectedCount =
-    FMath::Max(1, Config.PopulationLimit / 5);
+    bMixedCombatIntegration
+    ? 128 : FMath::Max(1, Config.PopulationLimit / 5);
   ProjectileSpawnedCount = 0;
   ProjectileImpactCount = 0;
   ProjectileDamageCount = 0;
+  ProjectileExpiredCount = 0;
+  ProjectileActiveCount = 0;
   ProjectileDuplicateCount = 0;
   ProjectileTraceHash = 14695981039346656037ull;
   bProjectileBatchSpawned = false;
+  AttackIntentCount = 0;
+  AttackImpactCount = 0;
+  AttackDamageCount = 0;
+  AttackDeathCount = 0;
+  AttackTargetSwitchCount = 0;
+  MeleeAttackIntentCount = 0;
+  MidRangeAttackIntentCount = 0;
+  RangedAttackIntentCount = 0;
   if (HasAuthority()
     && !ProjectileStore.EnsureCapacity(
       EntityManager, ProjectileExpectedCount,
@@ -633,7 +826,24 @@ void ACrowdDemoMixedSandboxCoordinator::InitializeSlotState(
   Slot.Health = 100;
   Slot.bActive = true;
   Slot.TransitionRevision = 1;
-  if (!FCrowdDemoBusinessPlannerRunner::BuildMixedAssignment(
+  if (bMixedCombatIntegration)
+  {
+    Slot.PlannerAssignment.PlannerId =
+      CrowdDemoBusinessPlanners::MixedCombat;
+    Slot.PlannerAssignment.CohortId =
+      SlotIndex <= 10 ? 1 : 2;
+    Slot.PlannerAssignment.Ordinal =
+      static_cast<uint16>((SlotIndex - 1) % 10);
+    Slot.FactionId = SlotIndex <= 10 ? 1 : 2;
+    const int32 TeamOrdinal = (SlotIndex - 1) % 10;
+    Slot.AttackProfileId = TeamOrdinal < 4
+      ? CrowdDemoAttackProfileIds::Melee
+      : TeamOrdinal < 6
+        ? CrowdDemoAttackProfileIds::MidRange
+        : CrowdDemoAttackProfileIds::Ranged;
+    Slot.Facts.FactionKey = Slot.FactionId;
+  }
+  else if (!FCrowdDemoBusinessPlannerRunner::BuildMixedAssignment(
       SlotIndex, Slot.PlannerAssignment))
   {
     Slot.bActive = false;
@@ -948,6 +1158,181 @@ bool ACrowdDemoMixedSandboxCoordinator::PrepareProjectileBoundary(
   return OutHitCommit.IsValid();
 }
 
+bool ACrowdDemoMixedSandboxCoordinator::PrepareMixedCombatAttackPlan(
+  TArray<FSlotState>& InOutSlots,
+  TArray<FCrowdDemoAttackIntent>& OutIntents,
+  FCrowdDemoAttackPlanSummary& OutSummary,
+  int32& OutTargetSwitchCount)
+{
+  OutTargetSwitchCount = 0;
+  TArray<FCrowdDemoAttackAgent> Agents;
+  Agents.Reserve(InOutSlots.Num() - 1);
+  for (int32 SlotIndex = 1;
+    SlotIndex < InOutSlots.Num(); ++SlotIndex)
+  {
+    const FSlotState& Slot = InOutSlots[SlotIndex];
+    if (!Slot.bActive) continue;
+    FCrowdDemoAttackAgent& Agent =
+      Agents.AddDefaulted_GetRef();
+    Agent.EntityRef = Slot.Facts.StableEntityRef;
+    Agent.FactionId = Slot.FactionId;
+    Agent.NavLayer = Slot.InteractionLayer;
+    Agent.AttackProfileId = Slot.AttackProfileId;
+    Agent.Position = Slot.Location;
+    Agent.Velocity = Slot.Velocity
+      * static_cast<float>(MixedFixedStepSeconds);
+    Agent.Facing =
+      FRotator(0.0f, Slot.YawDegrees, 0.0f).Vector();
+    Agent.Health = Slot.Health;
+    Agent.bAlive = Slot.Health > 0;
+    Agent.State = Slot.AttackState;
+  }
+  const TArray<FCrowdDemoAttackProfileV1> Profiles =
+    BuildMixedCombatAttackProfiles();
+  if (!FCrowdDemoAttackPlanner::Advance(
+      9, FixedStepIndex, Profiles, Agents,
+      OutIntents, OutSummary)
+    || !OutSummary.bValid)
+    return false;
+  for (const FCrowdDemoAttackAgent& Agent : Agents)
+  {
+    const int32 SlotIndex =
+      static_cast<int32>(Agent.EntityRef.StableEntityId);
+    if (!InOutSlots.IsValidIndex(SlotIndex)
+      || InOutSlots[SlotIndex].Facts.StableEntityRef
+        != Agent.EntityRef)
+      return false;
+    FSlotState& Slot = InOutSlots[SlotIndex];
+    if (Slot.AttackState.TargetRef.IsValid()
+      && Slot.AttackState.TargetRef
+        != Agent.State.TargetRef)
+    {
+      ++OutTargetSwitchCount;
+      // The resolved target changed after a lifecycle invalidation. Drop the
+      // cached goal so this Boundary rebuilds the TargetRegion/flow plan from
+      // the new target rather than reusing the dead target's terminal region.
+      Slot.CachedGoalNodeId = 0;
+    }
+    Slot.AttackState = Agent.State;
+  }
+  return true;
+}
+
+bool ACrowdDemoMixedSandboxCoordinator::PrepareMixedCombatBoundary(
+  const TArray<FSlotState>& StagedSlots,
+  const TConstArrayView<FCrowdDemoAttackIntent> Intents,
+  FCrowdDemoPreparedAttackBoundary& OutAttack,
+  FCrowdPreparedProjectileBoundary& OutProjectile,
+  FCrowdDemoPreparedAttackHealthPatch& OutHealthPatch)
+{
+  OutAttack = {};
+  OutProjectile = {};
+  OutHealthPatch = {};
+  UWorld* World = GetWorld();
+  UMassEntitySubsystem* EntitySubsystem =
+    World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+  if (!HasAuthority() || !EntitySubsystem)
+    return false;
+
+  TArray<FCrowdDemoAttackTargetSnapshot> AttackTargets;
+  TArray<FCrowdProjectileTargetSnapshot> ProjectileTargets;
+  TArray<FCrowdDemoAttackHealthState> HealthStates;
+  for (int32 SlotIndex = 1;
+    SlotIndex < StagedSlots.Num(); ++SlotIndex)
+  {
+    const FSlotState& Slot = StagedSlots[SlotIndex];
+    if (!Slot.bActive) continue;
+    const FVector PreviousPosition =
+      Slot.Location - Slot.Velocity
+        * static_cast<float>(MixedFixedStepSeconds);
+    if (Slot.Health > 0)
+    {
+      FCrowdDemoAttackTargetSnapshot& AttackTarget =
+        AttackTargets.AddDefaulted_GetRef();
+      AttackTarget.Body.EntityRef = Slot.Facts.StableEntityRef;
+      AttackTarget.Body.StartPosition = PreviousPosition;
+      AttackTarget.Body.EndPosition = Slot.Location;
+      AttackTarget.Body.RadiusCm = 42.0f;
+      AttackTarget.Body.NavLayer = Slot.InteractionLayer;
+      AttackTarget.Body.RecalculateStableHash();
+      AttackTarget.FactionId = Slot.FactionId;
+    }
+
+    FCrowdProjectileTargetSnapshot& ProjectileTarget =
+      ProjectileTargets.AddDefaulted_GetRef();
+    ProjectileTarget.EntityRef = Slot.Facts.StableEntityRef;
+    ProjectileTarget.FactionId = Slot.FactionId;
+    ProjectileTarget.NavLayer = Slot.InteractionLayer;
+    ProjectileTarget.PreviousPosition = PreviousPosition;
+    ProjectileTarget.Position = Slot.Location;
+    ProjectileTarget.RadiusCm = 42.0f;
+    ProjectileTarget.bAlive = Slot.Health > 0;
+    ProjectileTarget.RecalculateStableHash();
+
+    HealthStates.Add({
+      Slot.Facts.StableEntityRef,
+      Slot.FactionId,
+      Slot.Health,
+      Slot.Health > 0});
+  }
+  const TArray<FCrowdSpatialEnvironmentBody> Environment;
+  if (!FCrowdDemoAttackHostAdapter::Prepare(
+      FixedStepIndex, Intents, AttackTargets,
+      Environment, OutAttack))
+    return false;
+
+  FCrowdProjectileBoundaryInput ProjectileInput;
+  ProjectileInput.FixedStepIndex = FixedStepIndex;
+  ProjectileInput.ServerTimeSeconds =
+    static_cast<float>(FixedStepIndex * MixedFixedStepSeconds);
+  ProjectileInput.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+  ProjectileInput.SpawnRequests =
+    OutAttack.ProjectileRequests;
+  ProjectileInput.Targets = MoveTemp(ProjectileTargets);
+  if (!ProjectileStore.Gather(
+      EntitySubsystem->GetEntityManager(),
+      ProjectileInput.CurrentStates))
+    return false;
+  FCrowdProjectileProfile& ProjectileProfile =
+    ProjectileInput.Profiles.AddDefaulted_GetRef();
+  ProjectileProfile.ProfileId =
+    CrowdDemoProjectileSchemas::ProjectileProfileId;
+  ProjectileProfile.RadiusCm = 12.0f;
+  ProjectileProfile.LifetimeFixedSteps = 60;
+  ProjectileProfile.MaxActiveProjectiles =
+    ProjectileExpectedCount;
+  ProjectileProfile.PositionQuantumCm = 1.0f;
+  ProjectileProfile.VelocityQuantumCmps = 1.0f;
+  ProjectileProfile.GridCellSizeCm = 256.0f;
+  ProjectileProfile.RecalculateStableHash();
+  if (!FCrowdProjectileBoundaryPipeline::Prepare(
+      ProjectileInput, OutProjectile)
+    || !FCrowdProjectileBoundaryPipeline::ValidatePrepared(
+      ProjectileInput, OutProjectile)
+    || !ProjectileStore.ValidatePreparedStates(
+      OutProjectile.States))
+    return false;
+
+  TArray<FCrowdImpactFact> Impacts =
+    OutAttack.ImmediateImpacts;
+  Impacts.Append(OutProjectile.Impacts);
+  FCrowdDemoRangedCombatSettings DamageSettings;
+  DamageSettings.bEnabled = 1;
+  DamageSettings.Damage = 20.0f;
+  const FCrowdEffectProfile EffectProfile =
+    FCrowdDemoProjectileAdapters::BuildEffectProfile(
+      DamageSettings);
+  FCrowdHitResolveResult ResolveResult;
+  if (!FCrowdCombatResolver::Resolve(
+      Impacts, MakeArrayView(&EffectProfile, 1),
+      ResolveResult))
+    return false;
+  return FCrowdDemoAttackHostAdapter::PrepareHealthPatch(
+    FixedStepIndex, ResolveResult.Hits,
+    HealthStates, OutHealthPatch);
+}
+
 void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
 {
   const double StartSeconds = FPlatformTime::Seconds();
@@ -975,6 +1360,20 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     PendingCombatDeathSlot;
   const int32 OriginalPendingSourceCommandCount =
     BehaviorSourceRuntime->GetPendingCommandCount();
+  TArray<FCrowdDemoAttackIntent> AttackIntents;
+  FCrowdDemoAttackPlanSummary AttackPlanSummary;
+  int32 StagedAttackTargetSwitches = 0;
+  if (bMixedCombatIntegration
+    && !PrepareMixedCombatAttackPlan(
+      StagedSlots, AttackIntents, AttackPlanSummary,
+      StagedAttackTargetSwitches))
+  {
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedCombat role=server stage=attack_planner fixed_step=%lld"),
+      FixedStepIndex);
+    return;
+  }
   FCrowdDemoPlannerDecisionBatch PlannerDecisionBatch;
   if (!PlanBusinessBoundary(
       StagedSlots, PlannerDecisionBatch))
@@ -1016,8 +1415,24 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       ++StaleRejectCount;
       return;
     }
+    const FCrowdDemoPlannerDecision* PlannerDecision =
+      PlannerDecisionBatch.Decisions.FindByPredicate(
+        [&Entity](const FCrowdDemoPlannerDecision& Decision)
+        {
+          return Decision.EntityRef == Entity.EntityRef;
+        });
+    if (!PlannerDecision
+      || PlannerDecision->DiagnosticLabel
+        >= static_cast<uint32>(ECrowdActiveBehavior::Count))
+    {
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        OriginalPendingSourceCommandCount);
+      ++StaleRejectCount;
+      return;
+    }
     const ECrowdActiveBehavior Label =
-      DeriveCrowdDemoDiagnosticBehavior(Entity.StagedSourceSet);
+      static_cast<ECrowdActiveBehavior>(
+        PlannerDecision->DiagnosticLabel);
     if (StagedSlots[SlotIndex].Facts.DerivedBehaviorLabel
       != static_cast<uint32>(Label))
     {
@@ -1030,13 +1445,16 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   }
   TArray<FCrowdDemoBusinessAgentState> BusinessAgents;
   BusinessAgents.Reserve(PreparedBehavior.Entities.Num());
-  for (const FSlotState& Slot : StagedSlots)
+  for (int32 SlotIndex = 1;
+    SlotIndex < StagedSlots.Num(); ++SlotIndex)
   {
+    const FSlotState& Slot = StagedSlots[SlotIndex];
     if (!Slot.bActive) continue;
     FCrowdDemoBusinessAgentState& Agent =
       BusinessAgents.AddDefaulted_GetRef();
     Agent.EntityRef = Slot.Facts.StableEntityRef;
-    Agent.TransitionRevision = Slot.TransitionRevision;
+    Agent.TransitionRevision =
+      Slots[SlotIndex].TransitionRevision;
     Agent.Health = Slot.Health;
     Agent.LastAttackFixedStep = Slot.LastAttackFixedStep;
     Agent.LastLogisticsFixedStep =
@@ -1047,8 +1465,14 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     Agent.bActive = true;
   }
   FCrowdDemoPreparedBusinessPatch PreparedBusiness;
+  TArray<FCrowdDemoHostIntent> HostIntents;
+  for (const FCrowdDemoPlannerDecision& Decision
+    : PlannerDecisionBatch.Decisions)
+    for (const FCrowdDemoHostIntent& Intent
+      : Decision.HostIntents)
+      HostIntents.Add(Intent);
   if (!FCrowdDemoBusinessPatchAdapter::Prepare(
-      PreparedBehavior, BusinessAgents,
+      PreparedBehavior, HostIntents, BusinessAgents,
       StagedBusinessLedger, PreparedBusiness))
   {
     BehaviorSourceRuntime->RollbackPendingCommandsTo(
@@ -1112,9 +1536,16 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   }
   FCrowdPreparedProjectileBoundary PreparedProjectile;
   FCrowdPreparedHostHitCommit PreparedProjectileHits;
-  if (!PrepareProjectileBoundary(
+  FCrowdDemoPreparedAttackBoundary PreparedAttack;
+  FCrowdDemoPreparedAttackHealthPatch PreparedAttackHealth;
+  const bool bProjectilePrepared = bMixedCombatIntegration
+    ? PrepareMixedCombatBoundary(
+      StagedSlots, AttackIntents, PreparedAttack,
+      PreparedProjectile, PreparedAttackHealth)
+    : PrepareProjectileBoundary(
       StagedSlots, PreparedProjectile,
-      PreparedProjectileHits))
+      PreparedProjectileHits);
+  if (!bProjectilePrepared)
   {
     BehaviorSourceRuntime->RollbackPendingCommandsTo(
       OriginalPendingSourceCommandCount);
@@ -1126,8 +1557,9 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   }
   for (const FCrowdHitFact& Hit : PreparedProjectileHits.Hits)
   {
+    if (bMixedCombatIntegration) break;
     const uint64 ProjectileOffset =
-      Hit.Impact.ProjectileId & 0xffffull;
+      Hit.Impact.ImpactId & 0xffffull;
     const uint64 ExpectedTarget =
       static_cast<uint64>(ProjectileExpectedCount)
       + ProjectileOffset;
@@ -1143,6 +1575,25 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       return;
     }
   }
+  if (bMixedCombatIntegration)
+  {
+    for (const FCrowdDemoAttackHealthState& Health
+      : PreparedAttackHealth.States)
+    {
+      const int32 SlotIndex = static_cast<int32>(
+        Health.EntityRef.StableEntityId);
+      if (!StagedSlots.IsValidIndex(SlotIndex)
+        || StagedSlots[SlotIndex].Facts.StableEntityRef
+          != Health.EntityRef)
+      {
+        BehaviorSourceRuntime->RollbackPendingCommandsTo(
+          OriginalPendingSourceCommandCount);
+        ++StaleRejectCount;
+        return;
+      }
+      StagedSlots[SlotIndex].Health = Health.Health;
+    }
+  }
   const int32 StagedProjectileSpawnedCount =
     ProjectileSpawnedCount
     + PreparedProjectile.Summary.SpawnedCount;
@@ -1151,7 +1602,14 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     + PreparedProjectile.Summary.ImpactedCount;
   const int32 StagedProjectileDamageCount =
     ProjectileDamageCount
-    + PreparedProjectileHits.Hits.Num();
+    + (bMixedCombatIntegration
+      ? PreparedAttackHealth.AppliedDamageCount
+      : PreparedProjectileHits.Hits.Num());
+  const int32 StagedProjectileExpiredCount =
+    ProjectileExpiredCount
+    + PreparedProjectile.Summary.ExpiredCount;
+  const int32 StagedProjectileActiveCount =
+    PreparedProjectile.Summary.ActiveCount;
   const int32 StagedProjectileDuplicateCount =
     ProjectileDuplicateCount
     + PreparedProjectile.Summary.DuplicateFireCount;
@@ -1167,6 +1625,33 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   const bool bStagedProjectileBatchSpawned =
     bProjectileBatchSpawned
     || PreparedProjectile.Summary.SpawnedCount > 0;
+  const int32 StagedAttackIntentCount =
+    AttackIntentCount + AttackIntents.Num();
+  const int32 StagedAttackImpactCount =
+    AttackImpactCount
+    + (bMixedCombatIntegration
+      ? PreparedAttack.ImmediateImpacts.Num()
+        + PreparedProjectile.Impacts.Num()
+      : 0);
+  const int32 StagedAttackDamageCount =
+    AttackDamageCount
+    + (bMixedCombatIntegration
+      ? PreparedAttackHealth.AppliedDamageCount
+      : 0);
+  const int32 StagedAttackDeathCount =
+    AttackDeathCount
+    + (bMixedCombatIntegration
+      ? PreparedAttackHealth.DeathCount
+      : 0);
+  const int32 StagedMeleeAttackIntentCount =
+    MeleeAttackIntentCount
+    + PreparedAttack.MeleeIntentCount;
+  const int32 StagedMidRangeAttackIntentCount =
+    MidRangeAttackIntentCount
+    + PreparedAttack.MidRangeIntentCount;
+  const int32 StagedRangedAttackIntentCount =
+    RangedAttackIntentCount
+    + PreparedAttack.RangedIntentCount;
   int32 StagedSafetyHolds = 0;
   uint64 StagedBoundaryCommitHash = 0;
   if (!RunProductMovementBoundary(
@@ -1210,9 +1695,19 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   ProjectileSpawnedCount = StagedProjectileSpawnedCount;
   ProjectileImpactCount = StagedProjectileImpactCount;
   ProjectileDamageCount = StagedProjectileDamageCount;
+  ProjectileExpiredCount = StagedProjectileExpiredCount;
+  ProjectileActiveCount = StagedProjectileActiveCount;
   ProjectileDuplicateCount = StagedProjectileDuplicateCount;
   ProjectileTraceHash = StagedProjectileTraceHash;
   bProjectileBatchSpawned = bStagedProjectileBatchSpawned;
+  AttackIntentCount = StagedAttackIntentCount;
+  AttackImpactCount = StagedAttackImpactCount;
+  AttackDamageCount = StagedAttackDamageCount;
+  AttackDeathCount = StagedAttackDeathCount;
+  AttackTargetSwitchCount += StagedAttackTargetSwitches;
+  MeleeAttackIntentCount = StagedMeleeAttackIntentCount;
+  MidRangeAttackIntentCount = StagedMidRangeAttackIntentCount;
+  RangedAttackIntentCount = StagedRangedAttackIntentCount;
 
   // Final Apply already rejects every unsafe candidate against the updated
   // spatial index. Sample the exact minimum once per simulation second for
@@ -1223,7 +1718,8 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       MinimumSeparationCm,
       SpatialSafety.CalculateMinimumSeparationCm());
 
-  if (FixedStepIndex % LifecycleIntervalSteps == 0)
+  if (!bMixedCombatIntegration
+    && FixedStepIndex % LifecycleIntervalSteps == 0)
   {
     FCrowdDemoContinuousLifecycleOperation Operation;
     if (BuildLifecycleOperation(Operation))
@@ -1311,7 +1807,9 @@ bool ACrowdDemoMixedSandboxCoordinator::PlanBusinessBoundary(
     return false;
 
   FCrowdDemoPlanningSnapshot Snapshot;
-  Snapshot.ScenarioId = CrowdDemoBusinessScenarios::Mixed;
+  Snapshot.ScenarioId = bMixedCombatIntegration
+    ? CrowdDemoBusinessScenarios::MixedCombat
+    : CrowdDemoBusinessScenarios::Mixed;
   Snapshot.FixedStepIndex = FixedStepIndex;
   Snapshot.FactRevision =
     static_cast<uint64>(FixedStepIndex) + 1;
@@ -1385,6 +1883,8 @@ bool ACrowdDemoMixedSandboxCoordinator::PlanBusinessBoundary(
     Agent.EntityRef = Slot.Facts.StableEntityRef;
     Agent.Assignment = Slot.PlannerAssignment;
     Agent.Capabilities = Slot.Facts.CapabilitySet;
+    Agent.FactionId = Slot.FactionId;
+    Agent.AttackProfileId = Slot.AttackProfileId;
     Agent.Position = Slot.Location;
     Agent.Velocity = Slot.Velocity;
     Agent.Facing =
@@ -1398,6 +1898,7 @@ bool ACrowdDemoMixedSandboxCoordinator::PlanBusinessBoundary(
     Agent.HitReactionVelocity = Slot.HitReactionVelocity;
     Agent.InteractionLayer = Slot.InteractionLayer;
     Agent.TransitionRevision = Slot.TransitionRevision;
+    Agent.AttackState = Slot.AttackState;
     Agent.bActive = Slot.bActive;
     if (Slot.PlannerAssignment.PlannerId
       == CrowdDemoBusinessPlanners::Logistics)
@@ -2315,6 +2816,67 @@ FCrowdLifecycleBatchHeader ACrowdDemoMixedSandboxCoordinator::MakeBatchHeader(
   return Header;
 }
 
+FCrowdDemoMixedAgentState
+ACrowdDemoMixedSandboxCoordinator::BuildReplicatedAgentState(
+  const FSlotState& Slot) const
+{
+  FCrowdDemoMixedAgentState State;
+  State.StableEntityId =
+    Slot.Facts.StableEntityRef.StableEntityId;
+  State.LifecycleSerial =
+    Slot.Facts.StableEntityRef.LifecycleSerial;
+  State.MembershipKey = Slot.MembershipKey;
+  State.Location = Slot.Location;
+  State.DerivedBehaviorLabel =
+    Slot.Facts.DerivedBehaviorLabel;
+  State.Health = static_cast<uint8>(
+    FMath::Clamp(Slot.Health, 0, 100));
+  State.FactionId = Slot.FactionId;
+  State.AttackProfileId = Slot.AttackProfileId;
+  State.AttackPhase =
+    static_cast<uint8>(Slot.AttackState.Phase);
+  State.AttackPhaseEnterFixedStep =
+    Slot.AttackState.PhaseEnterFixedStep;
+  State.AttackCooldownEndFixedStep =
+    Slot.AttackState.CooldownEndFixedStep;
+  State.AttackFireSequence =
+    Slot.AttackState.FireSequence;
+  State.AttackTargetProviderId =
+    Slot.AttackState.TargetRef.ProviderId;
+  State.AttackTargetStableEntityId =
+    Slot.AttackState.TargetRef.StableEntityId;
+  State.AttackTargetLifecycleSerial =
+    Slot.AttackState.TargetRef.LifecycleSerial;
+  State.TargetProviderId = Slot.Facts.TargetRef.ProviderId;
+  State.TargetStableEntityId =
+    Slot.Facts.TargetRef.StableEntityId;
+  State.TargetLifecycleSerial =
+    Slot.Facts.TargetRef.LifecycleSerial;
+  State.TaskProviderId =
+    Slot.Facts.BusinessTaskRef.ProviderId;
+  State.TaskStableEntityId =
+    Slot.Facts.BusinessTaskRef.StableEntityId;
+  State.TaskLifecycleSerial =
+    Slot.Facts.BusinessTaskRef.LifecycleSerial;
+  State.ProjectileExpectedCount = ProjectileExpectedCount;
+  State.ProjectileSpawnedCount = ProjectileSpawnedCount;
+  State.ProjectileImpactCount = ProjectileImpactCount;
+  State.ProjectileDamageCount = ProjectileDamageCount;
+  State.ProjectileExpiredCount = ProjectileExpiredCount;
+  State.ProjectileActiveCount = ProjectileActiveCount;
+  State.ProjectileDuplicateCount = ProjectileDuplicateCount;
+  State.ProjectileTraceHash = ProjectileTraceHash;
+  State.AttackIntentCount = AttackIntentCount;
+  State.AttackImpactCount = AttackImpactCount;
+  State.AttackDamageCount = AttackDamageCount;
+  State.AttackDeathCount = AttackDeathCount;
+  State.AttackTargetSwitchCount = AttackTargetSwitchCount;
+  State.MeleeAttackIntentCount = MeleeAttackIntentCount;
+  State.MidRangeAttackIntentCount = MidRangeAttackIntentCount;
+  State.RangedAttackIntentCount = RangedAttackIntentCount;
+  return State;
+}
+
 void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
 {
   TArray<FCrowdReliableStateRecord> Records;
@@ -2327,25 +2889,8 @@ void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
   {
     const FSlotState& Slot = Slots[SlotIndex];
     if (!Slot.bActive) continue;
-    const FCrowdDemoMixedAgentState State{
-      static_cast<uint64>(SlotIndex),
-      Slot.Facts.StableEntityRef.LifecycleSerial,
-      Slot.MembershipKey,
-      Slot.Location,
-      Slot.Facts.DerivedBehaviorLabel,
-      static_cast<uint8>(FMath::Clamp(Slot.Health, 0, 100)),
-      Slot.Facts.TargetRef.ProviderId,
-      Slot.Facts.TargetRef.StableEntityId,
-      Slot.Facts.TargetRef.LifecycleSerial,
-      Slot.Facts.BusinessTaskRef.ProviderId,
-      Slot.Facts.BusinessTaskRef.StableEntityId,
-      Slot.Facts.BusinessTaskRef.LifecycleSerial,
-      ProjectileExpectedCount,
-      ProjectileSpawnedCount,
-      ProjectileImpactCount,
-      ProjectileDamageCount,
-      ProjectileDuplicateCount,
-      ProjectileTraceHash};
+    const FCrowdDemoMixedAgentState State =
+      BuildReplicatedAgentState(Slot);
     const FCrowdStableEntityRef ReplicatedEntityRef{
       1, State.StableEntityId, State.LifecycleSerial};
     const uint64 HostFactHash =
@@ -2478,25 +3023,8 @@ bool ACrowdDemoMixedSandboxCoordinator::PublishBaseline(
   {
     const FSlotState& Slot = Slots[SlotIndex];
     if (!Slot.bActive) continue;
-    FCrowdDemoMixedAgentState State{
-      static_cast<uint64>(SlotIndex),
-      Slot.Facts.StableEntityRef.LifecycleSerial,
-      Slot.MembershipKey,
-      Slot.Location,
-      Slot.Facts.DerivedBehaviorLabel,
-      static_cast<uint8>(FMath::Clamp(Slot.Health, 0, 100)),
-      Slot.Facts.TargetRef.ProviderId,
-      Slot.Facts.TargetRef.StableEntityId,
-      Slot.Facts.TargetRef.LifecycleSerial,
-      Slot.Facts.BusinessTaskRef.ProviderId,
-      Slot.Facts.BusinessTaskRef.StableEntityId,
-      Slot.Facts.BusinessTaskRef.LifecycleSerial,
-      ProjectileExpectedCount,
-      ProjectileSpawnedCount,
-      ProjectileImpactCount,
-      ProjectileDamageCount,
-      ProjectileDuplicateCount,
-      ProjectileTraceHash};
+    FCrowdDemoMixedAgentState State =
+      BuildReplicatedAgentState(Slot);
     EncodeMixedAgent(
       State, FixedStepIndex, NextLifecycleSequence,
       RelevantSetRevision,
@@ -2539,25 +3067,8 @@ bool ACrowdDemoMixedSandboxCoordinator::PublishBaseline(
   {
     const FSlotState& Slot = Slots[SlotIndex];
     if (!Slot.bActive) continue;
-    const FCrowdDemoMixedAgentState State{
-      static_cast<uint64>(SlotIndex),
-      Slot.Facts.StableEntityRef.LifecycleSerial,
-      Slot.MembershipKey,
-      Slot.Location,
-      Slot.Facts.DerivedBehaviorLabel,
-      static_cast<uint8>(FMath::Clamp(Slot.Health, 0, 100)),
-      Slot.Facts.TargetRef.ProviderId,
-      Slot.Facts.TargetRef.StableEntityId,
-      Slot.Facts.TargetRef.LifecycleSerial,
-      Slot.Facts.BusinessTaskRef.ProviderId,
-      Slot.Facts.BusinessTaskRef.StableEntityId,
-      Slot.Facts.BusinessTaskRef.LifecycleSerial,
-      ProjectileExpectedCount,
-      ProjectileSpawnedCount,
-      ProjectileImpactCount,
-      ProjectileDamageCount,
-      ProjectileDuplicateCount,
-      ProjectileTraceHash};
+    const FCrowdDemoMixedAgentState State =
+      BuildReplicatedAgentState(Slot);
     LastPublishedHostFactHashes.Add(
       Slot.Facts.StableEntityRef,
       CalculateMixedHostFactHash(State));
@@ -2652,9 +3163,34 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
         State.TaskProviderId,
         State.TaskStableEntityId,
         State.TaskLifecycleSerial};
+      Slot.Facts.FactionKey = State.FactionId;
       Slot.Location = State.Location;
       Slot.MembershipKey = State.MembershipKey;
       Slot.Health = State.Health;
+      Slot.FactionId = State.FactionId;
+      Slot.AttackProfileId = State.AttackProfileId;
+      Slot.AttackState.Phase =
+        static_cast<ECrowdDemoAttackPlannerPhase>(
+          State.AttackPhase);
+      Slot.AttackState.PhaseEnterFixedStep =
+        State.AttackPhaseEnterFixedStep;
+      Slot.AttackState.CooldownEndFixedStep =
+        State.AttackCooldownEndFixedStep;
+      Slot.AttackState.FireSequence =
+        State.AttackFireSequence;
+      Slot.AttackState.TargetRef = {
+        State.AttackTargetProviderId,
+        State.AttackTargetStableEntityId,
+        State.AttackTargetLifecycleSerial};
+      Slot.AttackState.LockedTargetRef =
+        Slot.AttackState.TargetRef;
+      Slot.AttackState.bCommitIssued =
+        Slot.AttackState.Phase
+          == ECrowdDemoAttackPlannerPhase::Commit
+        || Slot.AttackState.Phase
+          == ECrowdDemoAttackPlannerPhase::Recovery
+        || Slot.AttackState.Phase
+          == ECrowdDemoAttackPlannerPhase::Cooldown;
       Slot.bActive = true;
       ProjectileExpectedCount =
         State.ProjectileExpectedCount;
@@ -2664,10 +3200,26 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
         State.ProjectileImpactCount;
       ProjectileDamageCount =
         State.ProjectileDamageCount;
+      ProjectileExpiredCount =
+        State.ProjectileExpiredCount;
+      ProjectileActiveCount =
+        State.ProjectileActiveCount;
       ProjectileDuplicateCount =
         State.ProjectileDuplicateCount;
       ProjectileTraceHash =
         State.ProjectileTraceHash;
+      AttackIntentCount = State.AttackIntentCount;
+      AttackImpactCount = State.AttackImpactCount;
+      AttackDamageCount = State.AttackDamageCount;
+      AttackDeathCount = State.AttackDeathCount;
+      AttackTargetSwitchCount =
+        State.AttackTargetSwitchCount;
+      MeleeAttackIntentCount =
+        State.MeleeAttackIntentCount;
+      MidRangeAttackIntentCount =
+        State.MidRangeAttackIntentCount;
+      RangedAttackIntentCount =
+        State.RangedAttackIntentCount;
       Snapshot.Add({Slot.Facts, Slot.MembershipKey});
     }
     if (BaselineStep < 0 || LifecycleResume == 0
@@ -2689,7 +3241,8 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
     {
       UMassCrowdPresentationSubsystem* Presentation =
         World->GetSubsystem<UMassCrowdPresentationSubsystem>();
-      if (!Presentation || !Presentation->ResetProfile(1))
+      if (!Presentation || !Presentation->ResetProfile(
+          MixedPresentationProfileKey))
       {
         ++StaleRejectCount;
         return;
@@ -2858,7 +3411,17 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyReplicatedAgentState(
   if (State.StableEntityId == 0
     || State.StableEntityId >= static_cast<uint64>(Slots.Num())
     || State.DerivedBehaviorLabel >=
-      static_cast<uint32>(ECrowdActiveBehavior::Count))
+      static_cast<uint32>(ECrowdActiveBehavior::Count)
+    || State.AttackPhase > static_cast<uint8>(
+      ECrowdDemoAttackPlannerPhase::Cooldown)
+    || (bMixedCombatIntegration
+      && (State.FactionId < 1 || State.FactionId > 2
+        || (State.AttackProfileId
+            != CrowdDemoAttackProfileIds::Melee
+          && State.AttackProfileId
+            != CrowdDemoAttackProfileIds::MidRange
+          && State.AttackProfileId
+            != CrowdDemoAttackProfileIds::Ranged))))
   {
     if (!bClientApplyFailureLogged)
     {
@@ -2898,12 +3461,48 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyReplicatedAgentState(
     State.TaskStableEntityId,
     State.TaskLifecycleSerial};
   Slot.Health = State.Health;
+  Slot.FactionId = State.FactionId;
+  Slot.Facts.FactionKey = State.FactionId;
+  Slot.AttackProfileId = State.AttackProfileId;
+  Slot.AttackState.Phase =
+    static_cast<ECrowdDemoAttackPlannerPhase>(
+      State.AttackPhase);
+  Slot.AttackState.PhaseEnterFixedStep =
+    State.AttackPhaseEnterFixedStep;
+  Slot.AttackState.CooldownEndFixedStep =
+    State.AttackCooldownEndFixedStep;
+  Slot.AttackState.FireSequence =
+    State.AttackFireSequence;
+  Slot.AttackState.TargetRef = {
+    State.AttackTargetProviderId,
+    State.AttackTargetStableEntityId,
+    State.AttackTargetLifecycleSerial};
+  Slot.AttackState.LockedTargetRef =
+    Slot.AttackState.TargetRef;
+  Slot.AttackState.bCommitIssued =
+    Slot.AttackState.Phase
+      == ECrowdDemoAttackPlannerPhase::Commit
+    || Slot.AttackState.Phase
+      == ECrowdDemoAttackPlannerPhase::Recovery
+    || Slot.AttackState.Phase
+      == ECrowdDemoAttackPlannerPhase::Cooldown;
   ProjectileExpectedCount = State.ProjectileExpectedCount;
   ProjectileSpawnedCount = State.ProjectileSpawnedCount;
   ProjectileImpactCount = State.ProjectileImpactCount;
   ProjectileDamageCount = State.ProjectileDamageCount;
+  ProjectileExpiredCount = State.ProjectileExpiredCount;
+  ProjectileActiveCount = State.ProjectileActiveCount;
   ProjectileDuplicateCount = State.ProjectileDuplicateCount;
   ProjectileTraceHash = State.ProjectileTraceHash;
+  AttackIntentCount = State.AttackIntentCount;
+  AttackImpactCount = State.AttackImpactCount;
+  AttackDamageCount = State.AttackDamageCount;
+  AttackDeathCount = State.AttackDeathCount;
+  AttackTargetSwitchCount = State.AttackTargetSwitchCount;
+  MeleeAttackIntentCount = State.MeleeAttackIntentCount;
+  MidRangeAttackIntentCount =
+    State.MidRangeAttackIntentCount;
+  RangedAttackIntentCount = State.RangedAttackIntentCount;
   SeenBehaviorBits |= BehaviorBit(
     static_cast<ECrowdActiveBehavior>(Slot.Facts.DerivedBehaviorLabel));
   LastReceivedFixedStep = FMath::Max(LastReceivedFixedStep, InFixedStepIndex);
@@ -2940,7 +3539,8 @@ void ACrowdDemoMixedSandboxCoordinator::SyncClientVisualsIncremental()
     Replicator->ClearCrowdVisualInstances();
     const TSharedRef<FCrowdDemoIsmPresentationSink> Sink =
       MakeShared<FCrowdDemoIsmPresentationSink>(*Instances, *HitFlash);
-    if (!Presentation->RegisterProfile(1, Sink))
+    if (!Presentation->RegisterProfile(
+        MixedPresentationProfileKey, Sink))
     {
       UE_LOG(LogTemp, Error,
         TEXT("VIOLATION CrowdDemoMixedSandbox role=client stage=presentation_profile"));
@@ -2969,7 +3569,7 @@ void ACrowdDemoMixedSandboxCoordinator::SyncClientVisualsIncremental()
       Despawn.Kind =
         ECrowdPresentationOperationKind::Despawn;
       Despawn.EntityRef = *Presented;
-      Despawn.ProfileKey = 1;
+      Despawn.ProfileKey = MixedPresentationProfileKey;
       Despawn.Sequence = Sequence;
     }
     if (Slot.bActive)
@@ -2980,7 +3580,7 @@ void ACrowdDemoMixedSandboxCoordinator::SyncClientVisualsIncremental()
         FRotator::ZeroRotator,
         Slot.Location + FVector(0, 0, 45),
         FVector(34));
-      State.ProfileKey = 1;
+      State.ProfileKey = MixedPresentationProfileKey;
       State.VisualState =
         Slot.Facts.DerivedBehaviorLabel ==
           static_cast<uint32>(ECrowdActiveBehavior::Attack) ? 1 : 0;
@@ -2999,7 +3599,7 @@ void ACrowdDemoMixedSandboxCoordinator::SyncClientVisualsIncremental()
           : ECrowdPresentationOperationKind::Spawn;
       Operation.State = State;
       Operation.EntityRef = State.EntityRef;
-      Operation.ProfileKey = 1;
+      Operation.ProfileKey = MixedPresentationProfileKey;
       Operation.Sequence = Sequence;
       NextPresented.Add(StableId, State.EntityRef);
     }
@@ -3107,6 +3707,139 @@ void ACrowdDemoMixedSandboxCoordinator::LogCheckpoint()
 
 void ACrowdDemoMixedSandboxCoordinator::TryLogPass()
 {
+  if (bMixedCombatIntegration)
+  {
+    if (HasAuthority() && !bServerPassLogged
+      && FixedStepIndex >= 600)
+    {
+      int32 AliveCount = 0;
+      int32 ReferencedDeadCount = 0;
+      for (int32 SlotIndex = 1;
+        SlotIndex < Slots.Num(); ++SlotIndex)
+      {
+        const FSlotState& Slot = Slots[SlotIndex];
+        if (!Slot.bActive) continue;
+        AliveCount += Slot.Health > 0 ? 1 : 0;
+        if (Slot.Health <= 0) continue;
+        if (Slot.AttackState.TargetRef.IsValid())
+        {
+          const int32 TargetIndex = static_cast<int32>(
+            Slot.AttackState.TargetRef.StableEntityId);
+          if (!Slots.IsValidIndex(TargetIndex)
+            || Slots[TargetIndex].Health <= 0
+            || Slots[TargetIndex].Facts.StableEntityRef
+              != Slot.AttackState.TargetRef)
+            ++ReferencedDeadCount;
+        }
+      }
+      const bool bProjectileConserved =
+        ProjectileSpawnedCount
+          == ProjectileImpactCount
+            + ProjectileExpiredCount
+            + ProjectileActiveCount;
+      const bool bPassed =
+        Config.PopulationLimit == 20
+        && LifecycleWorld.GetActiveEntityCount() == 20
+        && AliveCount > 0 && AliveCount < 20
+        && AttackIntentCount > 0
+        && AttackImpactCount > 0
+        && AttackDamageCount > 0
+        && AttackDeathCount > 0
+        && AttackTargetSwitchCount > 0
+        && MeleeAttackIntentCount > 0
+        && MidRangeAttackIntentCount > 0
+        && RangedAttackIntentCount > 0
+        && ProjectileSpawnedCount > 0
+        && ProjectileImpactCount > 0
+        && bProjectileConserved
+        && ProjectileDuplicateCount == 0
+        && ReferencedDeadCount == 0
+        && MinimumSeparationCm
+          >= MinimumSafeSeparationCm - 0.5f
+        && Percentile95(ServerStepMilliseconds)
+          <= MixedFixedStepSeconds * 1000.0
+        && StaleRejectCount == 0;
+      if (bPassed)
+      {
+        bServerPassLogged = true;
+        UE_LOG(LogTemp, Display,
+          TEXT("PASS CrowdDemoMixedCombat role=server fixed_step=%lld population=20 alive=%d attack_intent=%d melee_intent=%d midrange_intent=%d ranged_intent=%d impact=%d damage=%d death=%d target_switch=%d target_region_rebuild=%d referenced_dead=%d projectile_spawned=%d projectile_impacted=%d projectile_expired=%d projectile_active=%d projectile_duplicate=%d projectile_conserved=1 safety_holds=%d min_separation_cm=%.2f fixed_step_ms_p95=%.3f entity_hash=%llu membership_hash=%llu commit_hash=%llu"),
+          FixedStepIndex, AliveCount, AttackIntentCount,
+          MeleeAttackIntentCount, MidRangeAttackIntentCount,
+          RangedAttackIntentCount, AttackImpactCount,
+          AttackDamageCount, AttackDeathCount,
+          AttackTargetSwitchCount, AttackTargetSwitchCount,
+          ReferencedDeadCount,
+          ProjectileSpawnedCount, ProjectileImpactCount,
+          ProjectileExpiredCount, ProjectileActiveCount,
+          ProjectileDuplicateCount, SafetyHoldCount,
+          MinimumSeparationCm,
+          Percentile95(ServerStepMilliseconds),
+          LifecycleWorld.CalculateEntitySetHash(),
+          LifecycleWorld.CalculateMembershipHash(),
+          LastBoundaryCommitHash);
+      }
+    }
+
+    if (!HasAuthority() && !bClientPassLogged
+      && LastReceivedFixedStep >= 600
+      && bClientVisualsInitialized && !bVisualSyncPending)
+    {
+      UWorld* World = GetWorld();
+      ACrowdDemoReplicator* Replicator =
+        World ? FindMixedVisualHost(*World) : nullptr;
+      const int32 Visible = Replicator
+        ? Replicator->GetCrowdVisualInstanceCount() : 0;
+      int32 AliveCount = 0;
+      for (int32 SlotIndex = 1;
+        SlotIndex < Slots.Num(); ++SlotIndex)
+        AliveCount += Slots[SlotIndex].bActive
+          && Slots[SlotIndex].Health > 0 ? 1 : 0;
+      const bool bPassed =
+        Visible == LifecycleWorld.GetActiveEntityCount()
+        && LifecycleWorld.GetActiveEntityCount() == 20
+        && AliveCount > 0 && AliveCount < 20
+        && LifecycleWorld.CalculateEntitySetHash()
+          == LastExpectedEntitySetHash
+        && LifecycleWorld.CalculateMembershipHash()
+          == LastExpectedMembershipHash
+        && AttackIntentCount > 0
+        && AttackImpactCount > 0
+        && AttackDamageCount > 0
+        && AttackDeathCount > 0
+        && AttackTargetSwitchCount > 0
+        && MeleeAttackIntentCount > 0
+        && MidRangeAttackIntentCount > 0
+        && RangedAttackIntentCount > 0
+        && ProjectileSpawnedCount > 0
+        && ProjectileImpactCount > 0
+        && ProjectileSpawnedCount
+          == ProjectileImpactCount
+            + ProjectileExpiredCount
+            + ProjectileActiveCount
+        && ProjectileDuplicateCount == 0
+        && StaleRejectCount == 0;
+      if (bPassed)
+      {
+        bClientPassLogged = true;
+        UE_LOG(LogTemp, Display,
+          TEXT("PASS CrowdDemoMixedCombat role=client fixed_step=%lld population=20 alive=%d visible=%d state_sequence=%llu attack_intent=%d melee_intent=%d midrange_intent=%d ranged_intent=%d impact=%d damage=%d death=%d target_switch=%d target_region_rebuild=%d projectile_spawned=%d projectile_impacted=%d projectile_expired=%d projectile_active=%d projectile_duplicate=%d projectile_conserved=1 entity_hash=%llu membership_hash=%llu"),
+          LastReceivedFixedStep, AliveCount, Visible,
+          LastReceivedStateSequence, AttackIntentCount,
+          MeleeAttackIntentCount, MidRangeAttackIntentCount,
+          RangedAttackIntentCount, AttackImpactCount,
+          AttackDamageCount, AttackDeathCount,
+          AttackTargetSwitchCount, AttackTargetSwitchCount,
+          ProjectileSpawnedCount,
+          ProjectileImpactCount, ProjectileExpiredCount,
+          ProjectileActiveCount, ProjectileDuplicateCount,
+          LifecycleWorld.CalculateEntitySetHash(),
+          LifecycleWorld.CalculateMembershipHash());
+      }
+    }
+    return;
+  }
+
   if (HasAuthority() && !bServerPassLogged && FixedStepIndex >= 600)
   {
     const uint32 RequiredBehaviors =

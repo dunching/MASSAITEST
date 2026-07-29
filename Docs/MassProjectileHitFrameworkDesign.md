@@ -201,7 +201,7 @@ Demo Adapter或原工程 Adapter
 5. [x] [COMPUTED][HIGH] 公共模块最小宿主、结构、spawn/hit/rollback和Final Apply原子性自动化已完成。
 6. [x] [COMPUTED][HIGH] Demo回归、T8 13项、完整MassCrowd/CrowdDemo自动化及20/100/500并发Projectile门已完成。
 7. [ ] [INFERRED][HIGH] 原工程Actor/Mass projectile统一Adapter迁移未执行，且不属于PJ0–PJ6范围。
-8. [ ] [INFERRED][HIGH] T9/T10持续刷怪和完整类游戏业务未执行，且不属于PJ0–PJ6范围。
+8. [x] [COMPUTED][HIGH] T9固定20实体混合战斗已执行；持续刷怪、玩家技能和完整类游戏循环延期到T10，且不属于PJ0–PJ6范围。
 
 ## 10. 自动化、指标与验收
 
@@ -227,6 +227,6 @@ Demo Adapter或原工程 Adapter
 
 [COMPUTED][HIGH] 这是2026-07-17历史快照：当时Projectile专项尚未开始；其中“能力散落、缺少公共模块”的断言已由PJ1–PJ6关闭，不得作为当前状态引用。
 
-[INFERRED][HIGH] 当前范围内没有后续Projectile实施阶段；若继续，应另行立项原工程Adapter迁移或T9/T10，而不是恢复历史T6前置顺序。
+[INFERRED][HIGH] 当前范围内没有后续Projectile模块化阶段；T9已复用现行模块完成，若继续应另行立项原工程Adapter迁移或T10，而不是恢复历史T6前置顺序。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

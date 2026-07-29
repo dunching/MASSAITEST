@@ -27,6 +27,7 @@ param(
   [switch]$NavFlowProductSmall,
   [switch]$FriendlyLogisticsSmall,
   [switch]$MixedSandbox,
+  [switch]$MixedCombatIntegration,
   [switch]$RangedProjectileGolden,
   [double]$MaxFixedStepP95Ms = 33.333,
   [double]$MinSimulationRealtimeFactor = 0.95,
@@ -49,6 +50,10 @@ if (!(Test-Path -LiteralPath $EditorPath)) {
 }
 if (!(Test-Path -LiteralPath $ProjectPath)) {
   throw "Project not found: $ProjectPath"
+}
+if ($MixedCombatIntegration -and
+  $Map -eq "/Engine/Maps/Templates/OpenWorld") {
+  $Map = "/Game/Maps/CrowdDemo_NavSurfaceGraphVerticalSmall"
 }
 
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -73,6 +78,9 @@ if ($FriendlyLogisticsSmall) {
 }
 if ($MixedSandbox) {
   $CommonArgs = "$CommonArgs -CrowdDemoMixedSandbox"
+}
+if ($MixedCombatIntegration) {
+  $CommonArgs = "$CommonArgs -CrowdDemoMixedCombatIntegration"
 }
 
 if ($RequireClientReady -and !$NoClient) {
@@ -203,15 +211,15 @@ if ($HardFailures.Count -gt 0) {
 }
 
 if ($RangedProjectileGolden) {
-  $ExpectedAttackHash = "3512277419"
+  $ExpectedAttackHash = "41852579"
   $ExpectedProjectileHash = "488896174"
   $ExpectedEventHash = "4204062592"
   $ServerProjectile = Select-String -Path $ServerLog `
-    -Pattern "CrowdDemoProjectileCheckpoint role=server" |
+    -Pattern "CrowdDemoProjectileCheckpoint role=server round_id=1 " |
     Select-Object -Last 1
   $ClientProjectile = if ($NoClient) { $null } else {
     Select-String -Path $ClientLog `
-      -Pattern "CrowdDemoProjectileCheckpoint role=client" |
+      -Pattern "CrowdDemoProjectileCheckpoint role=client round_id=1 " |
       Select-Object -Last 1
   }
   $ServerGolden = $ServerProjectile -and
@@ -274,6 +282,59 @@ if ($MixedSandbox) {
     throw "CrowdDemo mixed sandbox gate failed: server_pass=$([bool]$ServerPass) client_pass=$([bool]$ClientPass) projectile=$([bool]$ProjectileReady) client_projectile=$([bool]$ClientProjectileReady) violations=$($MixedViolations.Count)"
   }
   Write-Host "[CrowdDemo] Mixed sandbox gate passed: projectiles=$ExpectedProjectiles projectile_hash=$ProjectileHash"
+}
+
+if ($MixedCombatIntegration) {
+  $ServerPass = Select-String -Path $ServerLog -Pattern "PASS CrowdDemoMixedCombat role=server" | Select-Object -Last 1
+  $ClientPass = if ($NoClient) { $true } else {
+    Select-String -Path $ClientLog -Pattern "PASS CrowdDemoMixedCombat role=client" | Select-Object -Last 1
+  }
+  $ServerEntityHash = if ($ServerPass -and
+    $ServerPass.Line -match 'entity_hash=(\d+)\b') {
+    $Matches[1]
+  } else { "" }
+  $ServerMembershipHash = if ($ServerPass -and
+    $ServerPass.Line -match 'membership_hash=(\d+)\b') {
+    $Matches[1]
+  } else { "" }
+  $ServerP95 = if ($ServerPass -and
+    $ServerPass.Line -match 'fixed_step_ms_p95=([0-9.]+)\b') {
+    [double]$Matches[1]
+  } else { [double]::PositiveInfinity }
+  $ServerReady = $ServerPass -and
+    $ServerPass.Line -match 'population=20\b' -and
+    $ServerPass.Line -match 'melee_intent=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'midrange_intent=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'ranged_intent=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'impact=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'damage=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'death=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'target_switch=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'target_region_rebuild=([1-9]\d*)\b' -and
+    $ServerPass.Line -match 'referenced_dead=0\b' -and
+    $ServerPass.Line -match 'projectile_duplicate=0\b' -and
+    $ServerPass.Line -match 'projectile_conserved=1\b' -and
+    $ServerP95 -le 33.333
+  $ClientReady = $NoClient -or ($ClientPass -and
+    $ClientPass.Line -match 'population=20\b' -and
+    $ClientPass.Line -match 'melee_intent=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'midrange_intent=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'ranged_intent=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'impact=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'damage=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'death=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'target_switch=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'target_region_rebuild=([1-9]\d*)\b' -and
+    $ClientPass.Line -match 'projectile_duplicate=0\b' -and
+    $ClientPass.Line -match 'projectile_conserved=1\b' -and
+    $ServerEntityHash -ne "" -and
+    $ClientPass.Line -match "entity_hash=$ServerEntityHash\b" -and
+    $ServerMembershipHash -ne "" -and
+    $ClientPass.Line -match "membership_hash=$ServerMembershipHash\b")
+  if (!$ServerReady -or !$ClientReady) {
+    throw "CrowdDemo mixed combat gate failed: server=$([bool]$ServerReady) client=$([bool]$ClientReady)"
+  }
+  Write-Host "[CrowdDemo] Mixed combat T9 gate passed"
 }
 
 if ($ContinuousLifecycle) {

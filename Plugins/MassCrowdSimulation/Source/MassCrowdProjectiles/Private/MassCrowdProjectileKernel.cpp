@@ -348,7 +348,8 @@ bool FCrowdProjectileKernel::Advance(
       }
       FCrowdImpactFact& Impact =
         OutImpacts.AddDefaulted_GetRef();
-      Impact.ProjectileId = Projectile.ProjectileId;
+      Impact.ImpactId = Projectile.ProjectileId;
+      Impact.ImpactTypeId = CrowdImpactTypeIds::Projectile;
       Impact.FixedStepIndex = FixedStepIndex;
       Impact.Instigator = Projectile.Instigator;
       if (BestTarget)
@@ -399,7 +400,7 @@ bool FCrowdProjectileKernel::Advance(
       return A.TimeOfImpactQ < B.TimeOfImpactQ;
     if (A.Target != B.Target)
       return A.Target < B.Target;
-    return A.ProjectileId < B.ProjectileId;
+    return A.ImpactId < B.ImpactId;
   });
   OutEvents.Sort(EventLess);
   InOutSummary.ActiveCount = 0;

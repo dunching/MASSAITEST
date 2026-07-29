@@ -1,5 +1,13 @@
 # MassAI Crowd Demo 当前架构
 
+## 0.0.1 2026-07-29 T9覆盖说明
+
+[COMPUTED][HIGH] T9在DP0–DP6之后新增通用Attack Profile/State/Intent与Host Attack Adapter。业务Planner只决定Acquire/Windup/Commit/Recovery/Cooldown及目标，Movement继续由Standard Sources和安全链处理；Melee/MidRange经一次Boundary稳定Spatial Index执行相对Sweep，Ranged生成Mass Projectile，三类Impact统一进入Combat Resolver与Prepared Health/Death提交。
+
+[COMPUTED][HIGH] `FCrowdImpactFact`现使用通用`ImpactId + ImpactTypeId`；Projectile仍以Projectile ID作为ImpactId，Melee/MidRange使用Attack Commit稳定ID。生产`AttackTarget` Source已删除，Behavior Registry黄金值版本化为`11335697795273479593`。
+
+[COMPUTED][HIGH] T9 Mixed可靠Agent Payload为显式v2，包含攻击Profile、Target、Phase、PhaseEnter、CooldownEnd和FireSequence并拒绝旧布局。8517双端20实体门通过死亡、目标重选、TargetRegion/Flow缓存重建、Projectile守恒、双端Hash与`2.910ms` p95。
+
 ## 0.0 2026-07-29 PJ0覆盖说明
 
 [COMPUTED][HIGH] 本文件顶部与第PJ节描述当前状态；后续按日期记录的迁移切片是历史执行证据，其中“尚未接入”“下一步”或“未授权100/500”不得覆盖R0–R7、S0–S6关闭结论。
@@ -18,7 +26,7 @@
 
 [COMPUTED][HIGH] Mixed Movement Worker消费Resolved Movement Goal/Velocity/Facing/Constraint，执行`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`并在Prepared Boundary中一次提交Movement、Business与Slot状态；Business数组非空不再跳过移动。Local Predictive与Particle按InteractionLayer过滤跨层邻居。Presentation Resolver按Property保留最高优先级Override和稳定排序的全部Additive记录。
 
-[COMPUTED][HIGH] 开放Behavior框架、通用Scheduler、行为网络v3、Standard Sources和Projectile三模块的R0–R7、S0–S6、PJ0–PJ6均已关闭；最终完整自动化为MassCrowd 65/65与CrowdDemo 125/125，20/100/500同路径并发Projectile门和四构建矩阵均通过。详细数值以`TestScenarioMatrix.md`为准。
+[COMPUTED][HIGH] 开放Behavior框架、通用Scheduler、行为网络v3、Standard Sources、Projectile三模块、Demo Business与T9均已关闭；T9后完整自动化为MassCrowd 64/64与CrowdDemo 133/133。既有20/100/500同路径并发Projectile门继续作为PJ6基线，T9本身只验收固定20实体。详细数值以`TestScenarioMatrix.md`为准。
 
 ## 1. 文档职责
 

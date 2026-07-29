@@ -120,7 +120,9 @@ void AMassAICrowdDemoGameMode::BeginPlay()
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoNavFlowProductSmall stage=game_mode_path fixed_round_agents=20 source=GameMode"));
   }
-  if (FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoMixedSandbox")))
+  if (FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoMixedSandbox"))
+    || FParse::Param(
+      FCommandLine::Get(), TEXT("CrowdDemoMixedCombatIntegration")))
   {
     if (!FindReplicator(*World))
     {
@@ -138,7 +140,10 @@ void AMassAICrowdDemoGameMode::BeginPlay()
       FRotator::ZeroRotator,
       SpawnParams);
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoMixedSandbox role=server stage=game_mode_path fixed_round_agents=0 source=GameMode"));
+      TEXT("CrowdDemoMixedSandbox role=server stage=game_mode_path fixed_round_agents=0 mixed_combat=%d source=GameMode"),
+      FParse::Param(
+        FCommandLine::Get(), TEXT("CrowdDemoMixedCombatIntegration"))
+        ? 1 : 0);
     return;
   }
   if (FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoNavSurfaceGraph")))

@@ -76,7 +76,7 @@ bool FCrowdDemoBehaviorRegistryGoldenTest::RunTest(
   const FString& Parameters)
 {
   constexpr uint64 ExpectedRegistryHash =
-    17037152232310596158ull;
+    11335697795273479593ull;
   constexpr uint64 ExpectedContextSchemaHash =
     7449648488286461483ull;
   FCrowdBehaviorSourceRuntime Runtime;

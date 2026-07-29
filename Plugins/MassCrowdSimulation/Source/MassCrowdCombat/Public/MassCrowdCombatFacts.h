@@ -3,9 +3,15 @@
 #include "CoreMinimal.h"
 #include "MassCrowdBehaviorSource.h"
 
+namespace CrowdImpactTypeIds
+{
+  inline constexpr uint32 Projectile = 1;
+}
+
 struct MASSCROWDCOMBAT_API FCrowdImpactFact
 {
-  uint64 ProjectileId = 0;
+  uint64 ImpactId = 0;
+  uint32 ImpactTypeId = 0;
   int64 FixedStepIndex = INDEX_NONE;
   FCrowdStableEntityRef Instigator;
   FCrowdStableEntityRef Target;

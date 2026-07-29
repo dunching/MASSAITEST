@@ -202,6 +202,8 @@ void UCrowdDemoMassSubsystem::RegisterRoundSimProcessors()
     || FParse::Param(FCommandLine::Get(),
       TEXT("CrowdDemoMixedSandbox"))
     || FParse::Param(FCommandLine::Get(),
+      TEXT("CrowdDemoMixedCombatIntegration"))
+    || FParse::Param(FCommandLine::Get(),
       TEXT("CrowdDemoContinuousLifecycle"));
   if (World->GetNetMode() != NM_DedicatedServer
     && !bPublicPresentationOwnsClient)

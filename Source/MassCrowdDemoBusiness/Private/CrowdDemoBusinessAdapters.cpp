@@ -159,6 +159,18 @@ bool FCrowdDemoBusinessPatchAdapter::Prepare(
   const FCrowdDemoBusinessCommitLedger& CurrentLedger,
   FCrowdDemoPreparedBusinessPatch& OutPatch)
 {
+  return Prepare(
+    PreparedBehavior, {}, CurrentAgents,
+    CurrentLedger, OutPatch);
+}
+
+bool FCrowdDemoBusinessPatchAdapter::Prepare(
+  const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
+  const TConstArrayView<FCrowdDemoHostIntent> HostIntents,
+  const TConstArrayView<FCrowdDemoBusinessAgentState> CurrentAgents,
+  const FCrowdDemoBusinessCommitLedger& CurrentLedger,
+  FCrowdDemoPreparedBusinessPatch& OutPatch)
+{
   OutPatch = {};
   if (!PreparedBehavior.bValid
     || PreparedBehavior.FixedStepIndex < 0)
@@ -248,6 +260,72 @@ bool FCrowdDemoBusinessPatchAdapter::Prepare(
       Fold(Hash, Contribution.CommitId);
       Fold(Hash, Contribution.AdapterId);
     }
+  }
+  TArray<FCrowdDemoHostIntent> SortedHostIntents(HostIntents);
+  SortedHostIntents.Sort([](const auto& A, const auto& B)
+  {
+    if (A.ActionTypeId != B.ActionTypeId)
+      return A.ActionTypeId < B.ActionTypeId;
+    if (A.CommitId != B.CommitId)
+      return A.CommitId < B.CommitId;
+    return A.InstigatorRef < B.InstigatorRef;
+  });
+  for (int32 IntentIndex = 0;
+    IntentIndex < SortedHostIntents.Num(); ++IntentIndex)
+  {
+    const FCrowdDemoHostIntent& Intent =
+      SortedHostIntents[IntentIndex];
+    if (!Intent.IsValid()
+      || Intent.ActionTypeId
+        != CrowdDemoBusinessActions::Attack
+      || !Intent.TargetRef.IsValid()
+      || (IntentIndex > 0
+        && SortedHostIntents[IntentIndex - 1].ActionTypeId
+          == Intent.ActionTypeId
+        && SortedHostIntents[IntentIndex - 1].CommitId
+          == Intent.CommitId))
+      return false;
+    FCrowdDemoBusinessAgentState* Instigator =
+      FindAgent(OutPatch.Agents, Intent.InstigatorRef);
+    FCrowdDemoBusinessAgentState* Target =
+      FindAgent(OutPatch.Agents, Intent.TargetRef);
+    if (!Instigator || !Target
+      || Instigator->TransitionRevision
+        != Intent.ExpectedRevision)
+      return false;
+    FCrowdDemoBusinessCommitRequest Request;
+    Request.Kind = ECrowdDemoBusinessCommitKind::CombatHit;
+    Request.CommitId = Intent.CommitId;
+    Request.FixedStepIndex =
+      PreparedBehavior.FixedStepIndex;
+    Request.TransitionRevision =
+      Instigator->TransitionRevision;
+    Request.AgentRef = Intent.InstigatorRef;
+    Request.TargetRef = Intent.TargetRef;
+    Request.PayloadKey = Intent.PayloadTypeId;
+    Request.Quantity = Intent.Quantity;
+    const ECrowdDemoBusinessCommitAcceptResult First =
+      OutPatch.Ledger.Apply(Request);
+    const ECrowdDemoBusinessCommitAcceptResult Replay =
+      OutPatch.Ledger.Apply(Request);
+    if (First != ECrowdDemoBusinessCommitAcceptResult::Applied
+      || Replay
+        != ECrowdDemoBusinessCommitAcceptResult::Duplicate)
+      return false;
+    ++OutPatch.DuplicateCommitCount;
+    Instigator->LastAttackFixedStep =
+      PreparedBehavior.FixedStepIndex;
+    Target->HitReactionVelocity = FVector::ZeroVector;
+    Target->HitReactionUntilFixedStep = FMath::Max(
+      Target->HitReactionUntilFixedStep,
+      PreparedBehavior.FixedStepIndex + 6);
+    Target->Health = FMath::Max(
+      0, Target->Health - Intent.Quantity);
+    if (Target->Health == 0
+      && !OutPatch.PendingDeathRef.IsValid())
+      OutPatch.PendingDeathRef = Target->EntityRef;
+    Fold(Hash, Intent.CommitId);
+    Fold(Hash, Intent.ActionTypeId);
   }
   for (const FCrowdDemoBusinessAgentState& Agent : OutPatch.Agents)
   {

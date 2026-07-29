@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CrowdDemoBusinessPlanner.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
 
 enum class ECrowdDemoBusinessCommitKind : uint8
@@ -98,6 +99,13 @@ class MASSCROWDDEMOBUSINESS_API FCrowdDemoBusinessPatchAdapter
 public:
   static bool Prepare(
     const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
+    TConstArrayView<FCrowdDemoBusinessAgentState> CurrentAgents,
+    const FCrowdDemoBusinessCommitLedger& CurrentLedger,
+    FCrowdDemoPreparedBusinessPatch& OutPatch);
+
+  static bool Prepare(
+    const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
+    TConstArrayView<FCrowdDemoHostIntent> HostIntents,
     TConstArrayView<FCrowdDemoBusinessAgentState> CurrentAgents,
     const FCrowdDemoBusinessCommitLedger& CurrentLedger,
     FCrowdDemoPreparedBusinessPatch& OutPatch);

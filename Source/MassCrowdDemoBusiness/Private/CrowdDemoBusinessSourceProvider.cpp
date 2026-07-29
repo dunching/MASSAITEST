@@ -177,14 +177,6 @@ namespace
             ECrowdBehaviorSourceReplicationPolicy::ServerOnly,
             CrowdDemoCapabilityIds::Haul, 1),
           MakeShared<FInteractionBusinessEvaluator,
-            ESPMode::ThreadSafe>())
-        && Register(
-          MakeSpec(
-            CrowdDemoSourceTypeIds::AttackTarget,
-            InteractionBusinessMask, 200,
-            ECrowdBehaviorSourceReplicationPolicy::ServerOnly,
-            CrowdDemoCapabilityIds::Attack, 2),
-          MakeShared<FInteractionBusinessEvaluator,
             ESPMode::ThreadSafe>());
     }
   };
@@ -239,9 +231,6 @@ ECrowdActiveBehavior DeriveCrowdDemoDiagnosticBehavior(
       || Instance.SourceTypeId
         == CrowdStandardSources::ArriveAtLocation)
       Promote(8, ECrowdActiveBehavior::HaulPickup);
-    else if (Instance.SourceTypeId
-        == CrowdDemoSourceTypeIds::AttackTarget)
-      Promote(7, ECrowdActiveBehavior::Attack);
     else if (Instance.SourceTypeId
         == CrowdStandardSources::PursueEntity)
       Promote(6, ECrowdActiveBehavior::Pursue);

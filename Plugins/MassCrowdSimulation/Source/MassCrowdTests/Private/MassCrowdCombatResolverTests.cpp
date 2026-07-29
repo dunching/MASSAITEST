@@ -15,7 +15,8 @@ namespace
     const FCrowdStableEntityRef& Target)
   {
     FCrowdImpactFact Impact;
-    Impact.ProjectileId = ProjectileId;
+    Impact.ImpactId = ProjectileId;
+    Impact.ImpactTypeId = CrowdImpactTypeIds::Projectile;
     Impact.FixedStepIndex = 7;
     Impact.Instigator = {1, 1, 1};
     Impact.Target = Target;

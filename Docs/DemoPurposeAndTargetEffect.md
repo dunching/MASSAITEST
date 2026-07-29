@@ -194,7 +194,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [COMPUTED][HIGH] 阶段I已补充基于静态烘焙NavMesh的稳定分层Surface Graph与共享Flow，并在真实地图验证坡道、桥上桥下、高台、多路线、窄桥和不可通行落差。[INFERRED][HIGH] 该独立导航probe不能外推为continuous lifecycle、Behavior、Combat、Logistics与Presentation已经完成混合运行。
 
-[INFERRED][HIGH] 新目标具有强制前置顺序：先使T1-T8独立Small测试大致全部通过并关闭已知硬失败，再提取不依赖Demo地图、Round脚本和固定资产路径的插件，完成独立宿主与Demo双重回归，最后才实施T9/T10综合业务场景。
+[COMPUTED][HIGH] 该前置顺序已执行到T9：T1–T8独立Small、插件提取/双重回归和T9固定20实体混合战斗均已完成；T10持续生成、玩家命令与完整游戏循环仍是后续阶段。
 
 [INFERRED][HIGH] 插件化用于降低未来接入`E:\Projects\SuperInvincibleTank_BugFix`的迁移风险；未来回原工程采用公开接口与Adapter，不默认复制整个Demo Source、Coordinator、地图或历史诊断代码。详细事实源为`GameplaySwarmSandboxAndPluginMigrationPlan.md`。
 

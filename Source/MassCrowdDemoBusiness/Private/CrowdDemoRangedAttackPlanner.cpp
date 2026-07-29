@@ -1,23 +1,83 @@
 #include "CrowdDemoRangedAttackPlanner.h"
 
+#include "CrowdDemoAttackPlanner.h"
+
 namespace CrowdDemoRangedAttackPlannerPrivate
 {
-  int32 QuantizeScalar(const float Value, const float Quantum)
+  ECrowdDemoAttackPlannerPhase ToGenericPhase(
+    const ECrowdDemoRangedAttackPhase Phase)
   {
-    return FMath::RoundToInt(
-      Value / FMath::Max(Quantum, SMALL_NUMBER));
+    switch (Phase)
+    {
+    case ECrowdDemoRangedAttackPhase::AcquireTarget:
+      return ECrowdDemoAttackPlannerPhase::AcquireTarget;
+    case ECrowdDemoRangedAttackPhase::Windup:
+      return ECrowdDemoAttackPlannerPhase::Windup;
+    case ECrowdDemoRangedAttackPhase::Fire:
+      return ECrowdDemoAttackPlannerPhase::Commit;
+    case ECrowdDemoRangedAttackPhase::Recovery:
+      return ECrowdDemoAttackPlannerPhase::Recovery;
+    case ECrowdDemoRangedAttackPhase::Cooldown:
+      return ECrowdDemoAttackPlannerPhase::Cooldown;
+    default:
+      return ECrowdDemoAttackPlannerPhase::None;
+    }
   }
 
-  FVector QuantizeVector(
-    const FVector& Value, const float Quantum)
+  ECrowdDemoRangedAttackPhase ToLegacyPhase(
+    const ECrowdDemoAttackPlannerPhase Phase)
   {
-    return FVector(
-      QuantizeScalar(Value.X, Quantum),
-      QuantizeScalar(Value.Y, Quantum),
-      QuantizeScalar(Value.Z, Quantum)) * Quantum;
+    switch (Phase)
+    {
+    case ECrowdDemoAttackPlannerPhase::AcquireTarget:
+      return ECrowdDemoRangedAttackPhase::AcquireTarget;
+    case ECrowdDemoAttackPlannerPhase::Windup:
+      return ECrowdDemoRangedAttackPhase::Windup;
+    case ECrowdDemoAttackPlannerPhase::Commit:
+      return ECrowdDemoRangedAttackPhase::Fire;
+    case ECrowdDemoAttackPlannerPhase::Recovery:
+      return ECrowdDemoRangedAttackPhase::Recovery;
+    case ECrowdDemoAttackPlannerPhase::Cooldown:
+      return ECrowdDemoRangedAttackPhase::Cooldown;
+    default:
+      return ECrowdDemoRangedAttackPhase::None;
+    }
   }
 
-  uint64 MakeProjectileId(
+  const FCrowdDemoRangedAttackAgent* FindByAgentId(
+    const TArray<FCrowdDemoRangedAttackAgent>& Agents,
+    const int32 AgentId)
+  {
+    return Agents.FindByPredicate(
+      [AgentId](const FCrowdDemoRangedAttackAgent& Agent)
+      {
+        return Agent.AgentId == AgentId;
+      });
+  }
+
+  const FCrowdDemoRangedAttackAgent* FindByFormation(
+    const TArray<FCrowdDemoRangedAttackAgent>& Agents,
+    const int32 FormationIndex)
+  {
+    return Agents.FindByPredicate(
+      [FormationIndex](const FCrowdDemoRangedAttackAgent& Agent)
+      {
+        return Agent.FormationIndex == FormationIndex;
+      });
+  }
+
+  const FCrowdDemoRangedAttackAgent* FindByRef(
+    const TArray<FCrowdDemoRangedAttackAgent>& Agents,
+    const FCrowdStableEntityRef& Ref)
+  {
+    return Agents.FindByPredicate(
+      [&Ref](const FCrowdDemoRangedAttackAgent& Agent)
+      {
+        return Agent.EntityRef == Ref;
+      });
+  }
+
+  uint64 MakeLegacyProjectileId(
     const int32 RoundId,
     const int32 SourceAgentId,
     const int32 FireSequence)
@@ -29,17 +89,6 @@ namespace CrowdDemoRangedAttackPlannerPrivate
         static_cast<uint32>(SourceAgentId) & 0xffffffu) << 24)
       | static_cast<uint64>(
         static_cast<uint32>(FireSequence) & 0xffffffu);
-  }
-
-  const FCrowdDemoRangedAttackAgent* FindTargetByFormation(
-    const TArray<FCrowdDemoRangedAttackAgent>& Agents,
-    const int32 FormationIndex)
-  {
-    return Agents.FindByPredicate(
-      [FormationIndex](const FCrowdDemoRangedAttackAgent& Agent)
-      {
-        return Agent.FormationIndex == FormationIndex;
-      });
   }
 }
 
@@ -92,174 +141,210 @@ bool FCrowdDemoRangedAttackPlanner::Advance(
 {
   OutFireIntents.Reset();
   OutSummary = {};
+  if (!Settings.IsValid())
+    return false;
+
   InOutAgents.Sort([](const auto& A, const auto& B)
   {
     return A.AgentId < B.AgentId;
   });
-  if (RoundId <= 0 || FixedStepIndex < 0
-    || !Settings.IsValid())
-    return false;
   for (int32 Index = 0; Index < InOutAgents.Num(); ++Index)
   {
     if (!InOutAgents[Index].IsValid()
-      || (Index > 0
-        && InOutAgents[Index - 1].AgentId
-          == InOutAgents[Index].AgentId))
+      || (Index > 0 && InOutAgents[Index - 1].AgentId
+        == InOutAgents[Index].AgentId))
       return false;
   }
 
-  for (FCrowdDemoRangedAttackAgent& Shooter : InOutAgents)
+  FCrowdDemoAttackProfileV1 Profile;
+  Profile.ProfileId = CrowdDemoAttackProfileIds::Ranged;
+  Profile.PayloadTypeId = CrowdDemoAttackPayloadTypeIds::Ranged;
+  Profile.EffectProfileId = 1;
+  Profile.Archetype = ECrowdDemoAttackArchetype::Ranged;
+  Profile.WindupFixedSteps = Settings.WindupFixedSteps;
+  Profile.RecoveryFixedSteps = Settings.RecoveryFixedSteps;
+  Profile.CooldownFixedSteps = Settings.CooldownFixedSteps;
+  Profile.MinimumDistanceCm = 0.0f;
+  Profile.MaximumDistanceCm = 1000000.0f;
+  Profile.QueryRadiusCm = 12.0f;
+  Profile.MuzzleForwardOffsetCm =
+    Settings.MuzzleForwardOffsetCm;
+  Profile.ProjectileSpeedCmps = Settings.ProjectileSpeedCmps;
+  Profile.PositionQuantumCm = Settings.PositionQuantumCm;
+  Profile.VelocityQuantumCmps = Settings.VelocityQuantumCmps;
+  Profile.Damage = 20;
+
+  TArray<FCrowdDemoAttackAgent> GenericAgents;
+  GenericAgents.Reserve(InOutAgents.Num());
+  for (const FCrowdDemoRangedAttackAgent& Source : InOutAgents)
   {
-    if (Shooter.FormationIndex >= Settings.ShooterCount
-      || !Shooter.bAlive || !Shooter.bStateAlive)
-      continue;
-    const FCrowdDemoRangedAttackAgent* Target =
-      FindTargetByFormation(
+    FCrowdDemoAttackAgent& Target =
+      GenericAgents.AddDefaulted_GetRef();
+    Target.EntityRef = Source.EntityRef;
+    Target.FactionId = Source.FactionId;
+    Target.NavLayer = Source.NavLayer;
+    Target.AttackProfileId = Profile.ProfileId;
+    Target.Position = Source.Position;
+    Target.Health = Source.bAlive && Source.bStateAlive ? 100 : 0;
+    Target.bAlive = Source.bAlive && Source.bStateAlive;
+    Target.bCanAttack =
+      Source.FormationIndex < Settings.ShooterCount;
+    Target.bRequirePreferredTarget = Target.bCanAttack;
+    const FCrowdDemoRangedAttackAgent* Preferred = nullptr;
+    if (Source.FormationIndex < Settings.ShooterCount)
+    {
+      Preferred = FindByFormation(
         InOutAgents,
-        Settings.ShooterCount + Shooter.FormationIndex);
-    const bool bTargetValid =
-      Target && Target->bAlive && Target->bStateAlive
-      && Target->LifecycleSerial
-        == Target->StateLifecycleSerial;
-    if (Shooter.State.AttackPhase
-        == ECrowdDemoRangedAttackPhase::None
-      || Shooter.State.AttackPhase
-        == ECrowdDemoRangedAttackPhase::AcquireTarget)
-    {
-      if (!bTargetValid)
-      {
-        const bool bHadTargetIdentity =
-          Shooter.State.LockedTargetAgentId != INDEX_NONE
-          || Shooter.State.TargetAgentId != INDEX_NONE;
-        Shooter.State.AttackPhase =
-          ECrowdDemoRangedAttackPhase::AcquireTarget;
-        Shooter.State.LockedTargetAgentId = INDEX_NONE;
-        Shooter.State.LockedTargetLifecycleSerial = 0;
-        Shooter.State.TargetAgentId = INDEX_NONE;
-        Shooter.State.TargetLifecycleSerial = 0;
-        OutSummary.InvalidTargetLifecycleCount +=
-          bHadTargetIdentity ? 1 : 0;
-        continue;
-      }
-      Shooter.State.BusinessState =
-        ECrowdDemoRangedBusinessState::Attacking;
-      Shooter.State.TargetAgentId = Target->AgentId;
-      Shooter.State.TargetLifecycleSerial =
-        Target->LifecycleSerial;
-      Shooter.State.LockedTargetAgentId = Target->AgentId;
-      Shooter.State.LockedTargetLifecycleSerial =
-        Target->LifecycleSerial;
-      Shooter.State.LockedTargetLocation = Target->Position;
-      Shooter.State.AttackPhase =
-        ECrowdDemoRangedAttackPhase::Windup;
-      Shooter.State.AttackPhaseEnterFixedStep = FixedStepIndex;
-      Shooter.State.bFireRequestIssued = false;
-      ++Shooter.State.BusinessStateRevision;
-      Shooter.State.BusinessStateEnterFixedStep = FixedStepIndex;
-      ++OutSummary.TargetAcquiredCount;
-      continue;
+        Settings.ShooterCount + Source.FormationIndex);
+      if (Preferred)
+        Target.PreferredTargetRef = Preferred->EntityRef;
     }
-
-    const bool bLockedTargetValid =
-      bTargetValid
-      && Target->AgentId
-        == Shooter.State.LockedTargetAgentId
-      && Target->LifecycleSerial
-        == Shooter.State.LockedTargetLifecycleSerial;
-    if (!bLockedTargetValid)
+    const bool bHasLockedPhase =
+      Source.State.AttackPhase
+        != ECrowdDemoRangedAttackPhase::None
+      && Source.State.AttackPhase
+        != ECrowdDemoRangedAttackPhase::AcquireTarget;
+    if (bHasLockedPhase
+      && (!Preferred || !Preferred->bAlive
+        || !Preferred->bStateAlive
+        || Preferred->LifecycleSerial
+          != Preferred->StateLifecycleSerial
+        || Source.State.LockedTargetAgentId
+          != Preferred->AgentId
+        || Source.State.LockedTargetLifecycleSerial
+          != Preferred->LifecycleSerial))
     {
-      Shooter.State.AttackPhase =
-        ECrowdDemoRangedAttackPhase::AcquireTarget;
-      Shooter.State.AttackPhaseEnterFixedStep = FixedStepIndex;
-      Shooter.State.LockedTargetAgentId = INDEX_NONE;
-      Shooter.State.LockedTargetLifecycleSerial = 0;
-      Shooter.State.TargetAgentId = INDEX_NONE;
-      Shooter.State.TargetLifecycleSerial = 0;
-      Shooter.State.bFireRequestIssued = false;
-      ++OutSummary.InvalidTargetLifecycleCount;
-      continue;
+      // Preserve the legacy T8 contract: a stale fixed-pair lock returns to
+      // Acquire for this Boundary and cannot immediately reacquire/fire.
+      Target.bCanAttack = false;
     }
-
-    switch (Shooter.State.AttackPhase)
+    if (const FCrowdDemoRangedAttackAgent* ExistingTarget =
+        FindByAgentId(InOutAgents, Source.State.TargetAgentId))
     {
-    case ECrowdDemoRangedAttackPhase::Windup:
-      if (!Shooter.State.bFireRequestIssued
-        && FixedStepIndex
-          - Shooter.State.AttackPhaseEnterFixedStep
-          >= Settings.WindupFixedSteps)
-      {
-        const FVector Direction =
-          (Shooter.State.LockedTargetLocation
-            - Shooter.Position).GetSafeNormal();
-        if (Direction.IsNearlyZero())
-          return false;
-        ++Shooter.State.FireSequence;
-        Shooter.State.bFireRequestIssued = true;
-        Shooter.State.AttackPhase =
-          ECrowdDemoRangedAttackPhase::Fire;
-        Shooter.State.AttackPhaseEnterFixedStep = FixedStepIndex;
-        FCrowdDemoFireIntent& Intent =
-          OutFireIntents.AddDefaulted_GetRef();
-        Intent.ProjectileId = MakeProjectileId(
-          RoundId, Shooter.AgentId, Shooter.State.FireSequence);
-        Intent.FixedStepIndex = FixedStepIndex;
-        Intent.Instigator = Shooter.EntityRef;
-        Intent.Target = Target->EntityRef;
-        Intent.FireSequence = Shooter.State.FireSequence;
-        Intent.SourceFactionId = Shooter.FactionId;
-        Intent.NavLayer = Shooter.NavLayer;
-        Intent.Position = QuantizeVector(
-          Shooter.Position
-            + Direction * Settings.MuzzleForwardOffsetCm,
-          Settings.PositionQuantumCm);
-        Intent.Velocity = QuantizeVector(
-          Direction * Settings.ProjectileSpeedCmps,
-          Settings.VelocityQuantumCmps);
-        if (!Intent.IsValid()) return false;
-        ++OutSummary.CompletedWindupCount;
-      }
-      break;
-    case ECrowdDemoRangedAttackPhase::Fire:
-      Shooter.State.AttackPhase =
-        ECrowdDemoRangedAttackPhase::Recovery;
-      Shooter.State.AttackPhaseEnterFixedStep = FixedStepIndex;
-      break;
-    case ECrowdDemoRangedAttackPhase::Recovery:
-      if (FixedStepIndex
-        - Shooter.State.AttackPhaseEnterFixedStep
-        >= Settings.RecoveryFixedSteps)
-      {
-        Shooter.State.AttackPhase =
-          ECrowdDemoRangedAttackPhase::Cooldown;
-        Shooter.State.AttackPhaseEnterFixedStep =
-          FixedStepIndex;
-        Shooter.State.CooldownEndFixedStep =
-          FixedStepIndex + Settings.CooldownFixedSteps;
-      }
-      break;
-    case ECrowdDemoRangedAttackPhase::Cooldown:
-      if (FixedStepIndex
-        >= Shooter.State.CooldownEndFixedStep)
-      {
-        Shooter.State.AttackPhase =
-          ECrowdDemoRangedAttackPhase::AcquireTarget;
-        Shooter.State.AttackPhaseEnterFixedStep =
-          FixedStepIndex;
-        Shooter.State.bFireRequestIssued = false;
-      }
-      break;
-    default:
-      break;
+      Target.State.TargetRef = ExistingTarget->EntityRef;
+      Target.State.TargetRef.LifecycleSerial =
+        static_cast<uint32>(
+          Source.State.TargetLifecycleSerial);
     }
+    if (const FCrowdDemoRangedAttackAgent* ExistingLocked =
+        FindByAgentId(
+          InOutAgents, Source.State.LockedTargetAgentId))
+    {
+      Target.State.LockedTargetRef = ExistingLocked->EntityRef;
+      Target.State.LockedTargetRef.LifecycleSerial =
+        static_cast<uint32>(
+          Source.State.LockedTargetLifecycleSerial);
+    }
+    Target.State.Phase =
+      ToGenericPhase(Source.State.AttackPhase);
+    Target.State.PhaseEnterFixedStep =
+      Source.State.AttackPhaseEnterFixedStep;
+    Target.State.CooldownEndFixedStep =
+      Source.State.CooldownEndFixedStep;
+    Target.State.LockedTargetLocation =
+      Source.State.LockedTargetLocation;
+    Target.State.Revision =
+      static_cast<uint32>(Source.State.BusinessStateRevision);
+    Target.State.FireSequence =
+      static_cast<uint32>(Source.State.FireSequence);
+    Target.State.bCommitIssued =
+      Source.State.bFireRequestIssued;
   }
-  OutFireIntents.Sort([](const auto& A, const auto& B)
+
+  TArray<FCrowdDemoAttackIntent> GenericIntents;
+  FCrowdDemoAttackPlanSummary GenericSummary;
+  if (!FCrowdDemoAttackPlanner::Advance(
+      RoundId, FixedStepIndex, MakeArrayView(&Profile, 1),
+      GenericAgents, GenericIntents, GenericSummary))
+    return false;
+
+  for (FCrowdDemoRangedAttackAgent& Target : InOutAgents)
   {
-    if (A.FixedStepIndex != B.FixedStepIndex)
-      return A.FixedStepIndex < B.FixedStepIndex;
-    if (A.Instigator != B.Instigator)
-      return A.Instigator < B.Instigator;
-    return A.FireSequence < B.FireSequence;
-  });
-  OutSummary.bValid = true;
-  return true;
+    const FCrowdDemoAttackAgent* Source =
+      GenericAgents.FindByPredicate(
+        [&Target](const FCrowdDemoAttackAgent& Candidate)
+        {
+          return Candidate.EntityRef == Target.EntityRef;
+        });
+    if (!Source) return false;
+    Target.State.AttackPhase = ToLegacyPhase(Source->State.Phase);
+    Target.State.AttackPhaseEnterFixedStep =
+      static_cast<int32>(Source->State.PhaseEnterFixedStep);
+    Target.State.CooldownEndFixedStep =
+      static_cast<int32>(Source->State.CooldownEndFixedStep);
+    Target.State.LockedTargetLocation =
+      Source->State.LockedTargetLocation;
+    Target.State.FireSequence =
+      static_cast<int32>(Source->State.FireSequence);
+    Target.State.bFireRequestIssued =
+      Source->State.bCommitIssued;
+    Target.State.BusinessStateRevision =
+      static_cast<int32>(Source->State.Revision);
+    if (const FCrowdDemoRangedAttackAgent* StateTarget =
+        FindByRef(InOutAgents, Source->State.TargetRef))
+    {
+      Target.State.TargetAgentId = StateTarget->AgentId;
+      Target.State.TargetLifecycleSerial =
+        StateTarget->LifecycleSerial;
+    }
+    else
+    {
+      Target.State.TargetAgentId = INDEX_NONE;
+      Target.State.TargetLifecycleSerial = 0;
+    }
+    if (const FCrowdDemoRangedAttackAgent* LockedTarget =
+        FindByRef(InOutAgents, Source->State.LockedTargetRef))
+    {
+      Target.State.LockedTargetAgentId = LockedTarget->AgentId;
+      Target.State.LockedTargetLifecycleSerial =
+        LockedTarget->LifecycleSerial;
+    }
+    else
+    {
+      Target.State.LockedTargetAgentId = INDEX_NONE;
+      Target.State.LockedTargetLifecycleSerial = 0;
+    }
+    Target.State.BusinessState =
+      Source->State.Phase == ECrowdDemoAttackPlannerPhase::None
+        || Source->State.Phase
+          == ECrowdDemoAttackPlannerPhase::AcquireTarget
+      ? ECrowdDemoRangedBusinessState::Idle
+      : ECrowdDemoRangedBusinessState::Attacking;
+    Target.State.BusinessStateEnterFixedStep =
+      Target.State.AttackPhaseEnterFixedStep;
+  }
+
+  for (const FCrowdDemoAttackIntent& Source : GenericIntents)
+  {
+    const FCrowdDemoRangedAttackAgent* Instigator =
+      FindByRef(InOutAgents, Source.Instigator);
+    if (!Instigator) return false;
+    FCrowdDemoFireIntent& Target =
+      OutFireIntents.AddDefaulted_GetRef();
+    // T8's persisted hit ledger orders events by this monotonic identity.
+    // The generic commit identity is intentionally opaque, so the legacy
+    // ranged adapter must retain the versioned projectile identity contract.
+    Target.ProjectileId = MakeLegacyProjectileId(
+      RoundId, Instigator->AgentId,
+      static_cast<int32>(Source.FireSequence));
+    Target.FixedStepIndex = Source.FixedStepIndex;
+    Target.Instigator = Source.Instigator;
+    Target.Target = Source.Target;
+    Target.FireSequence =
+      static_cast<int32>(Source.FireSequence);
+    Target.SourceFactionId = Source.SourceFactionId;
+    Target.NavLayer = Source.NavLayer;
+    Target.Position = Source.Position;
+    Target.Velocity =
+      Source.Direction * Source.ProjectileSpeedCmps;
+    if (!Target.IsValid()) return false;
+  }
+  OutSummary.bValid = GenericSummary.bValid;
+  OutSummary.TargetAcquiredCount =
+    GenericSummary.TargetAcquiredCount;
+  OutSummary.CompletedWindupCount =
+    GenericSummary.CompletedWindupCount;
+  OutSummary.InvalidTargetLifecycleCount =
+    GenericSummary.InvalidTargetLifecycleCount;
+  return OutSummary.bValid;
 }

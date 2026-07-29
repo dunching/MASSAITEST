@@ -174,12 +174,6 @@ bool FCrowdDemoMixedSandboxCompositionTest::RunTest(const FString& Parameters)
   Distance.MaximumCorrectionSpeedCmps = 80.0f;
   FCrowdFaceEntityPayload FaceTarget;
   FaceTarget.TargetRef = Target;
-  FCrowdDemoBehaviorSourcePayload Attack;
-  Attack.TargetRef = Target;
-  Attack.CommitId = 0x1002;
-  Attack.PrimaryId = CrowdDemoBehaviorAdapterIds::CombatHit;
-  Attack.SecondaryId = 1;
-  Attack.Quantity = 25;
   FCrowdMovementLockPayload Lock;
   const TArray<FCrowdDemoDesiredSource> AttackerDesired = {
     MakeDesiredSource(
@@ -191,9 +185,6 @@ bool FCrowdDemoMixedSandboxCompositionTest::RunTest(const FString& Parameters)
     MakeDesiredSource(
       CrowdDemoBehaviorControllerIds::Facing, 1,
       CrowdStandardSources::FaceEntity, FaceTarget),
-    MakeDesiredSource(
-      CrowdDemoBehaviorControllerIds::Interaction, 1,
-      CrowdDemoSourceTypeIds::AttackTarget, Attack, 1),
     MakeDesiredSource(
       CrowdDemoBehaviorControllerIds::Reaction, 1,
       CrowdStandardSources::MovementLock, Lock, 1)};
@@ -215,8 +206,8 @@ bool FCrowdDemoMixedSandboxCompositionTest::RunTest(const FString& Parameters)
     Prepared.Entities[0].ResolvedChannels.bMovementLocked);
   TestTrue(TEXT("pickup business keeps resolved movement"),
     !Prepared.Entities[0].ResolvedChannels.DesiredVelocity.IsNearlyZero());
-  TestTrue(TEXT("attack produces business output"),
-    Prepared.Entities[1].ResolvedChannels.Business.Num() == 1);
+  TestTrue(TEXT("attack business is no longer a behavior source"),
+    Prepared.Entities[1].ResolvedChannels.Business.IsEmpty());
   TestTrue(TEXT("attack stops through explicit constraint"),
     Prepared.Entities[1].ResolvedChannels.bMovementLocked);
   TestTrue(TEXT("source boundary commits"), Runtime.CommitPrepared(Prepared));
@@ -326,6 +317,14 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
   TestTrue(TEXT("baseline publication failure retries with a bounded cooldown"),
     Coordinator.Contains(TEXT("*EligibleSeconds = World->GetTimeSeconds() + 1.0"))
       && Coordinator.Contains(TEXT("stage=baseline_retry")));
+  TestTrue(TEXT("mixed attack snapshot has an explicit v2 gate"),
+    Coordinator.Contains(TEXT("MixedAgentPayloadVersion = 2"))
+      && Coordinator.Contains(TEXT(
+        "PayloadVersion != MixedAgentPayloadVersion")));
+  TestTrue(TEXT("late join carries complete cooldown state"),
+    Coordinator.Contains(TEXT("AttackCooldownEndFixedStep"))
+      && Coordinator.Contains(TEXT(
+        "Slot.AttackState.CooldownEndFixedStep")));
   TestTrue(TEXT("mixed path delegates atomic presentation lifecycle"),
     Coordinator.Contains(TEXT("UMassCrowdPresentationSubsystem"))
       && Coordinator.Contains(TEXT("PrepareFrame"))
@@ -553,16 +552,7 @@ bool FCrowdDemoStandardSourceLifecycleCompositionTest::RunTest(
     Persistent.Num());
 
   FCrowdMovementLockPayload Lock;
-  FCrowdDemoBehaviorSourcePayload Attack;
-  Attack.TargetRef = {1, 42, 1};
-  Attack.CommitId = 0x4101;
-  Attack.PrimaryId = CrowdDemoBehaviorAdapterIds::CombatHit;
-  Attack.SecondaryId = 1;
-  Attack.Quantity = 25;
   TArray<FCrowdDemoDesiredSource> WithAttack = Persistent;
-  WithAttack.Add(MakeDesiredSource(
-    CrowdDemoBehaviorControllerIds::Interaction, 1,
-    CrowdDemoSourceTypeIds::AttackTarget, Attack, 1));
   WithAttack.Add(MakeDesiredSource(
     CrowdDemoBehaviorControllerIds::Reaction, 1,
     CrowdStandardSources::MovementLock, Lock, 1));
@@ -574,8 +564,8 @@ bool FCrowdDemoStandardSourceLifecycleCompositionTest::RunTest(
     AttackPrepared.Entities.Num() == 1
       && AttackPrepared.Entities[0]
         .ResolvedChannels.bMovementLocked);
-  TestEqual(TEXT("attack still emits business request"),
-    AttackPrepared.Entities[0].ResolvedChannels.Business.Num(), 1);
+  TestTrue(TEXT("attack intent stays outside behavior channels"),
+    AttackPrepared.Entities[0].ResolvedChannels.Business.IsEmpty());
   FCrowdBehaviorPreparedBoundary Recovered;
   if (!TestTrue(TEXT("one-frame attack lock is removed"),
       PrepareAndCommit(5, Persistent, &Recovered)))

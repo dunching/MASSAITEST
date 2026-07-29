@@ -91,6 +91,34 @@ namespace CrowdDemoBusinessPlannerPrivate
     return nullptr;
   }
 
+  const FCrowdDemoPlannerAgentFact* SelectEnemy(
+    const FCrowdDemoPlanningSnapshot& Snapshot,
+    const FCrowdDemoPlannerAgentFact& Agent)
+  {
+    const FCrowdDemoPlannerAgentFact* Best = nullptr;
+    int64 BestDistanceQ = MAX_int64;
+    for (const FCrowdDemoPlannerAgentFact& Candidate
+      : Snapshot.Agents)
+    {
+      if (!Candidate.bActive || Candidate.Health <= 0
+        || Candidate.EntityRef == Agent.EntityRef
+        || Candidate.FactionId == 0
+        || Candidate.FactionId == Agent.FactionId)
+        continue;
+      const int64 DistanceQ = FMath::RoundToInt64(
+        FVector::DistSquared(
+          Agent.Position, Candidate.Position));
+      if (!Best || DistanceQ < BestDistanceQ
+        || (DistanceQ == BestDistanceQ
+          && Candidate.EntityRef < Best->EntityRef))
+      {
+        Best = &Candidate;
+        BestDistanceQ = DistanceQ;
+      }
+    }
+    return Best;
+  }
+
   bool AddFaceMovement(FCrowdDemoPlannerWriter& Writer)
   {
     FCrowdFaceMovementPayload Facing;
@@ -257,21 +285,23 @@ namespace CrowdDemoBusinessPlannerPrivate
         && Snapshot.FixedStepIndex - Agent.LastAttackFixedStep
           >= Snapshot.Settings.AttackCooldownSteps)
       {
-        FCrowdDemoBehaviorSourcePayload Attack;
-        Attack.PrimaryId = CrowdDemoBehaviorAdapterIds::CombatHit;
-        Attack.SecondaryId =
-          static_cast<uint32>(ECrowdActiveBehavior::Attack) + 1;
+        FCrowdDemoHostIntent Attack;
+        Attack.ActionTypeId =
+          CrowdDemoBusinessActions::Attack;
+        Attack.PayloadTypeId =
+          CrowdDemoAttackPayloadTypeIds::Melee;
         Attack.Quantity = 25;
+        Attack.InstigatorRef = Agent.EntityRef;
         Attack.TargetRef = Target->EntityRef;
+        Attack.ExpectedRevision = Agent.TransitionRevision;
+        Attack.Vector = Target->Position;
         Attack.CommitId = FCrowdDemoBusinessCommitId::Make(
           ECrowdDemoBusinessCommitKind::CombatHit,
           Snapshot.FixedStepIndex, Agent.TransitionRevision,
           Agent.EntityRef, {}, Target->EntityRef,
-          Attack.SecondaryId, Attack.Quantity);
+          Attack.PayloadTypeId, Attack.Quantity);
         FCrowdMovementLockPayload Lock;
-        if (!Writer.AddDemo(
-            CrowdDemoBehaviorControllerIds::Interaction, 1,
-            CrowdDemoSourceTypeIds::AttackTarget, Attack, 1)
+        if (!Writer.AddHostIntent(Attack)
           || !Writer.AddStandard(
             CrowdDemoBehaviorControllerIds::Reaction, 1,
             CrowdStandardSources::MovementLock, Lock, 1))
@@ -448,6 +478,80 @@ namespace CrowdDemoBusinessPlannerPrivate
     FCrowdDemoBusinessPlannerId Id;
   };
 
+  class FMixedCombatPlanner final
+    : public ICrowdDemoBusinessPlanner
+  {
+  public:
+    FCrowdDemoBusinessPlannerId GetPlannerId() const override
+    {
+      return CrowdDemoBusinessPlanners::MixedCombat;
+    }
+
+    bool Evaluate(
+      const FCrowdDemoPlanningSnapshot& Snapshot,
+      const FCrowdDemoPlannerAgentFact& Agent,
+      FCrowdDemoPlannerWriter& Writer) const override
+    {
+      const FCrowdDemoPlannerAgentFact* Target =
+        SelectEnemy(Snapshot, Agent);
+      if (!Target)
+        return AddSpeedLimit(Writer, Snapshot)
+          && AddFaceMovement(Writer);
+
+      float MinimumDistance = 130.0f;
+      float MaximumDistance = 260.0f;
+      if (Agent.AttackProfileId
+        == CrowdDemoAttackProfileIds::MidRange)
+      {
+        MinimumDistance = 400.0f;
+        MaximumDistance = 600.0f;
+      }
+      else if (Agent.AttackProfileId
+        == CrowdDemoAttackProfileIds::Ranged)
+      {
+        MinimumDistance = 700.0f;
+        MaximumDistance = 850.0f;
+      }
+      else if (Agent.AttackProfileId
+        != CrowdDemoAttackProfileIds::Melee)
+      {
+        return false;
+      }
+
+      FCrowdPursueEntityPayload Pursue;
+      Pursue.TargetRef = Target->EntityRef;
+      Pursue.MaximumSpeedCmps = Snapshot.Settings.MaximumSpeedCmps;
+      Pursue.AcceptanceRadiusCm = MinimumDistance;
+      Pursue.MaximumPredictionSeconds = 0.25f;
+      FCrowdMaintainDistancePayload Distance;
+      Distance.TargetRef = Target->EntityRef;
+      Distance.MinimumDistanceCm = MinimumDistance;
+      Distance.MaximumDistanceCm = MaximumDistance;
+      Distance.HysteresisCm = 10.0f;
+      Distance.MaximumCorrectionSpeedCmps = 180.0f;
+      if (!Writer.AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 1,
+          CrowdStandardSources::PursueEntity, Pursue)
+        || !Writer.AddStandard(
+          CrowdDemoBehaviorControllerIds::Navigation, 2,
+          CrowdStandardSources::MaintainDistance, Distance)
+        || !AddSpeedLimit(Writer, Snapshot)
+        || !AddFaceEntity(
+          Writer, Target->EntityRef, Snapshot.FactRevision))
+        return false;
+      if (Agent.AttackState.Phase
+        == ECrowdDemoAttackPlannerPhase::Commit)
+      {
+        FCrowdMovementLockPayload Lock;
+        if (!Writer.AddStandard(
+            CrowdDemoBehaviorControllerIds::Reaction, 1,
+            CrowdStandardSources::MovementLock, Lock, 1))
+          return false;
+      }
+      return true;
+    }
+  };
+
   uint32 DiagnosticLabelFor(
     const FCrowdDemoPlanningSnapshot& Snapshot,
     const FCrowdDemoPlannerAgentFact& Agent,
@@ -463,11 +567,11 @@ namespace CrowdDemoBusinessPlannerPrivate
     if (Agent.Assignment.PlannerId
       == CrowdDemoBusinessPlanners::PursueAttack)
     {
-      const bool bAttacking = Decision.DesiredSources.ContainsByPredicate(
-        [](const FCrowdDemoDesiredSource& Source)
+      const bool bAttacking = Decision.HostIntents.ContainsByPredicate(
+        [](const FCrowdDemoHostIntent& Intent)
         {
-          return Source.SourceTypeId
-            == CrowdDemoSourceTypeIds::AttackTarget;
+          return Intent.ActionTypeId
+            == CrowdDemoBusinessActions::Attack;
         });
       return static_cast<uint32>(bAttacking
         ? ECrowdActiveBehavior::Attack
@@ -498,6 +602,17 @@ namespace CrowdDemoBusinessPlannerPrivate
       return static_cast<uint32>(Decision.TargetRef.IsValid()
         ? ECrowdActiveBehavior::MoveTo
         : ECrowdActiveBehavior::Idle);
+    if (Agent.Assignment.PlannerId
+      == CrowdDemoBusinessPlanners::MixedCombat)
+      return static_cast<uint32>(
+        Agent.AttackState.Phase
+            == ECrowdDemoAttackPlannerPhase::Windup
+          || Agent.AttackState.Phase
+            == ECrowdDemoAttackPlannerPhase::Commit
+        ? ECrowdActiveBehavior::Attack
+        : Decision.TargetRef.IsValid()
+          ? ECrowdActiveBehavior::Pursue
+          : ECrowdActiveBehavior::Idle);
     return static_cast<uint32>(ECrowdActiveBehavior::Idle);
   }
 }
@@ -512,6 +627,8 @@ bool FCrowdDemoPlannerAgentFact::IsValid() const
     && !Position.ContainsNaN()
     && !Velocity.ContainsNaN()
     && !Facing.ContainsNaN()
+    && (FactionId != 0 || AttackProfileId == 0)
+    && (AttackProfileId == 0 || AttackState.IsValid())
     && (TaskRef.IsUnset() || TaskRef.IsValid())
     && Health >= 0
     && InteractionLayer < 64
@@ -575,8 +692,17 @@ bool FCrowdDemoPlanningSnapshot::Finalize()
     FoldIntegral(Hash, Agent.Assignment.PlannerId.Value);
     FoldIntegral(Hash, Agent.Assignment.CohortId);
     FoldIntegral(Hash, Agent.Assignment.Ordinal);
+    FoldIntegral(Hash, Agent.FactionId);
+    FoldIntegral(Hash, Agent.AttackProfileId);
     FoldVector(Hash, Agent.Position);
     FoldIntegral(Hash, static_cast<uint32>(Agent.Health));
+    FoldIntegral(
+      Hash, static_cast<uint8>(Agent.AttackState.Phase));
+    FoldIntegral(
+      Hash, static_cast<uint64>(
+        Agent.AttackState.PhaseEnterFixedStep));
+    FoldRef(Hash, Agent.AttackState.TargetRef);
+    FoldIntegral(Hash, Agent.AttackState.FireSequence);
   }
   for (int32 Index = 0; Index < Objectives.Num(); ++Index)
   {
@@ -809,6 +935,8 @@ bool FCrowdDemoBusinessPlannerRunner::BuildDefaultRegistry(
     && OutRegistry.Register(
       MakeShared<FNoSourcePlanner, ESPMode::ThreadSafe>(
         CrowdDemoBusinessPlanners::RangedAttack))
+    && OutRegistry.Register(
+      MakeShared<FMixedCombatPlanner, ESPMode::ThreadSafe>())
     && OutRegistry.Freeze();
 }
 

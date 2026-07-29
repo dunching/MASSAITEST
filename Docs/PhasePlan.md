@@ -1,8 +1,24 @@
 # MassAI Crowd Demo 当前阶段计划
 
+## 2026-07-29 T9 Mixed Combat Integration
+
+[COMPUTED][HIGH] T9 Small已实现并通过最新双端生产门。场景固定20实体、10对10、无重生；每方4 Melee、2 MidRange、4 Ranged。通用攻击状态机、Attack Intent、Melee/MidRange Spatial Sweep、Ranged Mass Projectile、Combat Resolver、Prepared Health/Death提交、目标失效重选、TargetRegion/Flow缓存重建和v2可靠攻击快照均已接入。
+
+T9.1 [x] [COMPUTED][HIGH] `MassCrowdDemoBusiness`提供`MixedCombat=20006`、Planner=`21008`、Action=`23006`以及三类Payload/Profile稳定ID；T8与T9共用Acquire→Windup→Commit→Recovery→Cooldown状态机。
+
+T9.2 [x] [COMPUTED][HIGH] 生产`AttackTarget` Source已删除；攻击由Planner产生Intent，Commit步只叠加一帧`MovementLock`。Behavior Codec保持v3，Registry黄金值版本化为`11335697795273479593`，旧Registry拒绝/resync。
+
+T9.3 [x] [COMPUTED][HIGH] `ImpactFact`已泛化为`ImpactId + ImpactTypeId`；Melee/MidRange与Projectile稳定合并后统一进入Combat Resolver。死亡实体从即时Spatial目标集合排除，下一Boundary清理目标Context并重选，目标变化会清空旧Goal缓存以重建TargetRegion/Flow计划。
+
+T9.4 [x] [COMPUTED][HIGH] 8517双端门在fixed step 600通过：alive=`11`、三类intent=`61/31/21`、impact/damage/death=`62/61/9`、target switch/region rebuild=`227/227`、referenced dead=`0`、Projectile spawned/impacted/expired/active=`21/5/15/1`且duplicate=`0`、双端entity/membership Hash一致，服务端p95=`2.910ms`。
+
+T9.5 [x] [COMPUTED][HIGH] 完整自动化为MassCrowd `64/64`、CrowdDemo `133/133`；T8双端版本化黄金门通过，Development/DebugGame × ForceUnity/DisableUnity四构建均成功。
+
+[INFERRED][HIGH] T10玩家Pawn、`GameplayCommand`、玩家线形/圆形技能、持续生成和完整游戏循环继续延期，不属于T9完成结论。
+
 ## 2026-07-29 pre-T9检查点
 
-[COMPUTED][HIGH] DP0–DP6实现与验证已经完成，T9 Mixed Combat Integration尚未开始。本检查点固定保留MassCrowd 64/64、CrowdDemo 131/131、四构建、T8黄金门以及Mixed 20/100/500证据；T9必须从独立后续修改开始，不得把DP工作区与T9实现混为同一恢复点。
+[COMPUTED][HIGH] 本节是提交`5b947389`的pre-T9历史检查点：DP0–DP6已完成而T9尚未开始。它固定保留MassCrowd 64/64、CrowdDemo 131/131、四构建、旧T8黄金门以及Mixed 20/100/500证据；当前状态以上方T9章节为准。
 
 ## 2026-07-29 现行 DP0–DP6 Demo业务规划模块化
 

@@ -2,7 +2,18 @@
 
 [INFERRED][HIGH] 本表只在生产调用链和对应专项门同时满足时勾选。接口、Codec或测试夹具存在但未接入生产，不得标为完整通过；Behavior Source现行状态以`EntityBehaviorSourceArchitecture.md`为准。
 
-[COMPUTED][HIGH] DP0–DP6 Demo业务规划独立模块与全入口迁移已关闭；PJ0–PJ6、S0–S6和R0–R7继续保持关闭。pre-T9检查点只记录已验证事实；T9 Mixed Combat Integration尚未开始。
+[COMPUTED][HIGH] T9 Mixed Combat Integration、DP0–DP6、PJ0–PJ6、S0–S6和R0–R7均已关闭。pre-T9提交`5b947389`只作为历史恢复基线；当前未关闭的游戏循环阶段是T10。
+
+## T9 Mixed Combat Integration检查表
+
+- [x] [COMPUTED][HIGH] 公共业务合同包含MixedCombat Scenario/Planner/Attack Action、Melee/MidRange/Ranged Payload与Profile稳定ID，以及统一五阶段攻击状态机。
+- [x] [COMPUTED][HIGH] `AttackTarget`生产Source已删除；三类攻击由Intent驱动，Commit步MovementLock只持续一帧。
+- [x] [COMPUTED][HIGH] Melee Moving Sphere、MidRange Capsule等价Sweep和Ranged Mass Projectile共享Spatial索引、通用Impact/Hit与Combat Resolver出口。
+- [x] [COMPUTED][HIGH] 死亡、目标失效、下一Boundary重选、TargetRegion/Flow缓存重建和死亡实体不再被引用/即时Sweep命中均已接入。
+- [x] [COMPUTED][HIGH] v2 Mixed Agent可靠Payload包含Profile、Target、Phase、PhaseEnter、CooldownEnd和FireSequence；旧Payload精确拒绝，late join恢复攻击状态。
+- [x] [COMPUTED][HIGH] 8517双端20实体门通过三类攻击、9次死亡、227次目标切换/区域计划重建、零死亡引用、零重复Projectile、Hash一致和`2.910ms` p95。
+- [x] [COMPUTED][HIGH] 完整自动化为MassCrowd 64/64、CrowdDemo 133/133；Registry黄金值为`11335697795273479593`。
+- [x] [COMPUTED][HIGH] T8双端版本化黄金门与Development/DebugGame × ForceUnity/DisableUnity四构建均通过。
 
 ## DP0–DP6 Demo业务规划检查表
 

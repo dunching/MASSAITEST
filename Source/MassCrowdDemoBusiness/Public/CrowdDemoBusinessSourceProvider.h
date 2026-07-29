@@ -19,7 +19,6 @@ namespace CrowdDemoSourceTypeIds
   inline constexpr FCrowdBehaviorSourceTypeId CarryCargo{1301};
   inline constexpr FCrowdBehaviorSourceTypeId PickupInteraction{1401};
   inline constexpr FCrowdBehaviorSourceTypeId DeliverInteraction{1402};
-  inline constexpr FCrowdBehaviorSourceTypeId AttackTarget{1501};
 }
 
 namespace CrowdDemoBehaviorSchemas

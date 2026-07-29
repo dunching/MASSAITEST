@@ -35,7 +35,7 @@ namespace
 
 bool FCrowdImpactFact::IsValid() const
 {
-  if (ProjectileId == 0 || FixedStepIndex < 0
+  if (ImpactId == 0 || ImpactTypeId == 0 || FixedStepIndex < 0
     || !Instigator.IsValid() || CollisionProfileId == 0
     || EffectProfileId == 0 || TimeOfImpactQ > 1000000
     || Position.ContainsNaN() || Normal.ContainsNaN()
@@ -49,7 +49,8 @@ bool FCrowdImpactFact::IsValid() const
 void FCrowdImpactFact::RecalculateStableHash()
 {
   uint64 Hash = CombatFactsFnvOffset;
-  FoldCombatFactHash(Hash, ProjectileId);
+  FoldCombatFactHash(Hash, ImpactId);
+  FoldCombatFactHash(Hash, ImpactTypeId);
   FoldCombatFactHash(Hash, static_cast<uint64>(FixedStepIndex));
   FoldCombatFactRef(Hash, Instigator);
   FoldCombatFactRef(Hash, Target);

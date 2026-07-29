@@ -467,7 +467,7 @@ bool FCrowdDemoProjectileAdapters::BuildDemoHitFacts(
       || !Hit.Impact.Target.IsValid())
       return false;
     FCrowdDemoHitFact& Fact = OutFacts.AddDefaulted_GetRef();
-    Fact.HitEventId = Hit.Impact.ProjectileId;
+    Fact.HitEventId = Hit.Impact.ImpactId;
     Fact.ApplyFixedStep =
       static_cast<int32>(Hit.Impact.FixedStepIndex);
     Fact.SourceAgentId = static_cast<int32>(
@@ -550,7 +550,7 @@ bool FCrowdDemoProjectileAdapters::BuildDemoHitFacts(
       [&Hit](const FCrowdDemoHitFact& Candidate)
       {
         return Candidate.HitEventId
-          == Hit.Impact.ProjectileId;
+          == Hit.Impact.ImpactId;
       });
     if (!Fact)
     {

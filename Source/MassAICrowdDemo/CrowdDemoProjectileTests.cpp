@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "Mass/CrowdDemoMassFragments.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
+#include "Mass/CrowdDemoAttackHostAdapter.h"
 #include "Mass/CrowdDemoProjectileAdapters.h"
 #include "MassCommonFragments.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
@@ -1266,6 +1267,152 @@ bool FCrowdDemoR7ThirdPartySourceMassProjectileGateTest::RunTest(
     TestTrue(TEXT("projectile impacts and suppression preserve persistent sources"),
       SourceSet && SourceSet->Instances.Num() == 4);
   }
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoAttackHostAdapterTest,
+  "CrowdDemo.Projectiles.MixedAttackHostAdapter",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoAttackHostAdapterTest::RunTest(
+  const FString& Parameters)
+{
+  TArray<FCrowdDemoAttackTargetSnapshot> Targets;
+  const auto AddTarget = [&Targets](
+    const uint64 StableId, const uint32 FactionId,
+    const FVector& Position)
+  {
+    FCrowdDemoAttackTargetSnapshot& Target =
+      Targets.AddDefaulted_GetRef();
+    Target.Body.EntityRef = {1, StableId, 1};
+    Target.Body.StartPosition = Position;
+    Target.Body.EndPosition = Position;
+    Target.Body.RadiusCm = 42.0f;
+    Target.Body.RecalculateStableHash();
+    Target.FactionId = FactionId;
+  };
+  AddTarget(1, 1, FVector(0.0, 0.0, 0.0));
+  AddTarget(11, 2, FVector(150.0, 0.0, 0.0));
+  AddTarget(2, 1, FVector(0.0, 1000.0, 0.0));
+  AddTarget(12, 2, FVector(450.0, 1000.0, 0.0));
+  AddTarget(3, 1, FVector(0.0, 2000.0, 0.0));
+  AddTarget(13, 2, FVector(850.0, 2000.0, 0.0));
+
+  TArray<FCrowdDemoAttackIntent> Intents;
+  const auto AddIntent = [&Intents](
+    const uint64 ImpactId, const uint64 SourceId,
+    const uint64 TargetId, const uint32 ProfileId,
+    const uint32 PayloadTypeId,
+    const ECrowdDemoAttackArchetype Archetype,
+    const FVector& Position, const float Range)
+  {
+    FCrowdDemoAttackIntent& Intent =
+      Intents.AddDefaulted_GetRef();
+    Intent.ImpactId = ImpactId;
+    Intent.FixedStepIndex = 10;
+    Intent.Instigator = {1, SourceId, 1};
+    Intent.Target = {1, TargetId, 1};
+    Intent.AttackProfileId = ProfileId;
+    Intent.PayloadTypeId = PayloadTypeId;
+    Intent.EffectProfileId = 1;
+    Intent.Archetype = Archetype;
+    Intent.FireSequence = 1;
+    Intent.SourceFactionId = 1;
+    Intent.Position = Position;
+    Intent.Direction = FVector::ForwardVector;
+    Intent.TargetStartPosition =
+      Position + FVector(Range, 0.0, 0.0);
+    Intent.TargetEndPosition = Intent.TargetStartPosition;
+    Intent.RangeCm = Range;
+    Intent.QueryRadiusCm = 20.0f;
+    Intent.ProjectileSpeedCmps =
+      Archetype == ECrowdDemoAttackArchetype::Ranged
+        ? 1000.0f : 0.0f;
+    Intent.Damage = 20;
+  };
+  AddIntent(
+    101, 1, 11, CrowdDemoAttackProfileIds::Melee,
+    CrowdDemoAttackPayloadTypeIds::Melee,
+    ECrowdDemoAttackArchetype::Melee,
+    FVector(0.0, 0.0, 0.0), 300.0f);
+  AddIntent(
+    102, 2, 12, CrowdDemoAttackProfileIds::MidRange,
+    CrowdDemoAttackPayloadTypeIds::MidRange,
+    ECrowdDemoAttackArchetype::MidRange,
+    FVector(0.0, 1000.0, 0.0), 600.0f);
+  AddIntent(
+    103, 3, 13, CrowdDemoAttackProfileIds::Ranged,
+    CrowdDemoAttackPayloadTypeIds::Ranged,
+    ECrowdDemoAttackArchetype::Ranged,
+    FVector(0.0, 2000.0, 0.0), 1000.0f);
+
+  FCrowdDemoPreparedAttackBoundary Prepared;
+  if (!TestTrue(TEXT("mixed attack prepare"),
+      FCrowdDemoAttackHostAdapter::Prepare(
+        10, Intents, Targets, {}, Prepared)))
+    return false;
+  TestTrue(TEXT("prepared attack valid"), Prepared.IsValid());
+  TestEqual(TEXT("melee intent count"),
+    Prepared.MeleeIntentCount, 1);
+  TestEqual(TEXT("mid-range intent count"),
+    Prepared.MidRangeIntentCount, 1);
+  TestEqual(TEXT("ranged intent count"),
+    Prepared.RangedIntentCount, 1);
+  TestEqual(TEXT("two immediate impacts"),
+    Prepared.ImmediateImpacts.Num(), 2);
+  TestEqual(TEXT("one projectile request"),
+    Prepared.ProjectileRequests.Num(), 1);
+  if (Prepared.ImmediateImpacts.IsEmpty())
+    return false;
+  if (Prepared.ImmediateImpacts.Num() == 2)
+  {
+    TestEqual(TEXT("melee impact type"),
+      Prepared.ImmediateImpacts[0].ImpactTypeId,
+      CrowdDemoAttackPayloadTypeIds::Melee);
+    TestEqual(TEXT("mid-range impact type"),
+      Prepared.ImmediateImpacts[1].ImpactTypeId,
+      CrowdDemoAttackPayloadTypeIds::MidRange);
+  }
+
+  FCrowdHitFact Hit;
+  Hit.Impact = Prepared.ImmediateImpacts[0];
+  Hit.PayloadTypeId =
+    CrowdDemoProjectileSchemas::HitPayloadTypeId;
+  FCrowdDemoProjectileHitPayload Damage;
+  Damage.Damage = 100.0f;
+  TestTrue(TEXT("damage payload"),
+    Hit.Payload.Set(
+      CrowdDemoProjectileSchemas::HitPayloadSchemaId,
+      Damage));
+  Hit.RecalculateStableHash();
+  TArray<FCrowdDemoAttackHealthState> HealthStates;
+  HealthStates.Add({{1, 1, 1}, 1, 100, true});
+  HealthStates.Add({{1, 11, 1}, 2, 100, true});
+  FCrowdDemoPreparedAttackHealthPatch HealthPatch;
+  TestTrue(TEXT("health patch prepare"),
+    FCrowdDemoAttackHostAdapter::PrepareHealthPatch(
+      10, MakeArrayView(&Hit, 1),
+      HealthStates, HealthPatch));
+  TestTrue(TEXT("health patch valid"), HealthPatch.IsValid());
+  TestEqual(TEXT("one death"), HealthPatch.DeathCount, 1);
+  const FCrowdDemoAttackHealthState* DeadState =
+    HealthPatch.States.FindByPredicate(
+      [](const FCrowdDemoAttackHealthState& State)
+      {
+        return State.EntityRef
+          == FCrowdStableEntityRef{1, 11, 1};
+      });
+  TestNotNull(TEXT("dead state exists"), DeadState);
+  if (DeadState)
+    TestEqual(TEXT("health reaches zero"),
+      DeadState->Health, 0);
+
+  TArray<FCrowdHitFact> DuplicateHits = {Hit, Hit};
+  TestFalse(TEXT("duplicate hit batch rejects"),
+    FCrowdDemoAttackHostAdapter::PrepareHealthPatch(
+      10, DuplicateHits, HealthStates, HealthPatch));
   return true;
 }
 

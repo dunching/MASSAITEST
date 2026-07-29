@@ -221,6 +221,8 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   // profile lifetime. The Round client processor must not compete for the
   // shared profile while one of those scenarios is active.
   if (FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoMixedSandbox"))
+    || FParse::Param(
+      FCommandLine::Get(), TEXT("CrowdDemoMixedCombatIntegration"))
     || FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoContinuousLifecycle"))
     || FParse::Param(FCommandLine::Get(), TEXT("CrowdDemoFriendlyLogisticsSmall")))
   {
