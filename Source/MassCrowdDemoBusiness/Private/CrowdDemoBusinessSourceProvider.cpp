@@ -1,4 +1,4 @@
-#include "CrowdDemoBehaviorSourceProvider.h"
+#include "CrowdDemoBusinessSourceProvider.h"
 
 namespace
 {
@@ -205,6 +205,64 @@ TSharedRef<const ICrowdBehaviorSourceProvider, ESPMode::ThreadSafe>
 CreateCrowdDemoBehaviorSourceProvider()
 {
   return MakeShared<FCrowdDemoBehaviorProvider, ESPMode::ThreadSafe>();
+}
+
+ECrowdActiveBehavior DeriveCrowdDemoDiagnosticBehavior(
+  const FCrowdBehaviorSourceSet& SourceSet)
+{
+  ECrowdActiveBehavior Result = ECrowdActiveBehavior::Idle;
+  uint8 ResultRank = 0;
+  const auto Promote = [&](
+    const uint8 Rank, const ECrowdActiveBehavior Label)
+  {
+    if (Rank <= ResultRank) return;
+    ResultRank = Rank;
+    Result = Label;
+  };
+  for (const FCrowdBehaviorSourceInstance& Instance
+    : SourceSet.Instances)
+  {
+    if (Instance.SourceTypeId
+        == CrowdStandardSources::MovementLock
+      && Instance.Handle.ControllerId
+        == CrowdDemoBehaviorControllerIds::Reaction
+      && Instance.Handle.SourceSequence == 2
+      && Instance.ExpireFixedStep == INDEX_NONE)
+      return ECrowdActiveBehavior::Dead;
+    if (Instance.SourceTypeId
+        == CrowdDemoSourceTypeIds::DeliverInteraction
+      || Instance.SourceTypeId
+        == CrowdDemoSourceTypeIds::CarryCargo)
+      Promote(9, ECrowdActiveBehavior::HaulDeliver);
+    else if (Instance.SourceTypeId
+        == CrowdDemoSourceTypeIds::PickupInteraction
+      || Instance.SourceTypeId
+        == CrowdStandardSources::ArriveAtLocation)
+      Promote(8, ECrowdActiveBehavior::HaulPickup);
+    else if (Instance.SourceTypeId
+        == CrowdDemoSourceTypeIds::AttackTarget)
+      Promote(7, ECrowdActiveBehavior::Attack);
+    else if (Instance.SourceTypeId
+        == CrowdStandardSources::PursueEntity)
+      Promote(6, ECrowdActiveBehavior::Pursue);
+    else if (Instance.SourceTypeId
+        == CrowdStandardSources::FleeFromEntity)
+      Promote(5, ECrowdActiveBehavior::Flee);
+    else if (Instance.SourceTypeId
+        == CrowdStandardSources::WanderSteering)
+      Promote(4, ECrowdActiveBehavior::Wander);
+    else if (Instance.SourceTypeId
+        == CrowdStandardSources::FollowEntity
+      || Instance.SourceTypeId
+        == CrowdStandardSources::FormationOffset)
+      Promote(3, ECrowdActiveBehavior::MoveTo);
+    else if (Instance.SourceTypeId
+        == CrowdStandardSources::MoveToLocation)
+      Promote(2, Instance.Priority == 99
+        ? ECrowdActiveBehavior::Guard
+        : ECrowdActiveBehavior::MoveTo);
+  }
+  return Result;
 }
 
 bool FCrowdDemoSourceSetDiff::BuildDesiredSourceDiff(

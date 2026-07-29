@@ -1,6 +1,6 @@
 #include "CrowdNavSurfaceGraph.h"
-#include "CrowdDemoBehaviorSourceProvider.h"
-#include "Mass/CrowdDemoBehaviorAdapters.h"
+#include "CrowdDemoBusinessSourceProvider.h"
+#include "CrowdDemoBusinessAdapters.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
@@ -249,9 +249,14 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
   TestTrue(TEXT("mixed path owns real lifecycle"),
     Coordinator.Contains(TEXT("LifecycleWorld.ApplyAtBoundary")));
   TestTrue(TEXT("mixed path evaluates composable behavior sources"),
-    Coordinator.Contains(TEXT("FCrowdDemoSourceSetDiff::BuildDesiredSourceDiff"))
+    Coordinator.Contains(TEXT("FCrowdDemoPlanningRuntimeHost::Stage"))
       && Coordinator.Contains(TEXT("BehaviorSourceRuntime->PrepareBoundary"))
-      && Coordinator.Contains(TEXT("ApplyPreparedBehaviorBusiness")));
+      && Coordinator.Contains(TEXT(
+        "FCrowdDemoBusinessPatchAdapter::Prepare")));
+  TestFalse(TEXT("mixed coordinator no longer owns source diff wiring"),
+    Coordinator.Contains(TEXT(
+      "FCrowdDemoSourceSetDiff::BuildDesiredSourceDiff"))
+      || Coordinator.Contains(TEXT("ApplyPlannerDecision(")));
   TestFalse(TEXT("legacy behavior recipe is no longer authoritative"),
     Coordinator.Contains(TEXT("FCrowdDemoBehaviorRecipe")));
   const int32 MovementStart =

@@ -1,4 +1,5 @@
 #include "Misc/AutomationTest.h"
+#include "CrowdDemoFriendlyLogisticsTestDirector.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
@@ -35,8 +36,9 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
   TestTrue(TEXT("scene consumes public transaction store"),
     Coordinator.Contains(TEXT("FCrowdLogisticsTransactionStore"))
       && Coordinator.Contains(TEXT("FCrowdLogisticsKernel::ChooseCarrier")));
-  TestTrue(TEXT("faults are driven by observed task state"),
-    Coordinator.Contains(TEXT("Store.GetTask().State"))
+  TestTrue(TEXT("faults are selected by the test director"),
+    Coordinator.Contains(
+        TEXT("FCrowdDemoFriendlyLogisticsTestDirector::Evaluate"))
       && Coordinator.Contains(TEXT("death_requeue"))
       && Coordinator.Contains(TEXT("RetargetSink"))
       && Coordinator.Contains(TEXT("UnreachableBackoffCount")));
@@ -49,6 +51,17 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
       && Coordinator.Contains(TEXT("BuildOrRefreshNavGraph"))
       && Coordinator.Contains(TEXT("AcquireFlow"))
       && Coordinator.Contains(TEXT("ApplyProductBoundaryCommit")));
+  TestTrue(TEXT("scene movement goal comes from resolved sources"),
+    Coordinator.Contains(TEXT(
+      "ResolvedChannels.MovementGoal.Location"))
+      && Coordinator.Contains(TEXT(
+        "EvaluateFriendlyLogistics"))
+      && Coordinator.Contains(TEXT(
+        "FCrowdDemoPlanningRuntimeHost::Stage")));
+  TestFalse(TEXT("friendly coordinator no longer owns source diff wiring"),
+    Coordinator.Contains(TEXT(
+      "FCrowdDemoSourceSetDiff::BuildDesiredSourceDiff"))
+      || Coordinator.Contains(TEXT("SetEvaluationContext(")));
   TestTrue(TEXT("client presentation consumes replicated corrections"),
     Coordinator.Contains(TEXT("ClientLocations.Find(EntityRef)"))
       && Coordinator.Contains(TEXT(
@@ -80,6 +93,44 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
       TEXT("bPublicPresentationOwnsClient"))
       && MassSubsystem.Contains(
         TEXT("CrowdDemoFriendlyLogisticsSmall")));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoFriendlyLogisticsDirectorTest,
+  "CrowdDemo.FriendlyLogistics.TestDirector",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoFriendlyLogisticsDirectorTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoFriendlyDirectorInput Input;
+  Input.TaskState = ECrowdLogisticsTaskState::Created;
+  Input.bTransitionDelayElapsed = true;
+  TestEqual(TEXT("first miss backs off"),
+    FCrowdDemoFriendlyLogisticsTestDirector::Evaluate(Input).Action,
+    ECrowdDemoFriendlyDirectorAction::IncrementBackoff);
+  Input.UnreachableBackoffCount = 2;
+  TestEqual(TEXT("competition follows backoff"),
+    FCrowdDemoFriendlyLogisticsTestDirector::Evaluate(Input).Action,
+    ECrowdDemoFriendlyDirectorAction::ClaimCompetitionWinner);
+  Input.TaskState = ECrowdLogisticsTaskState::Picked;
+  Input.bDeathInjected = false;
+  Input.PickupObservedFixedStep = 10;
+  Input.FixedStepIndex = 55;
+  TestEqual(TEXT("death requeue is deterministic"),
+    FCrowdDemoFriendlyLogisticsTestDirector::Evaluate(Input).Action,
+    ECrowdDemoFriendlyDirectorAction::RequeueDeadCarrier);
+  Input.TaskState = ECrowdLogisticsTaskState::Requeued;
+  Input.bFallbackApplied = false;
+  TestEqual(TEXT("fallback precedes recovery"),
+    FCrowdDemoFriendlyLogisticsTestDirector::Evaluate(Input).Action,
+    ECrowdDemoFriendlyDirectorAction::ApplyFallbackSink);
+  Input.bFallbackApplied = true;
+  TestEqual(TEXT("recovery claim follows fallback"),
+    FCrowdDemoFriendlyLogisticsTestDirector::Evaluate(Input).Action,
+    ECrowdDemoFriendlyDirectorAction::ClaimRecoveryCarrier);
   return true;
 }
 

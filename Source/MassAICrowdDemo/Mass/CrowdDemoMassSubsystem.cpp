@@ -156,6 +156,19 @@ bool UCrowdDemoMassSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 void UCrowdDemoMassSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
   Super::OnWorldBeginPlay(InWorld);
+  if (InWorld.GetNetMode() == NM_Client)
+  {
+    UMassEntitySubsystem* EntitySubsystem =
+      InWorld.GetSubsystem<UMassEntitySubsystem>();
+    const int32 MaxProjectilePoolCapacity = FMath::Clamp(
+      CVarCrowdDemoProjectileCapacity.GetValueOnGameThread(),
+      1, 65536);
+    checkf(EntitySubsystem
+        && ProjectileStore.EnsureCapacity(
+          EntitySubsystem->GetMutableEntityManager(),
+          MaxProjectilePoolCapacity, MaxProjectilePoolCapacity),
+      TEXT("Client projectile prediction Mass pool initialization failed"));
+  }
   RegisterRoundSimProcessors();
 }
 
@@ -303,6 +316,19 @@ FCrowdDemoMassSpawnResult UCrowdDemoMassSubsystem::SpawnAgents(const int32 Agent
     {
       InitializeAgentFragments(EntityManager, TrackedAgents[Index], Index, Result.RequestedAgents);
     }
+  }
+  const int32 MaxProjectilePoolCapacity = FMath::Clamp(
+    CVarCrowdDemoProjectileCapacity.GetValueOnGameThread(),
+    1, 65536);
+  if (!ProjectileStore.EnsureCapacity(
+      EntityManager, MaxProjectilePoolCapacity,
+      MaxProjectilePoolCapacity))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("CrowdDemoMass: spawn_failed projectile_pool_capacity=%d"),
+      MaxProjectilePoolCapacity);
+    DestroyTrackedAgents();
+    return Result;
   }
   Result.SpawnedAgents = TrackedAgents.Num();
   Result.AliveAgents = GetAliveAgentCount();
@@ -729,12 +755,10 @@ bool UCrowdDemoMassSubsystem::PrepareProjectileCapacity(
   UWorld* World = GetWorld();
   UMassEntitySubsystem* EntitySubsystem = World
     ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
-  if (!EntitySubsystem || World->GetNetMode() == NM_Client
-    || RequiredCount < 0 || RequiredCount > MaxProjectilePoolCapacity)
+  if (!EntitySubsystem || RequiredCount < 0
+    || RequiredCount > MaxProjectilePoolCapacity)
     return false;
-  return ProjectileStore.EnsureCapacity(
-    EntitySubsystem->GetMutableEntityManager(),
-    RequiredCount, MaxProjectilePoolCapacity);
+  return RequiredCount <= ProjectileStore.GetCapacity();
 }
 
 void UCrowdDemoMassSubsystem::ApplyProjectileStates(
@@ -743,7 +767,7 @@ void UCrowdDemoMassSubsystem::ApplyProjectileStates(
   UWorld* World = GetWorld();
   UMassEntitySubsystem* EntitySubsystem = World
     ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
-  check(EntitySubsystem && World->GetNetMode() != NM_Client);
+  check(EntitySubsystem);
   FMassEntityManager& EntityManager =
     EntitySubsystem->GetMutableEntityManager();
   check(ProjectileStore.ValidatePreparedStates(Projectiles));
@@ -757,7 +781,7 @@ bool UCrowdDemoMassSubsystem::GatherProjectileStates(
   const UWorld* World = GetWorld();
   const UMassEntitySubsystem* EntitySubsystem = World
     ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
-  if (!EntitySubsystem || World->GetNetMode() == NM_Client)
+  if (!EntitySubsystem)
     return false;
   return ProjectileStore.Gather(
     EntitySubsystem->GetEntityManager(), OutProjectiles);

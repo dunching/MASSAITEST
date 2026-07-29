@@ -61,8 +61,13 @@ static_assert(std::is_trivially_copyable_v<
 static_assert(sizeof(FCrowdDemoBehaviorSourcePayload)
   <= CrowdBehavior::MaxPayloadBytes);
 
+MASSCROWDDEMOBUSINESS_API
 TSharedRef<const ICrowdBehaviorSourceProvider, ESPMode::ThreadSafe>
 CreateCrowdDemoBehaviorSourceProvider();
+
+MASSCROWDDEMOBUSINESS_API ECrowdActiveBehavior
+DeriveCrowdDemoDiagnosticBehavior(
+  const FCrowdBehaviorSourceSet& SourceSet);
 
 struct FCrowdDemoDesiredSource
 {
@@ -83,7 +88,7 @@ struct FCrowdDemoDesiredSource
   }
 };
 
-class FCrowdDemoSourceSetDiff
+class MASSCROWDDEMOBUSINESS_API FCrowdDemoSourceSetDiff
 {
 public:
   static bool BuildDesiredSourceDiff(

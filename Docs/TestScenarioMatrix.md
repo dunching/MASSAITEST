@@ -4,6 +4,20 @@
 
 [INFERRED][HIGH] 规模结果必须标明生产路径。旧20实体Mixed、100实体SoftPressure和500实体Obstacle仍是历史分路径证据；当前PJ6结果来自同一Mixed Source/Resolver/Boundary/Networking/Projectiles生产路径。
 
+[COMPUTED][HIGH] pre-T9检查点固定DP0–DP6最终证据；T9的10对10 Melee/MidRange/Ranged真实混合战斗、死亡后重选目标和群体重新运输尚未执行，当前表不得提前标记为通过。
+
+## DP0–DP6 Demo业务规划当前门
+
+| 门 | 当前状态 | 完成要求 |
+|---|---|---|
+| DP0 基线 | [COMPUTED][HIGH] PASS | [COMPUTED][HIGH] `07359ed`、65/65、125/125、四构建与Mixed 20/100/500结果已冻结。 |
+| Planner Core | [COMPUTED][HIGH] PASS | [COMPUTED][HIGH] Registry/冻结、NoBusiness、反序、缺事实、容量、Host Intent和Stable Hash专项通过。 |
+| Mixed角色 | [COMPUTED][HIGH] PASS | [COMPUTED][HIGH] 五Planner、Reaction、目标丢失、Source精确恢复和Coordinator结构门通过。 |
+| Friendly | [COMPUTED][HIGH] PASS | [COMPUTED][HIGH] 8303通过Claim/Pickup/Deliver/Requeue/fallback/backoff/cancel、守恒和失败零写入。 |
+| Round T7/T8 | [COMPUTED][HIGH] PASS | [COMPUTED][HIGH] 8349 T7通过；8365 T8黄金门为50/50/50、duplicate=0、双端一致。真实StableEntityRef修正后版本化attack/projectile/event Hash为3512277419/488896174/4204062592。 |
+| NoBusiness | [COMPUTED][HIGH] PASS | [COMPUTED][HIGH] 8350 Continuous、8353–8363 T1–T6与8351 NavFlow通过统一入口且保持专项结果。 |
+| 最终门 | [COMPUTED][HIGH] PASS | [COMPUTED][HIGH] MassCrowd 64/64、CrowdDemo 131/131、四构建、全部真实入口及Mixed 8311/8314/8315的20/100/500通过。 |
+
 | 场景 | 核心能力 | 最新20实体技术/能力结果 | fixed-step p95 | 视觉状态 |
 |---|---|---|---:|---|
 | T1 | 测试参与集切换、压力传播、staging reset、新平衡 | [COMPUTED][HIGH] 6阶段、layer3、settling通过；全部 Mass 实体始终存在，不是 spawn/despawn；普通不连续=0，测试reset单列 | [COMPUTED][HIGH] 1.131ms | [INFERRED][HIGH] 当前版人工审片待补 |

@@ -8,6 +8,7 @@
 
 struct FCrowdDemoRangedCombatAgent
 {
+  FCrowdStableEntityRef EntityRef;
   int32 AgentId = INDEX_NONE;
   int32 LifecycleSerial = 0;
   int32 FormationIndex = INDEX_NONE;
@@ -105,7 +106,7 @@ public:
   static FCrowdEffectProfile BuildEffectProfile(
     const FCrowdDemoRangedCombatSettings& Settings);
 
-  static void AdvanceAttackPhases(
+  static bool BuildRangedAttackPlan(
     int32 RoundId,
     int32 FixedStepIndex,
     const FCrowdDemoRangedCombatSettings& Settings,
@@ -142,6 +143,11 @@ public:
 
   static bool BuildDemoHitFacts(
     TConstArrayView<FCrowdHitFact> Hits,
+    TArray<FCrowdDemoHitFact>& OutFacts);
+
+  static bool BuildDemoHitFacts(
+    TConstArrayView<FCrowdHitFact> Hits,
+    TConstArrayView<FCrowdDemoRangedCombatAgent> Agents,
     TArray<FCrowdDemoHitFact>& OutFacts);
 
   static uint32 HashAttackStates(

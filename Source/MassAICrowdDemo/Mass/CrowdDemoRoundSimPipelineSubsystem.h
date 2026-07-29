@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
+#include "CrowdDemoBusinessScenarioContract.h"
 #include "Mass/CrowdDemoMassFragments.h"
 #include "Mass/CrowdDemoParticleConstraintKernel.h"
 #include "Mass/CrowdDemoLocalPredictiveInteractionKernel.h"
@@ -1058,6 +1059,7 @@ private:
   TArray<FCrowdDemoRoundBoundaryFormationFact> BoundaryFormationFacts;
   TArray<FCrowdDemoRoundBoundaryFacingFact> BoundaryFacingFacts;
   TArray<FCrowdDemoRoundBoundaryBusinessFact> BoundaryBusinessFacts;
+  uint64 PreparedPlannerDecisionHash = 0;
   TUniquePtr<FCrowdMassBoundaryRunner> BoundaryOrchestrator;
   TSharedPtr<FCrowdDemoBoundaryFacingWorkState, ESPMode::ThreadSafe>
     BoundaryFacingWorkState;

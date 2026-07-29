@@ -1,4 +1,5 @@
 #include "CrowdDemoContinuousLifecycleCoordinator.h"
+#include "CrowdDemoBusinessScenarioContract.h"
 
 #include "CrowdDemoReplicator.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -568,6 +569,16 @@ void ACrowdDemoContinuousLifecycleCoordinator::ConsumeProductReplication()
 void ACrowdDemoContinuousLifecycleCoordinator::AdvanceServerFixedStep()
 {
   ++FixedStepIndex;
+  uint64 NoBusinessDecisionHash = 0;
+  if (!FCrowdDemoBusinessScenarioContract::EvaluateNoBusiness(
+      FixedStepIndex, NoBusinessDecisionHash))
+  {
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoContinuousLifecycle role=server stage=no_business_contract fixed_step=%lld"),
+      FixedStepIndex);
+    return;
+  }
   if (FixedStepIndex % OperationIntervalSteps != 0) return;
   UWorld* World = GetWorld();
   if (!World || !IsMassEntityManagerIdle(*World)) return;

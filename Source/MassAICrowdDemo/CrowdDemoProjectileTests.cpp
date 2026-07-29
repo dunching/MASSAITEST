@@ -1,7 +1,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "Algo/Reverse.h"
-#include "CrowdDemoBehaviorSourceProvider.h"
+#include "CrowdDemoBusinessSourceProvider.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Mass/CrowdDemoMassFragments.h"
@@ -43,6 +43,12 @@ namespace
     const FVector& Position)
   {
     FCrowdDemoRangedCombatAgent Agent;
+    Agent.EntityRef = {
+      1,
+      AgentId == 0
+        ? 100000ull
+        : static_cast<uint64>(AgentId),
+      1};
     Agent.AgentId = AgentId;
     Agent.LifecycleSerial = 1;
     Agent.FormationIndex = FormationIndex;
@@ -80,7 +86,7 @@ namespace
 
   struct FCrowdProjectilePublicApiFixture
   {
-    static void AdvanceAttackPhases(
+    static void BuildRangedAttackPlan(
       const int32 RoundId,
       const int32 FixedStepIndex,
       const FCrowdDemoRangedCombatSettings& Settings,
@@ -88,7 +94,7 @@ namespace
       TArray<FCrowdProjectileSpawnRequest>& OutRequests,
       FCrowdDemoProjectileStepSummary& InOutSummary)
     {
-      FCrowdDemoProjectileAdapters::AdvanceAttackPhases(
+      FCrowdDemoProjectileAdapters::BuildRangedAttackPlan(
         RoundId, FixedStepIndex, Settings,
         InOutAgents, OutRequests, InOutSummary);
     }
@@ -269,7 +275,7 @@ namespace
       TArray<FCrowdProjectileSpawnRequest> Requests;
       TArray<FCrowdDemoProjectileVisualEvent> Events;
       TArray<FCrowdDemoHitFact> Hits;
-      FCrowdProjectilePublicApiFixture::AdvanceAttackPhases(
+      FCrowdProjectilePublicApiFixture::BuildRangedAttackPlan(
         17, Step, Settings, Simulation.Agents, Requests, ProjectileSummary);
       FCrowdProjectilePublicApiFixture::SpawnProjectiles(
         Step, Step / 30.0f, Settings, Requests,
@@ -358,19 +364,19 @@ bool FCrowdDemoProjectileWindupSingleFireTest::RunTest(const FString& Parameters
   FCrowdDemoProjectileStepSummary Summary;
   TArray<FCrowdProjectileSpawnRequest> Requests;
 
-  FCrowdProjectilePublicApiFixture::AdvanceAttackPhases(7, 0, Settings, Agents, Requests, Summary);
+  FCrowdProjectilePublicApiFixture::BuildRangedAttackPlan(7, 0, Settings, Agents, Requests, Summary);
   TestTrue(TEXT("settings and acquire valid"), Summary.bValid);
   TestEqual(TEXT("one target acquired"), Summary.TargetAcquiredCount, 1);
   TestEqual(TEXT("acquire does not fire"), Requests.Num(), 0);
 
-  FCrowdProjectilePublicApiFixture::AdvanceAttackPhases(7, 1, Settings, Agents, Requests, Summary);
+  FCrowdProjectilePublicApiFixture::BuildRangedAttackPlan(7, 1, Settings, Agents, Requests, Summary);
   TestEqual(TEXT("windup not complete at step one"), Requests.Num(), 0);
-  FCrowdProjectilePublicApiFixture::AdvanceAttackPhases(7, 2, Settings, Agents, Requests, Summary);
+  FCrowdProjectilePublicApiFixture::BuildRangedAttackPlan(7, 2, Settings, Agents, Requests, Summary);
   TestEqual(TEXT("windup emits one request"), Requests.Num(), 1);
   TestEqual(TEXT("one completed windup"), Summary.CompletedWindupCount, 1);
   const uint64 ProjectileId = Requests[0].ProjectileId;
 
-  FCrowdProjectilePublicApiFixture::AdvanceAttackPhases(7, 2, Settings, Agents, Requests, Summary);
+  FCrowdProjectilePublicApiFixture::BuildRangedAttackPlan(7, 2, Settings, Agents, Requests, Summary);
   TestEqual(TEXT("same boundary cannot emit twice"), Requests.Num(), 0);
   TestEqual(TEXT("fire sequence remains one"), Agents[0].Combat.FireSequence, 1);
   TestTrue(TEXT("projectile id is stable and nonzero"), ProjectileId != 0);
@@ -390,11 +396,11 @@ bool FCrowdDemoProjectileLifecycleInvalidationTest::RunTest(const FString& Param
     MakeRangedAgent(2, 1, FVector(600.0f, 0.0f, 0.0f))};
   FCrowdDemoProjectileStepSummary Summary;
   TArray<FCrowdProjectileSpawnRequest> Requests;
-  FCrowdProjectilePublicApiFixture::AdvanceAttackPhases(8, 0, Settings, Agents, Requests, Summary);
+  FCrowdProjectilePublicApiFixture::BuildRangedAttackPlan(8, 0, Settings, Agents, Requests, Summary);
 
   Agents[1].LifecycleSerial = 2;
   Agents[1].Combat.LifecycleSerial = 2;
-  FCrowdProjectilePublicApiFixture::AdvanceAttackPhases(8, 2, Settings, Agents, Requests, Summary);
+  FCrowdProjectilePublicApiFixture::BuildRangedAttackPlan(8, 2, Settings, Agents, Requests, Summary);
   TestEqual(TEXT("stale lock emits no request"), Requests.Num(), 0);
   TestEqual(TEXT("shooter returns to acquire"), Agents[0].Combat.AttackPhase,
     ECrowdDemoAttackPhase::AcquireTarget);
@@ -674,15 +680,20 @@ bool FCrowdDemoProjectileHostResolverTest::RunTest(
   TArray<FCrowdProjectileState> Projectiles;
   TArray<FCrowdDemoProjectileVisualEvent> Events;
   FCrowdDemoProjectileStepSummary Summary;
-  const FCrowdProjectileSpawnRequest Request = MakeSpawnRequest(
+  FCrowdProjectileSpawnRequest Request = MakeSpawnRequest(
     9010, 1, FVector::ZeroVector,
     FVector(6000.0f, 0.0f, 0.0f));
+  Request.Instigator = {1, 101, 1};
+  Request.Target = {1, 202, 1};
+  Request.RecalculateStableHash();
   FCrowdProjectilePublicApiFixture::SpawnProjectiles(
     1, 0.0f, Settings, MakeArrayView(&Request, 1),
     Projectiles, Events, Summary);
-  const FCrowdDemoRangedCombatAgent Agents[] = {
+  FCrowdDemoRangedCombatAgent Agents[] = {
     MakeRangedAgent(1, 0, FVector(-1000.0f, 0.0f, 0.0f)),
     MakeRangedAgent(2, 1, FVector(500.0f, 0.0f, 0.0f))};
+  Agents[0].EntityRef = Request.Instigator;
+  Agents[1].EntityRef = Request.Target;
   TArray<FCrowdImpactFact> Impacts;
   FCrowdProjectilePublicApiFixture::AdvanceProjectiles(
     1, 1.0f, 0.1f, Settings, Agents,
@@ -701,8 +712,11 @@ bool FCrowdDemoProjectileHostResolverTest::RunTest(
 
   TArray<FCrowdDemoHitFact> DemoFacts;
   TestTrue(TEXT("demo adapter consumes generic hit"),
-    FCrowdDemoHostHitResolver::BuildDemoHitFacts(Hits, DemoFacts));
+    FCrowdDemoProjectileAdapters::BuildDemoHitFacts(
+      Hits, Agents, DemoFacts));
   TestEqual(TEXT("single demo damage fact"), DemoFacts.Num(), 1);
+  TestEqual(TEXT("stable target ref maps to demo agent id"),
+    DemoFacts[0].TargetAgentId, 2);
   TestEqual(TEXT("target lifecycle survives both adapters"),
     DemoFacts[0].TargetLifecycleSerial, 1);
   return true;

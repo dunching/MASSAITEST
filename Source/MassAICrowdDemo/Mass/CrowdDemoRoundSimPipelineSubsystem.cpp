@@ -4,6 +4,7 @@
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoCombatStateKernel.h"
 #include "Mass/CrowdDemoMassCrowdRuntimeAdapter.h"
+#include "CrowdDemoVatShowcasePlanner.h"
 
 namespace
 {
@@ -121,6 +122,7 @@ namespace
         return Output;
       FCrowdDemoRangedCombatAgent& Agent =
         Agents.AddDefaulted_GetRef();
+      Agent.EntityRef = Fact.EntityRef;
       Agent.AgentId = Fact.AgentId;
       Agent.LifecycleSerial =
         static_cast<int32>(Fact.EntityRef.LifecycleSerial);
@@ -152,13 +154,10 @@ namespace
       for (FCrowdDemoRangedCombatAgent& Agent : Agents)
       {
         if (Agent.Combat.BusinessStateRevision != 0) continue;
-        Agent.Combat.BusinessState = Agent.FormationIndex < 4
-          ? ECrowdDemoBusinessState::Idle
-          : Agent.FormationIndex < 8
-            ? ECrowdDemoBusinessState::Moving
-            : Agent.FormationIndex < 12
-              ? ECrowdDemoBusinessState::Attacking
-              : ECrowdDemoBusinessState::Idle;
+        Agent.Combat.BusinessState =
+          static_cast<ECrowdDemoBusinessState>(
+            FCrowdDemoVatShowcasePlanner::ResolveInitialState(
+              Agent.FormationIndex));
         Agent.Combat.AttackPhase =
           Agent.Combat.BusinessState
             == ECrowdDemoBusinessState::Attacking
@@ -191,13 +190,17 @@ namespace
     {
       for (const FCrowdDemoRangedCombatAgent& Agent : Agents)
       {
-        const bool bKnockback = Input.FixedStepIndex == 30
-          && Agent.FormationIndex >= 12 && Agent.FormationIndex < 14;
-        const bool bKnockUp = Input.FixedStepIndex == 60
-          && Agent.FormationIndex >= 14 && Agent.FormationIndex < 16;
-        const bool bDeath = Input.FixedStepIndex == 90
-          && Agent.FormationIndex >= 16;
-        if (!bKnockback && !bKnockUp && !bDeath) continue;
+        const ECrowdDemoVatInjectedHit InjectedHit =
+          FCrowdDemoVatShowcasePlanner::SelectInjectedHit(
+            Agent.FormationIndex, Input.FixedStepIndex);
+        if (InjectedHit == ECrowdDemoVatInjectedHit::None)
+          continue;
+        const bool bKnockback =
+          InjectedHit == ECrowdDemoVatInjectedHit::Knockback;
+        const bool bKnockUp =
+          InjectedHit == ECrowdDemoVatInjectedHit::KnockUp;
+        const bool bDeath =
+          InjectedHit == ECrowdDemoVatInjectedHit::Death;
         FCrowdDemoHitFact& Fact = HitFacts.AddDefaulted_GetRef();
         Fact.HitEventId =
           (static_cast<uint64>(Input.RoundId) << 32)
@@ -760,6 +763,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   PreparedObstacleMaxReprojectDeltaCm = -1.0f;
   PreparedTargetRegionGuidanceCandidates.Reset();
   PreparedBusinessGuidanceCandidates.Reset();
+  PreparedPlannerDecisionHash = 0;
   PreparedReactiveMotionSteps.Reset();
   PreparedCombatBoundaryCommit = {};
   PreparedRuntimeComposedGuidance.Reset();
@@ -1114,11 +1118,23 @@ bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction(
 
 bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
 {
+  const auto RejectBusinessStage =
+    [this](const TCHAR* Reason)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("CrowdDemoBusinessWorkStageDetail reason=%s step=%d plan_revision=%d snapshot_agents=%d snapshot_valid=%d"),
+      Reason,
+      GetCurrentFixedStepIndex(),
+      GetCurrentPlanRevision(),
+      BoundarySnapshot.Agents.Num(),
+      BoundarySnapshot.bValid ? 1 : 0);
+    return false;
+  };
   if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
     || BoundaryOrchestrator->GetState()
       != ECrowdBoundaryTransactionState::Gathering
     || !IsBoundarySnapshotCurrent())
-    return false;
+    return RejectBusinessStage(TEXT("invalid_boundary_state"));
   if (!BoundaryFacingWorkState.IsValid())
   {
     BoundaryFacingWorkState =
@@ -1126,20 +1142,70 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
         ESPMode::ThreadSafe>();
   }
   if (BoundaryFacingWorkState->bBusinessStaged)
-    return false;
+    return RejectBusinessStage(TEXT("already_staged"));
   FCrowdDemoBoundaryBusinessWorkInput& Input =
     BoundaryFacingWorkState->BusinessInput;
   Input.Snapshot = BoundarySnapshot;
   Input.Facts = BoundaryBusinessFacts;
   Input.Rules = ActivePlan.Rules;
   if (!BuildProjectileSnapshot(Input.Projectiles))
-    return false;
+    return RejectBusinessStage(TEXT("projectile_snapshot"));
   Input.RoundId = GetCurrentRoundId();
   Input.FixedStepIndex = GetCurrentFixedStepIndex();
   Input.PlanRevision = GetCurrentPlanRevision();
   Input.StepEndServerTimeSeconds =
     GetCurrentStepEndServerTimeSeconds();
   Input.FixedStepSeconds = GetCurrentFixedStepSeconds();
+  const bool bVatShowcase =
+    ActivePlan.Rules.Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && ActivePlan.Rules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse;
+  const bool bRangedAttack =
+    ActivePlan.Rules.Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && ActivePlan.Rules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat;
+  if (!bVatShowcase && !bRangedAttack)
+  {
+    if (!FCrowdDemoBusinessScenarioContract::EvaluateNoBusiness(
+        GetCurrentFixedStepIndex(),
+        PreparedPlannerDecisionHash))
+      return RejectBusinessStage(TEXT("no_business"));
+  }
+  else
+  {
+    TArray<FCrowdDemoScenarioAgentFact> PlannerAgents;
+    PlannerAgents.Reserve(BoundarySnapshot.Agents.Num());
+    for (const FCrowdMassBoundaryAgentRecord& Agent
+      : BoundarySnapshot.Agents)
+    {
+      FCrowdDemoScenarioAgentFact& Fact =
+        PlannerAgents.AddDefaulted_GetRef();
+      Fact.EntityRef = Agent.AgentFacts.StableEntityRef;
+      Fact.Position = Agent.State.Position;
+      Fact.Velocity = Agent.State.Velocity;
+      Fact.Health = 100;
+      Fact.Revision =
+        static_cast<uint32>(
+          FMath::Max(1, GetCurrentPlanRevision()));
+    }
+    FCrowdDemoPlannerDecisionBatch PlannerBatch;
+    if (!FCrowdDemoBusinessScenarioContract::EvaluateAssigned(
+        bVatShowcase
+          ? CrowdDemoBusinessScenarios::VatShowcase
+          : CrowdDemoBusinessScenarios::RangedProjectile,
+        bVatShowcase
+          ? CrowdDemoBusinessPlanners::VatShowcase
+          : CrowdDemoBusinessPlanners::RangedAttack,
+        GetCurrentFixedStepIndex(),
+        static_cast<uint64>(GetCurrentFixedStepIndex()) + 1,
+        PlannerAgents, PlannerBatch))
+      return RejectBusinessStage(TEXT("assigned_planner"));
+    PreparedPlannerDecisionHash = PlannerBatch.StableHash;
+  }
+  if (PreparedPlannerDecisionHash == 0)
+    return RejectBusinessStage(TEXT("zero_hash"));
   BoundaryFacingWorkState->bBusinessStaged = true;
   return true;
 }
@@ -1484,8 +1550,15 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
                 return FCrowdBoundaryTaskResult::Failure();
             for (FCrowdTargetRegionTransportAgent& Agent
               : DemandInput.ExternalAgents)
+            {
+              // External cohort members are demand obstacles, not members of
+              // this cohort's controllable flow set. During client bootstrap
+              // they can become visible one correction frame before their
+              // shared-flow input. Their gathered velocity is the immutable
+              // boundary fallback for that transient frame.
               if (!JoinFarFlow(Agent))
-                return FCrowdBoundaryTaskResult::Failure();
+                Agent.FarFlowPreferredVelocity = Agent.Velocity;
+            }
             Slot.DemandOutput =
               FCrowdMassTargetRegionWork::BuildDemand(DemandInput);
             return Slot.DemandOutput.bValid
@@ -1882,9 +1955,10 @@ bool UCrowdDemoRoundSimPipelineSubsystem::WaitBoundaryWork()
       : LastBoundaryTransactionResult.Tasks)
     {
       UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoBoundaryTaskFailed step=%d stage=%d scope=%llu succeeded=%d off_gt=%d hash=%llu"),
+        TEXT("VIOLATION CrowdDemoBoundaryTaskFailed step=%d stage=%d task_type=%d scope=%llu succeeded=%d off_gt=%d hash=%llu"),
         GetCurrentFixedStepIndex(),
         static_cast<int32>(Task.Key.StageId.Value),
+        static_cast<int32>(Task.Key.TaskTypeId.Value),
         static_cast<unsigned long long>(Task.Key.ScopeKey),
         Task.Result.bSucceeded ? 1 : 0,
         Task.Result.bRanOffGameThread ? 1 : 0,
@@ -2204,6 +2278,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PrepareBoundaryCommit(
       static_cast<uint64>(Output.Candidate.StableHash));
   }
   if (!AddPatch(5, 8205, FlowDiagnosticHash))
+    return false;
+  if (!AddPatch(1, 8208, PreparedPlannerDecisionHash))
     return false;
   if (!PreparedTargetResourceSlots.IsEmpty())
   {
@@ -4905,6 +4981,12 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordRoundInitialState(
   RoundInputHash = InputHash;
   RoundInitialStateHash = InitialStateHash;
   ++RoundResetCount;
+  UE_LOG(LogTemp, Display,
+    TEXT("CrowdDemoRoundInitialState role=%s round_id=%d input_hash=%u state_hash=%u reset_count=%d source=MassPipeline"),
+    GetWorld() && GetWorld()->GetNetMode() == NM_Client
+      ? TEXT("client") : TEXT("server"),
+    GetCurrentRoundId(), RoundInputHash, RoundInitialStateHash,
+    RoundResetCount);
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordNavigationDomainReprojectDelta(const float DeltaCm)

@@ -1,4 +1,5 @@
-#include "Mass/CrowdDemoBehaviorAdapters.h"
+#include "CrowdDemoBusinessAdapters.h"
+#include "MassCrowdBehaviorSourceRuntime.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -8,14 +9,19 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   "CrowdDemo.BehaviorAdapters.LogisticsCombat",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoBehaviorRegistryGoldenTest,
+  "CrowdDemo.BehaviorAdapters.RegistryGolden",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
 namespace
 {
-  FCrowdBusinessCommitRequest MakeRequest(
-    const ECrowdBusinessCommitKind Kind,
+  FCrowdDemoBusinessCommitRequest MakeRequest(
+    const ECrowdDemoBusinessCommitKind Kind,
     const uint64 CommitId,
     const int32 Quantity = 1)
   {
-    FCrowdBusinessCommitRequest Request;
+    FCrowdDemoBusinessCommitRequest Request;
     Request.Kind = Kind;
     Request.CommitId = CommitId;
     Request.FixedStepIndex = static_cast<int64>(CommitId);
@@ -33,8 +39,8 @@ bool FCrowdDemoBehaviorAdaptersLogisticsCombatTest::RunTest(
   const FString& Parameters)
 {
   FCrowdDemoBusinessCommitLedger Ledger;
-  const FCrowdBusinessCommitRequest Pickup =
-    MakeRequest(ECrowdBusinessCommitKind::CargoPickup, 10);
+  const FCrowdDemoBusinessCommitRequest Pickup =
+    MakeRequest(ECrowdDemoBusinessCommitKind::CargoPickup, 10);
   TestEqual(TEXT("pickup applies"), Ledger.Apply(Pickup),
     ECrowdDemoBusinessCommitAcceptResult::Applied);
   TestEqual(TEXT("pickup replay is idempotent"), Ledger.Apply(Pickup),
@@ -42,16 +48,16 @@ bool FCrowdDemoBehaviorAdaptersLogisticsCombatTest::RunTest(
   TestEqual(TEXT("cargo carrier is recorded"),
     Ledger.GetCargoCarrier(500), 10ull);
 
-  const FCrowdBusinessCommitRequest Deliver =
-    MakeRequest(ECrowdBusinessCommitKind::CargoDeliver, 20);
+  const FCrowdDemoBusinessCommitRequest Deliver =
+    MakeRequest(ECrowdDemoBusinessCommitKind::CargoDeliver, 20);
   TestEqual(TEXT("delivery applies"), Ledger.Apply(Deliver),
     ECrowdDemoBusinessCommitAcceptResult::Applied);
   TestEqual(TEXT("cargo is released"), Ledger.GetCargoCarrier(500), 0ull);
   TestEqual(TEXT("pickup count"), Ledger.GetPickupCount(), 1);
   TestEqual(TEXT("delivery count"), Ledger.GetDeliveryCount(), 1);
 
-  const FCrowdBusinessCommitRequest Attack =
-    MakeRequest(ECrowdBusinessCommitKind::CombatHit, 30, 25);
+  const FCrowdDemoBusinessCommitRequest Attack =
+    MakeRequest(ECrowdDemoBusinessCommitKind::CombatHit, 30, 25);
   TestEqual(TEXT("combat request applies"), Ledger.Apply(Attack),
     ECrowdDemoBusinessCommitAcceptResult::Applied);
   TestEqual(TEXT("combat replay is idempotent"), Ledger.Apply(Attack),
@@ -59,10 +65,27 @@ bool FCrowdDemoBehaviorAdaptersLogisticsCombatTest::RunTest(
   TestEqual(TEXT("combat quantity is recorded"),
     Ledger.GetCombatHitQuantity(900), 25);
 
-  FCrowdBusinessCommitRequest Invalid = Attack;
+  FCrowdDemoBusinessCommitRequest Invalid = Attack;
   Invalid.CommitId = 0;
   TestEqual(TEXT("invalid request is rejected"), Ledger.Apply(Invalid),
     ECrowdDemoBusinessCommitAcceptResult::Rejected);
+  return true;
+}
+
+bool FCrowdDemoBehaviorRegistryGoldenTest::RunTest(
+  const FString& Parameters)
+{
+  constexpr uint64 ExpectedRegistryHash =
+    17037152232310596158ull;
+  constexpr uint64 ExpectedContextSchemaHash =
+    7449648488286461483ull;
+  FCrowdBehaviorSourceRuntime Runtime;
+  TestTrue(TEXT("production provider registry freezes"),
+    Runtime.InitializeFromRegisteredProviders());
+  TestEqual(TEXT("production registry matches golden"),
+    Runtime.GetRegistryHash(), ExpectedRegistryHash);
+  TestEqual(TEXT("production context schema matches golden"),
+    Runtime.GetContextSchemaHash(), ExpectedContextSchemaHash);
   return true;
 }
 

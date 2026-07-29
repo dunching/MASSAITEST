@@ -2,8 +2,10 @@
 
 #include "Camera/CameraActor.h"
 #include "Components/InstancedStaticMeshComponent.h"
-#include "CrowdDemoBehaviorSourceProvider.h"
+#include "CrowdDemoBusinessSourceProvider.h"
+#include "CrowdDemoPlanningRuntimeHost.h"
 #include "CrowdDemoReplicator.h"
+#include "CrowdDemoSourceStatePublisher.h"
 #include "Engine/TargetPoint.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -131,64 +133,6 @@ namespace
   {
     const uint8 Index = static_cast<uint8>(Behavior);
     return Index < 32 ? uint32{1} << Index : 0;
-  }
-
-  ECrowdActiveBehavior DeriveDiagnosticBehavior(
-    const FCrowdBehaviorSourceSet& SourceSet)
-  {
-    ECrowdActiveBehavior Result = ECrowdActiveBehavior::Idle;
-    uint8 ResultRank = 0;
-    const auto Promote = [&](
-      const uint8 Rank, const ECrowdActiveBehavior Label)
-    {
-      if (Rank <= ResultRank) return;
-      ResultRank = Rank;
-      Result = Label;
-    };
-    for (const FCrowdBehaviorSourceInstance& Instance :
-      SourceSet.Instances)
-    {
-      if (Instance.SourceTypeId
-          == CrowdStandardSources::MovementLock
-        && Instance.Handle.ControllerId
-          == CrowdDemoBehaviorControllerIds::Reaction
-        && Instance.Handle.SourceSequence == 2
-        && Instance.ExpireFixedStep == INDEX_NONE)
-        return ECrowdActiveBehavior::Dead;
-      if (Instance.SourceTypeId
-          == CrowdDemoSourceTypeIds::DeliverInteraction
-        || Instance.SourceTypeId
-          == CrowdDemoSourceTypeIds::CarryCargo)
-        Promote(9, ECrowdActiveBehavior::HaulDeliver);
-      else if (Instance.SourceTypeId
-          == CrowdDemoSourceTypeIds::PickupInteraction
-        || Instance.SourceTypeId
-          == CrowdStandardSources::ArriveAtLocation)
-        Promote(8, ECrowdActiveBehavior::HaulPickup);
-      else if (Instance.SourceTypeId
-          == CrowdDemoSourceTypeIds::AttackTarget)
-        Promote(7, ECrowdActiveBehavior::Attack);
-      else if (Instance.SourceTypeId
-          == CrowdStandardSources::PursueEntity)
-        Promote(6, ECrowdActiveBehavior::Pursue);
-      else if (Instance.SourceTypeId
-          == CrowdStandardSources::FleeFromEntity)
-        Promote(5, ECrowdActiveBehavior::Flee);
-      else if (Instance.SourceTypeId
-          == CrowdStandardSources::WanderSteering)
-        Promote(4, ECrowdActiveBehavior::Wander);
-      else if (Instance.SourceTypeId
-          == CrowdStandardSources::FollowEntity
-        || Instance.SourceTypeId
-          == CrowdStandardSources::FormationOffset)
-        Promote(3, ECrowdActiveBehavior::MoveTo);
-      else if (Instance.SourceTypeId
-          == CrowdStandardSources::MoveToLocation)
-        Promote(2, Instance.Priority == 99
-          ? ECrowdActiveBehavior::Guard
-          : ECrowdActiveBehavior::MoveTo);
-    }
-    return Result;
   }
 
   uint64 FoldMixedHash(uint64 Hash, const uint64 Value)
@@ -605,6 +549,10 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
     return false;
   BehaviorSourceRuntime =
     &RuntimeSubsystem->GetBehaviorSourceRuntime();
+  if (!BusinessPlannerRegistry.IsFrozen()
+    && !FCrowdDemoBusinessPlannerRunner::BuildDefaultRegistry(
+      BusinessPlannerRegistry))
+    return false;
 
   FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
   const TArray<const UScriptStruct*> Types = {
@@ -685,6 +633,12 @@ void ACrowdDemoMixedSandboxCoordinator::InitializeSlotState(
   Slot.Health = 100;
   Slot.bActive = true;
   Slot.TransitionRevision = 1;
+  if (!FCrowdDemoBusinessPlannerRunner::BuildMixedAssignment(
+      SlotIndex, Slot.PlannerAssignment))
+  {
+    Slot.bActive = false;
+    return;
+  }
 
   if (!NavGraphHandle.IsValid() || NavGraphHandle->Nodes.IsEmpty())
   {
@@ -820,32 +774,19 @@ FCrowdAgentFacts ACrowdDemoMixedSandboxCoordinator::MakeAgentFacts(
   const uint32 LifecycleSerial) const
 {
   FCrowdAgentFacts Facts;
-  const int32 CohortRole = ((SlotIndex - 1) % 20) + 1;
   Facts.StableEntityRef = {1, static_cast<uint64>(SlotIndex), LifecycleSerial};
   Facts.FactionKey = static_cast<uint32>((SlotIndex % 3) + 1);
   Facts.CapabilitySet.Add(ECrowdCapability::Move);
+  Facts.CapabilitySet.Add(ECrowdCapability::Wander);
+  Facts.CapabilitySet.Add(ECrowdCapability::MoveTo);
+  Facts.CapabilitySet.Add(ECrowdCapability::Pursue);
+  Facts.CapabilitySet.Add(ECrowdCapability::Haul);
+  Facts.CapabilitySet.Add(ECrowdCapability::Attack);
+  Facts.CapabilitySet.Add(ECrowdCapability::Guard);
+  Facts.CapabilitySet.Add(ECrowdCapability::Flee);
   Facts.CapabilitySet.Add(ECrowdCapability::UseNavLayer);
   Facts.DerivedBehaviorLabel =
     static_cast<uint32>(ECrowdActiveBehavior::Idle);
-  if (CohortRole <= 6)
-  {
-    Facts.CapabilitySet.Add(ECrowdCapability::Haul);
-  }
-  else if (CohortRole <= 10)
-  {
-    Facts.CapabilitySet.Add(ECrowdCapability::Pursue);
-    Facts.CapabilitySet.Add(ECrowdCapability::Attack);
-  }
-  else if (CohortRole <= 14)
-  {
-    Facts.CapabilitySet.Add(ECrowdCapability::Guard);
-    Facts.CapabilitySet.Add(ECrowdCapability::Flee);
-  }
-  else
-  {
-    Facts.CapabilitySet.Add(ECrowdCapability::Wander);
-    Facts.CapabilitySet.Add(ECrowdCapability::MoveTo);
-  }
   Facts.MovementProfileKey = 1;
   Facts.PresentationProfileKey = 1;
   Facts.RuntimeState = 1;
@@ -1034,21 +975,17 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     PendingCombatDeathSlot;
   const int32 OriginalPendingSourceCommandCount =
     BehaviorSourceRuntime->GetPendingCommandCount();
-  for (int32 SlotIndex = 1;
-    SlotIndex < StagedSlots.Num(); ++SlotIndex)
+  FCrowdDemoPlannerDecisionBatch PlannerDecisionBatch;
+  if (!PlanBusinessBoundary(
+      StagedSlots, PlannerDecisionBatch))
   {
-    if (StagedSlots[SlotIndex].bActive
-      && !EvaluateSlotBehavior(
-        SlotIndex, StagedSlots))
-    {
-      BehaviorSourceRuntime->RollbackPendingCommandsTo(
-        OriginalPendingSourceCommandCount);
-      ++StaleRejectCount;
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=behavior slot=%d fixed_step=%lld"),
-        SlotIndex, FixedStepIndex);
-      return;
-    }
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      OriginalPendingSourceCommandCount);
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=planner fixed_step=%lld"),
+      FixedStepIndex);
+    return;
   }
   EvaluationEndSeconds = FPlatformTime::Seconds();
   FCrowdBehaviorPreparedBoundary PreparedBehavior;
@@ -1080,7 +1017,7 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       return;
     }
     const ECrowdActiveBehavior Label =
-      DeriveDiagnosticBehavior(Entity.StagedSourceSet);
+      DeriveCrowdDemoDiagnosticBehavior(Entity.StagedSourceSet);
     if (StagedSlots[SlotIndex].Facts.DerivedBehaviorLabel
       != static_cast<uint32>(Label))
     {
@@ -1091,11 +1028,28 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       static_cast<uint32>(Label);
     StagedSeenBehaviorBits |= BehaviorBit(Label);
   }
-  if (!ApplyPreparedBehaviorBusiness(
-      PreparedBehavior, StagedSlots,
-      StagedBusinessLedger,
-      StagedDuplicateCommitCount,
-      StagedPendingCombatDeathSlot))
+  TArray<FCrowdDemoBusinessAgentState> BusinessAgents;
+  BusinessAgents.Reserve(PreparedBehavior.Entities.Num());
+  for (const FSlotState& Slot : StagedSlots)
+  {
+    if (!Slot.bActive) continue;
+    FCrowdDemoBusinessAgentState& Agent =
+      BusinessAgents.AddDefaulted_GetRef();
+    Agent.EntityRef = Slot.Facts.StableEntityRef;
+    Agent.TransitionRevision = Slot.TransitionRevision;
+    Agent.Health = Slot.Health;
+    Agent.LastAttackFixedStep = Slot.LastAttackFixedStep;
+    Agent.LastLogisticsFixedStep =
+      Slot.LastLogisticsFixedStep;
+    Agent.HitReactionUntilFixedStep =
+      Slot.HitReactionUntilFixedStep;
+    Agent.HitReactionVelocity = Slot.HitReactionVelocity;
+    Agent.bActive = true;
+  }
+  FCrowdDemoPreparedBusinessPatch PreparedBusiness;
+  if (!FCrowdDemoBusinessPatchAdapter::Prepare(
+      PreparedBehavior, BusinessAgents,
+      StagedBusinessLedger, PreparedBusiness))
   {
     BehaviorSourceRuntime->RollbackPendingCommandsTo(
       OriginalPendingSourceCommandCount);
@@ -1105,6 +1059,36 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       FixedStepIndex);
     return;
   }
+  for (const FCrowdDemoBusinessAgentState& Agent
+    : PreparedBusiness.Agents)
+  {
+    const int32 SlotIndex =
+      static_cast<int32>(Agent.EntityRef.StableEntityId);
+    if (!StagedSlots.IsValidIndex(SlotIndex)
+      || StagedSlots[SlotIndex].Facts.StableEntityRef
+        != Agent.EntityRef)
+    {
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        OriginalPendingSourceCommandCount);
+      ++StaleRejectCount;
+      return;
+    }
+    FSlotState& Slot = StagedSlots[SlotIndex];
+    Slot.Health = Agent.Health;
+    Slot.LastAttackFixedStep = Agent.LastAttackFixedStep;
+    Slot.LastLogisticsFixedStep =
+      Agent.LastLogisticsFixedStep;
+    Slot.HitReactionUntilFixedStep =
+      Agent.HitReactionUntilFixedStep;
+    Slot.HitReactionVelocity =
+      Agent.HitReactionVelocity;
+  }
+  StagedBusinessLedger = PreparedBusiness.Ledger;
+  StagedDuplicateCommitCount +=
+    PreparedBusiness.DuplicateCommitCount;
+  if (PreparedBusiness.PendingDeathRef.IsValid())
+    StagedPendingCombatDeathSlot = static_cast<int32>(
+      PreparedBusiness.PendingDeathRef.StableEntityId);
   PrepareEndSeconds = FPlatformTime::Seconds();
   TArray<FCrowdAgentFacts> PreparedFacts;
   for (int32 SlotIndex = 1;
@@ -1222,6 +1206,7 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   PendingCombatDeathSlot = StagedPendingCombatDeathSlot;
   SafetyHoldCount += StagedSafetyHolds;
   LastBoundaryCommitHash = StagedBoundaryCommitHash;
+  LastPlannerDecisionHash = PlannerDecisionBatch.StableHash;
   ProjectileSpawnedCount = StagedProjectileSpawnedCount;
   ProjectileImpactCount = StagedProjectileImpactCount;
   ProjectileDamageCount = StagedProjectileDamageCount;
@@ -1315,28 +1300,34 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   if (ServerStepMilliseconds.Num() > 2048) ServerStepMilliseconds.RemoveAt(0, 512);
 }
 
-bool ACrowdDemoMixedSandboxCoordinator::EvaluateSlotBehavior(
-  const int32 SlotIndex,
-  TArray<FSlotState>& InOutSlots)
+bool ACrowdDemoMixedSandboxCoordinator::PlanBusinessBoundary(
+  TArray<FSlotState>& InOutSlots,
+  FCrowdDemoPlannerDecisionBatch& OutDecisionBatch)
 {
-  const auto RejectBehavior = [this, SlotIndex](const TCHAR* Reason)
-  {
-    UE_LOG(LogTemp, Warning,
-      TEXT("CrowdDemoMixedSandboxBehaviorReject reason=%s slot=%d fixed_step=%lld"),
-      Reason, SlotIndex, FixedStepIndex);
+  OutDecisionBatch = {};
+  if (!BehaviorSourceRuntime
+    || !BusinessPlannerRegistry.IsFrozen()
+    || !NavGraphHandle.IsValid())
     return false;
-  };
-  FSlotState& Slot = InOutSlots[SlotIndex];
-  const int32 CohortBase = ((SlotIndex - 1) / 20) * 20;
-  const int32 CohortRole = ((SlotIndex - 1) % 20) + 1;
-  const auto ActiveRef = [&](const int32 Candidate)
-  {
-    return InOutSlots.IsValidIndex(Candidate)
-      && InOutSlots[Candidate].bActive
-      ? InOutSlots[Candidate].Facts.StableEntityRef
-      : FCrowdStableEntityRef{};
-  };
-  const auto DockingLocation = [&](const FName MarkerTag)
+
+  FCrowdDemoPlanningSnapshot Snapshot;
+  Snapshot.ScenarioId = CrowdDemoBusinessScenarios::Mixed;
+  Snapshot.FixedStepIndex = FixedStepIndex;
+  Snapshot.FactRevision =
+    static_cast<uint64>(FixedStepIndex) + 1;
+  Snapshot.Settings.PopulationLimit = Config.PopulationLimit;
+  Snapshot.Settings.MaximumSpeedCmps = 500.0f;
+  Snapshot.Settings.ScaleMaximumSpeedCmps = 10.0f;
+  Snapshot.Settings.InteractionRadiusCm = 180.0f;
+  Snapshot.Settings.ScaleInteractionRadiusCm =
+    MixedScaleInteractionRadiusCm;
+  Snapshot.Settings.LogisticsCooldownSteps = 30;
+  Snapshot.Settings.AttackCooldownSteps = 30;
+  Snapshot.Settings.RoamSwitchIntervalSteps = 300;
+  Snapshot.Settings.HitReactionDurationSteps = 6;
+
+  const auto ResolveObjectiveLocation =
+    [this](const FSlotState& Slot, const FName MarkerTag)
   {
     const FVector MarkerLocation =
       Marker(MarkerTag, FVector::ZeroVector);
@@ -1367,6 +1358,11 @@ bool ACrowdDemoMixedSandboxCoordinator::EvaluateSlotBehavior(
       });
     if (Candidates.IsEmpty())
       return MarkerLocation;
+    uint32 PlacementOrdinal = 0;
+    if (!FCrowdDemoBusinessPlannerRunner::
+        GetObjectivePlacementOrdinal(
+          Slot.PlannerAssignment, PlacementOrdinal))
+      return MarkerLocation;
     const int32 MarkerOffset =
       MarkerTag == TEXT("CrowdNavHigh")
       ? Candidates.Num() / 2
@@ -1375,590 +1371,108 @@ bool ACrowdDemoMixedSandboxCoordinator::EvaluateSlotBehavior(
         : 0;
     return Candidates[
       (MarkerOffset
-        + (CohortBase / 20 * 6 + CohortRole - 1) * 17)
+        + static_cast<int32>(PlacementOrdinal) * 17)
         % Candidates.Num()]
       ->Center;
   };
 
-  TArray<FCrowdDemoDesiredSource, TInlineAllocator<8>> Desired;
-  const auto AddStandard =
-    [&]<typename PayloadType>(
-      const FCrowdBehaviorControllerId ControllerId,
-      const uint32 Sequence,
-      const FCrowdBehaviorSourceTypeId TypeId,
-      const PayloadType& Payload,
-      const int32 LifetimeSteps = 0,
-      const int16 Priority = 0)
+  for (int32 SlotIndex = 1;
+    SlotIndex < InOutSlots.Num(); ++SlotIndex)
   {
-    FCrowdDemoDesiredSource& Entry =
-      Desired.AddDefaulted_GetRef();
-    Entry.ControllerId = ControllerId;
-    Entry.SourceSequence = Sequence;
-    Entry.SourceTypeId = TypeId;
-    Entry.Priority = Priority;
-    Entry.LifetimeSteps = LifetimeSteps;
-    return Entry.Payload.Set(
-      CrowdStandardSources::PayloadSchema(TypeId), Payload);
-  };
-  const auto AddDemo =
-    [&](const FCrowdBehaviorControllerId ControllerId,
-      const uint32 Sequence,
-      const FCrowdBehaviorSourceTypeId TypeId,
-      const FCrowdDemoBehaviorSourcePayload& Payload,
-      const int32 LifetimeSteps = 0)
-  {
-    FCrowdDemoDesiredSource& Entry =
-      Desired.AddDefaulted_GetRef();
-    Entry.ControllerId = ControllerId;
-    Entry.SourceSequence = Sequence;
-    Entry.SourceTypeId = TypeId;
-    Entry.LifetimeSteps = LifetimeSteps;
-    return Entry.Payload.Set(
-      CrowdDemoBehaviorSchemas::Standard, Payload);
-  };
-  const auto AddFaceMovement = [&]()
-  {
-    FCrowdFaceMovementPayload Facing;
-    Facing.MinimumSpeedCmps = 1.0f;
-    return AddStandard(
-      CrowdDemoBehaviorControllerIds::Facing, 1,
-      CrowdStandardSources::FaceMovement, Facing);
-  };
-  const auto AddFaceEntity =
-    [&](const FCrowdStableEntityRef TargetRef)
-  {
-    FCrowdFaceEntityPayload Facing;
-    Facing.TargetRef = TargetRef;
-    return AddStandard(
-      CrowdDemoBehaviorControllerIds::Facing, 1,
-      CrowdStandardSources::FaceEntity, Facing);
-  };
-  const auto AddSpeedLimit = [&]()
-  {
-    FCrowdSpeedLimitPayload Limit;
-    // Keep the 500-agent gate on the same production pipeline without
-    // turning its small validation map into an artificial convergence
-    // stress test. Particle/local-predictive stress has dedicated kernels;
-    // this gate measures the full Standard Source composition path.
-    Limit.MaximumSpeedCmps =
-      Config.PopulationLimit >= 500 ? 10.0f : 500.0f;
-    Limit.AllowedNavLayerMask = MAX_uint64;
-    return AddStandard(
-      CrowdDemoBehaviorControllerIds::Navigation, 3,
-      CrowdStandardSources::SpeedLimit, Limit);
-  };
-
-  ECrowdActiveBehavior DiagnosticLabel = ECrowdActiveBehavior::Idle;
-  FVector Objective = Slot.Location;
-  FCrowdStableEntityRef TargetRef;
-  FCrowdStableEntityRef TaskRef;
-  FCrowdStableEntityRef FormationAnchorRef;
-  FVector FormationLocalOffset = FVector::ZeroVector;
-  bool bInteractionReady = false;
-  ECrowdBusinessCommitKind CommitKind =
-    ECrowdBusinessCommitKind::None;
-
-  if (Slot.Health <= 0)
-  {
-    DiagnosticLabel = ECrowdActiveBehavior::Dead;
-    FCrowdMovementLockPayload Lock;
-    if (!AddStandard(
-        CrowdDemoBehaviorControllerIds::Reaction, 2,
-        CrowdStandardSources::MovementLock, Lock))
-      return RejectBehavior(TEXT("death_lock"));
-  }
-  else if (CohortRole <= 6)
-  {
-    const bool bCarrying =
-      BusinessLedger.GetCargoCarrier(
-        static_cast<uint64>(SlotIndex))
-      == static_cast<uint64>(SlotIndex);
-    DiagnosticLabel = bCarrying
-      ? ECrowdActiveBehavior::HaulDeliver
-      : ECrowdActiveBehavior::HaulPickup;
-    Objective = bCarrying
-      ? DockingLocation(TEXT("CrowdNavHigh"))
-      : DockingLocation(TEXT("CrowdNavLower"));
-    FCrowdArriveAtLocationPayload Move;
-    Move.TargetLocation = FVector3f(Objective);
-    Move.MaximumSpeedCmps = 500.0f;
-    Move.AcceptanceRadiusCm = 80.0f;
-    Move.SlowdownRadiusCm = 300.0f;
-    if (!AddStandard(
-        CrowdDemoBehaviorControllerIds::Navigation, 1,
-        CrowdStandardSources::ArriveAtLocation, Move)
-      || !AddSpeedLimit()
-      || !AddFaceMovement())
-      return RejectBehavior(TEXT("logistics_sources"));
-    TaskRef = {2, static_cast<uint64>(SlotIndex), 1};
-    bInteractionReady =
-      FVector::Distance(Slot.Location, Objective)
-      <= (Config.PopulationLimit > DefaultMixedPopulation
-        ? MixedScaleInteractionRadiusCm
-        : MixedInteractionRadiusCm)
-      && FixedStepIndex - Slot.LastLogisticsFixedStep >= 30;
-    CommitKind = bCarrying
-      ? ECrowdBusinessCommitKind::CargoDeliver
-      : ECrowdBusinessCommitKind::CargoPickup;
-    if (bCarrying)
+    FSlotState& Slot = InOutSlots[SlotIndex];
+    if (!Slot.bActive) continue;
+    FCrowdDemoPlannerAgentFact Agent;
+    Agent.EntityRef = Slot.Facts.StableEntityRef;
+    Agent.Assignment = Slot.PlannerAssignment;
+    Agent.Capabilities = Slot.Facts.CapabilitySet;
+    Agent.Position = Slot.Location;
+    Agent.Velocity = Slot.Velocity;
+    Agent.Facing =
+      FRotator(0.0f, Slot.YawDegrees, 0.0f).Vector();
+    Agent.Health = Slot.Health;
+    Agent.LastAttackFixedStep = Slot.LastAttackFixedStep;
+    Agent.LastLogisticsFixedStep =
+      Slot.LastLogisticsFixedStep;
+    Agent.HitReactionUntilFixedStep =
+      Slot.HitReactionUntilFixedStep;
+    Agent.HitReactionVelocity = Slot.HitReactionVelocity;
+    Agent.InteractionLayer = Slot.InteractionLayer;
+    Agent.TransitionRevision = Slot.TransitionRevision;
+    Agent.bActive = Slot.bActive;
+    if (Slot.PlannerAssignment.PlannerId
+      == CrowdDemoBusinessPlanners::Logistics)
     {
-      FCrowdDemoBehaviorSourcePayload Carry;
-      Carry.PrimaryId = 1;
-      Carry.SecondaryId = 1;
-      if (!AddDemo(
-          CrowdDemoBehaviorControllerIds::Presentation, 1,
-          CrowdDemoSourceTypeIds::CarryCargo, Carry))
-        return RejectBehavior(TEXT("carry_source"));
+      Agent.TaskRef = {
+        2, static_cast<uint64>(SlotIndex), 1};
+      Agent.bCarrying =
+        BusinessLedger.GetCargoCarrier(
+          Agent.TaskRef.StableEntityId)
+        == Agent.EntityRef.StableEntityId;
     }
+    Snapshot.Agents.Add(Agent);
+    Snapshot.Objectives.Add({
+      CrowdDemoBusinessObjectives::LogisticsSource,
+      Agent.EntityRef,
+      ResolveObjectiveLocation(Slot, TEXT("CrowdNavLower")),
+      Snapshot.FactRevision});
+    Snapshot.Objectives.Add({
+      CrowdDemoBusinessObjectives::LogisticsSink,
+      Agent.EntityRef,
+      ResolveObjectiveLocation(Slot, TEXT("CrowdNavHigh")),
+      Snapshot.FactRevision});
+    Snapshot.Objectives.Add({
+      CrowdDemoBusinessObjectives::RoamRoute,
+      Agent.EntityRef,
+      ResolveObjectiveLocation(Slot, TEXT("CrowdNavRouteB")),
+      Snapshot.FactRevision});
   }
-  else if (CohortRole <= 10)
-  {
-    int32 TargetSlot = INDEX_NONE;
-    for (int32 Offset = 0; Offset < 4; ++Offset)
-    {
-      const int32 Candidate =
-        CohortBase + 11
-        + ((CohortRole - 7 + Offset) % 4);
-      if (ActiveRef(Candidate).IsValid())
-      {
-        TargetSlot = Candidate;
-        break;
-      }
-    }
-    TargetRef = ActiveRef(TargetSlot);
-    if (!TargetRef.IsValid())
-    {
-      // A lost target is a controller fact change, not an evaluator error.
-      // Omitting the dependent handles makes the stable diff stop them in
-      // this boundary before evaluation sees an absent context.
-      DiagnosticLabel = ECrowdActiveBehavior::Idle;
-      if (!AddSpeedLimit())
-        return RejectBehavior(TEXT("pursue_target_stop"));
-    }
-    else
-    {
-      Objective = InOutSlots[TargetSlot].Location;
-      const float Distance =
-        FVector::Distance(Slot.Location, Objective);
-      const float AttackInteractionRadiusCm =
-        Config.PopulationLimit > DefaultMixedPopulation
-        ? MixedScaleInteractionRadiusCm
-        : 180.0f;
-      const bool bAttackReady =
-        Distance <= AttackInteractionRadiusCm
-        && FixedStepIndex - Slot.LastAttackFixedStep >= 30;
-      DiagnosticLabel = Distance <= AttackInteractionRadiusCm
-        ? ECrowdActiveBehavior::Attack
-        : ECrowdActiveBehavior::Pursue;
-      FCrowdPursueEntityPayload Pursue;
-      Pursue.TargetRef = TargetRef;
-      Pursue.MaximumSpeedCmps = 500.0f;
-      Pursue.AcceptanceRadiusCm = 140.0f;
-      Pursue.MaximumPredictionSeconds = 0.25f;
-      FCrowdMaintainDistancePayload DistanceBand;
-      DistanceBand.TargetRef = TargetRef;
-      DistanceBand.MinimumDistanceCm = 130.0f;
-      DistanceBand.MaximumDistanceCm = 180.0f;
-      DistanceBand.HysteresisCm = 10.0f;
-      DistanceBand.MaximumCorrectionSpeedCmps = 150.0f;
-      if (!AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 1,
-          CrowdStandardSources::PursueEntity, Pursue)
-        || !AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 2,
-          CrowdStandardSources::MaintainDistance, DistanceBand)
-        || !AddSpeedLimit()
-        || !AddFaceEntity(TargetRef))
-        return RejectBehavior(TEXT("pursue_sources"));
-      bInteractionReady = bAttackReady;
-      CommitKind = ECrowdBusinessCommitKind::CombatHit;
-      if (bAttackReady)
-      {
-        FCrowdMovementLockPayload Lock;
-        if (!AddStandard(
-            CrowdDemoBehaviorControllerIds::Reaction, 1,
-            CrowdStandardSources::MovementLock, Lock, 1))
-          return RejectBehavior(TEXT("attack_lock"));
-      }
-    }
-  }
-  else if (CohortRole <= 14)
-  {
-    if (Slot.Health <= 50)
-    {
-      const int32 TargetSlot =
-        [&]()
-        {
-          for (int32 Offset = 0; Offset < 4; ++Offset)
-          {
-            const int32 Candidate =
-              CohortBase + 7
-              + ((CohortRole - 11 + Offset) % 4);
-            if (ActiveRef(Candidate).IsValid())
-              return Candidate;
-          }
-          return static_cast<int32>(INDEX_NONE);
-        }();
-      TargetRef = ActiveRef(TargetSlot);
-      if (!TargetRef.IsValid())
-      {
-        DiagnosticLabel = ECrowdActiveBehavior::Idle;
-        if (!AddSpeedLimit())
-          return RejectBehavior(TEXT("flee_target_stop"));
-      }
-      else
-      {
-        Objective = InOutSlots[TargetSlot].Location;
-        DiagnosticLabel = ECrowdActiveBehavior::Flee;
-        FCrowdFleeFromEntityPayload Flee;
-        Flee.TargetRef = TargetRef;
-        Flee.MaximumSpeedCmps = 500.0f;
-        Flee.SafeDistanceCm = 1000.0f;
-        Flee.MaximumPredictionSeconds = 0.25f;
-        if (!AddStandard(
-            CrowdDemoBehaviorControllerIds::Navigation, 1,
-            CrowdStandardSources::FleeFromEntity, Flee)
-          || !AddSpeedLimit()
-          || !AddFaceEntity(TargetRef))
-          return RejectBehavior(TEXT("flee_sources"));
-      }
-    }
-    else
-    {
-      DiagnosticLabel = ECrowdActiveBehavior::Guard;
-      Objective = Slot.Location;
-      FCrowdMoveToLocationPayload Move;
-      Move.TargetLocation = FVector3f(Objective);
-      Move.MaximumSpeedCmps = 350.0f;
-      Move.AcceptanceRadiusCm = 120.0f;
-      if (!AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 1,
-          CrowdStandardSources::MoveToLocation, Move,
-          0, 99)
-        || !AddSpeedLimit()
-        || !AddFaceMovement())
-        return RejectBehavior(TEXT("guard_sources"));
-    }
-  }
-  else if (CohortRole <= 16)
-  {
-    const bool bUseMoveTo =
-      ((FixedStepIndex / 300) + CohortRole) % 2 == 0;
-    DiagnosticLabel = bUseMoveTo
-      ? ECrowdActiveBehavior::MoveTo
-      : ECrowdActiveBehavior::Wander;
-    if (bUseMoveTo)
-    {
-      Objective = DockingLocation(TEXT("CrowdNavRouteB"));
-      FCrowdMoveToLocationPayload Move;
-      Move.TargetLocation = FVector3f(Objective);
-      Move.MaximumSpeedCmps = 400.0f;
-      Move.AcceptanceRadiusCm = 100.0f;
-      if (!AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 1,
-          CrowdStandardSources::MoveToLocation, Move))
-        return RejectBehavior(TEXT("roam_move"));
-    }
-    else
-    {
-      FCrowdWanderSteeringPayload Wander;
-      Wander.SpeedCmps = 300.0f;
-      Wander.ReselectIntervalSteps = 45;
-      if (!AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 1,
-          CrowdStandardSources::WanderSteering, Wander))
-        return RejectBehavior(TEXT("roam_wander"));
-    }
-    if (!AddSpeedLimit() || !AddFaceMovement())
-      return RejectBehavior(TEXT("roam_common"));
-  }
-  else
-  {
-    const int32 AnchorSlot =
-      [&]()
-      {
-        for (int32 Offset = 0; Offset < 2; ++Offset)
-        {
-          const int32 Candidate =
-            CohortBase + 15
-            + ((CohortRole - 17 + Offset) % 2);
-          if (ActiveRef(Candidate).IsValid())
-            return Candidate;
-        }
-        return static_cast<int32>(INDEX_NONE);
-      }();
-    TargetRef = ActiveRef(AnchorSlot);
-    FormationAnchorRef = TargetRef;
-    if (!TargetRef.IsValid())
-    {
-      DiagnosticLabel = ECrowdActiveBehavior::Idle;
-      if (!AddSpeedLimit())
-        return RejectBehavior(TEXT("escort_anchor_stop"));
-    }
-    else
-    {
-      Objective = InOutSlots[AnchorSlot].Location;
-      DiagnosticLabel = ECrowdActiveBehavior::MoveTo;
-      const int32 EscortIndex = CohortRole - 17;
-      FormationLocalOffset = FVector(
-        -160.0 - 80.0 * (EscortIndex / 2),
-        EscortIndex % 2 == 0 ? -100.0 : 100.0,
-        0.0);
-      FCrowdFollowEntityPayload Follow;
-      Follow.TargetRef = TargetRef;
-      Follow.LocalOffset = FVector3f(FormationLocalOffset);
-      Follow.MaximumSpeedCmps = 450.0f;
-      Follow.AcceptanceRadiusCm = 60.0f;
-      Follow.PositionGain = 1.5f;
-      FCrowdMaintainDistancePayload DistanceBand;
-      DistanceBand.TargetRef = TargetRef;
-      DistanceBand.MinimumDistanceCm = 120.0f;
-      DistanceBand.MaximumDistanceCm = 300.0f;
-      DistanceBand.HysteresisCm = 15.0f;
-      DistanceBand.MaximumCorrectionSpeedCmps = 100.0f;
-      FCrowdFormationOffsetPayload Formation;
-      Formation.PositionGain = 1.0f;
-      Formation.MaximumCorrectionSpeedCmps = 120.0f;
-      if (!AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 1,
-          CrowdStandardSources::FollowEntity, Follow)
-        || !AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 2,
-          CrowdStandardSources::MaintainDistance, DistanceBand)
-        || !AddSpeedLimit()
-        || !AddStandard(
-          CrowdDemoBehaviorControllerIds::Navigation, 4,
-          CrowdStandardSources::FormationOffset, Formation)
-        || !AddFaceMovement())
-        return RejectBehavior(TEXT("escort_sources"));
-    }
-  }
-
-  if (bInteractionReady
-    && CommitKind != ECrowdBusinessCommitKind::None)
-  {
-    FCrowdRuntimeBehaviorContext CommitContext;
-    CommitContext.AgentFacts = Slot.Facts;
-    CommitContext.RequestedBehavior = DiagnosticLabel;
-    CommitContext.FixedStepIndex = FixedStepIndex;
-    CommitContext.TransitionRevision = Slot.TransitionRevision;
-    CommitContext.TargetRef = TargetRef;
-    CommitContext.TaskRef = TaskRef;
-    CommitContext.TargetLocation = Objective;
-    CommitContext.InteractionPayloadKey =
-      static_cast<uint32>(DiagnosticLabel) + 1;
-    CommitContext.InteractionQuantity =
-      CommitKind == ECrowdBusinessCommitKind::CombatHit ? 25 : 1;
-    FCrowdDemoBehaviorSourcePayload Interaction;
-    Interaction.PrimaryId =
-      CommitKind == ECrowdBusinessCommitKind::CargoPickup
-      ? CrowdDemoBehaviorAdapterIds::CargoPickup
-      : CommitKind == ECrowdBusinessCommitKind::CargoDeliver
-        ? CrowdDemoBehaviorAdapterIds::CargoDeliver
-        : CrowdDemoBehaviorAdapterIds::CombatHit;
-    Interaction.SecondaryId =
-      CommitContext.InteractionPayloadKey;
-    Interaction.Quantity = CommitContext.InteractionQuantity;
-    Interaction.TargetRef =
-      CommitKind == ECrowdBusinessCommitKind::CombatHit
-      ? TargetRef : TaskRef;
-    Interaction.CommitId =
-      FCrowdBehaviorCommitId::Make(
-        CommitKind, CommitContext);
-    const FCrowdBehaviorSourceTypeId InteractionType =
-      CommitKind == ECrowdBusinessCommitKind::CargoPickup
-      ? CrowdDemoSourceTypeIds::PickupInteraction
-      : CommitKind == ECrowdBusinessCommitKind::CargoDeliver
-        ? CrowdDemoSourceTypeIds::DeliverInteraction
-        : CrowdDemoSourceTypeIds::AttackTarget;
-    if (!AddDemo(
-        CrowdDemoBehaviorControllerIds::Interaction, 1,
-        InteractionType, Interaction, 1))
-      return RejectBehavior(TEXT("interaction_source"));
-  }
-
-  if (Slot.HitReactionUntilFixedStep > FixedStepIndex)
-  {
-    FCrowdTimedImpulsePayload Impulse;
-    Impulse.InitialVelocity =
-      FVector3f(Slot.HitReactionVelocity);
-    Impulse.DecayMode = ECrowdImpulseDecayMode::Linear;
-    if (!AddStandard(
-        CrowdDemoBehaviorControllerIds::Reaction, 3,
-        CrowdStandardSources::TimedImpulse, Impulse,
-        static_cast<int32>(
-          Slot.HitReactionUntilFixedStep - FixedStepIndex)))
-      return RejectBehavior(TEXT("hit_reaction"));
-  }
-
-  const FCrowdBehaviorSourceSet* CurrentSet =
-    BehaviorSourceRuntime->FindSourceSet(
-      Slot.Facts.StableEntityRef);
-  if (!CurrentSet)
-    return RejectBehavior(TEXT("source_set"));
-  TArray<FCrowdBehaviorSourceCommand> Commands;
-  if (!FCrowdDemoSourceSetDiff::BuildDesiredSourceDiff(
-      FixedStepIndex, *CurrentSet, Desired, Commands))
-    return RejectBehavior(TEXT("source_diff"));
-  for (const FCrowdBehaviorSourceCommand& Command : Commands)
-    if (!BehaviorSourceRuntime->QueueCommand(Command))
-      return RejectBehavior(TEXT("queue_command"));
-  FCrowdBehaviorEntityEvaluationContext EvaluationContext;
-  EvaluationContext.EntityRef = Slot.Facts.StableEntityRef;
-  EvaluationContext.FixedStepIndex = FixedStepIndex;
-  EvaluationContext.Position = Slot.Location;
-  EvaluationContext.Velocity = Slot.Velocity;
-  EvaluationContext.Facing =
-    FRotator(0.0f, Slot.YawDegrees, 0.0f).Vector();
-  if (TargetRef.IsValid())
-  {
-    const int32 TargetSlot =
-      static_cast<int32>(TargetRef.StableEntityId);
-    if (!InOutSlots.IsValidIndex(TargetSlot)
-      || !InOutSlots[TargetSlot].bActive
-      || InOutSlots[TargetSlot].Facts.StableEntityRef
-        != TargetRef)
-      return RejectBehavior(TEXT("target_context"));
-    FCrowdTargetKinematicsV1 Target;
-    Target.TargetRef = TargetRef;
-    Target.Position =
-      FVector3f(InOutSlots[TargetSlot].Location);
-    Target.Velocity =
-      FVector3f(InOutSlots[TargetSlot].Velocity);
-    Target.Facing = FVector3f(
-      FRotator(
-        0.0f,
-        InOutSlots[TargetSlot].YawDegrees,
-        0.0f).Vector());
-    Target.NavLayer =
-      InOutSlots[TargetSlot].InteractionLayer;
-    Target.FactRevision =
-      static_cast<uint64>(FixedStepIndex) + 1;
-    FCrowdBehaviorContextRecord& Record =
-      EvaluationContext.Records.AddDefaulted_GetRef();
-    if (!Record.Set(
-        CrowdStandardSources::TargetKinematicsContextType,
-        CrowdStandardSources::ContextSchemaVersion,
-        Target))
-      return RejectBehavior(TEXT("target_record"));
-  }
-  if (FormationAnchorRef.IsValid())
-  {
-    const int32 AnchorSlot =
-      static_cast<int32>(FormationAnchorRef.StableEntityId);
-    FCrowdFormationAnchorV1 Anchor;
-    Anchor.AnchorRef = FormationAnchorRef;
-    Anchor.Position = FVector3f(InOutSlots[AnchorSlot].Location);
-    Anchor.Velocity = FVector3f(InOutSlots[AnchorSlot].Velocity);
-    Anchor.Facing = FVector3f(
-      FRotator(
-        0.0f,
-        InOutSlots[AnchorSlot].YawDegrees,
-        0.0f).Vector());
-    Anchor.LocalSlotOffset = FVector3f(FormationLocalOffset);
-    Anchor.NavLayer = InOutSlots[AnchorSlot].InteractionLayer;
-    Anchor.FactRevision =
-      static_cast<uint64>(FixedStepIndex) + 1;
-    FCrowdBehaviorContextRecord& Record =
-      EvaluationContext.Records.AddDefaulted_GetRef();
-    if (!Record.Set(
-        CrowdStandardSources::FormationAnchorContextType,
-        CrowdStandardSources::ContextSchemaVersion,
-        Anchor))
-      return RejectBehavior(TEXT("formation_record"));
-  }
-  EvaluationContext.RecalculateStableHash();
-  if (!BehaviorSourceRuntime->SetEvaluationContext(EvaluationContext))
-    return RejectBehavior(TEXT("evaluation_context"));
-
-  Slot.Facts.TargetRef = TargetRef;
-  Slot.Facts.BusinessTaskRef = TaskRef;
-  Slot.Facts.MovementProfileKey = 1;
-
-  return true;
-}
-
-bool ACrowdDemoMixedSandboxCoordinator::ApplyPreparedBehaviorBusiness(
-  const FCrowdBehaviorPreparedBoundary& Prepared,
-  TArray<FSlotState>& InOutSlots,
-  FCrowdDemoBusinessCommitLedger& InOutLedger,
-  int32& InOutDuplicateCommitCount,
-  int32& InOutPendingCombatDeathSlot)
-{
-  for (const FCrowdBehaviorPreparedEntity& Entity
-    : Prepared.Entities)
+  if (!Snapshot.Finalize()
+    || !FCrowdDemoBusinessPlannerRunner::Evaluate(
+      BusinessPlannerRegistry, Snapshot, OutDecisionBatch)
+    || !OutDecisionBatch.bValid
+    || OutDecisionBatch.Decisions.Num()
+      != Snapshot.Agents.Num())
+    return false;
+  TArray<FCrowdDemoPlanningRuntimeEntityFact> RuntimeFacts;
+  RuntimeFacts.Reserve(Snapshot.Agents.Num());
+  for (const FCrowdDemoPlannerAgentFact& Agent
+    : Snapshot.Agents)
   {
     const int32 SlotIndex =
-      static_cast<int32>(Entity.EntityRef.StableEntityId);
+      static_cast<int32>(Agent.EntityRef.StableEntityId);
     if (!InOutSlots.IsValidIndex(SlotIndex)
       || !InOutSlots[SlotIndex].bActive
-      || InOutSlots[SlotIndex].Facts.StableEntityRef != Entity.EntityRef)
+      || InOutSlots[SlotIndex].Facts.StableEntityRef
+        != Agent.EntityRef)
+      return false;
+    const FSlotState& Slot = InOutSlots[SlotIndex];
+    RuntimeFacts.Add({
+      Agent.EntityRef,
+      Slot.Location,
+      Slot.Velocity,
+      FRotator(0.0f, Slot.YawDegrees, 0.0f).Vector(),
+      Slot.InteractionLayer});
+  }
+  if (!FCrowdDemoPlanningRuntimeHost::Stage(
+      *BehaviorSourceRuntime,
+      FixedStepIndex,
+      RuntimeFacts,
+      OutDecisionBatch.Decisions))
+    return false;
+  for (const FCrowdDemoPlannerDecision& Decision
+    : OutDecisionBatch.Decisions)
+  {
+    const int32 SlotIndex =
+      static_cast<int32>(Decision.EntityRef.StableEntityId);
+    if (!InOutSlots.IsValidIndex(SlotIndex)
+      || !InOutSlots[SlotIndex].bActive
+      || InOutSlots[SlotIndex].Facts.StableEntityRef
+        != Decision.EntityRef)
       return false;
     FSlotState& Slot = InOutSlots[SlotIndex];
-    for (const FCrowdBusinessContribution& Contribution
-      : Entity.ResolvedChannels.Business)
-    {
-      FCrowdBusinessCommitRequest Request;
-      if (Contribution.AdapterId
-        == CrowdDemoBehaviorAdapterIds::CargoPickup)
-        Request.Kind = ECrowdBusinessCommitKind::CargoPickup;
-      else if (Contribution.AdapterId
-        == CrowdDemoBehaviorAdapterIds::CargoDeliver)
-        Request.Kind = ECrowdBusinessCommitKind::CargoDeliver;
-      else if (Contribution.AdapterId
-        == CrowdDemoBehaviorAdapterIds::CombatHit)
-        Request.Kind = ECrowdBusinessCommitKind::CombatHit;
-      else
-        return false;
-      Request.CommitId = Contribution.CommitId;
-      Request.FixedStepIndex = Prepared.FixedStepIndex;
-      Request.TransitionRevision = Slot.TransitionRevision;
-      Request.AgentRef = Contribution.InstigatorRef;
-      Request.PayloadKey = Contribution.PayloadTypeId;
-      Request.Quantity = Contribution.Quantity;
-      if (Request.Kind == ECrowdBusinessCommitKind::CombatHit)
-        Request.TargetRef = Contribution.TargetRef;
-      else
-        Request.TaskRef = Contribution.TargetRef;
-
-      const ECrowdDemoBusinessCommitAcceptResult First =
-        InOutLedger.Apply(Request);
-      const ECrowdDemoBusinessCommitAcceptResult Replay =
-        InOutLedger.Apply(Request);
-      if (First != ECrowdDemoBusinessCommitAcceptResult::Applied
-        || Replay != ECrowdDemoBusinessCommitAcceptResult::Duplicate)
-        return false;
-      ++InOutDuplicateCommitCount;
-      if (Request.Kind == ECrowdBusinessCommitKind::CombatHit)
-      {
-        Slot.LastAttackFixedStep = FixedStepIndex;
-        const int32 TargetSlot = static_cast<int32>(
-          Request.TargetRef.StableEntityId);
-        if (!InOutSlots.IsValidIndex(TargetSlot)
-          || !InOutSlots[TargetSlot].bActive)
-          return false;
-        const int32 InstigatorSlot = static_cast<int32>(
-          Request.AgentRef.StableEntityId);
-        if (!InOutSlots.IsValidIndex(InstigatorSlot)
-          || !InOutSlots[InstigatorSlot].bActive)
-          return false;
-        InOutSlots[TargetSlot].HitReactionVelocity =
-          FVector::ZeroVector;
-        InOutSlots[TargetSlot].HitReactionUntilFixedStep =
-          FMath::Max(
-            InOutSlots[TargetSlot].HitReactionUntilFixedStep,
-            FixedStepIndex + 6);
-        InOutSlots[TargetSlot].Health = FMath::Max(
-          0, InOutSlots[TargetSlot].Health - Request.Quantity);
-        if (InOutSlots[TargetSlot].Health == 0
-          && InOutPendingCombatDeathSlot == INDEX_NONE)
-          InOutPendingCombatDeathSlot = TargetSlot;
-      }
-      else
-      {
-        Slot.LastLogisticsFixedStep = FixedStepIndex;
-      }
-    }
+    Slot.Facts.TargetRef = Decision.TargetRef;
+    Slot.Facts.BusinessTaskRef = Decision.TaskRef;
+    Slot.Facts.MovementProfileKey = 1;
   }
   return true;
 }
@@ -2855,61 +2369,27 @@ void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
       LastPublishedHostFactHashes.Add(
         ReplicatedEntityRef, HostFactHash);
     }
-    const FCrowdBehaviorSourceSet* SourceSet =
-      BehaviorSourceRuntime
-        ? BehaviorSourceRuntime->FindSourceSet(
-          ReplicatedEntityRef)
-        : nullptr;
-    const FCrowdResolvedBehaviorChannels* Resolved =
-      BehaviorSourceRuntime
-        ? BehaviorSourceRuntime->FindResolvedChannels(
-          ReplicatedEntityRef)
-        : nullptr;
-    const uint32* LastPublishedRevision =
-      LastPublishedSourceSetRevisions.Find(ReplicatedEntityRef);
-    if (SourceSetRecordCount
-        < MaximumSourceSetRecordsPerFrame
-      && SourceSet && Resolved && Resolved->bValid
-      && (!LastPublishedRevision
-        || *LastPublishedRevision != SourceSet->Revision))
+    if (BehaviorSourceRuntime
+      && SourceSetRecordCount
+        < MaximumSourceSetRecordsPerFrame)
     {
-      FCrowdBehaviorSourceSetReplicationRecord SourceRecord;
-      SourceRecord.RegistryHash =
-        BehaviorSourceRuntime->GetRegistryHash();
-      SourceRecord.ContextSchemaHash =
-        BehaviorSourceRuntime->GetContextSchemaHash();
-      SourceRecord.SourceSet = *SourceSet;
-      SourceRecord.SourceSet.Instances.RemoveAll(
-        [](const FCrowdBehaviorSourceInstance& Instance)
-        {
-          return Instance.ReplicationPolicy
-            != ECrowdBehaviorSourceReplicationPolicy::Predictable;
-        });
-      SourceRecord.SourceSet.RecalculateStableHash();
-      SourceRecord.ResolvedBehaviorHash = Resolved->StableHash;
-      SourceRecord.DerivedDiagnosticLabel =
-        State.DerivedBehaviorLabel;
-      TArray<uint8> SourcePayload;
-      if (!FCrowdReplicationCodec::EncodeBehaviorSourceSet(
-          SourceRecord, SourcePayload))
+      const int32 PreviousRecordCount = Records.Num();
+      const FCrowdDemoSourceStateFact SourceFact{
+        ReplicatedEntityRef, State.DerivedBehaviorLabel};
+      if (!FCrowdDemoSourceStatePublisher::AppendChanged(
+          *BehaviorSourceRuntime,
+          MakeArrayView(&SourceFact, 1),
+          MaximumSourceSetRecordsPerFrame
+            - SourceSetRecordCount,
+          LastPublishedSourceSetRevisions,
+          NextStateSequence,
+          Records))
       {
         ++StaleRejectCount;
         return;
       }
-      FCrowdReliableStateRecord& ReplicatedSource =
-        Records.AddDefaulted_GetRef();
-      ReplicatedSource.Sequence = NextStateSequence++;
-      ReplicatedSource.Kind =
-        ECrowdReliableStateKind::BehaviorSourceSet;
-      ReplicatedSource.EntityRef = ReplicatedEntityRef;
-      ReplicatedSource.Revision = SourceSet->Revision;
-      ReplicatedSource.Payload = MoveTemp(SourcePayload);
-      ReplicatedSource.StableHash =
-        FCrowdReplicationTransport::CalculateReliableRecordHash(
-          ReplicatedSource);
-      LastPublishedSourceSetRevisions.Add(
-        ReplicatedEntityRef, SourceSet->Revision);
-      ++SourceSetRecordCount;
+      SourceSetRecordCount +=
+        Records.Num() - PreviousRecordCount;
     }
     FCrowdMovementCorrectionRecord& Correction =
       Corrections.AddDefaulted_GetRef();

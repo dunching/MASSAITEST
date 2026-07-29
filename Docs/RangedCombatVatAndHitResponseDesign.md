@@ -187,7 +187,7 @@ HitFlashProfileKey
 
 [COMPUTED][HIGH] 8451历史版本的T8生产链使用32实体Mass镜像pool、Pipeline数组权威和静止目标；该句只限定8451证据边界。当前R5实现状态以本文件顶部覆盖说明和`MassProjectileHitFrameworkDesign.md`为准。
 
-[COMPUTED][HIGH] 最终构建 8451 单轮得到 acquired/windup/spawned/impacted/damage=`50/50/50/50/50`，active/expired/duplicate fire/duplicate hit/invalid projectile=`0/0/0/0/0`；10 个目标死亡后各产生一次 lifecycle invalidation，`invalid_target_lifecycle=10`。server/client 的 attack/projectile/event hash 分别一致为 `2730049702/4215166500/4204062592`。
+[COMPUTED][HIGH] 旧身份布局历史构建8451单轮得到acquired/windup/spawned/impacted/damage=`50/50/50/50/50`，active/expired/duplicate fire/duplicate hit/invalid projectile=`0/0/0/0/0`；10个目标死亡后各产生一次lifecycle invalidation，`invalid_target_lifecycle=10`。当时server/client的attack/projectile/event hash为`2730049702/4215166500/4204062592`，其中前两项使用Demo AgentId伪装StableEntityRef，仅作为历史证据，不是现行黄金值。
 
 [COMPUTED][HIGH] 8451 同时满足 20 agents/20 visible、Particle Hard/Swept/Obstacle/Bounds=`0/0/0/0`、invalid/fallback=`0/0`、rollback=`54/0/0`、replayed steps=`55`、checkpoint 与 correction interval position error p95=`0cm`，且未出现 Fatal、Assertion、Ensure、`LogWindows: Error` 或 VIOLATION。
 
@@ -233,6 +233,8 @@ HitFlashProfileKey
 
 [COMPUTED][HIGH] 历史切片事实：原跨processor `PendingProjectileHitFacts`桥与三个旧processor实现当时已删除，T7/T8进入统一Resolve路径；但该切片时Projectile轨迹权威仍是Pipeline数组、Mass pool仍只是表现镜像。该限制随后由R5与PJ1–PJ6消除，不描述当前生产代码。
 
-[COMPUTED][HIGH] 8755 T7技术回归为20 agents/20 visible、fixed-step p95=`2.452ms`；8756 T8得到spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client attack/projectile/event hash一致为`2730049702/4215166500/4204062592`，fixed-step p95=`2.247ms`。本切片没有重录T7/T8人工视频，也不外推移动目标、100/500或entity-native projectile能力。
+[COMPUTED][HIGH] 8755 T7技术回归为20 agents/20 visible、fixed-step p95=`2.452ms`；旧身份布局8756 T8得到spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client hash一致为`2730049702/4215166500/4204062592`，fixed-step p95=`2.247ms`。该组Hash属于历史Schema，不作为现行黄金值；本切片没有重录T7/T8人工视频，也不外推移动目标、100/500或entity-native projectile能力。
+
+[COMPUTED][HIGH] 现行真实StableEntityRef合同由8365 T8黄金门关闭：spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client attack/projectile/event hash精确为`3512277419/488896174/4204062592`。`RunCrowdDemo.ps1 -RangedProjectileGolden`会拒绝任一计数、双端匹配或黄金Hash漂移。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

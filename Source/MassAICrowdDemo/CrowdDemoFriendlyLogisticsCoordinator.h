@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "MassCrowdBoundaryRunner.h"
+#include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdLogistics.h"
 #include "MassCrowdNavRuntime.h"
 #include "CrowdDemoFriendlyLogisticsCoordinator.generated.h"
@@ -20,10 +21,16 @@ class MASSAICROWDDEMO_API ACrowdDemoFriendlyLogisticsCoordinator final
 public:
   ACrowdDemoFriendlyLogisticsCoordinator();
   virtual void BeginPlay() override;
+  virtual void EndPlay(
+    const EEndPlayReason::Type EndPlayReason) override;
   virtual void Tick(float DeltaSeconds) override;
 
 private:
   FCrowdLogisticsTransactionStore Store;
+  FCrowdBehaviorSourceRuntime* BehaviorSourceRuntime = nullptr;
+  TMap<uint64, FCrowdStableEntityRef> BehaviorEntityRefsBySlot;
+  TMap<FCrowdStableEntityRef, uint32>
+    LastPublishedSourceSetRevisions;
   FCrowdLogisticsTransactionStore CancellationStore;
   TMap<TWeakObjectPtr<APlayerController>,
     TWeakObjectPtr<AMassCrowdReplicationActor>> ReplicationChannels;
@@ -64,6 +71,7 @@ private:
   int32 SourceAcceptanceCount = 0;
   int32 SinkAcceptanceCount = 0;
   uint64 LastProductCommitHash = 0;
+  uint64 LastPlannerDecisionHash = 0;
   uint64 PresentationSequence = 0;
   int32 CargoAttachCount = 0;
   int32 CargoDetachCount = 0;
@@ -74,6 +82,7 @@ private:
   FCrowdStableEntityRef LastVisualEvidenceCarrierRef;
   bool bPendingVisualEvidenceViewActivated = false;
   bool bInitialized = false;
+  bool bBehaviorEntitiesRegistered = false;
   bool bDeathInjected = false;
   bool bFallbackApplied = false;
   bool bServerPassLogged = false;

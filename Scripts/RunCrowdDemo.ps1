@@ -27,6 +27,7 @@ param(
   [switch]$NavFlowProductSmall,
   [switch]$FriendlyLogisticsSmall,
   [switch]$MixedSandbox,
+  [switch]$RangedProjectileGolden,
   [double]$MaxFixedStepP95Ms = 33.333,
   [double]$MinSimulationRealtimeFactor = 0.95,
   [double]$MaxClientFrameP95Ms = 33.333,
@@ -73,6 +74,7 @@ if ($FriendlyLogisticsSmall) {
 if ($MixedSandbox) {
   $CommonArgs = "$CommonArgs -CrowdDemoMixedSandbox"
 }
+
 if ($RequireClientReady -and !$NoClient) {
   $CommonArgs = "$CommonArgs -CrowdDemoRequireClientReady -CrowdDemoReadyLeadSeconds=3 -CrowdDemoReadyTimeoutSeconds=60"
 }
@@ -187,6 +189,58 @@ if (Test-Path -LiteralPath $ServerLog) {
 }
 if (Test-Path -LiteralPath $ClientLog) {
   Select-String -Path $ClientLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoCorrectionFrame" -SimpleMatch | Select-Object -Last 20
+}
+
+$HardFailures = @($ServerLog, $ClientLog) |
+  Where-Object { Test-Path -LiteralPath $_ } |
+  ForEach-Object {
+    Select-String -Path $_ `
+      -Pattern 'Fatal error|Assertion failed|Ensure condition failed|LogWindows: Error|(?-i:\bVIOLATION\b)'
+  }
+if ($HardFailures.Count -gt 0) {
+  $FirstFailure = $HardFailures | Select-Object -First 1
+  throw "CrowdDemo hard failure gate failed: count=$($HardFailures.Count) first=$($FirstFailure.Path):$($FirstFailure.LineNumber) $($FirstFailure.Line)"
+}
+
+if ($RangedProjectileGolden) {
+  $ExpectedAttackHash = "3512277419"
+  $ExpectedProjectileHash = "488896174"
+  $ExpectedEventHash = "4204062592"
+  $ServerProjectile = Select-String -Path $ServerLog `
+    -Pattern "CrowdDemoProjectileCheckpoint role=server" |
+    Select-Object -Last 1
+  $ClientProjectile = if ($NoClient) { $null } else {
+    Select-String -Path $ClientLog `
+      -Pattern "CrowdDemoProjectileCheckpoint role=client" |
+      Select-Object -Last 1
+  }
+  $ServerGolden = $ServerProjectile -and
+    $ServerProjectile.Line -match 'valid=1\b' -and
+    $ServerProjectile.Line -match 'acquired=50\b' -and
+    $ServerProjectile.Line -match 'windup=50\b' -and
+    $ServerProjectile.Line -match 'spawned=50\b' -and
+    $ServerProjectile.Line -match 'active=0\b' -and
+    $ServerProjectile.Line -match 'impacted=50\b' -and
+    $ServerProjectile.Line -match 'expired=0\b' -and
+    $ServerProjectile.Line -match 'duplicate_fire=0\b' -and
+    $ServerProjectile.Line -match 'duplicate_hit=0\b' -and
+    $ServerProjectile.Line -match 'damage=50\b' -and
+    $ServerProjectile.Line -match "attack_hash=$ExpectedAttackHash\b" -and
+    $ServerProjectile.Line -match "projectile_hash=$ExpectedProjectileHash\b" -and
+    $ServerProjectile.Line -match "event_hash=$ExpectedEventHash\b"
+  $ClientGolden = $NoClient -or ($ClientProjectile -and
+    $ClientProjectile.Line -match 'valid=1/1\b' -and
+    $ClientProjectile.Line -match 'spawned=50/50\b' -and
+    $ClientProjectile.Line -match 'impacted=50/50\b' -and
+    $ClientProjectile.Line -match 'damage=50/50\b' -and
+    $ClientProjectile.Line -match "attack_hash=$ExpectedAttackHash/$ExpectedAttackHash\b" -and
+    $ClientProjectile.Line -match "projectile_hash=$ExpectedProjectileHash/$ExpectedProjectileHash\b" -and
+    $ClientProjectile.Line -match "event_hash=$ExpectedEventHash/$ExpectedEventHash\b" -and
+    $ClientProjectile.Line -match 'match=1\b')
+  if (!$ServerGolden -or !$ClientGolden) {
+    throw "CrowdDemo ranged projectile golden gate failed: server=$([bool]$ServerGolden) client=$([bool]$ClientGolden) expected=$ExpectedAttackHash/$ExpectedProjectileHash/$ExpectedEventHash"
+  }
+  Write-Host "[CrowdDemo] Ranged projectile golden gate passed: attack/projectile/event=$ExpectedAttackHash/$ExpectedProjectileHash/$ExpectedEventHash"
 }
 
 if ($MixedSandbox) {

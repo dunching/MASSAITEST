@@ -5,7 +5,8 @@
 #include "CrowdDemoContinuousLifecycleCoordinator.h"
 #include "CrowdNavSurfaceGraph.h"
 #include "GameFramework/Actor.h"
-#include "Mass/CrowdDemoBehaviorAdapters.h"
+#include "CrowdDemoBusinessAdapters.h"
+#include "CrowdDemoBusinessPlanner.h"
 #include "MassCrowdMassLifecycleWorld.h"
 #include "MassCrowdBoundaryRunner.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
@@ -89,6 +90,7 @@ private:
     int64 LastLogisticsFixedStep = -1000;
     int64 HitReactionUntilFixedStep = INDEX_NONE;
     FVector HitReactionVelocity = FVector::ZeroVector;
+    FCrowdDemoPlannerAssignment PlannerAssignment;
     int32 PreviousBlockedAgeSteps = 0;
     bool bActive = false;
   };
@@ -99,6 +101,7 @@ private:
   FCrowdMassLifecycleWorld LifecycleWorld;
   FMassArchetypeHandle LifecycleArchetype;
   FCrowdBehaviorSourceRuntime* BehaviorSourceRuntime = nullptr;
+  FCrowdDemoBusinessPlannerRegistry BusinessPlannerRegistry;
   FCrowdDemoBusinessCommitLedger BusinessLedger;
   FCrowdMassProjectileStore ProjectileStore;
   TSharedPtr<const FCrowdNavSurfaceGraph, ESPMode::ThreadSafe> NavGraphHandle;
@@ -131,6 +134,7 @@ private:
   uint64 LastExpectedEntitySetHash = 0;
   uint64 LastExpectedMembershipHash = 0;
   uint64 LastBoundaryCommitHash = 0;
+  uint64 LastPlannerDecisionHash = 0;
   uint64 PresentationSequence = 0;
   uint32 LastConsumedBaselineRevision = 0;
   uint32 RelevantSetRevision = 1;
@@ -171,15 +175,9 @@ private:
   void InitializeSlotState(int32 SlotIndex, uint32 LifecycleSerial);
   FCrowdAgentFacts MakeAgentFacts(int32 SlotIndex, uint32 LifecycleSerial) const;
   void AdvanceServerFixedStep();
-  bool EvaluateSlotBehavior(
-    int32 SlotIndex,
-    TArray<FSlotState>& InOutSlots);
-  bool ApplyPreparedBehaviorBusiness(
-    const FCrowdBehaviorPreparedBoundary& Prepared,
+  bool PlanBusinessBoundary(
     TArray<FSlotState>& InOutSlots,
-    FCrowdDemoBusinessCommitLedger& InOutLedger,
-    int32& InOutDuplicateCommitCount,
-    int32& InOutPendingCombatDeathSlot);
+    FCrowdDemoPlannerDecisionBatch& OutDecisionBatch);
   bool PrepareProjectileBoundary(
     const TArray<FSlotState>& StagedSlots,
     FCrowdPreparedProjectileBoundary& OutPrepared,

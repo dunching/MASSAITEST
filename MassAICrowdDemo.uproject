@@ -5,6 +5,11 @@
   "Description": "Isolated 500-entity MassAI crowd replication and movement demo.",
   "Modules": [
     {
+      "Name": "MassCrowdDemoBusiness",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
       "Name": "MassAICrowdDemo",
       "Type": "Runtime",
       "LoadingPhase": "Default"

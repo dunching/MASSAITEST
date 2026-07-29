@@ -367,10 +367,20 @@ bool FCrowdBehaviorSourceRuntime::InitializeFromRegisteredProviders()
     CapabilityProfiles, Evaluators, ContextSchemas);
   for (const auto& Pair : Providers)
     if (!Pair.Value.IsValid() || !Pair.Value->Register(Builder))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("Crowd behavior provider registration failed provider_id=%u"),
+        Pair.Key.Value);
       return false;
+    }
 
   if (!CapabilityProfiles.Freeze() || !Evaluators.Freeze())
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("Crowd behavior registry freeze failed providers=%d"),
+      Providers.Num());
     return false;
+  }
   RegistryHash = FnvOffset64;
   FoldUnsigned(RegistryHash, static_cast<uint32>(Providers.Num()));
   for (const auto& Pair : Providers)

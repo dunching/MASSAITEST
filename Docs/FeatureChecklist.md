@@ -2,6 +2,18 @@
 
 [INFERRED][HIGH] 本表只在生产调用链和对应专项门同时满足时勾选。接口、Codec或测试夹具存在但未接入生产，不得标为完整通过；Behavior Source现行状态以`EntityBehaviorSourceArchitecture.md`为准。
 
+[COMPUTED][HIGH] DP0–DP6 Demo业务规划独立模块与全入口迁移已关闭；PJ0–PJ6、S0–S6和R0–R7继续保持关闭。pre-T9检查点只记录已验证事实；T9 Mixed Combat Integration尚未开始。
+
+## DP0–DP6 Demo业务规划检查表
+
+- [x] [COMPUTED][HIGH] DP0：冻结`07359ed`代码、ID、角色比例、业务Hash、65/65、125/125、四构建及20/100/500基线。
+- [x] [COMPUTED][HIGH] DP1：独立`MassCrowdDemoBusiness`模块、Planner Registry/Snapshot/Decision/Writer/Runner和结构边界已实现。
+- [x] [COMPUTED][HIGH] DP2：Logistics/PursueAttack/GuardFlee/Roam/Escort及Reaction Planner、稳定角色分配和反序等价已实现。
+- [x] [COMPUTED][HIGH] DP3：Provider、Diff、Ledger、Combat/RangedAttack规划和Prepared Adapter已迁移，Runtime领域API已删除。
+- [x] [COMPUTED][HIGH] DP4：Mixed/Friendly/T7/T8生产迁移完成，T1–T6/Continuous使用NoBusiness，旧双路径已删除。
+- [x] [COMPUTED][HIGH] DP5：共享Planning Host、Source状态发布、零写入与模块依赖结构门已通过。
+- [x] [COMPUTED][HIGH] DP6：MassCrowd 64/64、CrowdDemo 131/131、四构建、全部真实入口及Mixed 20/100/500规模门通过。
+
 ## PJ0–PJ6 Projectile模块化关闭检查表
 
 - [x] [COMPUTED][HIGH] PJ0：当前文档与历史快照已分离，Projectile当前数组事务、模块所有权和最新测试数据无冲突描述。

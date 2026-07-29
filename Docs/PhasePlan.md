@@ -1,5 +1,27 @@
 # MassAI Crowd Demo 当前阶段计划
 
+## 2026-07-29 pre-T9检查点
+
+[COMPUTED][HIGH] DP0–DP6实现与验证已经完成，T9 Mixed Combat Integration尚未开始。本检查点固定保留MassCrowd 64/64、CrowdDemo 131/131、四构建、T8黄金门以及Mixed 20/100/500证据；T9必须从独立后续修改开始，不得把DP工作区与T9实现混为同一恢复点。
+
+## 2026-07-29 现行 DP0–DP6 Demo业务规划模块化
+
+[COMPUTED][HIGH] DP0–DP6 已完成。Demo 产品 Source、业务 Planner、业务纯状态和 Prepared Adapter 已收敛到独立项目模块 `MassCrowdDemoBusiness`；Mixed、Friendly、Round T7/T8 已迁移，Round T1–T6 与 Continuous 使用 NoBusiness 保持专项边界。详细合同以 `DemoBusinessPlanningArchitecture.md` 为准。
+
+DP0. [x] [COMPUTED][HIGH] 已冻结提交 `07359ed`、Mixed 每20实体角色比例、现有Provider/Source/Adapter ID、T7/T8业务Hash、65/65、125/125、四构建及Mixed 20/100/500性能基线。
+
+DP1. [x] [COMPUTED][HIGH] 独立模块、Planner Registry/Snapshot/Decision/Writer/Runner、冻结排序、稳定Hash和结构门已实现。
+
+DP2. [x] [COMPUTED][HIGH] Mixed五类Planner、Reaction叠加、稳定角色表、Context Request和反序等价已实现。
+
+DP3. [x] [COMPUTED][HIGH] Demo Provider、Source Diff、Ledger、Combat/RangedAttack规划和Prepared Business Adapter已迁移；Runtime领域Commit API已删除。
+
+DP4. [x] [COMPUTED][HIGH] Mixed、Friendly、T7/T8已使用业务Planner；T1–T6与Continuous显式NoBusiness；旧EvaluateSlotBehavior/AdvanceAttackPhases双路径已删除。
+
+DP5. [x] [COMPUTED][HIGH] 共享Planning Host、Source状态发布与Prepared接线已收口；公共Runtime无Cargo/Attack领域合同，业务模块无Engine/MassEntity/Networking/Projectile依赖。
+
+DP6. [x] [COMPUTED][HIGH] 最终自动化为MassCrowd 64/64、CrowdDemo 131/131；Development/DebugGame × ForceUnity/DisableUnity四构建通过。Continuous、Friendly、NavFlow、T1–T8和Mixed 20/100/500同路径门通过；T8恢复spawn/impact/damage=50/50/50、duplicate=0并双端一致。
+
 ## 2026-07-29 已关闭 PJ0–PJ6 Projectile模块化
 
 [COMPUTED][HIGH] R0–R7、S0–S6和PJ0–PJ6均已关闭。Projectile公共所有权现已收敛到`MassCrowdSpatial`、`MassCrowdCombat`和`MassCrowdProjectiles`，Demo只保留攻击业务与宿主Adapter；当前没有未关闭的本仓库Projectile模块化阶段。

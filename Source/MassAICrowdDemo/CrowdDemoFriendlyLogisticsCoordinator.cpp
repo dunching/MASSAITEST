@@ -1,4 +1,9 @@
 #include "CrowdDemoFriendlyLogisticsCoordinator.h"
+#include "CrowdDemoBusinessScenarioContract.h"
+#include "CrowdDemoBusinessSourceProvider.h"
+#include "CrowdDemoFriendlyLogisticsTestDirector.h"
+#include "CrowdDemoPlanningRuntimeHost.h"
+#include "CrowdDemoSourceStatePublisher.h"
 
 #include "CrowdDemoPlayerController.h"
 #include "CrowdDemoReplicator.h"
@@ -121,6 +126,24 @@ void ACrowdDemoFriendlyLogisticsCoordinator::BeginPlay()
   }
 }
 
+void ACrowdDemoFriendlyLogisticsCoordinator::EndPlay(
+  const EEndPlayReason::Type EndPlayReason)
+{
+  if (BehaviorSourceRuntime && bBehaviorEntitiesRegistered)
+  {
+    TArray<FCrowdStableEntityRef> EntityRefs;
+    BehaviorEntityRefsBySlot.GenerateValueArray(EntityRefs);
+    EntityRefs.Sort();
+    for (const FCrowdStableEntityRef& EntityRef : EntityRefs)
+      BehaviorSourceRuntime->RemoveEntity(EntityRef);
+  }
+  BehaviorSourceRuntime = nullptr;
+  BehaviorEntityRefsBySlot.Reset();
+  LastPublishedSourceSetRevisions.Reset();
+  bBehaviorEntitiesRegistered = false;
+  Super::EndPlay(EndPlayReason);
+}
+
 void ACrowdDemoFriendlyLogisticsCoordinator::Tick(const float DeltaSeconds)
 {
   Super::Tick(DeltaSeconds);
@@ -229,6 +252,142 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   const FVector Objective = bMoveToSource
     ? SourceLocation
     : (bFallbackApplied ? FallbackSinkLocation : PrimarySinkLocation);
+  BehaviorSourceRuntime =
+    &Runtime->GetBehaviorSourceRuntime();
+  if (!bBehaviorEntitiesRegistered)
+  {
+    for (const FCrowdMassBoundaryAgentRecord& Agent
+      : Snapshot.Agents)
+    {
+      FCrowdCapabilityBinding Binding;
+      Binding.ProfileKey = CrowdDemoBehaviorSchemas::FullProfile;
+      if (!BehaviorSourceRuntime->RegisterEntity(
+          Agent.AgentFacts.StableEntityRef, Binding))
+        return false;
+      BehaviorEntityRefsBySlot.Add(
+        Agent.AgentFacts.StableEntityRef.StableEntityId,
+        Agent.AgentFacts.StableEntityRef);
+    }
+    bBehaviorEntitiesRegistered = true;
+  }
+  for (const FCrowdMassBoundaryAgentRecord& Agent
+    : Snapshot.Agents)
+  {
+    const FCrowdStableEntityRef CurrentRef =
+      Agent.AgentFacts.StableEntityRef;
+    FCrowdStableEntityRef* RegisteredRef =
+      BehaviorEntityRefsBySlot.Find(CurrentRef.StableEntityId);
+    if (RegisteredRef && *RegisteredRef == CurrentRef)
+      continue;
+    if (RegisteredRef && RegisteredRef->IsValid()
+      && !BehaviorSourceRuntime->RemoveEntity(*RegisteredRef))
+      return false;
+    FCrowdCapabilityBinding Binding;
+    Binding.ProfileKey = CrowdDemoBehaviorSchemas::FullProfile;
+    if (!BehaviorSourceRuntime->RegisterEntity(CurrentRef, Binding))
+      return false;
+    BehaviorEntityRefsBySlot.Add(
+      CurrentRef.StableEntityId, CurrentRef);
+  }
+  const int32 PendingCommandCheckpoint =
+    BehaviorSourceRuntime->GetPendingCommandCount();
+  struct FPendingBehaviorRollback
+  {
+    FCrowdBehaviorSourceRuntime* Runtime = nullptr;
+    int32 Checkpoint = 0;
+    bool bCommitted = false;
+    ~FPendingBehaviorRollback()
+    {
+      if (Runtime && !bCommitted)
+        Runtime->RollbackPendingCommandsTo(Checkpoint);
+    }
+  } PendingRollback{
+    BehaviorSourceRuntime, PendingCommandCheckpoint, false};
+
+  FCrowdDemoPlannerDecision PlannerDecision;
+  const bool bHasPlannerDecision =
+    (bMoveToSource || bMoveToSink) && Carrier.IsValid();
+  uint64 StagedPlannerDecisionHash = 0;
+  if (bHasPlannerDecision)
+  {
+    const FCrowdMassBoundaryAgentRecord* CarrierAgent =
+      Snapshot.Agents.FindByPredicate(
+        [&Carrier](const auto& Agent)
+        {
+          return Agent.AgentFacts.StableEntityRef == Carrier;
+        });
+    if (!CarrierAgent) return false;
+    FCrowdDemoFriendlyLogisticsPlanningFact PlanningFact;
+    PlanningFact.EntityRef = Carrier;
+    PlanningFact.TaskRef = Task.TaskRef;
+    PlanningFact.Position = CarrierAgent->State.Position;
+    PlanningFact.Velocity = CarrierAgent->State.Velocity;
+    PlanningFact.SourceLocation = SourceLocation;
+    PlanningFact.SinkLocation =
+      bFallbackApplied
+        ? FallbackSinkLocation : PrimarySinkLocation;
+    PlanningFact.LastLogisticsFixedStep =
+      ProductFixedStepIndex - 1;
+    PlanningFact.TransitionRevision =
+      FMath::Max<uint32>(1u, Task.Revision);
+    PlanningFact.bCarrying = bMoveToSink;
+    if (!FCrowdDemoBusinessScenarioContract::
+        EvaluateFriendlyLogistics(
+          ProductFixedStepIndex,
+          static_cast<uint64>(ProductFixedStepIndex) + 1,
+          PlanningFact, PlannerDecision))
+      return false;
+    StagedPlannerDecisionHash = PlannerDecision.StableHash;
+  }
+  else
+  {
+    if (!FCrowdDemoBusinessScenarioContract::EvaluateNoBusiness(
+        ProductFixedStepIndex, StagedPlannerDecisionHash))
+      return false;
+  }
+
+  TArray<FCrowdDemoPlanningRuntimeEntityFact> RuntimeFacts;
+  RuntimeFacts.Reserve(Snapshot.Agents.Num());
+  for (const FCrowdMassBoundaryAgentRecord& Agent
+    : Snapshot.Agents)
+  {
+    RuntimeFacts.Add({
+      Agent.AgentFacts.StableEntityRef,
+      Agent.State.Position,
+      Agent.State.Velocity,
+      FRotator(
+        0.0f, Agent.State.YawDegrees, 0.0f).Vector(),
+      0});
+  }
+  TArray<FCrowdDemoPlannerDecision> Decisions;
+  if (bHasPlannerDecision)
+    Decisions.Add(PlannerDecision);
+  if (!FCrowdDemoPlanningRuntimeHost::Stage(
+      *BehaviorSourceRuntime,
+      ProductFixedStepIndex,
+      RuntimeFacts,
+      Decisions))
+    return false;
+  FCrowdBehaviorPreparedBoundary PreparedBehavior;
+  if (!BehaviorSourceRuntime->PrepareBoundary(
+      ProductFixedStepIndex, PreparedBehavior)
+    || !BehaviorSourceRuntime->ValidatePrepared(PreparedBehavior))
+    return false;
+  FVector ResolvedObjective = Objective;
+  if (bHasPlannerDecision)
+  {
+    const FCrowdBehaviorPreparedEntity* CarrierBehavior =
+      PreparedBehavior.Entities.FindByPredicate(
+        [&Carrier](const auto& Entity)
+        {
+          return Entity.EntityRef == Carrier;
+        });
+    if (!CarrierBehavior
+      || !CarrierBehavior->ResolvedChannels.MovementGoal.bHasGoal)
+      return false;
+    ResolvedObjective =
+      CarrierBehavior->ResolvedChannels.MovementGoal.Location;
+  }
   TSharedPtr<const FCrowdNavSurfaceGraph, ESPMode::ThreadSafe> Graph;
   TSharedPtr<const FCrowdNavSurfaceFlow, ESPMode::ThreadSafe> Flow;
   if ((bMoveToSource || bMoveToSink) && Carrier.IsValid())
@@ -247,11 +406,11 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     uint32 NavLayer = 0;
     if (!Graph.IsValid()
       || !FCrowdNavSurfaceGraphKernel::AttachClosest(
-        *Graph, Objective, 1000.0f, GoalNodeId, NavLayer))
+        *Graph, ResolvedObjective, 1000.0f, GoalNodeId, NavLayer))
     {
       UE_LOG(LogTemp, Warning,
         TEXT("CrowdDemoFriendlyLogistics diagnostic=objective_attach_failed objective=%s nodes=%d"),
-        *Objective.ToCompactString(), Graph.IsValid()
+        *ResolvedObjective.ToCompactString(), Graph.IsValid()
           ? Graph->Nodes.Num() : 0);
       return false;
     }
@@ -285,7 +444,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     return false;
   if (!Runner.AddTask(
       {{3}, {301}, 0}, {},
-      [Snapshot, Carrier, Objective, Graph, Flow,
+      [Snapshot, Carrier, ResolvedObjective, Graph, Flow,
         FixedStepSeconds, Work, AcceptanceRadius, CarrierSpeed]()
       {
         FCrowdMassCommitPlan Plan;
@@ -316,7 +475,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
               return FCrowdBoundaryTaskResult::Failure();
             FVector Direction = FlowNode->Direction;
             const FVector ToObjective =
-              Objective - Agent.State.Position;
+              ResolvedObjective - Agent.State.Position;
             if (ToObjective.Size2D() <= AcceptanceRadius
               || FlowNode->StableNodeId == Flow->GoalStableNodeId)
               Direction = ToObjective.GetSafeNormal2D();
@@ -382,37 +541,53 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   TArray<FCrowdBoundaryPreparedPatch> Patches;
   FCrowdLogisticsPreparedPatch LogisticsPatch;
   bool bHasLogisticsPatch = false;
-  const FCrowdMassCommitRecord* CarrierRecord =
-    Work->Plan.Records.FindByPredicate(
-      [&Carrier](const FCrowdMassCommitRecord& Record)
-      {
-        return Record.EntityRef == Carrier;
-      });
   ECrowdLogisticsCommitKind TransitionKind =
     ECrowdLogisticsCommitKind::Claim;
-  if (CarrierRecord && bMoveToSource
-    && FVector::Dist2D(
-      CarrierRecord->Movement.Position, SourceLocation)
-        <= AcceptanceRadiusCm)
+  uint64 PlannerCommitId = 0;
+  const FCrowdBehaviorPreparedEntity* CarrierBehavior =
+    Carrier.IsValid()
+    ? PreparedBehavior.Entities.FindByPredicate(
+      [&Carrier](const auto& Entity)
+      {
+        return Entity.EntityRef == Carrier;
+      })
+    : nullptr;
+  if (CarrierBehavior
+    && CarrierBehavior->ResolvedChannels.Business.Num() > 1)
+    return false;
+  if (CarrierBehavior
+    && CarrierBehavior->ResolvedChannels.Business.Num() == 1)
   {
-    TransitionKind = ECrowdLogisticsCommitKind::Pickup;
-    ++SourceAcceptanceCount;
-    bHasLogisticsPatch = true;
-  }
-  else if (CarrierRecord && bMoveToSink && bDeathInjected
-    && FVector::Dist2D(
-      CarrierRecord->Movement.Position,
-      bFallbackApplied ? FallbackSinkLocation : PrimarySinkLocation)
-        <= AcceptanceRadiusCm)
-  {
-    TransitionKind = ECrowdLogisticsCommitKind::Deliver;
-    ++SinkAcceptanceCount;
+    const FCrowdBusinessContribution& Contribution =
+      CarrierBehavior->ResolvedChannels.Business[0];
+    PlannerCommitId = Contribution.CommitId;
+    if (Contribution.InstigatorRef != Carrier
+      || Contribution.TargetRef != Task.TaskRef)
+      return false;
+    if (Contribution.AdapterId
+        == CrowdDemoBehaviorAdapterIds::CargoPickup
+      && bMoveToSource)
+    {
+      TransitionKind = ECrowdLogisticsCommitKind::Pickup;
+      ++SourceAcceptanceCount;
+    }
+    else if (Contribution.AdapterId
+        == CrowdDemoBehaviorAdapterIds::CargoDeliver
+      && bMoveToSink && bDeathInjected)
+    {
+      TransitionKind = ECrowdLogisticsCommitKind::Deliver;
+      ++SinkAcceptanceCount;
+    }
+    else
+    {
+      return false;
+    }
     bHasLogisticsPatch = true;
   }
   if (bHasLogisticsPatch)
   {
     const FCrowdLogisticsCommitRequest Request{
-      NextCommitId, TransitionKind, Task.TaskRef, Carrier,
+      PlannerCommitId, TransitionKind, Task.TaskRef, Carrier,
       Task.Revision, Store.GetSource().Revision,
       Store.GetSink().Revision};
     if (Store.Prepare(Request, LogisticsPatch)
@@ -442,12 +617,15 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   {
     Store.ApplyPrepared(LogisticsPatch);
     Store.ApplyPrepared(LogisticsPatch);
-    ++NextCommitId;
     ++AppliedCount;
   }
   if (!Runner.MarkCommitted(0.0))
     return false;
+  checkf(BehaviorSourceRuntime->CommitPrepared(PreparedBehavior),
+    TEXT("Validated Friendly behavior transaction changed before apply"));
+  PendingRollback.bCommitted = true;
   LastProductCommitHash = Runner.GetCommitEnvelope().StableHash;
+  LastPlannerDecisionHash = StagedPlannerDecisionHash;
 
   for (const FCrowdMassCommitRecord& Record : Work->Plan.Records)
   {
@@ -524,108 +702,119 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::Commit(
 
 void ACrowdDemoFriendlyLogisticsCoordinator::AdvanceObservedState()
 {
-  const FCrowdStableEntityRef FirstCarrier{1, 1, 1};
-  const FCrowdStableEntityRef RecoveryCarrier{1, 2, 1};
-  const ECrowdLogisticsTaskState State = Store.GetTask().State;
+  const double Now = GetWorld()->GetTimeSeconds();
+  FCrowdDemoFriendlyDirectorInput Input;
+  Input.TaskState = Store.GetTask().State;
+  Input.CancellationTaskState = CancellationStore.GetTask().State;
+  Input.FixedStepIndex = ProductFixedStepIndex;
+  Input.PickupObservedFixedStep = PickupObservedFixedStep;
+  Input.UnreachableBackoffCount = UnreachableBackoffCount;
+  Input.CancellationCount = CancellationCount;
+  Input.bTransitionDelayElapsed = Now >= NextTransitionWorldSeconds;
+  Input.bDeathInjected = bDeathInjected;
+  Input.bFallbackApplied = bFallbackApplied;
+  const FCrowdDemoFriendlyDirectorDecision Decision =
+    FCrowdDemoFriendlyLogisticsTestDirector::Evaluate(Input);
   bool bStateChanged = false;
-
-  if (State == ECrowdLogisticsTaskState::Created)
-  {
-    const double Now = GetWorld()->GetTimeSeconds();
-    if (Now < NextTransitionWorldSeconds)
-      return;
+  if (Input.TaskState == ECrowdLogisticsTaskState::Created
+    && Input.bTransitionDelayElapsed)
     NextTransitionWorldSeconds = Now + TransitionDelaySeconds;
-    if (UnreachableBackoffCount < 2)
-    {
-      ++UnreachableBackoffCount;
-      return;
-    }
-    TArray<FCrowdStableEntityRef> Candidates;
-    for (uint64 Id = FriendlyPopulation; Id >= 1; --Id)
-    {
-      Candidates.Add({1, Id, 1});
-    }
-    FCrowdStableEntityRef Winner;
-    if (!FCrowdLogisticsKernel::ChooseCarrier(Candidates, Winner)
-      || Winner != FirstCarrier
-      || !Commit(Store, ECrowdLogisticsCommitKind::Claim, Winner))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=competition"));
-      return;
-    }
-    ++CompetitionCount;
-    bStateChanged = true;
-  }
-  else if (State == ECrowdLogisticsTaskState::Picked && !bDeathInjected)
+
+  switch (Decision.Action)
   {
-    if (PickupObservedFixedStep == INDEX_NONE)
+  case ECrowdDemoFriendlyDirectorAction::IncrementBackoff:
+    ++UnreachableBackoffCount;
+    return;
+  case ECrowdDemoFriendlyDirectorAction::ClaimCompetitionWinner:
     {
-      PickupObservedFixedStep = ProductFixedStepIndex;
-      return;
+      TArray<FCrowdStableEntityRef> Candidates;
+      for (uint64 Id = FriendlyPopulation; Id >= 1; --Id)
+        Candidates.Add({1, Id, 1});
+      FCrowdStableEntityRef Winner;
+      const FCrowdStableEntityRef ExpectedWinner{1, 1, 1};
+      if (!FCrowdLogisticsKernel::ChooseCarrier(Candidates, Winner)
+        || Winner != ExpectedWinner
+        || !Commit(Store, ECrowdLogisticsCommitKind::Claim, Winner))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=competition"));
+        return;
+      }
+      ++CompetitionCount;
+      bStateChanged = true;
+      break;
     }
-    if (ProductFixedStepIndex - PickupObservedFixedStep < 45)
-      return;
-    const FCrowdStableEntityRef DeadCarrier =
-      Store.GetTask().CarrierRef;
-    if (!Commit(Store, ECrowdLogisticsCommitKind::Requeue,
-      DeadCarrier))
+  case ECrowdDemoFriendlyDirectorAction::ObservePickup:
+    PickupObservedFixedStep = ProductFixedStepIndex;
+    return;
+  case ECrowdDemoFriendlyDirectorAction::RequeueDeadCarrier:
     {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=death_requeue"));
-      return;
+      const FCrowdStableEntityRef DeadCarrier =
+        Store.GetTask().CarrierRef;
+      if (!Commit(Store, ECrowdLogisticsCommitKind::Requeue,
+          DeadCarrier))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=death_requeue"));
+        return;
+      }
+      UWorld* World = GetWorld();
+      UCrowdDemoMassSubsystem* Mass = World
+        ? World->GetSubsystem<UCrowdDemoMassSubsystem>() : nullptr;
+      FCrowdStableEntityRef Replacement;
+      if (!Mass || !Mass->RecycleTrackedAgent(
+          DeadCarrier, Replacement)
+        || Replacement.LifecycleSerial
+          != DeadCarrier.LifecycleSerial + 1)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=death_respawn"));
+        return;
+      }
+      bDeathInjected = true;
+      ++DeathRecoveryCount;
+      bStateChanged = true;
+      break;
     }
-    UWorld* World = GetWorld();
-    UCrowdDemoMassSubsystem* Mass =
-      World ? World->GetSubsystem<UCrowdDemoMassSubsystem>() : nullptr;
-    FCrowdStableEntityRef Replacement;
-    if (!Mass || !Mass->RecycleTrackedAgent(
-        DeadCarrier, Replacement)
-      || Replacement.LifecycleSerial
-        != DeadCarrier.LifecycleSerial + 1)
+  case ECrowdDemoFriendlyDirectorAction::ApplyFallbackSink:
     {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=death_respawn"));
-      return;
+      const FCrowdLogisticsInventoryFact Fallback{
+        {30, 3, 1}, 0, 0, 0, 0, 80, 1};
+      if (!Store.RetargetSink(Fallback, NextCommitId++))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=fallback"));
+        return;
+      }
+      bFallbackApplied = true;
+      ++FallbackCount;
+      bStateChanged = true;
+      break;
     }
-    bDeathInjected = true;
-    ++DeathRecoveryCount;
-    bStateChanged = true;
-  }
-  else if (State == ECrowdLogisticsTaskState::Requeued && !bFallbackApplied)
-  {
-    const FCrowdLogisticsInventoryFact Fallback{
-      {30, 3, 1}, 0, 0, 0, 0, 80, 1};
-    if (!Store.RetargetSink(Fallback, NextCommitId++))
+  case ECrowdDemoFriendlyDirectorAction::ClaimRecoveryCarrier:
     {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=fallback"));
-      return;
+      const FCrowdStableEntityRef RecoveryCarrier{1, 2, 1};
+      if (!Commit(Store, ECrowdLogisticsCommitKind::Claim,
+          RecoveryCarrier))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=recover_claim"));
+        return;
+      }
+      bStateChanged = true;
+      break;
     }
-    bFallbackApplied = true;
-    ++FallbackCount;
-    bStateChanged = true;
-  }
-  else if (State == ECrowdLogisticsTaskState::Requeued)
-  {
-    if (!Commit(Store, ECrowdLogisticsCommitKind::Claim, RecoveryCarrier))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=recover_claim"));
-      return;
-    }
-    bStateChanged = true;
+  default:
+    break;
   }
 
-  if (CancellationCount == 0
-    && CancellationStore.GetTask().State
-      == ECrowdLogisticsTaskState::Created)
+  if (Decision.bRunCancellationFixture)
   {
     const FCrowdStableEntityRef CancelCarrier{1, 3, 1};
-    if (Commit(CancellationStore, ECrowdLogisticsCommitKind::Claim,
-        CancelCarrier)
-      && Commit(CancellationStore, ECrowdLogisticsCommitKind::Cancel,
-        CancelCarrier))
+    if (Commit(CancellationStore,
+        ECrowdLogisticsCommitKind::Claim, CancelCarrier)
+      && Commit(CancellationStore,
+        ECrowdLogisticsCommitKind::Cancel, CancelCarrier))
     {
       ++CancellationCount;
       bStateChanged = true;
@@ -634,7 +823,6 @@ void ACrowdDemoFriendlyLogisticsCoordinator::AdvanceObservedState()
   if (bStateChanged)
     PublishState();
 }
-
 void ACrowdDemoFriendlyLogisticsCoordinator::RefreshReplicationChannels()
 {
   UWorld* World = GetWorld();
@@ -648,6 +836,7 @@ void ACrowdDemoFriendlyLogisticsCoordinator::RefreshReplicationChannels()
       AMassCrowdReplicationActor::SpawnForController(*Controller);
     if (!Channel) continue;
     ReplicationChannels.Add(Controller, Channel);
+    LastPublishedSourceSetRevisions.Reset();
     if (bInitialized) PublishBaseline(*Channel);
   }
 }
@@ -680,26 +869,61 @@ void ACrowdDemoFriendlyLogisticsCoordinator::PublishState()
   StateHash = HashBytes(Bytes);
   if (!bInitialized) return;
   for (TPair<TWeakObjectPtr<APlayerController>,
+    TWeakObjectPtr<AMassCrowdReplicationActor>>& Pair
+    : ReplicationChannels)
+  {
+    if (AMassCrowdReplicationActor* Channel = Pair.Value.Get();
+      Channel && Channel->RequiresNewBaseline())
+    {
+      PublishBaseline(*Channel);
+      LastPublishedSourceSetRevisions.Reset();
+    }
+  }
+  TArray<FCrowdReliableStateRecord> Records;
+  FCrowdReliableStateRecord& TaskRecord =
+    Records.AddDefaulted_GetRef();
+  TaskRecord.Sequence = NextReliableSequence++;
+  TaskRecord.Kind = ECrowdReliableStateKind::Task;
+  TaskRecord.EntityRef = Store.GetTask().TaskRef;
+  TaskRecord.Revision = Store.GetTask().Revision;
+  TaskRecord.Payload = Bytes;
+  TaskRecord.StableHash =
+    FCrowdReplicationTransport::CalculateReliableRecordHash(
+      TaskRecord);
+  if (BehaviorSourceRuntime)
+  {
+    TArray<FCrowdDemoSourceStateFact> SourceFacts;
+    SourceFacts.Reserve(BehaviorEntityRefsBySlot.Num());
+    for (const auto& Pair : BehaviorEntityRefsBySlot)
+    {
+      const FCrowdBehaviorSourceSet* SourceSet =
+        BehaviorSourceRuntime->FindSourceSet(Pair.Value);
+      if (!SourceSet) continue;
+      SourceFacts.Add({
+        Pair.Value,
+        static_cast<uint32>(
+          DeriveCrowdDemoDiagnosticBehavior(*SourceSet))});
+    }
+    if (!FCrowdDemoSourceStatePublisher::AppendChanged(
+        *BehaviorSourceRuntime,
+        SourceFacts,
+        FriendlyPopulation,
+        LastPublishedSourceSetRevisions,
+        NextReliableSequence,
+        Records))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=source_publish"));
+      return;
+    }
+  }
+  for (TPair<TWeakObjectPtr<APlayerController>,
     TWeakObjectPtr<AMassCrowdReplicationActor>>& Pair : ReplicationChannels)
   {
     AMassCrowdReplicationActor* Channel = Pair.Value.Get();
     if (!Channel) continue;
-    if (Channel->RequiresNewBaseline())
-    {
-      PublishBaseline(*Channel);
-      continue;
-    }
-    FCrowdReliableStateRecord Record;
-    Record.Sequence = NextReliableSequence;
-    Record.Kind = ECrowdReliableStateKind::Task;
-    Record.EntityRef = Store.GetTask().TaskRef;
-    Record.Revision = Store.GetTask().Revision;
-    Record.Payload = Bytes;
-    Record.StableHash =
-      FCrowdReplicationTransport::CalculateReliableRecordHash(Record);
-    Channel->PublishReliable(Record);
+    Channel->PublishReliables(Records);
   }
-  ++NextReliableSequence;
 }
 
 void ACrowdDemoFriendlyLogisticsCoordinator::ConsumeState()
@@ -735,18 +959,73 @@ void ACrowdDemoFriendlyLogisticsCoordinator::ConsumeState()
         for (const FCrowdReliableStateRecord& Record
           : Frame.ReliableRecords)
         {
-          if (Record.Sequence <= LastConsumedSequence
-            || Record.Kind != ECrowdReliableStateKind::Task)
+          if (Record.Sequence <= LastConsumedSequence)
             continue;
-          if (!DecodeState(Record.Payload))
+          if (Record.Kind == ECrowdReliableStateKind::Task)
           {
-            UE_LOG(LogTemp, Error,
-              TEXT("VIOLATION CrowdDemoFriendlyLogistics role=client stage=decode sequence=%llu"),
-              Record.Sequence);
+            if (!DecodeState(Record.Payload))
+            {
+              UE_LOG(LogTemp, Error,
+                TEXT("VIOLATION CrowdDemoFriendlyLogistics role=client stage=decode sequence=%llu"),
+                Record.Sequence);
+              return;
+            }
+            bStateChanged = true;
+          }
+          else if (Record.Kind
+            == ECrowdReliableStateKind::BehaviorSourceSet)
+          {
+            UWorld* RuntimeWorld = GetWorld();
+            UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+              RuntimeWorld
+              ? RuntimeWorld->GetSubsystem<
+                  UMassCrowdRuntimeSubsystem>()
+              : nullptr;
+            BehaviorSourceRuntime = RuntimeSubsystem
+              ? &RuntimeSubsystem->GetBehaviorSourceRuntime()
+              : nullptr;
+            FCrowdBehaviorSourceSetReplicationRecord SourceRecord;
+            if (!BehaviorSourceRuntime
+              || !FCrowdReplicationCodec::DecodeBehaviorSourceSet(
+                Record.Payload,
+                BehaviorSourceRuntime->GetRegistryHash(),
+                BehaviorSourceRuntime->GetContextSchemaHash(),
+                SourceRecord)
+              || SourceRecord.SourceSet.EntityRef
+                != Record.EntityRef)
+            {
+              Channel->RequestResync();
+              return;
+            }
+            if (!BehaviorSourceRuntime->FindSourceSet(
+                Record.EntityRef))
+            {
+              FCrowdCapabilityBinding Binding;
+              Binding.ProfileKey =
+                CrowdDemoBehaviorSchemas::FullProfile;
+              if (!BehaviorSourceRuntime->RegisterEntity(
+                  Record.EntityRef, Binding))
+              {
+                Channel->RequestResync();
+                return;
+              }
+              BehaviorEntityRefsBySlot.Add(
+                Record.EntityRef.StableEntityId,
+                Record.EntityRef);
+            }
+            if (!BehaviorSourceRuntime->ApplyReplicatedSourceSet(
+                SourceRecord.SourceSet))
+            {
+              Channel->RequestResync();
+              return;
+            }
+          }
+          else
+          {
+            Channel->RequestResync();
             return;
           }
           LastConsumedSequence = Record.Sequence;
-          bStateChanged = true;
         }
         continue;
       }

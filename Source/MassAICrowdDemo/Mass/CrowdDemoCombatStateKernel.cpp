@@ -1,4 +1,5 @@
 #include "Mass/CrowdDemoCombatStateKernel.h"
+#include "CrowdDemoVatShowcasePlanner.h"
 
 namespace
 {
@@ -323,57 +324,25 @@ FCrowdDemoVatShowcaseMotionResult FCrowdDemoCombatStateKernel::BuildVatShowcaseM
   const FVector& AnchorLocation,
   const FCrowdDemoVatShowcaseMotionSettings& Settings)
 {
+  FCrowdDemoVatMotionSettings PlannerSettings;
+  PlannerSettings.FirstMovingFormationIndex =
+    Settings.FirstMovingFormationIndex;
+  PlannerSettings.MovingAgentCount = Settings.MovingAgentCount;
+  PlannerSettings.HalfCycleFixedSteps =
+    Settings.HalfCycleFixedSteps;
+  PlannerSettings.MoveSpeedCmps = Settings.MoveSpeedCmps;
+  PlannerSettings.MaximumAnchorOffsetCm =
+    Settings.MaximumAnchorOffsetCm;
+  const FCrowdDemoVatMotionDecision Decision =
+    FCrowdDemoVatShowcasePlanner::BuildMotion(
+      FormationIndex, FixedStepIndex, CurrentLocation,
+      AnchorLocation, PlannerSettings);
   FCrowdDemoVatShowcaseMotionResult Result;
-  Result.DesiredLocation = CurrentLocation;
-  const bool bFinite = FMath::IsFinite(CurrentLocation.X)
-    && FMath::IsFinite(CurrentLocation.Y)
-    && FMath::IsFinite(CurrentLocation.Z)
-    && FMath::IsFinite(AnchorLocation.X)
-    && FMath::IsFinite(AnchorLocation.Y)
-    && FMath::IsFinite(AnchorLocation.Z)
-    && FMath::IsFinite(Settings.MoveSpeedCmps)
-    && FMath::IsFinite(Settings.MaximumAnchorOffsetCm);
-  if (!bFinite || FormationIndex < 0 || FixedStepIndex < 0
-    || Settings.FirstMovingFormationIndex < 0 || Settings.MovingAgentCount < 0
-    || Settings.HalfCycleFixedSteps <= 0 || Settings.MoveSpeedCmps < 0.0f
-    || Settings.MaximumAnchorOffsetCm < 0.0f)
-  {
-    return Result;
-  }
-
-  Result.bMovingGroup = FormationIndex >= Settings.FirstMovingFormationIndex
-    && FormationIndex < Settings.FirstMovingFormationIndex + Settings.MovingAgentCount;
-  if (Result.bMovingGroup && Settings.MoveSpeedCmps > 0.0f
-    && Settings.MaximumAnchorOffsetCm > 0.0f)
-  {
-    const int32 HalfCycle = FixedStepIndex / Settings.HalfCycleFixedSteps;
-    float Direction = (HalfCycle & 1) == 0 ? 1.0f : -1.0f;
-    const float OffsetX = CurrentLocation.X - AnchorLocation.X;
-    if (OffsetX >= Settings.MaximumAnchorOffsetCm && Direction > 0.0f)
-    {
-      Direction = -1.0f;
-    }
-    else if (OffsetX <= -Settings.MaximumAnchorOffsetCm && Direction < 0.0f)
-    {
-      Direction = 1.0f;
-    }
-    Result.DesiredVelocity = FVector(Direction * Settings.MoveSpeedCmps, 0.0f, 0.0f);
-    Result.DesiredLocation = AnchorLocation
-      + FVector(Direction * Settings.MaximumAnchorOffsetCm, 0.0f, 0.0f);
-  }
-
-  uint32 Hash = Fold(FnvOffset, 1u);
-  Hash = Fold(Hash, static_cast<uint64>(FormationIndex));
-  Hash = Fold(Hash, static_cast<uint64>(FixedStepIndex));
-  Hash = Fold(Hash, static_cast<uint64>(Quantize(CurrentLocation.X)));
-  Hash = Fold(Hash, static_cast<uint64>(Quantize(CurrentLocation.Y)));
-  Hash = Fold(Hash, static_cast<uint64>(Quantize(AnchorLocation.X)));
-  Hash = Fold(Hash, static_cast<uint64>(Quantize(AnchorLocation.Y)));
-  Hash = Fold(Hash, Result.bMovingGroup ? 1u : 0u);
-  Hash = Fold(Hash, static_cast<uint64>(Quantize(Result.DesiredVelocity.X)));
-  Hash = Fold(Hash, static_cast<uint64>(Quantize(Result.DesiredVelocity.Y)));
-  Result.StableHash = Hash;
-  Result.bValid = true;
+  Result.bValid = Decision.bValid;
+  Result.bMovingGroup = Decision.bMovingGroup;
+  Result.DesiredVelocity = Decision.DesiredVelocity;
+  Result.DesiredLocation = Decision.DesiredLocation;
+  Result.StableHash = Decision.StableHash;
   return Result;
 }
 
