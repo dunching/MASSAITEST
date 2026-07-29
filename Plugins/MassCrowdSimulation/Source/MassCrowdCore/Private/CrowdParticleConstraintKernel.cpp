@@ -490,6 +490,9 @@ void FCrowdParticleConstraintKernel::BuildCandidatePairs(
   TArray<int64> CellKeys;
   Grid.GetKeys(CellKeys);
   CellKeys.Sort();
+  TSet<uint64> SeenPairKeys;
+  SeenPairKeys.Reserve(Agents.Num() * 8);
+  OutPairs.Reserve(Agents.Num() * 8);
   for (const int64 CellKey : CellKeys)
   {
     TArray<int32>& CellAgents = Grid.FindChecked(CellKey);
@@ -504,11 +507,22 @@ void FCrowdParticleConstraintKernel::BuildCandidatePairs(
         if (Agents[CellAgents[A]].InteractionLayer
           != Agents[CellAgents[B]].InteractionLayer)
           continue;
+        const int32 MinAgentId =
+          Agents[CellAgents[A]].AgentId;
+        const int32 MaxAgentId =
+          Agents[CellAgents[B]].AgentId;
+        const uint64 PairKey =
+          (static_cast<uint64>(
+            static_cast<uint32>(MinAgentId)) << 32)
+          | static_cast<uint32>(MaxAgentId);
+        if (SeenPairKeys.Contains(PairKey))
+          continue;
+        SeenPairKeys.Add(PairKey);
         FCrowdParticleConstraintPair& Pair = OutPairs.AddDefaulted_GetRef();
         Pair.MinAgentIndex = CellAgents[A];
         Pair.MaxAgentIndex = CellAgents[B];
-        Pair.MinAgentId = Agents[Pair.MinAgentIndex].AgentId;
-        Pair.MaxAgentId = Agents[Pair.MaxAgentIndex].AgentId;
+        Pair.MinAgentId = MinAgentId;
+        Pair.MaxAgentId = MaxAgentId;
       }
     }
   }

@@ -115,7 +115,7 @@ S4. [x] [COMPUTED][HIGH] Demo重复运动薄Evaluator已删除，产品Provider�
 
 S5. [x] [COMPUTED][HIGH] 确定性Wander、FormationOffset和有期限TimedImpulse已实现；Escort、Pursue+Attack、显式一帧Lock及HitReaction精确恢复均有专项证据。
 
-S6. [x] [COMPUTED][HIGH] StandardSources 8/8、Mixed组合5/5、第三方三复制策略Fixture、MassCrowd 61/61、CrowdDemo 125/125与四构建通过；20/100/500同一生产路径双端门服务端p95=`1.593/8.772/27.587ms`、客户端p95=`4.801/4.951/4.822ms`，三种规模均双端Hash一致、零resync和零安全违规。目标丢失Stop、Schema拒绝、Wander回放、Distance迟滞、显式Lock、HitReaction精确恢复和完整安全链均有专项或真实门证据。
+S6. [x] [COMPUTED][HIGH] StandardSources 8/8、Mixed组合5/5、第三方三复制策略Fixture与20/100/500同一生产路径双端门均已关闭。PJ6最终回归更新为MassCrowd 65/65、CrowdDemo 125/125与四构建通过，并在相同路径加入4/20/100发公共Projectile；服务端p95=`2.152/9.675/30.016ms`、客户端p95=`4.963/4.938/5.171ms`，三种规模均双端Hash一致、零resync和零安全违规。目标丢失Stop、Schema拒绝、Wander回放、Distance迟滞、显式Lock、HitReaction精确恢复和完整安全链均有专项或真实门证据。
 
 ## 9. 验收边界
 

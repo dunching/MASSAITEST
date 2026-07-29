@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
 #include "MassEntityHandle.h"
+#include "MassCrowdProjectileMassStore.h"
 #include "MassCrowdRuntimeBridge.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CrowdDemoMassSubsystem.generated.h"
@@ -11,19 +12,6 @@ struct FMassEntityManager;
 class AActor;
 class UCrowdDemoClientVisualMassProcessor;
 class UCrowdDemoRoundSimFixedStepPipelineProcessor;
-
-struct MASSAICROWDDEMO_API FCrowdDemoMassProjectileStoreAdapter
-{
-  static void ApplyValidated(
-    FMassEntityManager& EntityManager,
-    TConstArrayView<FMassEntityHandle> ProjectileEntities,
-    TConstArrayView<struct FCrowdDemoProjectileState> Projectiles);
-
-  static bool Gather(
-    const FMassEntityManager& EntityManager,
-    TConstArrayView<FMassEntityHandle> ProjectileEntities,
-    TArray<struct FCrowdDemoProjectileState>& OutProjectiles);
-};
 
 USTRUCT()
 struct FCrowdDemoMassSpawnResult
@@ -80,15 +68,18 @@ public:
     FCrowdStableEntityRef& OutReplacementRef);
   bool PrepareProjectileCapacity(int32 RequiredCount);
   void ApplyProjectileStates(
-    TConstArrayView<struct FCrowdDemoProjectileState> Projectiles);
+    TConstArrayView<struct FCrowdProjectileState> Projectiles);
   bool GatherProjectileStates(
-    TArray<struct FCrowdDemoProjectileState>& OutProjectiles) const;
+    TArray<struct FCrowdProjectileState>& OutProjectiles) const;
   void ResetProjectileStates();
-  int32 GetTrackedProjectilePoolCount() const { return TrackedProjectiles.Num(); }
+  int32 GetTrackedProjectilePoolCount() const
+  {
+    return ProjectileStore.GetCapacity();
+  }
 
 private:
   TArray<FMassEntityHandle> TrackedAgents;
-  TArray<FMassEntityHandle> TrackedProjectiles;
+  FCrowdMassProjectileStore ProjectileStore;
   TWeakObjectPtr<AActor> TargetActor;
   ECrowdDemoScenario CurrentScenario = ECrowdDemoScenario::SimRoundObstacle;
   ECrowdDemoSoftPressureTestCase SoftPressureTestCase =
@@ -102,7 +93,6 @@ private:
 
   FVector MakeSpawnLocation(int32 AgentIndex, int32 AgentCount) const;
   void DestroyTrackedAgents();
-  void GrowProjectilePool(FMassEntityManager& EntityManager, int32 AddCount);
   void InitializeAgentFragments(FMassEntityManager& EntityManager, FMassEntityHandle Entity, int32 AgentIndex, int32 AgentCount) const;
   void RegisterRoundSimProcessors();
   void UnregisterRoundSimProcessors();

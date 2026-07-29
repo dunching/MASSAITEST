@@ -1,5 +1,19 @@
 #include "MassCrowdRuntimeBridge.h"
 
+#define FnvOffset RuntimeBridge_FnvOffset
+#define FnvPrime RuntimeBridge_FnvPrime
+#define FnvOffset64 RuntimeBridge_FnvOffset64
+#define FnvPrime64 RuntimeBridge_FnvPrime64
+#define Fold RuntimeBridge_Fold
+#define FoldInt RuntimeBridge_FoldInt
+#define FoldFloat RuntimeBridge_FoldFloat
+#define Fold64 RuntimeBridge_Fold64
+#define FoldInt64 RuntimeBridge_FoldInt64
+#define FoldFloat64 RuntimeBridge_FoldFloat64
+#define FoldRef64 RuntimeBridge_FoldRef64
+#define FoldFacts64 RuntimeBridge_FoldFacts64
+#define IsFiniteVector RuntimeBridge_IsFiniteVector
+
 namespace CrowdRuntimeBridgePrivate
 {
   constexpr uint32 FnvOffset = 2166136261u;
@@ -541,3 +555,17 @@ bool FCrowdMassRuntimeBridge::ApplyMovementToState(
   OutMovement.Value = Record.Movement;
   return true;
 }
+
+#undef IsFiniteVector
+#undef FoldFacts64
+#undef FoldRef64
+#undef FoldFloat64
+#undef FoldInt64
+#undef Fold64
+#undef FoldFloat
+#undef FoldInt
+#undef Fold
+#undef FnvPrime64
+#undef FnvOffset64
+#undef FnvPrime
+#undef FnvOffset

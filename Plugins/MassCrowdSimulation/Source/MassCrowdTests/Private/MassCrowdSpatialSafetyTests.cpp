@@ -22,6 +22,9 @@ bool FMassCrowdSpatialSafetyIndexTest::RunTest(const FString& Parameters)
     Index.IsCandidateSafe({1, 1, 1}, FVector(120.0, 0.0, 0.0), 50.0f));
   TestTrue(TEXT("different nav layer does not conflict"),
     Index.IsCandidateSafe({1, 1, 1}, FVector(0.0, 0.0, 160.0), 50.0f));
+  TestFalse(TEXT("candidate nav layer is checked before update"),
+    Index.IsCandidateSafe(
+      {1, 1, 1}, FVector(20.0, 0.0, 0.0), 50.0f, 1));
   TestEqual(TEXT("minimum separation ignores different nav layers"),
     Index.CalculateMinimumSeparationCm(), 200.0f);
   TestTrue(TEXT("moving entity updates its spatial cell"),

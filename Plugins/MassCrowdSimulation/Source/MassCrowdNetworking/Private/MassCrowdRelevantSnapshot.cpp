@@ -1,5 +1,11 @@
 #include "MassCrowdRelevantSnapshot.h"
 
+#define FnvOffset64 RelevantSnapshot_FnvOffset64
+#define FnvPrime64 RelevantSnapshot_FnvPrime64
+#define FoldByte RelevantSnapshot_FoldByte
+#define FoldUnsigned RelevantSnapshot_FoldUnsigned
+#define FoldBytes RelevantSnapshot_FoldBytes
+
 #include <type_traits>
 
 namespace
@@ -512,3 +518,9 @@ void FCrowdRelevantSnapshotAssembly::Fail()
 {
   bFailed = true;
 }
+
+#undef FoldBytes
+#undef FoldUnsigned
+#undef FoldByte
+#undef FnvPrime64
+#undef FnvOffset64

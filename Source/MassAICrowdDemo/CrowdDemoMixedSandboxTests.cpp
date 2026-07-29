@@ -325,6 +325,18 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
     Coordinator.Contains(TEXT("UMassCrowdPresentationSubsystem"))
       && Coordinator.Contains(TEXT("PrepareFrame"))
       && Coordinator.Contains(TEXT("ApplyPreparedFrame")));
+  TestTrue(TEXT("mixed scale gate uses public projectile boundary and Mass store"),
+    Coordinator.Contains(
+      TEXT("FCrowdProjectileBoundaryPipeline::Prepare"))
+      && Coordinator.Contains(
+        TEXT("ProjectileStore.ApplyValidated"))
+      && Coordinator.Contains(
+        TEXT("Config.PopulationLimit / 5")));
+  TestTrue(TEXT("mixed projectile hits use the generic combat resolver"),
+    Coordinator.Contains(
+      TEXT("FCrowdCombatResolver::Resolve"))
+      && Coordinator.Contains(
+        TEXT("FCrowdPreparedHostHitCommit")));
   TestFalse(TEXT("mixed coordinator does not mutate ISM slots directly"),
     Coordinator.Contains(TEXT("->AddInstance("))
       || Coordinator.Contains(TEXT("->RemoveInstance("))
@@ -334,7 +346,9 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
   TestTrue(TEXT("runner exposes and gates mixed path"),
     Runner.Contains(TEXT("[switch]$MixedSandbox"))
       && Runner.Contains(TEXT("PASS CrowdDemoMixedSandbox role=server"))
-      && Runner.Contains(TEXT("PASS CrowdDemoMixedSandbox role=client")));
+      && Runner.Contains(TEXT("PASS CrowdDemoMixedSandbox role=client"))
+      && Runner.Contains(TEXT("projectile_spawned=$ExpectedProjectiles"))
+      && Runner.Contains(TEXT("projectile_hash=$ProjectileHash")));
   return true;
 }
 

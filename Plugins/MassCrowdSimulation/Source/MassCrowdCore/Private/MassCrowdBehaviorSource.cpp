@@ -1,5 +1,13 @@
 #include "MassCrowdBehaviorSource.h"
 
+#define FnvOffset64 BehaviorSource_FnvOffset64
+#define FnvPrime64 BehaviorSource_FnvPrime64
+#define FoldUnsigned BehaviorSource_FoldUnsigned
+#define FoldRef BehaviorSource_FoldRef
+#define FoldFloat BehaviorSource_FoldFloat
+#define FoldVector BehaviorSource_FoldVector
+#define IsFiniteVector BehaviorSource_IsFiniteVector
+
 namespace
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
@@ -962,3 +970,11 @@ bool FCrowdBehaviorResolver::Resolve(
   OutResolved.bValid = StableHash != 0;
   return OutResolved.bValid;
 }
+
+#undef IsFiniteVector
+#undef FoldVector
+#undef FoldFloat
+#undef FoldRef
+#undef FoldUnsigned
+#undef FnvPrime64
+#undef FnvOffset64

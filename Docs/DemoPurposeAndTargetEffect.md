@@ -16,7 +16,7 @@
 
 [COMPUTED][HIGH] 当前能力包括固定 Agent 集合的 Round 验收、Core/Runtime 通用运动链、Demo correction/checkpoint chunks、Target Region、Combat HitFact 与 Demo ISM/VAT 表现。
 
-[COMPUTED][HIGH] 当前已具备生产 Snapshot、bounded lifecycle batches、持续 spawn/despawn、死亡移除、Lifecycle 槽位复用、membership增量、统一Behavior、owner-only late join、空间RelevantSet、公共Presentation和20实体continuous混合Sandbox；真实移动视区enter/exit验收、独立NavFlow与FriendlyLogistics产品场景仍缺失。
+[COMPUTED][HIGH] 当前已具备生产Snapshot、bounded lifecycle batches、持续spawn/despawn、死亡移除、Lifecycle槽位复用、membership增量、统一Behavior、owner-only late join、空间RelevantSet、公共Presentation、NavFlowProductSmall、FriendlyLogisticsSmall和20/100/500同路径Mixed Sandbox。真实移动视区enter/exit专项仍未单独保存证据。
 
 [INFERRED][HIGH] 未来能力必须以 Faction、Capability、Active Behavior 与 Cohort 分离为前提：Faction 只表达关系/权限/目标过滤；Capability 表达能做什么；Active Behavior 表达当前做什么；Cohort 由共享 Objective、NavigationLayer、MovementProfile、CapabilityProfile 与宏观策略形成，不等同于阵营。
 
@@ -104,7 +104,7 @@
 
 [INFERRED][HIGH] T1 的“移除”只表示实体退出 Particle active 集合并回到可见 staging 状态，不是业务 despawn、死亡或 Mass 实体生命周期销毁；该边界不能被写成已实现真实生成/销毁系统。
 
-[COMPUTED][HIGH] T1、T3与T4已通过各自现行20实体能力合同；T2的8426结论现降级为旧口径到达/安全证据并等待稳定性V1复验。T6M已在8670关闭45秒能力门，但T5/T2稳定性V1与当前版人工审片未全部完成，因此当前状态仍不能笼统描述为T1–T6全部完成。
+[COMPUTED][HIGH] 历史稳定性审计快照：当时T1、T3、T4已通过，T2/T5仍等待稳定性V1，T6M刚由8670关闭能力门。当前技术回归状态以`TestScenarioMatrix.md`为准，当前版本人工审片仍未全部完成。
 
 [COMPUTED][HIGH] 8426 T2证明20实体能够从开放Shared Flow接近切换到目标相对Transport与Distance Band，并在覆盖16/16可行Region、当帧`TerminalSettle=20/20`时保持Particle硬安全、双端确定性、correction replay和20/20完整显示；当前`terminal_settled_count`没有连续低速或位置稳定窗口语义，因此8426不能单独证明最终无抖动自然落位。
 
@@ -168,7 +168,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [INFERRED][HIGH] 该失败说明“群体驱动”中的共享导航事实必须与动态群体目标处于同一空间参考系；只让个体速度跟随目标平移、但让共享势场继续指向旧世界坐标，不构成完整的移动群体调度。
 
-[COMPUTED][HIGH] 因此当前最终效果仍不能描述为 T1–T8 全部无硬失败，Mass Projectile 插件迁移前置门继续保持关闭。
+[COMPUTED][HIGH] 历史2026-07-17结论：当时T6M尚未关闭，因此不能描述为T1–T8全部无硬失败。该前置停止条件后来已经解除，Mass Projectile功能迁移、PJ0–PJ6三模块重构与专项均已完成。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。
 
@@ -186,7 +186,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [COMPUTED][HIGH] 命中闪色事实、HitFlashIntensity和红色同帧VAT overlay已接入；T7近景录像已证明完整受击动作可辨识。T8进一步实现并验证了10射手+10静止目标的目标选择、windup、Mass projectile、swept hit、damage、客户端事件视觉与统一HitResponse。
 
-[INFERRED][HIGH] T8 Small通过只证明静止目标远程投射物链成立，不能把Ranged距离带本身误报为攻击能力，也不能外推为移动目标、远程Transport handoff、T9混合战斗或100/500规模已经成立。当前边界以`RangedCombatVatAndHitResponseDesign.md`为准。
+[INFERRED][HIGH] T8 Small本身只证明静止目标远程投射物链；PJ6另以20/100/500实体和4/20/100并发Projectile关闭模块化规模门。两者仍不能外推为远程Transport handoff、T9混合战斗或原工程迁移已经成立。
 
 ## 2026-07-16 类游戏业务Sandbox与插件化迁移目标
 
@@ -198,15 +198,15 @@ Shared Flow / Transport决定去哪个可行区域
 
 [INFERRED][HIGH] 插件化用于降低未来接入`E:\Projects\SuperInvincibleTank_BugFix`的迁移风险；未来回原工程采用公开接口与Adapter，不默认复制整个Demo Source、Coordinator、地图或历史诊断代码。详细事实源为`GameplaySwarmSandboxAndPluginMigrationPlan.md`。
 
-[COMPUTED][HIGH] 2026-07-17 的Mass Projectile插件前置核对最初因T3生产合同缺失而停止；随后T3、T4与T6M能力门已经关闭，T8实验链也已存在。插件化迁移仍受T2/T5稳定性V1、当前版完整回归及真实Mass-native Projectile边界约束，不能由T6M单项通过自动启动。
+[COMPUTED][HIGH] 2026-07-17 的Mass Projectile插件前置核对最初因T3生产合同缺失而停止；随后T3、T4、T6M、T8和PJ0–PJ6均已关闭。本句仅保留历史停止原因，不再构成当前前置门。
 
 ## 2026-07-17 大量远程敌人与通用命中目标
 
-[INFERRED][HIGH] Demo长期目标明确包含大量远程类敌人和大量同时在场Projectile；最终实现必须使用真正的Mass Projectile Entity、稳定空间Broadphase与fixed-step相对sweep，不能长期维持Pipeline数组权威和`Projectile×Agent`全量扫描。
+[COMPUTED][HIGH] Demo长期目标中的大量远程类敌人与大量同时在场Projectile已由PJ6公共Mass Projectile Entity、稳定空间Broadphase和fixed-step相对sweep实现到本仓库规模门；结构测试持续禁止跨Boundary持久Pipeline数组权威或`Projectile×Agent`全量扫描。
 
 [INFERRED][HIGH] “命中”和“被命中”必须通过通用、无Actor依赖的HitFact连接：Projectile、线形、圆形和近战只生产事实；原工程Adapter负责伤害、防御、状态、击退/击飞、死亡、掉落和视觉结果。
 
-[INFERRED][HIGH] 插件化不是复制当前Demo代码，而是先纠正Projectile权威状态和接口边界，再在最小宿主、Demo和原工程三处验证。完整事实源为`MassProjectileHitFrameworkDesign.md`。
+[COMPUTED][HIGH] 插件公共模块与Demo验证已经完成；原工程Adapter验证尚未执行。完整事实源为`MassProjectileHitFrameworkDesign.md`。
 
 ## 2026-07-18 最终站位标记语义
 

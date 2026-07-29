@@ -2,6 +2,16 @@
 
 [INFERRED][HIGH] 本表只在生产调用链和对应专项门同时满足时勾选。接口、Codec或测试夹具存在但未接入生产，不得标为完整通过；Behavior Source现行状态以`EntityBehaviorSourceArchitecture.md`为准。
 
+## PJ0–PJ6 Projectile模块化关闭检查表
+
+- [x] [COMPUTED][HIGH] PJ0：当前文档与历史快照已分离，Projectile当前数组事务、模块所有权和最新测试数据无冲突描述。
+- [x] [COMPUTED][HIGH] PJ1：`MassCrowdSpatial`、`MassCrowdCombat`、`MassCrowdProjectiles`模块和单向依赖已建立；公共模块无Demo引用，Runtime不反向依赖Projectiles。
+- [x] [COMPUTED][HIGH] PJ2：Movement SpatialSafety与Projectile稳定Body/Grid/相对Sweep/环境Sweep已统一迁入Spatial模块；候选NavLayer随安全结果原子提交。
+- [x] [COMPUTED][HIGH] PJ3：Impact/Hit、Effect Profile、纯Resolver及Prepared Host Commit已迁入Combat模块。
+- [x] [COMPUTED][HIGH] PJ4：Projectile Mass Fragment/Trait、动态Mass实体池、Boundary WORK与Prepared Patch已迁入Projectiles模块；Mass Fragment保持唯一持久权威。
+- [x] [COMPUTED][HIGH] PJ5：Demo只保留攻击业务、伤害/VAT/视觉映射和清晰Adapter；旧Demo Kernel/Fragment/Store及重复Round入口已删除。
+- [x] [COMPUTED][HIGH] PJ6：三模块专项、结构门、T8/R7、`MassCrowd 65/65`、`CrowdDemo 125/125`、四构建及20/100/500并发4/20/100 Projectile双端门通过；服务端p95=`2.152/9.675/30.016ms`，最小间距=`70.11/70.03/70.00cm`。
+
 ## S0–S6 Standard Sources当前检查表
 
 - [x] [COMPUTED][HIGH] S0：RootMotionSource式扩展类比、StandardSources模块边界、通用/产品Source归属、Context/State、组合和验收边界已经写入事实源。
@@ -10,7 +20,7 @@
 - [x] [COMPUTED][HIGH] S3：MoveTo/Arrive/Follow/Pursue/Flee/MaintainDistance/Facing/Constraint第一批自主Evaluator及Payload/Context/State专项已实现。
 - [x] [COMPUTED][HIGH] S4：Demo已迁移为五Controller直接维护稳定Source集合Diff；产品Provider只保留SharedFlow、Cargo、Pickup/Deliver/Attack，生产Movement/Facing不扫描SourceSet或TypeId。
 - [x] [COMPUTED][HIGH] S5：确定性Wander、FormationOffset、TimedImpulse、Escort、Pursue+Attack、一帧显式Lock和HitReaction精确恢复门已实现。
-- [x] [COMPUTED][HIGH] S6：StandardSources 8/8、Mixed组合5/5、第三方Fixture、MassCrowd 61/61、CrowdDemo 125/125、四构建及20/100/500同路径双端late join均通过；三种规模均全集active/visible、网络Hash一致、零resync和零安全违规，服务端p95=`1.593/8.772/27.587ms`。
+- [x] [COMPUTED][HIGH] S6：StandardSources 8/8、Mixed组合5/5、第三方Fixture与20/100/500同路径双端late join继续保持关闭；PJ6最终完整回归更新为MassCrowd 65/65、CrowdDemo 125/125和四构建全通过。
 
 ## R0–R7 基础框架历史关闭表
 
@@ -143,7 +153,7 @@
 - [x] [COMPUTED][HIGH] T5M 8785技术、性能与稳定诊断通过；无merge block/chatter。
 - [x] [COMPUTED][HIGH] T6M 8790的Round末inside/coverage=`20/20`且安全、同步、性能通过；AcquireThenHold资格有效期间不要求持续重排Region，最后90步18/17保留为过程诊断。
 - [ ] [COMPUTED][HIGH] 单进程DebugGame PIE和当前版人工审片未完成。
-- [ ] [COMPUTED][HIGH] 8210的100实体SoftPressure通过旧Round双端启动、连续correction与性能门；8215的500实体Obstacle完成旧Round五轮双端Checkpoint、障碍穿透和revision gap为0。两者不是同一Behavior Source生产路径的100/500验收，且8215没有最终PASS/正常退出记录。
+- [x] [COMPUTED][HIGH] 8210/8215仅保留为S6之前的旧Round历史基线；当前同一Behavior Source生产路径的100/500已由8384/8379双端PASS替代，不再以8215作为当前关闭证据。
 
 - [x] [COMPUTED][HIGH] 临时`FCrowdMassParticleConstraintFragment`已物理删除；Particle processor无Mass query，FacingFinalize从prepared final kinematics验证并提交最终运动事实。
 - [x] [COMPUTED][HIGH] 第十五切片Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8731 T2为20/20 settled、16/16 coverage，8732异构T6为20/20 completed/settled/inside/coverage，双端安全、同步与性能门通过。

@@ -11,7 +11,7 @@ struct FCrowdSpatialSafetyAgent
   uint32 NavLayer = 0;
 };
 
-class MASSCROWDRUNTIME_API FCrowdSpatialSafetyIndex
+class MASSCROWDSPATIAL_API FCrowdSpatialSafetyIndex
 {
 public:
   bool Build(
@@ -22,6 +22,11 @@ public:
     const FCrowdStableEntityRef& MovingRef,
     const FVector& Candidate,
     float RadiusCm) const;
+  bool IsCandidateSafe(
+    const FCrowdStableEntityRef& MovingRef,
+    const FVector& Candidate,
+    float RadiusCm,
+    uint32 CandidateNavLayer) const;
   bool Update(
     const FCrowdStableEntityRef& EntityRef,
     const FVector& NewPosition);

@@ -22,7 +22,22 @@
       "LoadingPhase": "PreDefault"
     },
     {
+      "Name": "MassCrowdSpatial",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
+      "Name": "MassCrowdCombat",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
       "Name": "MassCrowdRuntime",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "MassCrowdProjectiles",
       "Type": "Runtime",
       "LoadingPhase": "Default"
     },

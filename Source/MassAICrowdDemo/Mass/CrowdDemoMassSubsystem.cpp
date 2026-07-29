@@ -4,7 +4,7 @@
 #include "Mass/CrowdDemoMassFragments.h"
 #include "Mass/CrowdDemoClientVisualMassProcessor.h"
 #include "Mass/CrowdDemoRoundSimProcessors.h"
-#include "Mass/CrowdDemoProjectileKernel.h"
+#include "Mass/CrowdDemoProjectileAdapters.h"
 #include "MassCrowdRuntimeFragments.h"
 #include "MassCommonFragments.h"
 #include "MassEntityTemplate.h"
@@ -164,7 +164,7 @@ void UCrowdDemoMassSubsystem::Deinitialize()
   UnregisterRoundSimProcessors();
   TargetActor.Reset();
   TrackedAgents.Reset();
-  TrackedProjectiles.Reset();
+  ProjectileStore.ResetTracking();
   Super::Deinitialize();
 }
 
@@ -704,7 +704,7 @@ void UCrowdDemoMassSubsystem::DestroyTrackedAgents()
   if (!EntitySubsystem)
   {
     TrackedAgents.Reset();
-    TrackedProjectiles.Reset();
+    ProjectileStore.ResetTracking();
     return;
   }
 
@@ -717,38 +717,7 @@ void UCrowdDemoMassSubsystem::DestroyTrackedAgents()
     }
   }
   TrackedAgents.Reset();
-  for (const FMassEntityHandle Entity : TrackedProjectiles)
-  {
-    if (EntityManager.IsEntityValid(Entity))
-      EntityManager.DestroyEntity(Entity);
-  }
-  TrackedProjectiles.Reset();
-}
-
-void UCrowdDemoMassSubsystem::GrowProjectilePool(
-  FMassEntityManager& EntityManager,
-  const int32 AddCount)
-{
-  if (AddCount <= 0)
-    return;
-  const TArray<const UScriptStruct*> Fragments = {
-    FCrowdDemoMassProjectileTag::StaticStruct(),
-    FCrowdDemoMassProjectileFragment::StaticStruct(),
-    FTransformFragment::StaticStruct()};
-  const FMassArchetypeHandle Archetype = EntityManager.CreateArchetype(Fragments);
-  TArray<FMassEntityHandle> Added;
-  const TSharedRef<FMassEntityManager::FEntityCreationContext> CreationContext =
-    EntityManager.BatchCreateEntities(Archetype, AddCount, Added);
-  for (const FMassEntityHandle Entity : Added)
-  {
-    EntityManager.GetFragmentDataChecked<FCrowdDemoMassProjectileFragment>(Entity) = {};
-    EntityManager.GetFragmentDataChecked<FTransformFragment>(Entity).GetMutableTransform()
-      .SetLocation(FVector(0.0f, 0.0f, -100000.0f));
-  }
-  TrackedProjectiles.Append(Added);
-  UE_LOG(LogTemp, Display,
-    TEXT("CrowdDemoProjectilePool role=server pool=%d source=MassSubsystem"),
-    TrackedProjectiles.Num());
+  ProjectileStore.DestroyAll(EntityManager);
 }
 
 bool UCrowdDemoMassSubsystem::PrepareProjectileCapacity(
@@ -763,131 +732,26 @@ bool UCrowdDemoMassSubsystem::PrepareProjectileCapacity(
   if (!EntitySubsystem || World->GetNetMode() == NM_Client
     || RequiredCount < 0 || RequiredCount > MaxProjectilePoolCapacity)
     return false;
-  if (RequiredCount > TrackedProjectiles.Num())
-  {
-    GrowProjectilePool(
-      EntitySubsystem->GetMutableEntityManager(),
-      RequiredCount - TrackedProjectiles.Num());
-  }
-  return TrackedProjectiles.Num() >= RequiredCount;
-}
-
-void FCrowdDemoMassProjectileStoreAdapter::ApplyValidated(
-  FMassEntityManager& EntityManager,
-  const TConstArrayView<FMassEntityHandle> ProjectileEntities,
-  const TConstArrayView<FCrowdDemoProjectileState> Projectiles)
-{
-  TArray<FCrowdDemoProjectileState> Active;
-  for (const FCrowdDemoProjectileState& Projectile : Projectiles)
-    if (Projectile.bActive) Active.Add(Projectile);
-  Active.Sort([](const auto& A, const auto& B) { return A.ProjectileId < B.ProjectileId; });
-  check(Active.Num() <= ProjectileEntities.Num());
-  for (int32 Index = 0; Index < ProjectileEntities.Num(); ++Index)
-  {
-    const FMassEntityHandle Entity = ProjectileEntities[Index];
-    if (!EntityManager.IsEntityValid(Entity))
-      continue;
-    auto& Fragment = EntityManager.GetFragmentDataChecked<FCrowdDemoMassProjectileFragment>(Entity);
-    auto& Transform = EntityManager.GetFragmentDataChecked<FTransformFragment>(Entity).GetMutableTransform();
-    if (!Active.IsValidIndex(Index))
-    {
-      Fragment = {};
-      Transform.SetLocation(FVector(0.0f, 0.0f, -100000.0f));
-      continue;
-    }
-    const FCrowdDemoProjectileState& Projectile = Active[Index];
-    Fragment.ProjectileId = Projectile.ProjectileId;
-    Fragment.SourceAgentId = Projectile.SourceAgentId;
-    Fragment.SourceLifecycleSerial =
-      Projectile.SourceLifecycleSerial;
-    Fragment.TargetAgentId = Projectile.TargetAgentId;
-    Fragment.TargetLifecycleSerial =
-      Projectile.TargetLifecycleSerial;
-    Fragment.FireSequence = Projectile.FireSequence;
-    Fragment.SpawnFixedStep = Projectile.SpawnFixedStep;
-    Fragment.AgeFixedSteps = Projectile.AgeFixedSteps;
-    Fragment.RemainingPierces = Projectile.RemainingPierces;
-    Fragment.LastHitTargetAgentId =
-      Projectile.LastHitTargetAgentId;
-    Fragment.SourceFactionId = Projectile.SourceFactionId;
-    Fragment.PreviousPosition = Projectile.PreviousPosition;
-    Fragment.Position = Projectile.Position;
-    Fragment.Velocity = Projectile.Velocity;
-    Fragment.RadiusCm = Projectile.RadiusCm;
-    Fragment.NavLayer = Projectile.NavLayer;
-    Fragment.CollisionProfileId = Projectile.CollisionProfileId;
-    Fragment.EffectProfileId = Projectile.EffectProfileId;
-    Fragment.bActive = Projectile.bActive;
-    Fragment.bImpacted = Projectile.bImpacted;
-    Fragment.bExpired = Projectile.bExpired;
-    Transform.SetLocation(Projectile.Position);
-  }
-}
-
-bool FCrowdDemoMassProjectileStoreAdapter::Gather(
-  const FMassEntityManager& EntityManager,
-  const TConstArrayView<FMassEntityHandle> ProjectileEntities,
-  TArray<FCrowdDemoProjectileState>& OutProjectiles)
-{
-  OutProjectiles.Reset();
-  for (const FMassEntityHandle Entity : ProjectileEntities)
-  {
-    if (!EntityManager.IsEntityValid(Entity))
-      continue;
-    const FCrowdDemoMassProjectileFragment& Fragment =
-      EntityManager.GetFragmentDataChecked<
-        FCrowdDemoMassProjectileFragment>(Entity);
-    if (!Fragment.bActive || Fragment.ProjectileId == 0)
-      continue;
-    FCrowdDemoProjectileState& Projectile =
-      OutProjectiles.AddDefaulted_GetRef();
-    Projectile.ProjectileId = Fragment.ProjectileId;
-    Projectile.SourceAgentId = Fragment.SourceAgentId;
-    Projectile.SourceLifecycleSerial =
-      Fragment.SourceLifecycleSerial;
-    Projectile.TargetAgentId = Fragment.TargetAgentId;
-    Projectile.TargetLifecycleSerial =
-      Fragment.TargetLifecycleSerial;
-    Projectile.FireSequence = Fragment.FireSequence;
-    Projectile.SpawnFixedStep = Fragment.SpawnFixedStep;
-    Projectile.AgeFixedSteps = Fragment.AgeFixedSteps;
-    Projectile.RemainingPierces = Fragment.RemainingPierces;
-    Projectile.LastHitTargetAgentId =
-      Fragment.LastHitTargetAgentId;
-    Projectile.SourceFactionId = Fragment.SourceFactionId;
-    Projectile.NavLayer = Fragment.NavLayer;
-    Projectile.CollisionProfileId = Fragment.CollisionProfileId;
-    Projectile.EffectProfileId = Fragment.EffectProfileId;
-    Projectile.PreviousPosition = Fragment.PreviousPosition;
-    Projectile.Position = Fragment.Position;
-    Projectile.Velocity = Fragment.Velocity;
-    Projectile.RadiusCm = Fragment.RadiusCm;
-    Projectile.bActive = Fragment.bActive;
-    Projectile.bImpacted = Fragment.bImpacted;
-    Projectile.bExpired = Fragment.bExpired;
-  }
-  OutProjectiles.Sort([](const auto& A, const auto& B)
-  {
-    return A.ProjectileId < B.ProjectileId;
-  });
-  return true;
+  return ProjectileStore.EnsureCapacity(
+    EntitySubsystem->GetMutableEntityManager(),
+    RequiredCount, MaxProjectilePoolCapacity);
 }
 
 void UCrowdDemoMassSubsystem::ApplyProjectileStates(
-  const TConstArrayView<FCrowdDemoProjectileState> Projectiles)
+  const TConstArrayView<FCrowdProjectileState> Projectiles)
 {
   UWorld* World = GetWorld();
   UMassEntitySubsystem* EntitySubsystem = World
     ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
   check(EntitySubsystem && World->GetNetMode() != NM_Client);
-  FCrowdDemoMassProjectileStoreAdapter::ApplyValidated(
-    EntitySubsystem->GetMutableEntityManager(),
-    TrackedProjectiles,
-    Projectiles);
+  FMassEntityManager& EntityManager =
+    EntitySubsystem->GetMutableEntityManager();
+  check(ProjectileStore.ValidatePreparedStates(Projectiles));
+  ProjectileStore.ApplyValidated(EntityManager, Projectiles);
 }
 
 bool UCrowdDemoMassSubsystem::GatherProjectileStates(
-  TArray<FCrowdDemoProjectileState>& OutProjectiles) const
+  TArray<FCrowdProjectileState>& OutProjectiles) const
 {
   OutProjectiles.Reset();
   const UWorld* World = GetWorld();
@@ -895,10 +759,8 @@ bool UCrowdDemoMassSubsystem::GatherProjectileStates(
     ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
   if (!EntitySubsystem || World->GetNetMode() == NM_Client)
     return false;
-  return FCrowdDemoMassProjectileStoreAdapter::Gather(
-    EntitySubsystem->GetEntityManager(),
-    TrackedProjectiles,
-    OutProjectiles);
+  return ProjectileStore.Gather(
+    EntitySubsystem->GetEntityManager(), OutProjectiles);
 }
 
 void UCrowdDemoMassSubsystem::ResetProjectileStates()

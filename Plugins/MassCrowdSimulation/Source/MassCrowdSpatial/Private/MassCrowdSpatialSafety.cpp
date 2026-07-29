@@ -1,5 +1,6 @@
 #include "MassCrowdSpatialSafety.h"
 
+// Stable movement-safety index shared by movement and projectile hosts.
 #define IsFiniteVector SpatialSafety_IsFiniteVector
 
 namespace
@@ -61,14 +62,24 @@ bool FCrowdSpatialSafetyIndex::IsCandidateSafe(
   const FVector& Candidate,
   const float RadiusCm) const
 {
+  const FCrowdSpatialSafetyAgent* Moving =
+    AgentsByRef.Find(MovingRef);
+  return Moving && IsCandidateSafe(
+    MovingRef, Candidate, RadiusCm, Moving->NavLayer);
+}
+
+bool FCrowdSpatialSafetyIndex::IsCandidateSafe(
+  const FCrowdStableEntityRef& MovingRef,
+  const FVector& Candidate,
+  const float RadiusCm,
+  const uint32 CandidateNavLayer) const
+{
   if (!MovingRef.IsValid() || !AgentsByRef.Contains(MovingRef)
     || !IsFiniteVector(Candidate) || !FMath::IsFinite(RadiusCm)
     || RadiusCm < 0.0f || CellSizeCm <= 0.0f || LayerToleranceCm <= 0.0f)
   {
     return false;
   }
-  const FCrowdSpatialSafetyAgent& Moving =
-    AgentsByRef.FindChecked(MovingRef);
   const FIntVector Center = CellFor(Candidate);
   for (int32 Z = Center.Z - 1; Z <= Center.Z + 1; ++Z)
   {
@@ -84,7 +95,7 @@ bool FCrowdSpatialSafetyIndex::IsCandidateSafe(
           if (OtherRef == MovingRef) continue;
           const FCrowdSpatialSafetyAgent& Other =
             AgentsByRef.FindChecked(OtherRef);
-          if (Moving.NavLayer != Other.NavLayer
+          if (CandidateNavLayer != Other.NavLayer
             || FMath::Abs(Candidate.Z - Other.Position.Z)
               > LayerToleranceCm)
           {

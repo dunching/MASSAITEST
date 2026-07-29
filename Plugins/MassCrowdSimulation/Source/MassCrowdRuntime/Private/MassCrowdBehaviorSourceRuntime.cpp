@@ -1,5 +1,10 @@
 #include "MassCrowdBehaviorSourceRuntime.h"
 
+#define FnvOffset64 BehaviorSourceRuntime_FnvOffset64
+#define FnvPrime64 BehaviorSourceRuntime_FnvPrime64
+#define FoldUnsigned BehaviorSourceRuntime_FoldUnsigned
+#define FoldRef BehaviorSourceRuntime_FoldRef
+
 namespace
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
@@ -797,6 +802,11 @@ bool FCrowdBehaviorSourceRuntime::IsSourceActive(
       return Instance.Handle == Handle;
     });
 }
+
+#undef FoldRef
+#undef FoldUnsigned
+#undef FnvPrime64
+#undef FnvOffset64
 
 bool FCrowdBehaviorSourceRuntime::HasCommittedEvent(
   const FCrowdBehaviorSourceHandle& Handle,

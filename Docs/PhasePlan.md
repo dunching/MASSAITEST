@@ -1,5 +1,23 @@
 # MassAI Crowd Demo 当前阶段计划
 
+## 2026-07-29 已关闭 PJ0–PJ6 Projectile模块化
+
+[COMPUTED][HIGH] R0–R7、S0–S6和PJ0–PJ6均已关闭。Projectile公共所有权现已收敛到`MassCrowdSpatial`、`MassCrowdCombat`和`MassCrowdProjectiles`，Demo只保留攻击业务与宿主Adapter；当前没有未关闭的本仓库Projectile模块化阶段。
+
+PJ0. [x] [COMPUTED][HIGH] PJ0检查点已收口当时的61/61、125/125和20/100/500结果，准确记录Boundary临时Projectile数组，并消除“并发门未运行”等过期断言；进入PJ1前工作区差异只有文档。PJ6最终结果已更新为65/65与新的并发门。
+
+PJ1. [x] [COMPUTED][HIGH] 已新增`MassCrowdSpatial`、`MassCrowdCombat`和`MassCrowdProjectiles`模块；Runtime只依赖Spatial，Projectiles单向依赖Core/Spatial/Combat/Runtime/MassEntity，公共模块不引用Demo。
+
+PJ2. [x] [COMPUTED][HIGH] `MassCrowdSpatial`已接管Movement SpatialSafety，并提供稳定Body Snapshot、Uniform Grid、移动球相对Sweep、环境AABB Sweep、NavLayer/Mask过滤和稳定TOI决胜；候选NavLayer与安全Hold原子提交缺口亦已由专项和规模门关闭。
+
+PJ3. [x] [COMPUTED][HIGH] `MassCrowdCombat`已接管Impact/Hit、Effect Profile、纯Resolver和Prepared Host Commit合同；Acquire/Windup/Fire/Recovery仍属于宿主业务。
+
+PJ4. [x] [COMPUTED][HIGH] `MassCrowdProjectiles`已接管Spawn Request、Profile、Mass Fragment/Trait、动态Mass实体池、Boundary Pipeline和Prepared Patch；Mass Fragment是唯一跨Boundary持久权威，Gather/Prepared数组只存在于单次Boundary事务。
+
+PJ5. [x] [COMPUTED][HIGH] Demo仅保留攻击相位、伤害、VAT/视觉映射和明确的Environment/HostHit Adapter；`FCrowdDemoProjectileKernel`、Demo Projectile Fragment/Store与Round重复算法入口已删除，未保留运行时双路径。
+
+PJ6. [x] [COMPUTED][HIGH] Spatial/Combat/Projectiles/Public API与结构专项、T8/R7回归、`MassCrowd 65/65`、`CrowdDemo 125/125`及Development/DebugGame × ForceUnity/DisableUnity四构建均通过。最终同一路径8402/8403/8401分别以20/100/500实体并发4/20/100发Projectile通过：spawn/impact/damage完全守恒、duplicate=`0`、双端Hash一致、最小同层间距=`70.11/70.03/70.00cm`，服务端fixed-step p95=`2.152/9.675/30.016ms`。
+
 ## 2026-07-28 现行 S0–S6 Standard Sources与生产消费
 
 [COMPUTED][HIGH] 本节是Standard Sources当前事实表。R0–R7保留为已经完成的开放框架、Scheduler、网络与Projectile基线；S0–S6现已全部关闭。
@@ -16,11 +34,11 @@ S4. [x] [COMPUTED][HIGH] Demo Provider只保留SharedFlow桥、CarryCargo及Pick
 
 S5. [x] [COMPUTED][HIGH] 已实现确定性方向表/PRNG的`WanderSteering`、锚点局部槽位修正`FormationOffset`和线性衰减`TimedImpulse`。Escort与Pursue+Attack组合进入Mixed；专项证明HitReaction及一帧Attack Lock结束后持久Handle/Payload/State逐字保持。
 
-S6. [x] [COMPUTED][HIGH] StandardSources定向8/8、Mixed组合5/5、第三方三复制策略Fixture、完整`MassCrowd 61/61`与`CrowdDemo 125/125`通过。Development/DebugGame的`-ForceUnity`与`-DisableUnity`四构建通过；当前同一Mixed Source/Resolver/Boundary/Networking路径的20/100/500双端门服务端p95=`1.593/8.772/27.587ms`，最小同层间距=`70.14/70.01/70.00cm`，客户端p95=`4.801/4.951/4.822ms`。8383/8384/8379分别在step600/630/630达到active/visible=`20/20`、`100/100`、`500/500`，双端Entity/Membership Hash一致且零resync、零安全违规。
+S6. [x] [COMPUTED][HIGH] StandardSources定向8/8、Mixed组合5/5、第三方三复制策略Fixture及同路径20/100/500双端门继续保持关闭；PJ6最终回归已将完整插件自动化更新为`MassCrowd 65/65`、`CrowdDemo 125/125`，并在相同Source/Resolver/Boundary/Networking路径加入4/20/100发公共Projectiles模块并发门，结果见上方PJ6。
 
 ## 2026-07-28 现行 R0–R7 重构
 
-[INFERRED][HIGH] 本节取代旧B0–B7并记录已经关闭的基础框架阶段；当前未关闭实施顺序以上方S0–S6为准。下文A–J、P0–P5和B0–B7均为历史能力或迁移基线。
+[COMPUTED][HIGH] 本节取代旧B0–B7并记录已经关闭的基础框架阶段；PJ0–PJ6随后也已关闭。下文A–J、P0–P5和B0–B7均为历史能力或迁移基线。
 
 R0. [x] [COMPUTED][HIGH] 已重写架构事实源、阶段计划、检查表和恢复入口，明确旧B0–B7不再是完成口径；当前未提交文档修改被保留。
 
@@ -40,7 +58,7 @@ R7. [x] [COMPUTED][HIGH] 同一Mixed Source/Resolver/Boundary/Networking路径�
 
 ## 历史能力阶段与当前产品化顺序
 
-[COMPUTED][HIGH] A–J是已经完成并保留证据的历史能力阶段；8210/8215补充了旧Round路径的100/500基线，但没有完成同一Behavior Source生产路径的20/100/500。L原工程迁移仍冻结。历史阶段和旧Round规模证据不等同于Behavior Source端到端产品闭环。
+[COMPUTED][HIGH] A–J是已经完成并保留证据的历史能力阶段；8210/8215仅是S6之前旧Round路径的100/500基线。同一Behavior Source生产路径的20/100/500后来已由S6关闭。L原工程迁移仍冻结。
 
 A. [x] [COMPUTED][HIGH] 通用 Runtime/Replication 合同文档冻结。
 B. [x] [COMPUTED][HIGH] StableEntityRef + Capability + Behavior POD。

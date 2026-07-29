@@ -9,7 +9,10 @@
 #include "MassCrowdMassLifecycleWorld.h"
 #include "MassCrowdBoundaryRunner.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
+#include "MassCrowdCombatResolver.h"
 #include "MassCrowdNavRuntime.h"
+#include "MassCrowdProjectileBoundary.h"
+#include "MassCrowdProjectileMassStore.h"
 #include "MassCrowdSpatialSafety.h"
 #include "CrowdDemoMixedSandboxCoordinator.generated.h"
 
@@ -45,6 +48,12 @@ struct FCrowdDemoMixedAgentState
   UPROPERTY() uint32 TaskProviderId = 0;
   UPROPERTY() uint64 TaskStableEntityId = 0;
   UPROPERTY() uint32 TaskLifecycleSerial = 0;
+  UPROPERTY() int32 ProjectileExpectedCount = 0;
+  UPROPERTY() int32 ProjectileSpawnedCount = 0;
+  UPROPERTY() int32 ProjectileImpactCount = 0;
+  UPROPERTY() int32 ProjectileDamageCount = 0;
+  UPROPERTY() int32 ProjectileDuplicateCount = 0;
+  UPROPERTY() uint64 ProjectileTraceHash = 0;
 };
 
 UCLASS()
@@ -91,6 +100,7 @@ private:
   FMassArchetypeHandle LifecycleArchetype;
   FCrowdBehaviorSourceRuntime* BehaviorSourceRuntime = nullptr;
   FCrowdDemoBusinessCommitLedger BusinessLedger;
+  FCrowdMassProjectileStore ProjectileStore;
   TSharedPtr<const FCrowdNavSurfaceGraph, ESPMode::ThreadSafe> NavGraphHandle;
   TMap<FName, FVector> MarkerLocations;
   TMap<uint64, FCrowdNavFlowHandle> FlowHandleByGoalNode;
@@ -135,9 +145,15 @@ private:
   int32 DuplicateCommitCount = 0;
   int32 SafetyHoldCount = 0;
   int32 StaleRejectCount = 0;
+  int32 ProjectileExpectedCount = 0;
+  int32 ProjectileSpawnedCount = 0;
+  int32 ProjectileImpactCount = 0;
+  int32 ProjectileDamageCount = 0;
+  int32 ProjectileDuplicateCount = 0;
   int32 MaxObservedPopulation = 0;
   uint32 SeenBehaviorBits = 0;
   float MinimumSeparationCm = TNumericLimits<float>::Max();
+  uint64 ProjectileTraceHash = 14695981039346656037ull;
   bool bWorldInitialized = false;
   bool bClientVisualsInitialized = false;
   bool bPresentationProfileRegistered = false;
@@ -147,6 +163,7 @@ private:
   bool bCaptureRequested = false;
   bool bCaptureCompleted = false;
   bool bClientApplyFailureLogged = false;
+  bool bProjectileBatchSpawned = false;
   double CaptureAtWorldSeconds = 0.0;
 
   bool TryInitializeServer();
@@ -163,6 +180,10 @@ private:
     FCrowdDemoBusinessCommitLedger& InOutLedger,
     int32& InOutDuplicateCommitCount,
     int32& InOutPendingCombatDeathSlot);
+  bool PrepareProjectileBoundary(
+    const TArray<FSlotState>& StagedSlots,
+    FCrowdPreparedProjectileBoundary& OutPrepared,
+    FCrowdPreparedHostHitCommit& OutHitCommit);
   bool RunProductMovementBoundary(
     const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
     TArray<FSlotState>& InOutSlots,

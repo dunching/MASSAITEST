@@ -146,19 +146,6 @@ protected:
 
 
 UCLASS()
-class MASSAICROWDDEMO_API UCrowdDemoRoundCombatBoundaryProcessor : public UMassProcessor
-{
-  GENERATED_BODY()
-public:
-  UCrowdDemoRoundCombatBoundaryProcessor();
-protected:
-  virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
-  virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-private:
-  FMassEntityQuery EntityQuery;
-};
-
-UCLASS()
 class MASSAICROWDDEMO_API UCrowdDemoRoundMovementWorkProcessor : public UMassProcessor
 {
   GENERATED_BODY()
@@ -265,7 +252,6 @@ protected:
   virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
   virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 private:
-  UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundCombatBoundaryProcessor> CombatBoundaryProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundMovementWorkProcessor> MovementWorkProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundPlanApplyProcessor> PlanApplyProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundBoundaryGatherProcessor> BoundaryGatherProcessor;

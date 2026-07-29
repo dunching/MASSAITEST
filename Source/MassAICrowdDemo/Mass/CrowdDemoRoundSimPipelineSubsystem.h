@@ -9,7 +9,7 @@
 #include "Mass/CrowdDemoOpenCohortMovementKernel.h"
 #include "Mass/CrowdDemoBidirectionalSwapKernel.h"
 #include "Mass/CrowdDemoValidCorridorTransitKernel.h"
-#include "Mass/CrowdDemoProjectileKernel.h"
+#include "Mass/CrowdDemoProjectileAdapters.h"
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoSoftPressureRouteDiagnosticKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
@@ -92,7 +92,7 @@ struct FCrowdDemoPreparedCombatBoundaryCommit
   int32 FixedStepIndex = INDEX_NONE;
   int32 PlanRevision = INDEX_NONE;
   TArray<FCrowdDemoRangedCombatAgent> Agents;
-  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdProjectileState> Projectiles;
   TArray<FCrowdDemoProjectileVisualEvent> ProjectileEvents;
   FCrowdDemoProjectileStepSummary ProjectileSummary;
   FCrowdDemoHitResponseSummary HitSummary;
@@ -280,7 +280,7 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   TMap<int32, float> FlowLowSpeedSecondsByAgentId;
   TSet<int32> FlowCorridorDeadlockAgentIds;
   FCrowdDemoRoundCompareMetrics CompareMetrics;
-  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdProjectileState> Projectiles;
   FCrowdDemoProjectileMetrics ProjectileMetrics;
 };
 
@@ -328,7 +328,7 @@ struct FCrowdDemoBoundaryBusinessWorkInput
   FCrowdMassBoundarySnapshot Snapshot;
   TArray<FCrowdDemoRoundBoundaryBusinessFact> Facts;
   FCrowdDemoRoundRules Rules;
-  TArray<FCrowdDemoProjectileState> Projectiles;
+  TArray<FCrowdProjectileState> Projectiles;
   int32 RoundId = INDEX_NONE;
   int32 FixedStepIndex = INDEX_NONE;
   int32 PlanRevision = INDEX_NONE;
@@ -658,10 +658,10 @@ public:
   }
 
   bool BuildProjectileSnapshot(
-    TArray<FCrowdDemoProjectileState>& OutProjectiles) const;
+    TArray<FCrowdProjectileState>& OutProjectiles) const;
   bool PrepareProjectileFinalApply(int32 RequiredActiveCount);
   void ApplyProjectileFinalState(
-    TConstArrayView<FCrowdDemoProjectileState> Projectiles);
+    TConstArrayView<FCrowdProjectileState> Projectiles);
   void RecordProjectileStep(
     const FCrowdDemoProjectileStepSummary& Summary,
     TConstArrayView<FCrowdDemoProjectileVisualEvent> Events);

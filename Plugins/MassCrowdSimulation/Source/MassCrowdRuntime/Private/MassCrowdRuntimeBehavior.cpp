@@ -1,5 +1,10 @@
 #include "MassCrowdRuntimeBehavior.h"
 
+#define FnvOffset64 RuntimeBehavior_FnvOffset64
+#define FnvPrime64 RuntimeBehavior_FnvPrime64
+#define FoldUnsigned RuntimeBehavior_FoldUnsigned
+#define FoldRef RuntimeBehavior_FoldRef
+
 namespace CrowdRuntimeBehaviorPrivate
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
@@ -56,3 +61,8 @@ uint64 FCrowdBehaviorCommitId::Make(
   FoldUnsigned(Hash, static_cast<uint32>(Context.InteractionQuantity));
   return Hash == 0 ? 1 : Hash;
 }
+
+#undef FoldRef
+#undef FoldUnsigned
+#undef FnvPrime64
+#undef FnvOffset64

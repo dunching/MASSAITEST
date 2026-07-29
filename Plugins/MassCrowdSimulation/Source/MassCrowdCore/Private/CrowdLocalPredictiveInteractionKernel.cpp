@@ -513,6 +513,7 @@ void FCrowdLocalPredictiveInteractionKernel::BuildCandidatePairs(
   const float CellSize = FMath::Max(1.0f, Settings.SpatialCellSizeCm);
   const float Horizon = FMath::Max(Settings.FixedStepSeconds, Settings.TimeHorizonSeconds);
   TArray<FGridRecord> Records;
+  Records.Reserve(Agents.Num() * 4);
   for (int32 AgentIndex = 0; AgentIndex < Agents.Num(); ++AgentIndex)
   {
     const auto& Agent = Agents[AgentIndex];
@@ -533,6 +534,7 @@ void FCrowdLocalPredictiveInteractionKernel::BuildCandidatePairs(
     return A.AgentId < B.AgentId;
   });
   TSet<uint64> PairKeys;
+  PairKeys.Reserve(Agents.Num() * 8);
   int32 Begin = 0;
   while (Begin < Records.Num())
   {
@@ -552,8 +554,10 @@ void FCrowdLocalPredictiveInteractionKernel::BuildCandidatePairs(
   TArray<uint64> SortedKeys = PairKeys.Array();
   SortedKeys.Sort();
   TMap<int32, int32> IndexById;
+  IndexById.Reserve(Agents.Num());
   for (int32 Index = 0; Index < Agents.Num(); ++Index)
     IndexById.Add(Agents[Index].AgentId, Index);
+  OutPairs.Reserve(SortedKeys.Num());
   for (const uint64 Key : SortedKeys)
   {
     const int32 MinId = static_cast<int32>(Key >> 32);

@@ -12,6 +12,7 @@ public class MassCrowdRuntime : ModuleRules
       "CoreUObject",
       "Engine",
       "MassCrowdCore",
+      "MassCrowdSpatial",
       "MassEntity",
       "MassSpawner",
       "NavigationSystem"

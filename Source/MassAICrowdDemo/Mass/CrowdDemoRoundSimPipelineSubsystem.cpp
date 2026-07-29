@@ -172,38 +172,20 @@ namespace
     TArray<FCrowdDemoHitFact> HitFacts;
     FCrowdDemoProjectileStepSummary ProjectileSummary;
     TArray<FCrowdDemoProjectileVisualEvent> ProjectileEvents;
-    TArray<FCrowdDemoProjectileState> NextProjectiles =
+    TArray<FCrowdProjectileState> NextProjectiles =
       Input.Projectiles;
     if (bProjectileCombat)
     {
-      TArray<FCrowdDemoProjectileSpawnRequest> Requests;
-      FCrowdDemoProjectileKernel::AdvanceAttackPhases(
-        Input.RoundId, Input.FixedStepIndex,
-        Input.Rules.RangedCombatSettings, Agents, Requests,
-        ProjectileSummary);
-      FCrowdDemoProjectileKernel::SpawnProjectiles(
-        Input.FixedStepIndex, Input.StepEndServerTimeSeconds,
-        Input.Rules.RangedCombatSettings, Requests, NextProjectiles,
-        ProjectileEvents, ProjectileSummary);
-      TArray<FCrowdImpactFact> Impacts;
-      TArray<FCrowdProjectileEnvironmentBody> EnvironmentBodies;
-      const FCrowdDemoFlowObstacleCollisionSnapshotProvider
-        EnvironmentProvider(Input.Rules.FlowFieldConfig);
-      if (!EnvironmentProvider.Gather(
-          Input.FixedStepIndex, EnvironmentBodies))
+      FCrowdPreparedProjectileBoundary ProjectileBoundary;
+      if (!FCrowdDemoProjectileAdapters::PrepareProjectileBoundary(
+          Input.RoundId, Input.FixedStepIndex,
+          Input.StepEndServerTimeSeconds, Input.FixedStepSeconds,
+          Input.Rules.RangedCombatSettings,
+          Input.Rules.FlowFieldConfig, Agents, Input.Projectiles,
+          ProjectileBoundary, HitFacts, ProjectileEvents,
+          ProjectileSummary))
         return Output;
-      FCrowdDemoProjectileKernel::AdvanceProjectiles(
-        Input.FixedStepIndex, Input.StepEndServerTimeSeconds,
-        Input.FixedStepSeconds, Input.Rules.RangedCombatSettings,
-        Agents, EnvironmentBodies, NextProjectiles, Impacts,
-        ProjectileEvents, ProjectileSummary);
-      TArray<FCrowdHitFact> ResolvedHits;
-      const FCrowdDemoHostHitResolver HitResolver(
-        Input.Rules.RangedCombatSettings);
-      if (!HitResolver.Resolve(Impacts, ResolvedHits)
-        || !FCrowdDemoHostHitResolver::BuildDemoHitFacts(
-          ResolvedHits, HitFacts))
-        ProjectileSummary.bValid = false;
+      NextProjectiles = MoveTemp(ProjectileBoundary.States);
     }
     if (bShowcase)
     {
@@ -3510,7 +3492,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::BuildCurrentLocalPredictiveComponentFi
 }
 
 bool UCrowdDemoRoundSimPipelineSubsystem::BuildProjectileSnapshot(
-  TArray<FCrowdDemoProjectileState>& OutProjectiles) const
+  TArray<FCrowdProjectileState>& OutProjectiles) const
 {
   const UWorld* World = GetWorld();
   if (!World)
@@ -3537,7 +3519,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PrepareProjectileFinalApply(
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::ApplyProjectileFinalState(
-  const TConstArrayView<FCrowdDemoProjectileState> Projectiles)
+  const TConstArrayView<FCrowdProjectileState> Projectiles)
 {
   UWorld* World = GetWorld();
   UCrowdDemoMassSubsystem* MassSubsystem = World

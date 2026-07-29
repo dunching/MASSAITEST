@@ -1,5 +1,10 @@
 #include "MassCrowdRelevantSet.h"
 
+#define FnvOffset RelevantSet_FnvOffset
+#define FnvPrime RelevantSet_FnvPrime
+#define Fold RelevantSet_Fold
+#define FoldRef RelevantSet_FoldRef
+
 namespace
 {
   constexpr uint64 FnvOffset = 14695981039346656037ull;
@@ -22,7 +27,7 @@ namespace
     return Fold(Hash, Ref.LifecycleSerial);
   }
 
-  bool IsFinite(const FVector& Value)
+  bool RelevantSet_IsFinite(const FVector& Value)
   {
     return FMath::IsFinite(Value.X)
       && FMath::IsFinite(Value.Y)
@@ -49,7 +54,7 @@ FCrowdSpatialGridRelevantSetProvider::FCrowdSpatialGridRelevantSetProvider(
 bool FCrowdSpatialGridRelevantSetProvider::TryCellForLocation(
   const FVector& Location, FIntVector& OutCell) const
 {
-  if (!Limits.IsValid() || !IsFinite(Location))
+  if (!Limits.IsValid() || !RelevantSet_IsFinite(Location))
     return false;
   const double InvCellSize = 1.0 / static_cast<double>(Limits.CellSizeCm);
   const int64 X = FMath::FloorToInt64(Location.X * InvCellSize);
@@ -238,7 +243,7 @@ bool FCrowdSpatialGridRelevantSetProvider::BuildRelevantSet(
 {
   OutResult = {};
   if (!Limits.IsValid() || View.ClientKey == 0
-    || !IsFinite(View.Location)
+    || !RelevantSet_IsFinite(View.Location)
     || !FMath::IsFinite(View.RelevantRadiusCm)
     || View.RelevantRadiusCm < 0.0f)
     return false;
@@ -321,3 +326,8 @@ bool FCrowdSpatialGridRelevantSetProvider::BuildRelevantSet(
   OutResult.bValid = Hash != 0;
   return OutResult.bValid;
 }
+
+#undef FoldRef
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

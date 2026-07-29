@@ -1,16 +1,24 @@
 # MassAI Crowd Demo 当前架构
 
+## 0.0 2026-07-29 PJ0覆盖说明
+
+[COMPUTED][HIGH] 本文件顶部与第PJ节描述当前状态；后续按日期记录的迁移切片是历史执行证据，其中“尚未接入”“下一步”或“未授权100/500”不得覆盖R0–R7、S0–S6关闭结论。
+
+[COMPUTED][HIGH] PJ0–PJ6现已关闭。Projectile跨Boundary持久状态只位于`MassCrowdProjectiles`的Mass Fragment；Boundary使用不可变Snapshot和临时Prepared数组，最终由已验证Patch一次写回。空间查询、Combat事实/Resolver和Projectile运行时分别归属`MassCrowdSpatial`、`MassCrowdCombat`和`MassCrowdProjectiles`，Demo不再拥有第二套Kernel/Fragment/Store。
+
 ## 0. 2026-07-28 R基线源码事实
 
 [COMPUTED][HIGH] Runtime当前新增了公共`ICrowdBehaviorSourceProvider`、`FCrowdBehaviorRegistryBuilder`、稳定Provider/Context ID、冻结时Registry Hash、标准位置/速度/Facing Context、最多8项96字节扩展Context、96字节实例状态以及Writer Next State。
 
-[COMPUTED][HIGH] 当前Runtime通过开放Provider注册并冻结Registry，领域Source由Demo Provider拥有；Mixed读取Resolved Movement/Facing，公共Scheduler使用通用Stage/Task/Scope键；Projectile由Mass Fragment唯一持有，旧数组/镜像路径已删除；StateTree Adapter已拆为默认禁用兄弟插件。
+[COMPUTED][HIGH] 当前Runtime通过开放Provider注册并冻结Registry，领域Source由Demo Provider拥有；Mixed读取Resolved Movement/Facing，公共Scheduler使用通用Stage/Task/Scope键；Projectile由Mass Fragment唯一持有，旧跨Boundary数组权威与固定镜像路径已删除，Boundary内临时Gather/Prepared数组仍作为事务数据使用；StateTree Adapter已拆为默认禁用兄弟插件。
 
 [COMPUTED][HIGH] 当前已有随`MassCrowdSimulation`加载的`MassCrowdStandardSources` Runtime模块，Provider ID=`100`。模块提供13种稳定TypeId的自主Evaluator、TargetKinematics/FormationAnchor v1 POD Context、MaintainDistance/Wander持久State；`MassCrowdRuntime`和`MassCrowdCore`均不反向依赖该模块或特判其TypeId。
 
+[COMPUTED][HIGH] `MassCrowdSpatial`提供Movement安全索引、稳定Body Snapshot、Uniform Grid、Swept Bounds查询、移动球相对Sweep和环境AABB Sweep；`MassCrowdCombat`提供Impact/Hit、Effect Profile、纯Resolver和Prepared Host Commit；`MassCrowdProjectiles`提供Spawn/Profile/State、Mass Fragment/Trait/Store、生命周期事件、Kernel和Boundary Pipeline。Runtime只单向依赖Spatial，Projectiles依赖Core/Spatial/Combat/Runtime/MassEntity，三个公共模块均不引用Demo。
+
 [COMPUTED][HIGH] Mixed Movement Worker消费Resolved Movement Goal/Velocity/Facing/Constraint，执行`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`并在Prepared Boundary中一次提交Movement、Business与Slot状态；Business数组非空不再跳过移动。Local Predictive与Particle按InteractionLayer过滤跨层邻居。Presentation Resolver按Property保留最高优先级Override和稳定排序的全部Additive记录。
 
-[INFERRED][HIGH] 开放Behavior框架、通用Scheduler、行为网络v3和Mass权威Projectile的R0–R7基础门已经关闭；通用Source库、Demo组合迁移和同路径20/100/500生产门已落地。现行构建、自动化和网络门状态以`PhasePlan.md`为准。
+[COMPUTED][HIGH] 开放Behavior框架、通用Scheduler、行为网络v3、Standard Sources和Projectile三模块的R0–R7、S0–S6、PJ0–PJ6均已关闭；最终完整自动化为MassCrowd 65/65与CrowdDemo 125/125，20/100/500同路径并发Projectile门和四构建矩阵均通过。详细数值以`TestScenarioMatrix.md`为准。
 
 ## 1. 文档职责
 
@@ -57,7 +65,7 @@
 | Plugin Source 的 Enemy/Friendly/Faction 特判 | [COMPUTED][HIGH] 指定插件 Source 中未检出这些阵营分支。 | [COMPUTED][HIGH] 当前运动 kernel 保持 provider-neutral。 | [COMPUTED][HIGH] 否。 | [INFERRED][HIGH] 未来仍必须通过 Faction 只做关系/过滤的合同防止回流。 | [INFERRED][HIGH] Core 公共事实 + 宿主关系策略。 |
 | Demo testcase 替代产品生命周期路径 | [COMPUTED][HIGH] T1 active/inactive 与 boundary layout reset、Round 全量重置会改变测试参与状态或位置，但不创建/销毁对应 Agent。 | [COMPUTED][HIGH] 仅测试诊断可复用。 | [COMPUTED][HIGH] 是。 | [COMPUTED][HIGH] 若称为动态生命周期即属错误。 | [INFERRED][HIGH] 保留 fixture，并新增独立 production lifecycle 测试。 |
 
-[COMPUTED][HIGH] 审计状态汇总：Core/Runtime运动链、AgentFacts POD、Networking Snapshot/lifecycle primitives、Demo Snapshot接入与continuous lifecycle、统一Behavior接口、Recast Surface Graph/Shared Flow及独立20实体混合Sandbox均已实现；Demo correction chunks、HitFact、VAT/ISM与Target membership仍带Demo语义，late join、动态Relevancy、Presentation公共实现以及J对公共Runtime/Networking/Presentation的消费仍未完成。
+[COMPUTED][HIGH] 历史P0审计快照：当时Core/Runtime运动链、AgentFacts、Snapshot/lifecycle和20实体Sandbox已实现，而late join、Presentation及J公共消费尚未完成；这些缺口后来已由P3–P5关闭。Hit/VAT和部分Target诊断继续属于Demo宿主语义。
 
 ## 1.3 P0 产品化闭环审计（2026-07-23）
 
@@ -317,7 +325,7 @@ RoundPlanApply
 
 [COMPUTED][HIGH] 非Combat路径回归同样通过：8757 T2保持handoff/inside/terminal=`20/20/20`、coverage=`16/16`、fixed-step p95=`4.263ms`；8758异构T6保持wall/corridor/completed/settled=`20/20/20/20`、inside/coverage=`20/20`、fixed-step p95=`5.230ms`。两次运行agents/visible=`20/20`，双端correction位置/速度/Yaw误差为0，无明确硬错误。
 
-[INFERRED][HIGH] 当前已收敛通用Movement中间镜像、最终写回和Demo Combat事务，但仍不能宣称整个fixed-step只有一次Mass读取：Plan/初始化、SF1桥接、场景诊断、Networking与Presentation具有独立边界。下一步必须先形成剩余查询/写入接缝矩阵，再判断哪些是可删除镜像、哪些是有业务所有权的持久状态；archetype拆分和100/500仍未授权。
+[INFERRED][HIGH] 这是第二十三切片的历史停止点：当时仍不能宣称整个fixed-step只有一次Mass读取，且100/500尚未授权；后续切片及S6已经完成接缝收敛和同路径100/500门，本句不得作为PJ0当前状态。
 
 [COMPUTED][HIGH] 第二十四切片已形成[RoundSim Mass查询与数据所有权矩阵](MassQueryOwnershipMatrix.md)。矩阵区分了Round激活事务、canonical boundary gather、Runtime WORK、Demo Combat、SF1桥接、Networking和Presentation，不再用“遍历次数越少越好”替代真实数据所有权。
 
@@ -327,7 +335,7 @@ RoundPlanApply
 
 [COMPUTED][HIGH] 第二十四切片通过Development与DebugGame Editor（`-DisableUnity`）、MassCrowd 15/15和CrowdDemo 105/105。8759 T7 fixed-step p95=`2.058ms`；8760 T8 fixed-step p95=`1.782ms`且spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`；8761 T2 terminal=`20/20`、coverage=`16/16`、fixed-step p95=`4.378ms`；8762异构T6 completed/settled/inside/coverage=`20/20`、fixed-step p95=`6.221ms`。四次运行agents/visible=`20/20`，Particle硬安全、correction误差和明确硬错误均为0。
 
-[INFERRED][HIGH] 当前最明确的下一接缝是SF1 `RoundProposedMovement → RoundObstacleConstraint`：它们只在两个相邻阶段之间传递预测与障碍结果。下一切片应先改为prepared POD并保持SF1行为，再审计FacingFinalize的三次遍历；archetype拆分与100/500仍未获准。
+[INFERRED][HIGH] 这是第二十四切片的历史停止点：当时下一接缝是SF1 `RoundProposedMovement → RoundObstacleConstraint`，且100/500尚未获准；该接缝已由第二十五切片关闭，同路径100/500已由S6关闭。
 
 [COMPUTED][HIGH] 第二十五切片已关闭该SF1中间桥。MovementWork对两个正式场景均只发布`PreparedRuntimePredictedMovements`；SF1 ObstacleConstraint按canonical boundary snapshot验证AgentId全集，调用既有`FCrowdDemoSharedFlowFieldKernel::ConstrainMovement`并发布`PreparedRuntimeFinalKinematics`。`FCrowdDemoRoundProposedMovementFragment`和`FCrowdDemoRoundObstacleConstraintFragment`连同模板注册、spawn初始化和query读写已物理删除。
 

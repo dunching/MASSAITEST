@@ -2,7 +2,7 @@
 
 [INFERRED][HIGH] 每个场景分别记录自动化、能力、性能和人工视觉；低层通过不能替代高层结论。
 
-[INFERRED][HIGH] 规模结果必须标明生产路径。旧20实体Mixed、100实体SoftPressure和500实体Obstacle仍是历史分路径证据；当前R7另有同一Mixed Source/Resolver/Boundary/Networking路径的20/100/500双端结果。
+[INFERRED][HIGH] 规模结果必须标明生产路径。旧20实体Mixed、100实体SoftPressure和500实体Obstacle仍是历史分路径证据；当前PJ6结果来自同一Mixed Source/Resolver/Boundary/Networking/Projectiles生产路径。
 
 | 场景 | 核心能力 | 最新20实体技术/能力结果 | fixed-step p95 | 视觉状态 |
 |---|---|---|---:|---|
@@ -25,9 +25,9 @@
 
 | 规模 | 当前结论 |
 |---|---|
-| 20 | [COMPUTED][HIGH] `R7-Mixed20-Gate`在step600通过同一Source/Resolver/Boundary/Networking路径；Entity Hash=`18043463626242274870`、Membership Hash=`11109043427439450524`，服务端/客户端p95=`1.138/0.687ms`，最小间距=`71.09cm`，无resync或违规。 |
-| 100 | [COMPUTED][HIGH] `R7-Mixed100-Gate`通过同一路径；服务端step630 p95=`4.403ms`、客户端step627 p95=`0.635ms`、最小间距=`70.04cm`。客户端按每个接收包所属固定步校验对应期望Hash，无resync或违规。 |
-| 500 | [COMPUTED][HIGH] `R7-Mixed500-Gate3`在step600通过同一路径；Entity Hash=`10175708628847408601`、Membership Hash=`2082814669609241299`，服务端/客户端p95=`13.275/0.625ms`、最小间距=`71.09cm`，无resync或违规。 |
+| 20 | [COMPUTED][HIGH] 8402在step600通过同一Source/Resolver/Boundary/Networking/Projectiles路径；active/visible=`20/20`，4发Projectile的spawn/impact/damage=`4/4/4`、duplicate=`0`，服务端/客户端p95=`2.152/4.963ms`，最小间距=`70.11cm`，双端实体/成员/Projectile Hash一致且无resync或违规。 |
+| 100 | [COMPUTED][HIGH] 8403在step630通过同一路径；active/visible=`100/100`，20发Projectile的spawn/impact/damage=`20/20/20`、duplicate=`0`，服务端/客户端p95=`9.675/4.938ms`，最小间距=`70.03cm`，双端实体/成员/Projectile Hash一致且无resync或违规。 |
+| 500 | [COMPUTED][HIGH] 8401在step630通过同一路径；active/visible=`500/500`，100发Projectile的spawn/impact/damage=`100/100/100`、duplicate=`0`，服务端/客户端p95=`30.016/5.171ms`，最小间距=`70.00cm`，双端实体/成员/Projectile Hash一致且无resync或违规。 |
 
 ## 生产生命周期与复制场景
 
@@ -42,7 +42,7 @@
 | 客户端视觉实例增量创建/回收 | [COMPUTED][HIGH] 公共Presentation slot table与Demo ISM sink已接管J/Continuous；7975 active/visible恒等，7977 step600 active/visible=`20/20`，swap-remove和重复/stale由定向测试覆盖。 |
 | Cargo/Combat 跨 Source 组合 | [COMPUTED][HIGH] Demo Provider覆盖领域Source，控制器对期望持久集合执行Start/Update/Stop Diff；临时压制结束后原Source实例与持久状态继续存在。Mixed 20/100/500均走同一Resolver/安全链。 |
 | NavMesh Surface Graph / Shared Flow | [COMPUTED][HIGH] I的合成图测试覆盖确定性、桥上桥下XY重叠、窄门/落差拒绝、layer attach、动态目标rebind；`CrowdDemo_NavSurfaceGraphVerticalSmall`的8800真实Recast运行得到98 nodes、234 directed edges、4 layers、13 overlap、76 reachable sloped edges、8/8 reachable markers与drop unreachable。视觉证据为`Saved/StageI_NavSurfaceGraph_Visual.png`。 |
-| continuous lifecycle / Sandbox | [COMPUTED][HIGH] 当前Mixed双端路径组合LifecycleWorld、Source World Store、Combat、Logistics、NavMesh Flow与增量ISM；S1后Movement/Facing/Constraint消费Resolver结果并进入`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`。当前20实体升级路径已通过；历史100/500框架门必须在S6按StandardSources升级路径复测。 |
+| continuous lifecycle / Sandbox | [COMPUTED][HIGH] 当前Mixed双端路径组合LifecycleWorld、Source World Store、Combat、Logistics、NavMesh Flow与增量ISM；Movement/Facing/Constraint消费Resolver结果并进入`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`。StandardSources升级后的20/100/500均已通过同一路径复测。 |
 
 ## Behavior Source专项门
 
@@ -53,8 +53,8 @@
 | Runtime原子性 | [COMPUTED][HIGH] Source staging、Prepared Hash、Patch稳定排序、篡改拒绝与失败零写入自动化存在；Mixed只在全部Prepare/Validate成功后Final Apply。 |
 | Behavior网络 | [COMPUTED][HIGH] v3 Codec携带Registry/Context/State Schema与实例状态，已接入生产可靠状态、late join、分批发送和Hash resync；Fixture覆盖Predictable/ResolvedOnly回放。 |
 | StateTree | [COMPUTED][HIGH] Adapter已拆为默认禁用兄弟插件并通过独立构建Smoke；真实业务Task已从现行框架门移除。 |
-| Mass Projectile | [COMPUTED][HIGH] T8专项13/13覆盖Mass权威生命周期、相对/环境Sweep、Broadphase、墙体优先、Faction/NavLayer、Pierce、通用Impact/Hit与唯一宿主伤害；`CrowdDemo.Integration.R7.ThirdPartySourceMassProjectile20`又以10发并发Projectile验证生产Mass Fragment Store往返、10/10精确命中和非全扫描Broadphase。 |
-| 同路径规模 | [COMPUTED][HIGH] 当前Mixed Source/Resolver/Boundary/Networking路径已依次通过20/100/500；新增组合门同时运行20个第三方Fixture Source、持久Movement/Cargo/Business Source、HitReaction压制/恢复、移动安全阶段与10发并发Mass Projectile，恢复后持久Source保持20/20。 |
+| Mass Projectile | [COMPUTED][HIGH] T8专项13/13继续覆盖Mass权威生命周期、相对/环境Sweep、Broadphase、墙体优先、Faction/NavLayer、Pierce、通用Impact/Hit与唯一宿主伤害；PJ6新增Spatial/Combat/Projectiles公共专项与结构门，禁止公共模块引用Demo、持久Projectile数组、Projectile×Agent全扫描和Runtime反向依赖Projectiles。 |
+| 同路径规模 | [COMPUTED][HIGH] PJ6 Mixed Source/Resolver/Boundary/Networking/Projectiles路径已依次通过20/100/500；每种规模全部实体执行Standard Source，并并发4/20/100发公共Mass Projectile，spawn/impact/damage守恒、零重复、双端Hash一致、零安全违规。 |
 
 ## Standard Sources S0–S6专项门
 
@@ -64,8 +64,8 @@
 | Target Context | [COMPUTED][HIGH] `TargetKinematicsV1`与`FormationAnchorV1`均为不超过96字节的trivially-copyable POD；缺失、版本、Ref、Revision和非有限值均有拒绝专项。 |
 | 基础Source库 | [COMPUTED][HIGH] 13种标准Source自主Evaluator已实现；定向8/8覆盖位置Goal、目标预测、Flee、Distance迟滞、Facing/Constraint、Wander回放、Formation和Impulse。 |
 | 组合Recipe | [COMPUTED][HIGH] Mixed五Controller稳定Diff专项5/5覆盖无变化零命令、Escort、Pursue+Attack、显式一帧Lock、目标丢失Stop和HitReaction持久Source精确恢复。 |
-| 完整运动安全链 | [COMPUTED][HIGH] 20/100/500均执行Resolved Goal/Movement/Facing/Constraint → Local Predictive → Particle/Bounds → Facing → Final Safety/Prepared Apply；8383/8384/8379最小同层间距分别为`70.14/70.01/70.00cm`且零违规。 |
-| 网络与规模 | [COMPUTED][HIGH] Codec v3覆盖Registry/Context/State、旧版本拒绝和Hash不符；第三方Fixture覆盖三复制策略。20/100/500双端late join均达到全集active/visible、Hash一致和零resync；服务端p95分别为`1.593/8.772/27.587ms`，客户端p95分别为`4.801/4.951/4.822ms`。 |
+| 完整运动安全链 | [COMPUTED][HIGH] 20/100/500均执行Resolved Goal/Movement/Facing/Constraint → Local Predictive → Particle/Bounds → Facing → Final Safety/Prepared Apply；PJ6修复候选NavLayer与安全Hold的原子提交缺口后，8402/8403/8401最小同层间距分别为`70.11/70.03/70.00cm`且零违规。 |
+| 网络与规模 | [COMPUTED][HIGH] Codec v3覆盖Registry/Context/State、旧版本拒绝和Hash不符；第三方Fixture覆盖三复制策略。PJ6 20/100/500双端late join均达到全集active/visible、实体/成员/Projectile Hash一致和零resync；服务端p95=`2.152/9.675/30.016ms`，客户端p95=`4.963/4.938/5.171ms`。 |
 
 ## P0–P5 产品化验证矩阵
 

@@ -198,10 +198,28 @@ if ($MixedSandbox) {
     ForEach-Object {
       Select-String -Path $_ -Pattern 'Fatal error|Assertion failed|Ensure condition failed|LogWindows: Error|(?-i:\bVIOLATION\b)'
     }
-  if (!$ServerPass -or !$ClientPass -or $MixedViolations.Count -gt 0) {
-    throw "CrowdDemo mixed sandbox gate failed: server_pass=$([bool]$ServerPass) client_pass=$([bool]$ClientPass) violations=$($MixedViolations.Count)"
+  $ExpectedProjectiles = [Math]::Max(1, [int]($EntityCount / 5))
+  $ProjectileReady = $ServerPass -and
+    $ServerPass.Line -match "projectile_expected=$ExpectedProjectiles\b" -and
+    $ServerPass.Line -match "projectile_spawned=$ExpectedProjectiles\b" -and
+    $ServerPass.Line -match "projectile_impacted=$ExpectedProjectiles\b" -and
+    $ServerPass.Line -match "projectile_damage=$ExpectedProjectiles\b" -and
+    $ServerPass.Line -match 'projectile_duplicate=0\b' -and
+    $ServerPass.Line -match 'projectile_hash=(\d+)'
+  $ProjectileHash = if ($ProjectileReady) { $Matches[1] } else { "" }
+  $ClientProjectileReady = $NoClient -or ($ClientPass -and
+    $ClientPass.Line -match "projectile_expected=$ExpectedProjectiles\b" -and
+    $ClientPass.Line -match "projectile_spawned=$ExpectedProjectiles\b" -and
+    $ClientPass.Line -match "projectile_impacted=$ExpectedProjectiles\b" -and
+    $ClientPass.Line -match "projectile_damage=$ExpectedProjectiles\b" -and
+    $ClientPass.Line -match 'projectile_duplicate=0\b' -and
+    $ProjectileHash -ne "" -and
+    $ClientPass.Line -match "projectile_hash=$ProjectileHash\b")
+  if (!$ServerPass -or !$ClientPass -or !$ProjectileReady -or
+    !$ClientProjectileReady -or $MixedViolations.Count -gt 0) {
+    throw "CrowdDemo mixed sandbox gate failed: server_pass=$([bool]$ServerPass) client_pass=$([bool]$ClientPass) projectile=$([bool]$ProjectileReady) client_projectile=$([bool]$ClientProjectileReady) violations=$($MixedViolations.Count)"
   }
-  Write-Host "[CrowdDemo] Mixed sandbox gate passed"
+  Write-Host "[CrowdDemo] Mixed sandbox gate passed: projectiles=$ExpectedProjectiles projectile_hash=$ProjectileHash"
 }
 
 if ($ContinuousLifecycle) {

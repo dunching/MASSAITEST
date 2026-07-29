@@ -36,6 +36,20 @@ namespace
   constexpr float MinimumSafeSeparationCm = 70.0f;
   constexpr float MixedInteractionRadiusCm = 900.0f;
   constexpr float MixedScaleInteractionRadiusCm = 2000.0f;
+  constexpr int64 MixedProjectileFireFixedStep = 60;
+  constexpr uint32 MixedProjectileProfileId = 9901;
+  constexpr uint32 MixedProjectileCollisionProfileId = 9901;
+  constexpr uint32 MixedProjectileEffectProfileId = 9901;
+  constexpr uint32 MixedProjectilePayloadTypeId = 9901;
+  constexpr uint32 MixedProjectilePayloadSchemaId = 9901;
+
+  struct FMixedProjectileDamagePayload
+  {
+    int32 Damage = 1;
+  };
+
+  static_assert(
+    std::is_trivially_copyable_v<FMixedProjectileDamagePayload>);
 
   double DistanceSquaredToNavNode(
     const FVector& Location,
@@ -203,6 +217,12 @@ namespace
     Hash = FoldMixedHash(Hash, State.TaskProviderId);
     Hash = FoldMixedHash(Hash, State.TaskStableEntityId);
     Hash = FoldMixedHash(Hash, State.TaskLifecycleSerial);
+    Hash = FoldMixedHash(Hash, State.ProjectileExpectedCount);
+    Hash = FoldMixedHash(Hash, State.ProjectileSpawnedCount);
+    Hash = FoldMixedHash(Hash, State.ProjectileImpactCount);
+    Hash = FoldMixedHash(Hash, State.ProjectileDamageCount);
+    Hash = FoldMixedHash(Hash, State.ProjectileDuplicateCount);
+    Hash = FoldMixedHash(Hash, State.ProjectileTraceHash);
     return Hash;
   }
 
@@ -266,6 +286,17 @@ namespace
     WriteU32(OutBytes, State.TaskProviderId);
     WriteU64(OutBytes, State.TaskStableEntityId);
     WriteU32(OutBytes, State.TaskLifecycleSerial);
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.ProjectileExpectedCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.ProjectileSpawnedCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.ProjectileImpactCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.ProjectileDamageCount));
+    WriteU32(OutBytes, static_cast<uint32>(
+      State.ProjectileDuplicateCount));
+    WriteU64(OutBytes, State.ProjectileTraceHash);
   }
 
   bool DecodeMixedAgent(
@@ -280,6 +311,11 @@ namespace
     uint32 X = 0;
     uint32 Y = 0;
     uint32 Z = 0;
+    uint32 ProjectileExpected = 0;
+    uint32 ProjectileSpawned = 0;
+    uint32 ProjectileImpacted = 0;
+    uint32 ProjectileDamage = 0;
+    uint32 ProjectileDuplicates = 0;
     int32 Offset = 0;
     if (!ReadU64(Bytes, Offset, Step)
       || !ReadU64(Bytes, Offset, OutLifecycleResumeSequence)
@@ -301,6 +337,12 @@ namespace
       || !ReadU32(Bytes, Offset, OutState.TaskProviderId)
       || !ReadU64(Bytes, Offset, OutState.TaskStableEntityId)
       || !ReadU32(Bytes, Offset, OutState.TaskLifecycleSerial)
+      || !ReadU32(Bytes, Offset, ProjectileExpected)
+      || !ReadU32(Bytes, Offset, ProjectileSpawned)
+      || !ReadU32(Bytes, Offset, ProjectileImpacted)
+      || !ReadU32(Bytes, Offset, ProjectileDamage)
+      || !ReadU32(Bytes, Offset, ProjectileDuplicates)
+      || !ReadU64(Bytes, Offset, OutState.ProjectileTraceHash)
       || Offset != Bytes.Num())
       return false;
     OutFixedStepIndex = static_cast<int64>(Step);
@@ -308,6 +350,16 @@ namespace
       static_cast<int32>(X) / 10.0,
       static_cast<int32>(Y) / 10.0,
       static_cast<int32>(Z) / 10.0);
+    OutState.ProjectileExpectedCount =
+      static_cast<int32>(ProjectileExpected);
+    OutState.ProjectileSpawnedCount =
+      static_cast<int32>(ProjectileSpawned);
+    OutState.ProjectileImpactCount =
+      static_cast<int32>(ProjectileImpacted);
+    OutState.ProjectileDamageCount =
+      static_cast<int32>(ProjectileDamage);
+    OutState.ProjectileDuplicateCount =
+      static_cast<int32>(ProjectileDuplicates);
     return true;
   }
 
@@ -384,6 +436,15 @@ void ACrowdDemoMixedSandboxCoordinator::EndPlay(
 {
   if (UWorld* World = GetWorld())
   {
+    if (HasAuthority())
+    {
+      if (UMassEntitySubsystem* EntitySubsystem =
+        World->GetSubsystem<UMassEntitySubsystem>())
+      {
+        ProjectileStore.DestroyAll(
+          EntitySubsystem->GetMutableEntityManager());
+      }
+    }
     if (UMassCrowdRuntimeSubsystem* Runtime =
       World->GetSubsystem<UMassCrowdRuntimeSubsystem>())
     {
@@ -589,6 +650,19 @@ bool ACrowdDemoMixedSandboxCoordinator::InitializeLifecycleWorld()
   }
 
   FixedStepIndex = 0;
+  ProjectileExpectedCount =
+    FMath::Max(1, Config.PopulationLimit / 5);
+  ProjectileSpawnedCount = 0;
+  ProjectileImpactCount = 0;
+  ProjectileDamageCount = 0;
+  ProjectileDuplicateCount = 0;
+  ProjectileTraceHash = 14695981039346656037ull;
+  bProjectileBatchSpawned = false;
+  if (HasAuthority()
+    && !ProjectileStore.EnsureCapacity(
+      EntityManager, ProjectileExpectedCount,
+      ProjectileExpectedCount))
+    return false;
   NextLifecycleSequence = 1;
   RelevantSetRevision = Config.RelevantSetRevision;
   MaxObservedPopulation = Config.PopulationLimit;
@@ -778,6 +852,161 @@ FCrowdAgentFacts ACrowdDemoMixedSandboxCoordinator::MakeAgentFacts(
   return Facts;
 }
 
+bool ACrowdDemoMixedSandboxCoordinator::PrepareProjectileBoundary(
+  const TArray<FSlotState>& StagedSlots,
+  FCrowdPreparedProjectileBoundary& OutPrepared,
+  FCrowdPreparedHostHitCommit& OutHitCommit)
+{
+  OutPrepared = {};
+  OutHitCommit = {};
+  UWorld* World = GetWorld();
+  UMassEntitySubsystem* EntitySubsystem =
+    World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+  if (!HasAuthority() || !EntitySubsystem
+    || ProjectileExpectedCount <= 0)
+    return false;
+
+  FCrowdProjectileBoundaryInput Input;
+  Input.FixedStepIndex = FixedStepIndex;
+  Input.ServerTimeSeconds =
+    static_cast<float>(FixedStepIndex * MixedFixedStepSeconds);
+  Input.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+  if (!ProjectileStore.Gather(
+      EntitySubsystem->GetEntityManager(),
+      Input.CurrentStates))
+    return false;
+
+  FCrowdProjectileProfile& Profile =
+    Input.Profiles.AddDefaulted_GetRef();
+  Profile.ProfileId = MixedProjectileProfileId;
+  Profile.RadiusCm = 8.0f;
+  Profile.LifetimeFixedSteps = 10;
+  Profile.MaxActiveProjectiles = ProjectileExpectedCount;
+  Profile.PositionQuantumCm = 1.0f;
+  Profile.VelocityQuantumCmps = 1.0f;
+  Profile.GridCellSizeCm = 128.0f;
+  Profile.RecalculateStableHash();
+
+  // An empty Mass store has no projectile work outside the single
+  // deterministic fire Boundary. Still produce and validate a no-op prepared
+  // transaction so the host retains one atomic Boundary contract without
+  // rebuilding target snapshots on every fixed step.
+  if (Input.CurrentStates.IsEmpty()
+    && FixedStepIndex != MixedProjectileFireFixedStep)
+  {
+    OutPrepared.FixedStepIndex = FixedStepIndex;
+    OutPrepared.BaseStateHash =
+      FCrowdProjectileKernel::HashStates(
+        Input.CurrentStates);
+    OutPrepared.RecalculateStableHash();
+    if (!FCrowdProjectileBoundaryPipeline::ValidatePrepared(
+        Input, OutPrepared)
+      || !ProjectileStore.ValidatePreparedStates(
+        OutPrepared.States))
+      return false;
+    OutHitCommit.FixedStepIndex = FixedStepIndex;
+    OutHitCommit.SourceResolveHash =
+      OutPrepared.StableHash;
+    OutHitCommit.RecalculateStableHash();
+    return OutHitCommit.IsValid();
+  }
+
+  for (int32 ShooterOffset = 0;
+    ShooterOffset < ProjectileExpectedCount; ++ShooterOffset)
+  {
+    const int32 TargetSlot =
+      ProjectileExpectedCount + ShooterOffset + 1;
+    if (!StagedSlots.IsValidIndex(TargetSlot)
+      || !StagedSlots[TargetSlot].bActive)
+      return false;
+    const FSlotState& TargetSlotState =
+      StagedSlots[TargetSlot];
+    FCrowdProjectileTargetSnapshot& Target =
+      Input.Targets.AddDefaulted_GetRef();
+    Target.EntityRef =
+      TargetSlotState.Facts.StableEntityRef;
+    Target.FactionId =
+      TargetSlotState.Facts.FactionKey;
+    Target.NavLayer = TargetSlotState.InteractionLayer;
+    Target.PreviousPosition =
+      TargetSlotState.Location
+      - TargetSlotState.Velocity * MixedFixedStepSeconds;
+    Target.Position = TargetSlotState.Location;
+    Target.RadiusCm = 35.0f;
+    Target.bAlive = true;
+    Target.RecalculateStableHash();
+
+    if (!bProjectileBatchSpawned
+      && FixedStepIndex == MixedProjectileFireFixedStep)
+    {
+      const int32 ShooterSlot = ShooterOffset + 1;
+      if (!StagedSlots.IsValidIndex(ShooterSlot)
+        || !StagedSlots[ShooterSlot].bActive)
+        return false;
+      FCrowdProjectileSpawnRequest& Request =
+        Input.SpawnRequests.AddDefaulted_GetRef();
+      Request.ProjectileId =
+        0x504a000000000000ull
+        | static_cast<uint64>(ShooterOffset + 1);
+      Request.FixedStepIndex = FixedStepIndex;
+      Request.Instigator =
+        StagedSlots[ShooterSlot].Facts.StableEntityRef;
+      Request.Target = Target.EntityRef;
+      Request.FireSequence =
+        static_cast<uint32>(ShooterOffset + 1);
+      Request.NavLayer = Target.NavLayer;
+      Request.ProjectileProfileId = MixedProjectileProfileId;
+      Request.CollisionProfileId =
+        MixedProjectileCollisionProfileId;
+      Request.EffectProfileId =
+        MixedProjectileEffectProfileId;
+      Request.Position =
+        Target.Position - FVector(0.0, 0.0, 180.0);
+      Request.Velocity = FVector(0.0, 0.0, 3000.0);
+      Request.RecalculateStableHash();
+    }
+  }
+
+  if (!FCrowdProjectileBoundaryPipeline::Prepare(
+      Input, OutPrepared)
+    || !FCrowdProjectileBoundaryPipeline::ValidatePrepared(
+      Input, OutPrepared)
+    || !ProjectileStore.ValidatePreparedStates(
+      OutPrepared.States))
+    return false;
+
+  TArray<FCrowdHitFact> Hits;
+  uint64 SourceResolveHash = OutPrepared.StableHash;
+  if (!OutPrepared.Impacts.IsEmpty())
+  {
+    FCrowdEffectProfile EffectProfile;
+    EffectProfile.EffectProfileId =
+      MixedProjectileEffectProfileId;
+    EffectProfile.PayloadTypeId =
+      MixedProjectilePayloadTypeId;
+    const FMixedProjectileDamagePayload DamagePayload;
+    if (!EffectProfile.Payload.Set(
+        MixedProjectilePayloadSchemaId, DamagePayload))
+      return false;
+    EffectProfile.RecalculateStableHash();
+    FCrowdHitResolveResult ResolveResult;
+    if (!FCrowdCombatResolver::Resolve(
+        OutPrepared.Impacts,
+        MakeArrayView(&EffectProfile, 1),
+        ResolveResult)
+      || ResolveResult.FixedStepIndex != FixedStepIndex)
+      return false;
+    Hits = MoveTemp(ResolveResult.Hits);
+    SourceResolveHash = ResolveResult.StableHash;
+  }
+  OutHitCommit.FixedStepIndex = FixedStepIndex;
+  OutHitCommit.SourceResolveHash = SourceResolveHash;
+  OutHitCommit.Hits = MoveTemp(Hits);
+  OutHitCommit.RecalculateStableHash();
+  return OutHitCommit.IsValid();
+}
+
 void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
 {
   const double StartSeconds = FPlatformTime::Seconds();
@@ -897,6 +1126,63 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       FixedStepIndex);
     return;
   }
+  FCrowdPreparedProjectileBoundary PreparedProjectile;
+  FCrowdPreparedHostHitCommit PreparedProjectileHits;
+  if (!PrepareProjectileBoundary(
+      StagedSlots, PreparedProjectile,
+      PreparedProjectileHits))
+  {
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      OriginalPendingSourceCommandCount);
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=projectile_prepare fixed_step=%lld"),
+      FixedStepIndex);
+    return;
+  }
+  for (const FCrowdHitFact& Hit : PreparedProjectileHits.Hits)
+  {
+    const uint64 ProjectileOffset =
+      Hit.Impact.ProjectileId & 0xffffull;
+    const uint64 ExpectedTarget =
+      static_cast<uint64>(ProjectileExpectedCount)
+      + ProjectileOffset;
+    if (!Hit.IsValid()
+      || ProjectileOffset == 0
+      || ProjectileOffset
+        > static_cast<uint64>(ProjectileExpectedCount)
+      || Hit.Impact.Target.StableEntityId != ExpectedTarget)
+    {
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        OriginalPendingSourceCommandCount);
+      ++StaleRejectCount;
+      return;
+    }
+  }
+  const int32 StagedProjectileSpawnedCount =
+    ProjectileSpawnedCount
+    + PreparedProjectile.Summary.SpawnedCount;
+  const int32 StagedProjectileImpactCount =
+    ProjectileImpactCount
+    + PreparedProjectile.Summary.ImpactedCount;
+  const int32 StagedProjectileDamageCount =
+    ProjectileDamageCount
+    + PreparedProjectileHits.Hits.Num();
+  const int32 StagedProjectileDuplicateCount =
+    ProjectileDuplicateCount
+    + PreparedProjectile.Summary.DuplicateFireCount;
+  uint64 StagedProjectileTraceHash = ProjectileTraceHash;
+  if (!PreparedProjectile.States.IsEmpty()
+    || !PreparedProjectile.Events.IsEmpty()
+    || !PreparedProjectile.Impacts.IsEmpty())
+  {
+    StagedProjectileTraceHash = FoldMixedHash(
+      StagedProjectileTraceHash,
+      PreparedProjectile.StableHash);
+  }
+  const bool bStagedProjectileBatchSpawned =
+    bProjectileBatchSpawned
+    || PreparedProjectile.Summary.SpawnedCount > 0;
   int32 StagedSafetyHolds = 0;
   uint64 StagedBoundaryCommitHash = 0;
   if (!RunProductMovementBoundary(
@@ -912,6 +1198,18 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     return;
   }
   MovementEndSeconds = FPlatformTime::Seconds();
+  UMassEntitySubsystem* ProjectileEntitySubsystem =
+    GetWorld()
+      ? GetWorld()->GetSubsystem<UMassEntitySubsystem>()
+      : nullptr;
+  check(ProjectileEntitySubsystem);
+  if (!PreparedProjectile.States.IsEmpty()
+    || !PreparedProjectile.Events.IsEmpty())
+  {
+    ProjectileStore.ApplyValidated(
+      ProjectileEntitySubsystem->GetMutableEntityManager(),
+      PreparedProjectile.States);
+  }
   LifecycleWorld.ApplyValidatedAgentFactsCorrectionsAtBoundary(
     FixedStepIndex, PreparedFacts);
   checkf(BehaviorSourceRuntime->CommitPrepared(PreparedBehavior),
@@ -924,6 +1222,12 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   PendingCombatDeathSlot = StagedPendingCombatDeathSlot;
   SafetyHoldCount += StagedSafetyHolds;
   LastBoundaryCommitHash = StagedBoundaryCommitHash;
+  ProjectileSpawnedCount = StagedProjectileSpawnedCount;
+  ProjectileImpactCount = StagedProjectileImpactCount;
+  ProjectileDamageCount = StagedProjectileDamageCount;
+  ProjectileDuplicateCount = StagedProjectileDuplicateCount;
+  ProjectileTraceHash = StagedProjectileTraceHash;
+  bProjectileBatchSpawned = bStagedProjectileBatchSpawned;
 
   // Final Apply already rejects every unsafe candidate against the updated
   // spatial index. Sample the exact minimum once per simulation second for
@@ -980,14 +1284,21 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   if (Config.PopulationLimit == MaximumMixedPopulation
     && TotalMilliseconds > 33.333)
   {
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoMixedSandboxSlowStep fixed_step=%lld evaluate_ms=%.3f prepare_ms=%.3f movement_ms=%.3f apply_publish_ms=%.3f total_ms=%.3f"),
-      FixedStepIndex,
-      (EvaluationEndSeconds - StartSeconds) * 1000.0,
-      (PrepareEndSeconds - EvaluationEndSeconds) * 1000.0,
-      (MovementEndSeconds - PrepareEndSeconds) * 1000.0,
-      (EndSeconds - MovementEndSeconds) * 1000.0,
-      TotalMilliseconds);
+    // Keep telemetry from perturbing the 500-entity performance sample.
+    // Periodic samples retain phase attribution without synchronous log I/O
+    // on every over-budget fixed step.
+    if (FixedStepIndex % 30 == 0
+      || TotalMilliseconds > 50.0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoMixedSandboxSlowStep fixed_step=%lld evaluate_ms=%.3f prepare_ms=%.3f movement_ms=%.3f apply_publish_ms=%.3f total_ms=%.3f"),
+        FixedStepIndex,
+        (EvaluationEndSeconds - StartSeconds) * 1000.0,
+        (PrepareEndSeconds - EvaluationEndSeconds) * 1000.0,
+        (MovementEndSeconds - PrepareEndSeconds) * 1000.0,
+        (EndSeconds - MovementEndSeconds) * 1000.0,
+        TotalMilliseconds);
+    }
   }
   if (Config.PopulationLimit == MaximumMixedPopulation
     && (FixedStepIndex <= 5 || FixedStepIndex % 150 == 0))
@@ -1680,10 +1991,12 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
   TArray<FVector> ResolvedFacings;
   TArray<float> ResolvedMaximumSpeeds;
   TArray<uint32> ResolvedInteractionLayers;
+  TArray<uint64> ResolvedAttachedNodeIds;
   ResolvedVelocities.SetNumZeroed(InOutSlots.Num());
   ResolvedFacings.SetNumZeroed(InOutSlots.Num());
   ResolvedMaximumSpeeds.Init(500.0f, InOutSlots.Num());
   ResolvedInteractionLayers.SetNumZeroed(InOutSlots.Num());
+  ResolvedAttachedNodeIds.SetNumZeroed(InOutSlots.Num());
   TArray<FCrowdMassCommitTarget> Targets;
   TArray<const FCrowdBehaviorPreparedEntity*>
     PreparedBehaviorBySlot;
@@ -1748,11 +2061,12 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     if (NavGraphHandle->Nodes.IsValidIndex(
         AttachedNodeIndex))
     {
-      InOutSlots[SlotIndex].AttachedNavNodeId =
+      ResolvedAttachedNodeIds[SlotIndex] =
         AttachedNodeId;
-      InOutSlots[SlotIndex].InteractionLayer =
-        AttachedNavLayer;
     }
+    else
+      ResolvedAttachedNodeIds[SlotIndex] =
+        Slot.AttachedNavNodeId;
     ResolvedInteractionLayers[SlotIndex] =
       AttachedNavLayer;
     Targets.Add({
@@ -2130,7 +2444,8 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     const bool bCandidateSafe =
       SpatialSafety.IsCandidateSafe(
         Record.EntityRef, Record.Movement.Position,
-        MinimumSafeSeparationCm * 0.5f);
+        MinimumSafeSeparationCm * 0.5f,
+        ResolvedInteractionLayers[SlotIndex]);
     const FVector SafePosition =
       bCandidateSafe ? Record.Movement.Position : Slot.Location;
     const FVector SafeVelocity =
@@ -2140,8 +2455,17 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     if (!ResolvedInteractionLayers.IsValidIndex(SlotIndex)
       || !SpatialSafety.Update(
         Record.EntityRef, SafePosition,
-        ResolvedInteractionLayers[SlotIndex]))
+        bCandidateSafe
+          ? ResolvedInteractionLayers[SlotIndex]
+          : Slot.InteractionLayer))
       return RejectBoundary(TEXT("safety_update"));
+    if (bCandidateSafe)
+    {
+      InOutSlots[SlotIndex].AttachedNavNodeId =
+        ResolvedAttachedNodeIds[SlotIndex];
+      InOutSlots[SlotIndex].InteractionLayer =
+        ResolvedInteractionLayers[SlotIndex];
+    }
     SafetyFinalizeInput.Records.Add({
       Record.EntityRef,
       Record.Movement.AgentId,
@@ -2501,7 +2825,13 @@ void ACrowdDemoMixedSandboxCoordinator::PublishProductStateFrame()
       Slot.Facts.TargetRef.LifecycleSerial,
       Slot.Facts.BusinessTaskRef.ProviderId,
       Slot.Facts.BusinessTaskRef.StableEntityId,
-      Slot.Facts.BusinessTaskRef.LifecycleSerial};
+      Slot.Facts.BusinessTaskRef.LifecycleSerial,
+      ProjectileExpectedCount,
+      ProjectileSpawnedCount,
+      ProjectileImpactCount,
+      ProjectileDamageCount,
+      ProjectileDuplicateCount,
+      ProjectileTraceHash};
     const FCrowdStableEntityRef ReplicatedEntityRef{
       1, State.StableEntityId, State.LifecycleSerial};
     const uint64 HostFactHash =
@@ -2680,7 +3010,13 @@ bool ACrowdDemoMixedSandboxCoordinator::PublishBaseline(
       Slot.Facts.TargetRef.LifecycleSerial,
       Slot.Facts.BusinessTaskRef.ProviderId,
       Slot.Facts.BusinessTaskRef.StableEntityId,
-      Slot.Facts.BusinessTaskRef.LifecycleSerial};
+      Slot.Facts.BusinessTaskRef.LifecycleSerial,
+      ProjectileExpectedCount,
+      ProjectileSpawnedCount,
+      ProjectileImpactCount,
+      ProjectileDamageCount,
+      ProjectileDuplicateCount,
+      ProjectileTraceHash};
     EncodeMixedAgent(
       State, FixedStepIndex, NextLifecycleSequence,
       RelevantSetRevision,
@@ -2735,7 +3071,13 @@ bool ACrowdDemoMixedSandboxCoordinator::PublishBaseline(
       Slot.Facts.TargetRef.LifecycleSerial,
       Slot.Facts.BusinessTaskRef.ProviderId,
       Slot.Facts.BusinessTaskRef.StableEntityId,
-      Slot.Facts.BusinessTaskRef.LifecycleSerial};
+      Slot.Facts.BusinessTaskRef.LifecycleSerial,
+      ProjectileExpectedCount,
+      ProjectileSpawnedCount,
+      ProjectileImpactCount,
+      ProjectileDamageCount,
+      ProjectileDuplicateCount,
+      ProjectileTraceHash};
     LastPublishedHostFactHashes.Add(
       Slot.Facts.StableEntityRef,
       CalculateMixedHostFactHash(State));
@@ -2834,6 +3176,18 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
       Slot.MembershipKey = State.MembershipKey;
       Slot.Health = State.Health;
       Slot.bActive = true;
+      ProjectileExpectedCount =
+        State.ProjectileExpectedCount;
+      ProjectileSpawnedCount =
+        State.ProjectileSpawnedCount;
+      ProjectileImpactCount =
+        State.ProjectileImpactCount;
+      ProjectileDamageCount =
+        State.ProjectileDamageCount;
+      ProjectileDuplicateCount =
+        State.ProjectileDuplicateCount;
+      ProjectileTraceHash =
+        State.ProjectileTraceHash;
       Snapshot.Add({Slot.Facts, Slot.MembershipKey});
     }
     if (BaselineStep < 0 || LifecycleResume == 0
@@ -3064,6 +3418,12 @@ bool ACrowdDemoMixedSandboxCoordinator::ApplyReplicatedAgentState(
     State.TaskStableEntityId,
     State.TaskLifecycleSerial};
   Slot.Health = State.Health;
+  ProjectileExpectedCount = State.ProjectileExpectedCount;
+  ProjectileSpawnedCount = State.ProjectileSpawnedCount;
+  ProjectileImpactCount = State.ProjectileImpactCount;
+  ProjectileDamageCount = State.ProjectileDamageCount;
+  ProjectileDuplicateCount = State.ProjectileDuplicateCount;
+  ProjectileTraceHash = State.ProjectileTraceHash;
   SeenBehaviorBits |= BehaviorBit(
     static_cast<ECrowdActiveBehavior>(Slot.Facts.DerivedBehaviorLabel));
   LastReceivedFixedStep = FMath::Max(LastReceivedFixedStep, InFixedStepIndex);
@@ -3237,7 +3597,7 @@ void ACrowdDemoMixedSandboxCoordinator::LogCheckpoint()
       ++MovingHaulAgentCount;
   }
   UE_LOG(LogTemp, Display,
-    TEXT("CrowdDemoMixedSandboxCheckpoint role=%s fixed_step=%lld state_sequence=%llu active=%d visible=%d transitions=%d seen_behavior_bits=0x%08x pickups=%d deliveries=%d combat_quantity=%d commits=%d duplicate_commits=%d spawned=%d despawned=%d membership=%d max_population=%d safety_holds=%d min_separation_cm=%.2f haul_distance_cm=%.2f..%.2f haul_min_2d_cm=%.2f haul_min_z_cm=%.2f haul_moving=%d stale_reject=%d entity_hash=%llu membership_hash=%llu commit_hash=%llu source=MassCrowdBoundaryRunner+MassCrowdNavRuntime+ApplyFrame"),
+    TEXT("CrowdDemoMixedSandboxCheckpoint role=%s fixed_step=%lld state_sequence=%llu active=%d visible=%d transitions=%d seen_behavior_bits=0x%08x pickups=%d deliveries=%d combat_quantity=%d commits=%d duplicate_commits=%d spawned=%d despawned=%d membership=%d max_population=%d safety_holds=%d min_separation_cm=%.2f haul_distance_cm=%.2f..%.2f haul_min_2d_cm=%.2f haul_min_z_cm=%.2f haul_moving=%d stale_reject=%d projectile_expected=%d projectile_spawned=%d projectile_impacted=%d projectile_damage=%d projectile_duplicate=%d projectile_hash=%llu entity_hash=%llu membership_hash=%llu commit_hash=%llu source=MassCrowdBoundaryRunner+MassCrowdNavRuntime+ApplyFrame"),
     HasAuthority() ? TEXT("server") : TEXT("client"),
     HasAuthority() ? FixedStepIndex : LastReceivedFixedStep,
     HasAuthority() ? NextStateSequence - 1 : LastReceivedStateSequence,
@@ -3254,6 +3614,12 @@ void ACrowdDemoMixedSandboxCoordinator::LogCheckpoint()
     ClosestHaulObjectiveDistance2DCm,
     ClosestHaulObjectiveHeightDeltaCm,
     MovingHaulAgentCount, StaleRejectCount,
+    ProjectileExpectedCount,
+    ProjectileSpawnedCount,
+    ProjectileImpactCount,
+    ProjectileDamageCount,
+    ProjectileDuplicateCount,
+    ProjectileTraceHash,
     LifecycleWorld.CalculateEntitySetHash(),
     LifecycleWorld.CalculateMembershipHash(),
     LastBoundaryCommitHash);
@@ -3286,17 +3652,32 @@ void ACrowdDemoMixedSandboxCoordinator::TryLogPass()
       && DuplicateCommitCount == BusinessLedger.GetAppliedCommitCount()
       && (SeenBehaviorBits & RequiredBehaviors) == RequiredBehaviors
       && MinimumSeparationCm >= MinimumSafeSeparationCm - 0.5f
+      && ProjectileExpectedCount
+        == Config.PopulationLimit / 5
+      && ProjectileSpawnedCount == ProjectileExpectedCount
+      && ProjectileImpactCount == ProjectileExpectedCount
+      && ProjectileDamageCount == ProjectileExpectedCount
+      && ProjectileDuplicateCount == 0
+      && ProjectileTraceHash != 14695981039346656037ull
+      && Percentile95(ServerStepMilliseconds)
+        <= MixedFixedStepSeconds * 1000.0
       && StaleRejectCount == 0;
     if (bPassed)
     {
       bServerPassLogged = true;
       UE_LOG(LogTemp, Display,
-        TEXT("PASS CrowdDemoMixedSandbox role=server fixed_step=%lld active=%d transitions=%d pickups=%d deliveries=%d combat_quantity=%d commits=%d duplicate_commits=%d spawned=%d despawned=%d membership=%d max_population=%d safety_holds=%d min_separation_cm=%.2f fixed_step_ms_p95=%.3f entity_hash=%llu membership_hash=%llu topology_hash=%llu commit_hash=%llu source=MassCrowdBoundaryRunner+MassCrowdNavRuntime+ApplyFrame"),
+        TEXT("PASS CrowdDemoMixedSandbox role=server fixed_step=%lld active=%d transitions=%d pickups=%d deliveries=%d combat_quantity=%d commits=%d duplicate_commits=%d spawned=%d despawned=%d membership=%d max_population=%d safety_holds=%d min_separation_cm=%.2f fixed_step_ms_p95=%.3f projectile_expected=%d projectile_spawned=%d projectile_impacted=%d projectile_damage=%d projectile_duplicate=%d projectile_hash=%llu entity_hash=%llu membership_hash=%llu topology_hash=%llu commit_hash=%llu source=MassCrowdBoundaryRunner+MassCrowdNavRuntime+ApplyFrame"),
         FixedStepIndex, LifecycleWorld.GetActiveEntityCount(), BehaviorTransitionCount,
         BusinessLedger.GetPickupCount(), BusinessLedger.GetDeliveryCount(), CombatQuantity,
         BusinessLedger.GetAppliedCommitCount(), DuplicateCommitCount,
         SpawnCount, DespawnCount, MembershipChangeCount, MaxObservedPopulation,
         SafetyHoldCount, MinimumSeparationCm, Percentile95(ServerStepMilliseconds),
+        ProjectileExpectedCount,
+        ProjectileSpawnedCount,
+        ProjectileImpactCount,
+        ProjectileDamageCount,
+        ProjectileDuplicateCount,
+        ProjectileTraceHash,
         LifecycleWorld.CalculateEntitySetHash(), LifecycleWorld.CalculateMembershipHash(),
         Config.NavTopologyHash,
         LastBoundaryCommitHash);
@@ -3313,14 +3694,27 @@ void ACrowdDemoMixedSandboxCoordinator::TryLogPass()
       && LifecycleWorld.GetActiveEntityCount() == Config.PopulationLimit
       && LifecycleWorld.CalculateEntitySetHash() == LastExpectedEntitySetHash
       && LifecycleWorld.CalculateMembershipHash() == LastExpectedMembershipHash
+      && ProjectileExpectedCount
+        == Config.PopulationLimit / 5
+      && ProjectileSpawnedCount == ProjectileExpectedCount
+      && ProjectileImpactCount == ProjectileExpectedCount
+      && ProjectileDamageCount == ProjectileExpectedCount
+      && ProjectileDuplicateCount == 0
+      && ProjectileTraceHash != 14695981039346656037ull
       && StaleRejectCount == 0;
     if (bPassed)
     {
       bClientPassLogged = true;
       UE_LOG(LogTemp, Display,
-        TEXT("PASS CrowdDemoMixedSandbox role=client fixed_step=%lld active=%d visible=%d state_sequence=%llu client_frame_ms_p95=%.3f entity_hash=%llu membership_hash=%llu topology_hash=%llu source=LifecycleBehaviorSurfaceFlow"),
+        TEXT("PASS CrowdDemoMixedSandbox role=client fixed_step=%lld active=%d visible=%d state_sequence=%llu client_frame_ms_p95=%.3f projectile_expected=%d projectile_spawned=%d projectile_impacted=%d projectile_damage=%d projectile_duplicate=%d projectile_hash=%llu entity_hash=%llu membership_hash=%llu topology_hash=%llu source=LifecycleBehaviorSurfaceFlow"),
         LastReceivedFixedStep, LifecycleWorld.GetActiveEntityCount(), Visible,
         LastReceivedStateSequence, Percentile95(ClientFrameMilliseconds),
+        ProjectileExpectedCount,
+        ProjectileSpawnedCount,
+        ProjectileImpactCount,
+        ProjectileDamageCount,
+        ProjectileDuplicateCount,
+        ProjectileTraceHash,
         LifecycleWorld.CalculateEntitySetHash(), LifecycleWorld.CalculateMembershipHash(),
         Config.NavTopologyHash);
       if (bCaptureRequested && !bCaptureCompleted && World)

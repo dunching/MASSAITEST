@@ -1,5 +1,13 @@
 #include "MassCrowdReplicationChannel.h"
 
+#define FnvOffset ReplicationChannel_FnvOffset
+#define FnvPrime ReplicationChannel_FnvPrime
+#define Fold ReplicationChannel_Fold
+#define FoldRef ReplicationChannel_FoldRef
+#define FoldBytes ReplicationChannel_FoldBytes
+#define FoldFloat ReplicationChannel_FoldFloat
+#define IsFiniteVector ReplicationChannel_IsFiniteVector
+
 namespace
 {
   constexpr uint64 FnvOffset = 14695981039346656037ull;
@@ -1266,3 +1274,11 @@ bool FCrowdReplicationServerState::ConsumeBufferedReliable(
   OutRecords = MoveTemp(BufferedReliable);
   return true;
 }
+
+#undef IsFiniteVector
+#undef FoldFloat
+#undef FoldBytes
+#undef FoldRef
+#undef Fold
+#undef FnvPrime
+#undef FnvOffset

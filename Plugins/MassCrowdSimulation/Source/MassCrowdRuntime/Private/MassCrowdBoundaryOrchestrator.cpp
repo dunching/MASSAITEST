@@ -3,6 +3,12 @@
 #include "HAL/PlatformTime.h"
 #include "Tasks/Task.h"
 
+#define FnvOffset64 BoundaryOrchestrator_FnvOffset64
+#define FnvPrime64 BoundaryOrchestrator_FnvPrime64
+#define FoldBytes BoundaryOrchestrator_FoldBytes
+#define FoldUint32 BoundaryOrchestrator_FoldUint32
+#define FoldUint64 BoundaryOrchestrator_FoldUint64
+
 namespace
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
@@ -648,6 +654,12 @@ FCrowdMassBoundaryOrchestrator::FindNode(
     if (Node->Key == Key) return Node.Get();
   return nullptr;
 }
+
+#undef FoldUint64
+#undef FoldUint32
+#undef FoldBytes
+#undef FnvPrime64
+#undef FnvOffset64
 
 const FCrowdMassBoundaryOrchestrator::FTaskNode*
 FCrowdMassBoundaryOrchestrator::FindNode(

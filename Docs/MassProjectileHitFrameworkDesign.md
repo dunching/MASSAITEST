@@ -1,16 +1,16 @@
 # Mass Projectile、空间碰撞与通用命中接口设计
 
-[COMPUTED][HIGH] 文档状态：本文件的合同已经在当前Demo生产路径实现；2026-07-17的“插件未开始、数组权威、固定32槽、全量扫描”全部是历史审计，不是当前源码状态。Behavior Source状态由`EntityBehaviorSourceArchitecture.md`单独管理。
+[COMPUTED][HIGH] 文档状态：PJ0–PJ6已经关闭。Mass持久状态、稳定Broadphase、相对/环境Sweep、纯Combat Resolver和宿主Prepared Commit现已分别收敛到公共`MassCrowdProjectiles`、`MassCrowdSpatial`和`MassCrowdCombat`模块；2026-07-17的“固定32槽、全量扫描”仅是历史审计。Behavior Source状态由`EntityBehaviorSourceArchitecture.md`单独管理。
 
 ## 1. 文档职责
 
 [INFERRED][HIGH] 本文件是“大量远程敌人、真正的 Mass projectile entity、稳定空间查询、通用命中/被命中接口和插件迁移”的权威设计事实源。
 
-[INFERRED][HIGH] `RangedCombatVatAndHitResponseDesign.md`继续记录T7/T8已经通过的业务、VAT和静止目标证据；本文件定义其后的可扩展生产架构。T8现有Small结果是回归基线，不是最终大量投射物架构已经成立的证据。
+[INFERRED][HIGH] `RangedCombatVatAndHitResponseDesign.md`继续记录T7/T8业务与VAT证据；本文件定义可扩展生产架构及已经关闭的PJ0–PJ6模块化状态。原工程迁移、T9/T10与真实StateTree业务Task不属于该关闭结论。
 
 ## 2. 已确认的当前事实与修正原因
 
-[COMPUTED][HIGH] 当前Demo的Projectile位置、速度、发射者、生命周期、NavLayer、Collision/Effect Profile、Pierce与状态只保存在`FCrowdDemoMassProjectileFragment`并由Mass Subsystem gather/apply；容量通过配置动态准备。`PreparedProjectiles`、`MirrorProjectileStates()`和固定32槽路径已从Source删除。
+[COMPUTED][HIGH] 当前Projectile跨Boundary持久状态只保存在公共`FCrowdMassProjectileFragment`；`FCrowdMassProjectileStore`在Boundary Gather时生成临时`FCrowdProjectileState`数组，WORK在副本上求解，完整验证后Apply回Fragment。该数组是瞬时事务数据而非跨Boundary第二权威。容量通过配置动态创建Mass实体；`PreparedProjectiles`成员、`MirrorProjectileStates()`、Demo Fragment/Store和固定32槽路径均已删除。
 
 [COMPUTED][HIGH] 当前Projectile kernel按量化网格构建移动目标Swept Bounds，查询候选后执行相对Sweep；环境体使用稳定SurfaceId和扩张AABB Sweep。相同TOI按稳定目标引用决胜，并显式过滤Faction、NavLayer和已命中目标；专项断言候选数而不是执行Projectile×Agent全扫描。
 
@@ -91,7 +91,7 @@ ProjectileLifetime       SpawnStep / AgeSteps / MaxSteps
 ProjectileState          Active / Impacted / Expired / PendingDestroy
 ```
 
-[INFERRED][HIGH] 这些fragment才是权威状态。可使用entity pool或批量spawn降低结构变更成本，但pool必须直接由projectile processors读写；禁止继续使用普通数组求解后再镜像到Mass实体。
+[INFERRED][HIGH] 这些fragment是跨Boundary持久权威。允许Boundary将其Gather为不可变POD并在WORK生成Prepared State，但数组不得跨Boundary保存，也不得绕过完整验证直接写回；最终只能由已验证的Projectile Patch一次Apply。PJ4将该合同从Demo迁入公共Projectiles模块。
 
 [INFERRED][HIGH] 第一版轨迹模型至少显式区分`Linear`；后续`Homing`、`Ballistic`、`Piercing`或`Bounce`必须作为版本化profile/fragment能力加入，不能通过武器名或AgentId隐式分支。
 
@@ -160,23 +160,23 @@ FixedStepBoundaryBegin
 ## 7. 插件模块与依赖方向
 
 ```text
-CrowdRuntimeCore
-├── StableEntityRef / HitFact / versioned settings / hashes
-CrowdSpatialRuntime
-├── collision snapshots / grid / broadphase / shape queries
-CrowdProjectileRuntime
-├── projectile fragments / traits / spawn / trajectory / hit processors
-CrowdCombatBridge
-├── hit queue / resolver interfaces / minimal default resolver
-CrowdPresentationRuntime
-└── projectile visual event / VAT adapter contracts
+MassCrowdCore
+├── StableEntityRef / versioned POD / hashes
+MassCrowdSpatial
+├── safety index / body snapshot / grid / broadphase / relative & environment sweep
+MassCrowdCombat
+├── ImpactFact / HitFact / EffectProfile / pure resolver / prepared host commit
+MassCrowdProjectiles
+├── projectile fragment / trait / Mass store / spawn / lifecycle / kernel / boundary pipeline
+MassCrowdRuntime
+└── generic boundary runtime; depends on Spatial, never on Projectiles
 
 Demo Adapter或原工程 Adapter
 → 插件Public API
 → 插件纯kernel
 ```
 
-[INFERRED][HIGH] 实际可先合并为较少UE模块，但公开依赖必须保持上述单向关系。插件不得include Demo Coordinator、RoundPlan、Scenario枚举、测试地图、Saved fixture路径、原工程`Business`类或具体ItemTag。
+[COMPUTED][HIGH] 当前公开依赖已按上述模块落地。结构自动化验证公共模块不include Demo Coordinator、RoundPlan、Scenario枚举、测试地图或原工程业务类型，并验证Runtime不反向依赖Projectiles。
 
 [INFERRED][HIGH] 原工程Adapter负责：
 
@@ -192,16 +192,16 @@ Demo Adapter或原工程 Adapter
 
 [INFERRED][HIGH] Demo可以继续运行双端同构模拟验证确定性；原工程可以采用“Server gameplay simulation + Client visual prediction/event correction”。这属于宿主策略差异，不得改变HitFact ID和表现事件守恒合同。
 
-## 9. 分阶段迁移顺序
+## 9. 历史迁移顺序与完成状态
 
-1. [INFERRED][HIGH] 冻结现有T8 8451/8450静止目标基线和纯fixture；明确其只验证20实体、静止目标与数组权威实现。
-2. [INFERRED][HIGH] 在插件中先建立StableEntityRef、CollisionSnapshot、ImpactFact、HitFact和Host resolver接口，并用纯POD自动化验证Actor/Mass引用与Lifecycle失效。
-3. [INFERRED][HIGH] 实现稳定spatial grid、移动目标相对sweep、环境sweep与线/Cylinder共享shape query；先通过纯kernel门。
-4. [INFERRED][HIGH] 将T8替换为entity-native Mass Projectile；删除`PreparedProjectiles`权威数组、`MirrorProjectileStates()`和固定32镜像pool。迁移比较使用离线fixture，不保留长期运行时A/B双路径。
-5. [INFERRED][HIGH] 在不包含Demo Coordinator和地图的最小宿主工程验证插件构建、spawn/hit/rollback和visual event。
-6. [INFERRED][HIGH] Demo改用插件后重跑T1–T8；T8新增移动目标、墙体阻挡、阵营过滤和并发Projectile门。
-7. [INFERRED][HIGH] 原工程先接入Adapter并验证现有Actor projectile、Mass ballistic projectile、命中、被命中、护甲、状态、击退/击飞、死亡、掉落和表现不回退，再把大量Mass远程敌人迁入通用Projectile/HitFact链；低频Actor武器分开记录迁移状态。
-8. [INFERRED][HIGH] 最后执行20/100/500敌人与代表性并发Projectile规模门，通过后才进入T9/T10持续刷怪和完整类游戏业务。
+1. [x] [COMPUTED][HIGH] T8历史基线、Mass持久权威和旧数组/镜像路径删除已完成。
+2. [x] [COMPUTED][HIGH] StableEntityRef、Spatial Snapshot、Impact/Hit、Effect Profile、纯Resolver与Prepared Host Commit公共接口及专项已完成。
+3. [x] [COMPUTED][HIGH] 稳定Grid、移动目标相对Sweep、环境Sweep、NavLayer/Mask过滤与稳定TOI决胜已完成。
+4. [x] [COMPUTED][HIGH] T8与Mixed均迁入公共Mass Projectile Fragment/Store/Boundary，不保留运行时A/B路径。
+5. [x] [COMPUTED][HIGH] 公共模块最小宿主、结构、spawn/hit/rollback和Final Apply原子性自动化已完成。
+6. [x] [COMPUTED][HIGH] Demo回归、T8 13项、完整MassCrowd/CrowdDemo自动化及20/100/500并发Projectile门已完成。
+7. [ ] [INFERRED][HIGH] 原工程Actor/Mass projectile统一Adapter迁移未执行，且不属于PJ0–PJ6范围。
+8. [ ] [INFERRED][HIGH] T9/T10持续刷怪和完整类游戏业务未执行，且不属于PJ0–PJ6范围。
 
 ## 10. 自动化、指标与验收
 
@@ -213,20 +213,20 @@ Demo Adapter或原工程 Adapter
 
 ## 11. 当前实现边界
 
-[COMPUTED][HIGH] 本仓库Demo已完成Mass权威Projectile、动态容量、网格Broadphase、相对/环境Sweep、`FCrowdImpactFact`、`FCrowdHitFact`、`ICrowdHostHitResolver`、宿主唯一伤害提交、Pierce与Faction/NavLayer过滤。T8专项当前13/13通过。
+[COMPUTED][HIGH] 本仓库已完成三个公共模块、Mass权威Projectile、动态容量、网格Broadphase、相对/环境Sweep、`FCrowdImpactFact`、`FCrowdHitFact`、纯Resolver、Prepared Host Commit、Pierce与Faction/NavLayer过滤。T8专项13项、MassCrowd 65/65和CrowdDemo 125/125通过。
 
-[INFERRED][HIGH] 原工程Actor/VisualId桥仍未修改，因为本轮范围明确限于本仓库及Demo。20/100/500 Mixed规模门也不等于代表性并发Projectile规模门；后者仍是R7未关闭组合项。
+[COMPUTED][HIGH] PJ6三模块生产路径的20/100/500门已分别以4/20/100发Projectile通过；spawn/impact/damage守恒、duplicate=`0`、双端实体/成员/Projectile Hash一致，服务端fixed-step p95=`2.152/9.675/30.016ms`且最小同层间距=`70.11/70.03/70.00cm`。原工程Actor/VisualId桥未修改，因为PJ0–PJ6范围限于本仓库及Demo。
 
 ## 12. 2026-07-17 前置门执行结果
 
-[COMPUTED][HIGH] 已完成计划指定的当前Demo、原工程Combat/Mass projectile和外部BulletHell/ProjectileSim/Octree只读核对。当前T8的数组权威、镜像pool、全Agent扫描、静态目标球心、单调HitEventId去重和Reliable-only视觉事件问题均由代码确认。
+[COMPUTED][HIGH] 这是2026-07-17前置审计结论：当时T8的数组权威、镜像pool、全Agent扫描、静态目标球心、单调HitEventId去重和Reliable-only视觉事件问题均由代码确认；这些旧实现问题已在R5/R7中关闭，不描述PJ0当前生产状态。
 
 [COMPUTED][HIGH] `git diff --check`、Development Editor和当前完整`CrowdDemo.SF` 46/46通过；自动化日志没有Fatal、Assertion、Ensure、`LogWindows: Error`或VIOLATION。
 
 [COMPUTED][HIGH] T3 8452首次真实单轮暴露生产合同缺失；该停止项现已修复。8455使用稳定10+10 cohort、两套相反Shared Flow和中心/完成平面达到20/20、throughput difference=0、final deadlock=0，安全、双端hash与rollback均通过；8456录像完成群体级人工审片。
 
-[COMPUTED][HIGH] 这是2026-07-17历史快照：当时Projectile专项尚未开始，且当时尚无对应插件Module或最小宿主。当前代码已完成entity-native Mass权威状态、稳定Spatial Broadphase、移动目标/环境命中和宿主Hit Adapter；只有代表性并发Projectile规模门仍未执行。
+[COMPUTED][HIGH] 这是2026-07-17历史快照：当时Projectile专项尚未开始；其中“能力散落、缺少公共模块”的断言已由PJ1–PJ6关闭，不得作为当前状态引用。
 
-[INFERRED][HIGH] 正确下一步是按顺序验收T6A、T6S和T6M；插件生产迁移只能在三个异构场景无已知硬失败后重新开始。
+[INFERRED][HIGH] 当前范围内没有后续Projectile实施阶段；若继续，应另行立项原工程Adapter迁移或T9/T10，而不是恢复历史T6前置顺序。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

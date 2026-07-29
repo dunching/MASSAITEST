@@ -10,7 +10,7 @@
 
 ## 2. 强制实施顺序
 
-[INFERRED][HIGH] 唯一后续顺序为：合同冻结 → StableEntityRef/Capability/Behavior POD → Relevant Snapshot → Demo Bootstrap 适配 → Spawn/Despawn/Membership Delta → 最小 Mass World 真实生命周期 → Demo continuous lifecycle → Logistics/Combat 共用 Behavior API → NavMesh Surface Graph/Shared Flow → 混合行为 Sandbox → 20/100/500 → 原工程最小宿主与生产迁移。
+[INFERRED][HIGH] 这是A–L历史迁移顺序；A–K已经关闭，L原工程迁移不在PJ0–PJ6范围。现行唯一实施顺序以`PhasePlan.md`的PJ0–PJ6为准。
 
 [COMPUTED][HIGH] 当前已完成A–J：合同冻结、AgentFacts POD/Runtime映射、Relevant Snapshot、Demo Bootstrap、lifecycle batches、最小Mass World真实生命周期、Demo continuous lifecycle、统一Behavior接口、NavMesh Surface Graph/Shared Flow及20实体混合行为Sandbox。
 
@@ -39,7 +39,7 @@ MassAICrowdDemo Project Module
 └── continuous Sandbox专用Director/Pawn
 ```
 
-[COMPUTED][HIGH] Core/Runtime运动、静态Recast分层Surface Graph/Shared Flow、Networking Snapshot/lifecycle/late-join/relevancy协议、公共Presentation、Demo continuous lifecycle、NavFlow与FriendlyLogistics产品场景及20实体Mixed均已实现。真实移动视区enter/exit仍无独立双客户端证据；Behavior Source Resolver权威化、行为网络和StateTree端到端仍未完成。
+[COMPUTED][HIGH] Core/Runtime运动、静态Recast分层Surface Graph/Shared Flow、Networking Snapshot/lifecycle/late-join/relevancy协议、公共Presentation、Demo continuous lifecycle、NavFlow、FriendlyLogistics和同路径20/100/500 Mixed均已实现；Behavior Source Resolver权威化与行为网络v3也已关闭。真实移动视区enter/exit仍无独立双客户端证据；真实StateTree业务Task不属于当前验收门。
 
 [INFERRED][HIGH] 依赖方向必须保持 `Demo/主工程 Adapter → 插件公开接口 → 纯 kernel`；插件不得反向 include Demo Coordinator、ScenarioConfigActor、测试地图或Saved诊断路径。
 
@@ -95,7 +95,7 @@ MassAICrowdDemo Project Module
 
 [COMPUTED][HIGH] 本段原先记录的Pipeline数组权威、Mass镜像pool和每Projectile全量扫描已经被R5替换；当前T8使用Mass Fragment唯一权威、动态容量、网格Broadphase、相对/环境Sweep和通用Impact/Hit宿主提交。
 
-[INFERRED][HIGH] Projectile 与 Combat 必须遵守现有 `MassCrowdCore / MassCrowdRuntime / MassCrowdNetworking / MassCrowdPresentation / 宿主Business` 边界；不再发明另一套并行模块命名。依赖保持`宿主Adapter → 插件Public API → 纯kernel`。
+[COMPUTED][HIGH] Projectile 与 Combat 已按`宿主Adapter → 插件Public API → 纯kernel`方向落地为`MassCrowdSpatial`、`MassCrowdCombat`和`MassCrowdProjectiles`三个公共模块；结构门禁止Runtime反向依赖Projectiles。
 
 [INFERRED][HIGH] 插件HitFact使用不含Actor/UObject/FMassEntityHandle的StableEntityRef和EffectProfileKey；原工程Adapter分别把Actor目标接入`FCombatDamageSpec/UCombatResolutionLibrary`，把Mass目标接入Lifecycle校验后的批量GT combat commit。`AMassEnemyTargetProxyActor + VisualId`只作为旧兼容入口，不是插件要求。
 
@@ -105,6 +105,6 @@ MassAICrowdDemo Project Module
 
 [INFERRED][HIGH] 迁移前后门、移动目标/环境命中、20/100/500规模指标和删除条件以`MassProjectileHitFrameworkDesign.md`为准。
 
-[COMPUTED][HIGH] 2026-07-17已执行Mass Projectile插件前置核对；T3停止项已通过8455/8456，T4已通过8460/8461，当前仅T6异构前置门仍开放；插件Module、最小宿主、T8迁移和旧路径删除均未执行。
+[COMPUTED][HIGH] 这是2026-07-17历史停止点：当时仅T6异构前置门开放，插件Module、T8迁移和旧路径删除均未执行。R5/R7随后完成T8迁移与旧权威路径删除；PJ1–PJ6又完成三模块公共所有权、Demo去耦和新路径专项门。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

@@ -796,15 +796,17 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
 
   const int32 TargetGuidanceStart = ProcessorSource.Find(
     TEXT("void UCrowdDemoRoundTargetRegionGuidanceProcessor::Execute"));
-  const int32 CombatBoundaryStart = ProcessorSource.Find(
-    TEXT("UCrowdDemoRoundCombatBoundaryProcessor::"),
+  const int32 ParticleBoundaryStart = ProcessorSource.Find(
+    TEXT("UCrowdDemoRoundParticleConstraintProcessor::"),
     ESearchCase::CaseSensitive, ESearchDir::FromStart, TargetGuidanceStart);
   TestTrue(TEXT("target guidance execute block found"),
-    TargetGuidanceStart != INDEX_NONE && CombatBoundaryStart > TargetGuidanceStart);
-  if (TargetGuidanceStart != INDEX_NONE && CombatBoundaryStart > TargetGuidanceStart)
+    TargetGuidanceStart != INDEX_NONE
+      && ParticleBoundaryStart > TargetGuidanceStart);
+  if (TargetGuidanceStart != INDEX_NONE
+    && ParticleBoundaryStart > TargetGuidanceStart)
   {
     const FString TargetGuidanceBody = ProcessorSource.Mid(
-      TargetGuidanceStart, CombatBoundaryStart - TargetGuidanceStart);
+      TargetGuidanceStart, ParticleBoundaryStart - TargetGuidanceStart);
     TestFalse(TEXT("target guidance does not traverse Mass"),
       TargetGuidanceBody.Contains(TEXT("EntityQuery.ForEachEntityChunk")));
     TestTrue(TEXT("target guidance consumes the canonical boundary snapshot"),
@@ -814,22 +816,22 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ProcessorSource.Contains(TEXT(
       "UCrowdDemoRoundTargetRegionGuidanceProcessor::ConfigureQueries")));
 
-  const FString CombatExecuteMarker =
-    TEXT("void UCrowdDemoRoundCombatBoundaryProcessor::Execute");
-  const FString ParticleConstructorMarker =
-    TEXT("UCrowdDemoRoundParticleConstraintProcessor::");
-  const int32 CombatExecuteStart = ProcessorSource.Find(CombatExecuteMarker);
-  const int32 ParticleConstructorStart = ProcessorSource.Find(
-    ParticleConstructorMarker, ESearchCase::CaseSensitive,
-    ESearchDir::FromStart, CombatExecuteStart + CombatExecuteMarker.Len());
-  TestTrue(TEXT("combined combat boundary block found"),
-    CombatExecuteStart != INDEX_NONE
-      && ParticleConstructorStart > CombatExecuteStart);
-  if (CombatExecuteStart != INDEX_NONE
-    && ParticleConstructorStart > CombatExecuteStart)
+  const FString CombatWorkMarker =
+    TEXT("FCrowdDemoBoundaryBusinessWorkOutput RunBoundaryBusinessWork");
+  const FString CorrectionIntervalMarker =
+    TEXT("constexpr float CorrectionIntervalSeconds");
+  const int32 CombatWorkStart = PipelineSource.Find(CombatWorkMarker);
+  const int32 CorrectionIntervalStart = PipelineSource.Find(
+    CorrectionIntervalMarker, ESearchCase::CaseSensitive,
+    ESearchDir::FromStart, CombatWorkStart + CombatWorkMarker.Len());
+  TestTrue(TEXT("combined combat boundary work block found"),
+    CombatWorkStart != INDEX_NONE
+      && CorrectionIntervalStart > CombatWorkStart);
+  if (CombatWorkStart != INDEX_NONE
+    && CorrectionIntervalStart > CombatWorkStart)
   {
-    const FString CombatBlock = ProcessorSource.Mid(
-      CombatExecuteStart, ParticleConstructorStart - CombatExecuteStart);
+    const FString CombatBlock = PipelineSource.Mid(
+      CombatWorkStart, CorrectionIntervalStart - CombatWorkStart);
     int32 QueryTraversalCount = 0;
     int32 SearchFrom = 0;
     const FString TraversalMarker = TEXT("EntityQuery.ForEachEntityChunk");
@@ -845,15 +847,18 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     TestEqual(TEXT("combat prepare has no independent Mass write traversal"),
       QueryTraversalCount, 0);
     TestTrue(TEXT("combat prepare consumes immutable canonical business facts"),
-      CombatBlock.Contains(TEXT("GetBoundaryBusinessFacts()")));
+      CombatBlock.Contains(TEXT("Input.Facts")));
     const int32 ProjectileStage = CombatBlock.Find(
-      TEXT("AdvanceAttackPhases("));
+      TEXT("PrepareProjectileBoundary("));
     const int32 HitStage = CombatBlock.Find(TEXT("ResolveHitFacts("));
     const int32 ReactiveStage = CombatBlock.Find(TEXT("AdvanceReactiveMotion("));
     TestTrue(TEXT("combat transaction preserves ranged then hit then reactive order"),
       ProjectileStage != INDEX_NONE && HitStage > ProjectileStage
         && ReactiveStage > HitStage);
   }
+  TestFalse(TEXT("old combined combat processor is physically deleted"),
+    ProcessorSource.Contains(
+      TEXT("UCrowdDemoRoundCombatBoundaryProcessor")));
   TestFalse(TEXT("old ranged processor is physically deleted"),
     ProcessorSource.Contains(TEXT("UCrowdDemoRoundRangedCombatProcessor")));
   TestFalse(TEXT("old hit processor is physically deleted"),
@@ -866,9 +871,8 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ProcessorSource.Contains(TEXT("SetPendingProjectileHitFacts"))
       || ProcessorSource.Contains(TEXT("ConsumePendingProjectileHitFacts")));
   TestTrue(TEXT("final boundary writer applies prepared combat state"),
-    ProcessorSource.Contains(TEXT(
-      "ApplyCombatAgentState(\n"
-      "          CombatAgent.Combat")));
+    ProcessorSource.Contains(
+      TEXT("CombatAgent.Combat, Stats[It], Businesses[It]")));
   TestTrue(TEXT("final boundary writer publishes Mass-authoritative projectile state"),
     ProcessorSource.Contains(TEXT(
       "Pipeline.ApplyProjectileFinalState(")));

@@ -141,7 +141,7 @@
 
 ## 9. 测试证据与证据边界
 
-[COMPUTED][HIGH] 当前完整自动化日志为`MassCrowd 61/61`与`CrowdDemo 125/125`，失败数为0；构建记录覆盖Development/DebugGame与`-ForceUnity`/`-DisableUnity`。
+[COMPUTED][HIGH] PJ6最终完整自动化日志为`MassCrowd 65/65`与`CrowdDemo 125/125`，失败数为0；构建记录覆盖Development/DebugGame与`-ForceUnity -DisableAdaptiveUnity`/`-DisableUnity`。
 
 [COMPUTED][HIGH] 当前同路径证据分别为`R7-Mixed20-Gate`、`R7-Mixed100-Gate`和`R7-Mixed500-Gate3`；20与500在fixed step 600达到双端Entity/Membership Hash一致，100门的每个接收包按对应固定步验证期望Hash，三者均无resync或安全违规。
 

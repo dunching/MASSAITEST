@@ -1,5 +1,9 @@
 #include "MassCrowdBoundaryWorkGraph.h"
 
+#define FnvOffset64 BoundaryWorkGraph_FnvOffset64
+#define FnvPrime64 BoundaryWorkGraph_FnvPrime64
+#define Fold BoundaryWorkGraph_Fold
+
 namespace
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
@@ -193,3 +197,7 @@ FCrowdMassBoundaryWorkGraphOutput FCrowdMassBoundaryWorkGraph::Run(
   Output.bCompleted = Hash != 0;
   return Output;
 }
+
+#undef Fold
+#undef FnvPrime64
+#undef FnvOffset64

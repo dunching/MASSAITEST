@@ -99,7 +99,7 @@ TargetAcquire/Validate
 
 [INFERRED][HIGH] windup 开始时锁定 `TargetAgentId + TargetLifecycleSerial` 和目标位置；发射请求按 `(FixedStepIndex, SourceAgentId, FireSequence)` 稳定排序，同一 windup 只能生成一个请求。
 
-[INFERRED][HIGH] 最终插件中的每颗 gameplay projectile 必须是权威轻量 Mass entity，至少保存 ProjectileId、SourceAgentId/LifecycleSerial、FireSequence、Previous/CurrentPosition、Velocity、Radius、Age/Lifetime 和 Damage/EffectProfileKey；当前T8仍是数组权威、Mass pool镜像，见第13节。
+[INFERRED][HIGH] 最终插件中的每颗gameplay projectile必须是权威轻量Mass entity，至少保存ProjectileId、Source/Lifecycle、FireSequence、Previous/CurrentPosition、Velocity、Radius、Age/Lifetime和EffectProfileKey。当前跨Boundary持久权威已是Mass Fragment；Boundary临时数组和模块化现状见`MassProjectileHitFrameworkDesign.md`。
 
 [INFERRED][HIGH] 第一版直射弹使用 fixed-step previous→proposed swept sphere/segment collision；命中候选按最早量化 hit time，再按 TargetAgentId 决胜。不得退化为仅查询当前点附近实体，也不得一发投射物对半径内全部实体重复造成直接命中伤害。
 
@@ -225,13 +225,13 @@ HitFlashProfileKey
 
 [INFERRED][HIGH] 详细POD合同、WORK/GT边界、插件模块、迁移顺序和规模门以`MassProjectileHitFrameworkDesign.md`为准；本文件继续作为T7/T8现有业务与视觉证据事实源。
 
-[COMPUTED][HIGH] 这是2026-07-17历史快照：当时尚未创建通用插件或切换T8。后续`MassCrowdSimulation`通用插件已建立，T6异构技术门已运行；T8仍未迁移为entity-native Projectile，数组权威、32实体镜像pool、全Agent扫描、单调HitEventId去重和Reliable视觉事件仍是待替换旧边界。
+[COMPUTED][HIGH] 这是2026-07-17历史快照：当时尚未创建通用插件或切换T8。后续T8已迁移为Mass持久权威、动态容量、网格Broadphase和相对/环境Sweep；PJ0–PJ6公共模块化现亦已关闭。
 
 ## 14. 宿主Combat boundary transaction（2026-07-22）
 
 [COMPUTED][HIGH] RangedCombat、HitResponse与ReactiveMotion已从三个独立processor收敛为唯一Demo宿主Combat事务。事务先一次采集完整、稳定排序的Agent业务事实，再严格执行Attack/Projectile→Hit resolve→Reactive advance，最后一次性写回Stats/Business/Attack/Reactive/HitFlash/Visual和ReactiveStep；任一完整性校验失败时不允许部分提交。
 
-[COMPUTED][HIGH] 原跨processor `PendingProjectileHitFacts`桥与三个旧processor实现已删除。T7的确定性测试HitFacts与T8的Projectile HitFacts现在都在同一事务内部进入统一Resolve路径；Projectile轨迹权威仍是Pipeline数组，Mass projectile pool仍只是表现镜像，本切片没有把它伪装为插件Core能力。
+[COMPUTED][HIGH] 历史切片事实：原跨processor `PendingProjectileHitFacts`桥与三个旧processor实现当时已删除，T7/T8进入统一Resolve路径；但该切片时Projectile轨迹权威仍是Pipeline数组、Mass pool仍只是表现镜像。该限制随后由R5与PJ1–PJ6消除，不描述当前生产代码。
 
 [COMPUTED][HIGH] 8755 T7技术回归为20 agents/20 visible、fixed-step p95=`2.452ms`；8756 T8得到spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client attack/projectile/event hash一致为`2730049702/4215166500/4204062592`，fixed-step p95=`2.247ms`。本切片没有重录T7/T8人工视频，也不外推移动目标、100/500或entity-native projectile能力。
 

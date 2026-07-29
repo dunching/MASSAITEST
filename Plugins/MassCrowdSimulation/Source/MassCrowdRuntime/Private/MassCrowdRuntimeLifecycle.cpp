@@ -1,5 +1,12 @@
 #include "MassCrowdRuntimeLifecycle.h"
 
+#define FnvOffset RuntimeLifecycle_FnvOffset
+#define FnvPrime RuntimeLifecycle_FnvPrime
+#define FoldByte RuntimeLifecycle_FoldByte
+#define FoldUnsigned RuntimeLifecycle_FoldUnsigned
+#define FoldRef RuntimeLifecycle_FoldRef
+#define FoldFacts RuntimeLifecycle_FoldFacts
+
 namespace
 {
   constexpr uint64 FnvOffset = 14695981039346656037ull;
@@ -350,3 +357,10 @@ int32 FCrowdMassRuntimeLifecycleStore::FindSlot(
   }
   return INDEX_NONE;
 }
+
+#undef FoldFacts
+#undef FoldRef
+#undef FoldUnsigned
+#undef FoldByte
+#undef FnvPrime
+#undef FnvOffset
