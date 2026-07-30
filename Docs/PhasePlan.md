@@ -1,5 +1,23 @@
 # MassAI Crowd Demo 当前阶段计划
 
+## 2026-07-30 AB0–AB6 异步Fixed-Step Boundary
+
+[INFERRED][HIGH] 本阶段替换旧P1“一次Dispatch、一次Wait”的最终合同，但不推翻其不可变Snapshot、Worker纯计算、完整验证和唯一GT writer成果。详细设计以`AsyncFixedStepBoundaryArchitecture.md`为准。
+
+AB0. [x] [INFERRED][HIGH] 文档设计已冻结GT Processor、可选非GT Mass Work Processor、Boundary Work Stage、UE::Tasks DAG、单槽Mailbox、Request/Result、跨帧Fixed Step、失效/teardown及性能门；未修改代码。
+
+AB1. [x] [COMPUTED][HIGH] 已增加Task级queue/run/critical-path遥测、Orchestrator/Runner非阻塞`PollAndDrain()`，并删除Runtime阻塞等待接口；定向自动化7/7通过。
+
+AB2. [x] [COMPUTED][HIGH] Runner已作为每World深度1 Mailbox，携带Generation/PlanRevision/FixedStep/SnapshotHash；Round/Friendly/Mixed持久任务仅捕获ThreadSafe数据。
+
+AB3. [x] [COMPUTED][HIGH] Round跨帧消费/生产与T5S首图已经关闭；8822为inside20、coverage16/16、稳定诊断valid=1、fixed-step/backlog p95=`17.980/31.284ms`，阻塞/stale/catch-up均为0。
+
+AB4. [x] [COMPUTED][HIGH] T5M/T6A/T6S/T6M推广、Worker-side Topology cache和Request级Flow lookup已完成；8824/8825/8826/8823功能与性能门通过，当前不合并Cohort Task。
+
+AB5. [ ] [COMPUTED][HIGH] 全生产路径阻塞Wait已删除；Round动态Stage Adapter的`CallExecute()`收敛尚未完成。
+
+AB6. [ ] [COMPUTED][HIGH] 四构建、MassCrowd 65/65、CrowdDemo 134/134及T5/T6五图独立双端门已通过；单进程双PIE、确定性完成顺序、Correction、teardown、全场景与FFmpeg连续性仍待关闭。
+
 ## 2026-07-29 T9 Mixed Combat Integration
 
 [COMPUTED][HIGH] T9 Small已实现并通过最新双端生产门。场景固定20实体、10对10、无重生；每方4 Melee、2 MidRange、4 Ranged。通用攻击状态机、Attack Intent、Melee/MidRange Spatial Sweep、Ranged Mass Projectile、Combat Resolver、Prepared Health/Death提交、目标失效重选、TargetRegion/Flow缓存重建和v2可靠攻击快照均已接入。
@@ -113,10 +131,10 @@ L. [ ] [INFERRED][HIGH] 原工程最小宿主与生产迁移。
 
 [COMPUTED][HIGH] 当前已完成A–K的同路径规模技术门；L原工程迁移未执行，也不在本轮范围。
 
-[INFERRED][HIGH] 当前唯一实施顺序改为以下产品化闭环；各阶段保持独立边界，但按用户修订合同连续执行，不再要求逐阶段人工授权：
+[COMPUTED][HIGH] 下列P0–P5是2026-07-23已经完成的历史产品化闭环，不再是当前唯一实施顺序；当前新增实施顺序以上方AB1–AB6为准。
 
 P0. [x] [COMPUTED][HIGH] 合同与事实收口：修复J状态冲突，冻结GT/WORK、Nav V1、物流边界、late join/relevancy和公共模块方向。
-P1. [x] [COMPUTED][HIGH] Round boundary已形成一次gather、一次Dispatch、一次Wait和唯一writer；Business/Combat为纯Worker prepare，SharedFlow与按Cohort拆分的Target任务链、Obstacle约束、Movement、Particle和Facing均进入同一typed DAG，源码无`Async/TFuture/Future.Get`。8132/8137/8138/8139分别完成T2/T6/T7/T8双端门；T6首次发现的旧同步预Wait空集合误报已修复并重跑通过。
+P1. [x] [COMPUTED][HIGH] 历史P1完成了一次gather、一次Dispatch、一次Wait、typed Worker DAG和唯一writer；8132/8137/8138/8139分别完成T2/T6/T7/T8双端门。该关闭只证明Snapshot/Worker/原子提交合同，不再证明非阻塞调度；同帧Wait已由AB阶段重新打开为待修缺陷。
 P2. [x] [COMPUTED][HIGH] Nav provider、Recast adapter、Graph resource、Topology revision/hash、Flow handle/refcount与有界LRU已实现；独立`NavFlowProductSmall`在真实垂直Recast地图同时运行20实体P1 Movement链，98节点/234有向边/4层、2个Flow资源、cache hit=1、9504字节及双端无硬错误通过。
 P3. [x] [COMPUTED][HIGH] owner-only replication actor、late-join baseline、可靠状态序列、latest-wins correction、空间RelevantSet、fail-closed resync重建与Presentation slot subsystem已实现；真实J与Continuous late join通过。
 P4. [x] [COMPUTED][HIGH] 插件新增可复用事务Store，覆盖Claim/Pickup/Deliver/Cancel/Requeue、死亡后无Carrier cargo恢复和fallback sink；专用`CrowdDemo_FriendlyLogisticsSmall`地图以20个真实Mass实体通过稳定竞争、数量守恒、幂等、退避、取消及公共channel late join。8154双端hash=`3180435972084878253`，客户端Cargo attach/detach=`2/2`、最终实例=`20`，携货与交付近景证据已保存。

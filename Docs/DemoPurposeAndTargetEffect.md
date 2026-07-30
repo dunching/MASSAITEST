@@ -86,6 +86,30 @@
 
 [INFERRED][HIGH] 目标类场景不能只用单帧`inside-band`、Region coverage或某一帧`TerminalSettle`数量判定完成。Static使用世界位置，Moving使用Target-relative位置/速度；两者都必须证明连续窗口内没有持续merge阻塞、终态状态抖动、位置往返和高频Particle反向修正。
 
+## 5.1 可视化、FFmpeg 与人工验收流程（2026-07-29）
+
+[INFERRED][HIGH] 每个专项关卡的当前版验收分为两次独立运行，不能用开启录屏和调试文字后的帧率替代性能基线。第一轮使用独立Server/Client、关闭录屏与状态标签，保存fixed-step、client frame、visual、Game/Render/GPU、realtime、step-limit和启动/稳定窗口分类；第二轮开启可视化标签与FFmpeg，保存连续录像、contact sheet、专项事件sidecar和事件短片。
+
+[INFERRED][HIGH] FFmpeg只判定视频是否可读、是否近黑/近白、是否发生长时间冻结，并按权威事件时间切片；它不能从像素反推出BusinessState、ReactiveMode、HitEvent、目标资格或Particle事实。业务正确性必须由服务端/复制权威日志与sidecar判定，人工审片负责核对“权威状态变化是否被连续、可辨识地表现出来”。
+
+[INFERRED][HIGH] 人工验收顺序固定为：先核对无录屏性能门；再看完整contact sheet排除黑屏、错误镜头和长期冻结；再按专项事件短片逐段看进入、保持、退出是否连续；最后对照sidecar中的expected/actual、authority sample step、client observation step和事件计数。复制延迟导致的短暂expected/actual差异必须保留为诊断，不得自动改写成业务失败或静默抹掉。
+
+[INFERRED][HIGH] T1只验收参与集切换、staging reset、压力传播与新平衡，允许被明确标记的测试边界reset，不允许普通帧瞬移；T3/T4/T6A只验收安全穿越与离开出口，不要求出口形成Target Region站位；T2/T5/T6S/T6M才验收目标相对Region覆盖和连续稳定落位。穿过窄口与目标站位是两项不同能力，不得互相替代。
+
+[INFERRED][HIGH] 推荐命令分为两轮：
+
+```powershell
+.\Scripts\RunCrowdDemo.ps1 `
+  -Map /Game/Maps/CrowdDemo_MultiStateVatHitResponseSmall `
+  -EntityCount 20 `
+  -Scenario SimRoundSoftPressure `
+  -RequirePerformanceGate
+
+.\Scripts\CaptureCrowdDemo.ps1 -T7StateAcceptance
+```
+
+[COMPUTED][HIGH] `CaptureCrowdDemo.ps1 -T7StateAcceptance`固定选择T7 Small和20实体，给客户端开启预期/实际状态标签并写入`scenario_state_events.jsonl`；录制结束后以实际Knockback、KnockUp和Death事件时间生成`step_030_knockback`、`step_060_knockup`、`step_090_death`短片及contact sheet，并写出`acceptance_manifest.json`。
+
 ## 6. 当前实现与目标差距
 
 [COMPUTED][HIGH] 当前已实现 Shared Flow V2、Target Region Transport、SoftPressure Particle、双端 hash、correction rollback 和 client-only visual。

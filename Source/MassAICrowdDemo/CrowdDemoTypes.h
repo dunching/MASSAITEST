@@ -973,7 +973,14 @@ struct FCrowdDemoRoundPerformanceMetrics
   UPROPERTY() int32 CatchupCpuBudgetHitCount = 0;
   UPROPERTY() int32 CatchupCpuBudgetConsecutiveMax = 0;
   UPROPERTY() int32 MaxFixedStepsPerFrameHitCount = 0;
+  UPROPERTY() int32 BoundaryPendingFrameCount = 0;
+  UPROPERTY() int32 BoundaryStaleResultCount = 0;
+  UPROPERTY() int32 OrdinaryBlockWaitCount = 0;
   UPROPERTY() float FixedStepBacklogMsMax = 0.0f;
+  UPROPERTY() float FixedStepBacklogMsP95 = 0.0f;
+  UPROPERTY() float WorkerQueueMsP95 = -1.0f;
+  UPROPERTY() float WorkerRunMsP95 = -1.0f;
+  UPROPERTY() float WorkerCriticalPathMsP95 = -1.0f;
   UPROPERTY() float SimulationRealtimeFactor = -1.0f;
   UPROPERTY() float RollbackReplayMsP95 = -1.0f;
   UPROPERTY() float RollbackReplayMsMax = -1.0f;

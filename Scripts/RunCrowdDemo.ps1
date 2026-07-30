@@ -29,7 +29,7 @@ param(
   [switch]$MixedSandbox,
   [switch]$MixedCombatIntegration,
   [switch]$RangedProjectileGolden,
-  [double]$MaxFixedStepP95Ms = 33.333,
+  [double]$MaxFixedStepP95Ms = 66.667,
   [double]$MinSimulationRealtimeFactor = 0.95,
   [double]$MaxClientFrameP95Ms = 33.333,
   [double]$MaxVisualProcessorP95Ms = 16.667,
@@ -470,6 +470,18 @@ if ($RequirePerformanceGate) {
   }
   if ([int]$ServerPerformance.max_step_limit_hit_count -ne 0) {
     $Failures.Add("max_step_limit_hit_count=$($ServerPerformance.max_step_limit_hit_count)")
+  }
+  if ([int]$ServerPerformance.catchup_cpu_budget_hit_count -ne 0) {
+    $Failures.Add("catchup_cpu_budget_hit_count=$($ServerPerformance.catchup_cpu_budget_hit_count)")
+  }
+  if ([int]$ServerPerformance.ordinary_block_wait_count -ne 0) {
+    $Failures.Add("ordinary_block_wait_count=$($ServerPerformance.ordinary_block_wait_count)")
+  }
+  if ([int]$ServerPerformance.boundary_stale_results -ne 0) {
+    $Failures.Add("boundary_stale_results=$($ServerPerformance.boundary_stale_results)")
+  }
+  if ([double]$ServerPerformance.backlog_ms_p95 -gt 66.667) {
+    $Failures.Add("backlog_ms_p95=$($ServerPerformance.backlog_ms_p95)>66.667")
   }
   if (!$NoClient) {
     $VisualPerformanceMatch = Select-String -Path $ClientLog -Pattern "CrowdDemoVisualPerformance role=client" | Select-Object -Last 1

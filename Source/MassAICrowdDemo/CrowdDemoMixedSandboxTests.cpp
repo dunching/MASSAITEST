@@ -252,7 +252,7 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
     Coordinator.Contains(TEXT("FCrowdDemoBehaviorRecipe")));
   const int32 MovementStart =
     Coordinator.Find(TEXT(
-      "bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary("));
+      "bool ACrowdDemoMixedSandboxCoordinator::BeginProductMovementBoundary("));
   const int32 MovementEnd =
     Coordinator.Find(TEXT(
       "bool ACrowdDemoMixedSandboxCoordinator::GetOrBuildFlow("),
@@ -304,8 +304,10 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
     Coordinator.Contains(TEXT("ExtractStaticRecast"))
       || Coordinator.Contains(TEXT("FCrowdNavSurfaceGraphExtractor::BuildFlow")));
   TestTrue(TEXT("mixed path uses the product boundary runner"),
-    Coordinator.Contains(TEXT("FCrowdMassBoundaryRunner Runner"))
-      && Coordinator.Contains(TEXT("RunProductMovementBoundary"))
+    Coordinator.Contains(
+      TEXT("MakeUnique<FCrowdMassBoundaryRunner>()"))
+      && Coordinator.Contains(TEXT("BeginProductMovementBoundary"))
+      && Coordinator.Contains(TEXT("PollProductMovementBoundary"))
       && Coordinator.Contains(TEXT("BuildAndSealCommit")));
   TestFalse(TEXT("mixed path has no direct shared-flow movement owner"),
     Coordinator.Contains(TEXT("MoveAlongSharedFlow")));

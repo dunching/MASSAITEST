@@ -378,12 +378,14 @@ struct FCrowdDemoBoundaryFacingWorkState
     FCrowdMassTargetRegionPlanOutput PlanOutput;
     FCrowdMassTargetRegionGuidanceInput GuidanceInput;
     FCrowdMassTargetRegionGuidanceOutput GuidanceOutput;
+    bool bUseCachedTopology = false;
     bool bDemandStaged = false;
     bool bPlanStaged = false;
     bool bGuidanceStaged = false;
   };
   FCrowdMassBoundaryWorkGraphInput GraphInput;
   FCrowdMassBoundaryWorkGraphOutput GraphOutput;
+  TMap<int32, int32> SharedFlowIndexByAgentId;
   FCrowdDemoBoundaryBusinessWorkInput BusinessInput;
   FCrowdDemoBoundaryBusinessWorkOutput BusinessOutput;
   FCrowdDemoSharedFlowFieldConfig ObstacleConfig;
@@ -445,12 +447,21 @@ public:
   int32 GetFormationCacheRebuildCount() const { return FormationCacheRebuildCount; }
   bool TryBeginFixedStep(float TargetServerTimeSeconds);
   void FinishFixedStep();
+  void FailFixedStep();
+  void InvalidateInFlightBoundaryForAuthoritativeState();
+  bool IsStepInProgress() const { return bStepInProgress; }
   bool IsActive() const { return bPlanActive; }
   bool IsRoundSimScenarioActive() const;
   float GetCurrentFixedStepSeconds() const { return CurrentFixedStepSeconds; }
   float GetCurrentStepStartServerTimeSeconds() const { return CurrentStepStartServerTimeSeconds; }
   float GetCurrentStepEndServerTimeSeconds() const { return CurrentStepEndServerTimeSeconds; }
   float GetSimulatedServerTimeSeconds() const { return SimulatedServerTimeSeconds; }
+  float GetScheduledServerTimeSeconds() const
+  {
+    return bStepInProgress
+      ? CurrentStepEndServerTimeSeconds
+      : SimulatedServerTimeSeconds;
+  }
   int32 GetCurrentRoundId() const { return ActivePlan.RoundId; }
   int32 GetCurrentPlanRevision() const { return ActivePlan.Revision; }
   const FCrowdDemoRoundPlanPacket& GetActivePlan() const { return ActivePlan; }
@@ -485,12 +496,15 @@ public:
       && BoundarySnapshot.PlanRevision == GetCurrentPlanRevision();
   }
   bool BeginBoundaryTransaction(double GatherMilliseconds);
+  float GetCurrentBoundaryWallMilliseconds() const;
   bool StageBoundaryBusinessWork();
   bool StageBoundarySharedFlowWork(
     const FCrowdMassSharedFlowSampleInput& Input);
   bool StageBoundaryTargetTopologyWork(
     uint32 CohortKey,
-    const FCrowdMassTargetRegionTopologyInput& Input);
+    const FCrowdMassTargetRegionTopologyInput& Input,
+    const FCrowdDemoTargetPolarTopology* CachedTopology = nullptr,
+    const FCrowdDemoTargetPolarTopologySummary* CachedSummary = nullptr);
   bool StageBoundaryTargetDemandWork(
     uint32 CohortKey,
     const FCrowdMassTargetRegionDemandInput& Input);
@@ -519,7 +533,13 @@ public:
     FCrowdMassFacingFinalizeWorkInput&& Input,
     TMap<int32, int32>&& ConsecutiveSettleStepsByAgentId,
     TMap<int32, bool>&& FinalSettledByAgentId);
-  bool WaitBoundaryWork();
+  ECrowdBoundaryPollResult PollBoundaryWork();
+  ECrowdBoundaryTransactionState GetBoundaryTransactionState() const
+  {
+    return BoundaryOrchestrator.IsValid()
+      ? BoundaryOrchestrator->GetState()
+      : ECrowdBoundaryTransactionState::Idle;
+  }
   bool ConsumeBoundaryFacingWork(
     FCrowdMassFacingFinalizeWorkOutput& OutOutput,
     TMap<int32, int32>& OutConsecutiveSettleStepsByAgentId,
@@ -1175,6 +1195,10 @@ private:
     static_cast<uint8>(ECrowdDemoRoundPerformanceStage::Count)];
   TArray<float> FixedStepPipelineMsSamples;
   TArray<float> FixedStepsPerGameFrameSamples;
+  TArray<float> FixedStepBacklogMsSamples;
+  TArray<float> BoundaryWorkerQueueMsSamples;
+  TArray<float> BoundaryWorkerRunMsSamples;
+  TArray<float> BoundaryWorkerCriticalPathMsSamples;
   TArray<float> RollbackReplayMsSamples;
   int32 PerformanceCatchupFrameCount = 0;
   int32 PerformanceCatchupCpuBudgetHitCount = 0;
@@ -1183,6 +1207,7 @@ private:
   int32 PerformanceMaxFixedStepsPerFrameHitCount = 0;
   float PerformanceFixedStepBacklogMsMax = 0.0f;
   double PerformanceRoundWallStartSeconds = 0.0;
+  double CurrentBoundaryRequestStartSeconds = 0.0;
   float PerformanceRoundSimStartSeconds = 0.0f;
   int32 PendingRollbackReplaySteps = 0;
   float PendingRollbackReplayMilliseconds = 0.0f;
@@ -1237,6 +1262,10 @@ private:
   int32 RoundTransitionOrderViolationCount = 0;
   uint64 PlanApplyBoundarySequence = 0;
   uint64 LastClaimedPlanApplyBoundarySequence = MAX_uint64;
+  uint64 BoundaryGeneration = 1;
+  int32 BoundaryPendingFrameCount = 0;
+  int32 BoundaryStaleResultCount = 0;
+  int32 BoundaryOrdinaryBlockWaitCount = 0;
   uint64 FormationMembershipHash = 0;
   int32 FormationMembershipCount = 0;
   int32 FormationCacheRebuildCount = 0;

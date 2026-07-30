@@ -459,6 +459,11 @@ bool FCrowdDemoMassClientBubbleHandler::UpdateAgentMinimal(
   Existing.AnimState = Agent.AnimState;
   Existing.VatClipIndex = Agent.VatClipIndex;
   Existing.VatPlayRateByte = Agent.VatPlayRateByte;
+  // Minimal RoundSim replication deliberately leaves movement to the shared
+  // deterministic pipeline. When a business/visual change already dirties the
+  // item, however, its timestamp must describe that new authority sample rather
+  // than the initial spawn sample.
+  Existing.ServerSampleTimeSeconds = Agent.ServerSampleTimeSeconds;
   Existing.Combat = Agent.Combat;
   Serializer->MarkItemDirty(Item);
   return true;

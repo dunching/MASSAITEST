@@ -1108,7 +1108,7 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
       Particle.RollbackAgentMismatchCount, Particle.RollbackReplayedStepCount);
     const FCrowdDemoRoundPerformanceMetrics& Performance = Particle.Performance;
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoPerformanceCheckpoint role=server round_id=%d fixed_step_ms_p50=%.3f fixed_step_ms_p95=%.3f fixed_step_ms_max=%.3f business_prepare_ms_p95=%.3f business_prepare_ms_max=%.3f flow_ms_p95=%.3f flow_ms_max=%.3f topology_ms_p95=%.3f topology_ms_max=%.3f demand_ms_p95=%.3f demand_ms_max=%.3f plan_ms_p95=%.3f plan_ms_max=%.3f guidance_ms_p95=%.3f guidance_ms_max=%.3f guidance_compose_ms_p95=%.3f guidance_compose_ms_max=%.3f local_predictive_ms_p95=%.3f local_predictive_ms_max=%.3f particle_stage_ms_p95=%.3f particle_stage_ms_max=%.3f facing_finalize_ms_p95=%.3f facing_finalize_ms_max=%.3f commit_ms_p95=%.3f commit_ms_max=%.3f topology_builds=%d topology_cache_hits=%d demand_full_builds=%d demand_population_updates=%d steps_per_game_frame_p50=%.3f steps_per_game_frame_p95=%.3f steps_per_game_frame_max=%d catchup_frame_count=%d catchup_cpu_budget_hit_count=%d catchup_cpu_budget_consecutive_max=%d max_step_limit_hit_count=%d backlog_ms_max=%.3f simulation_realtime_factor=%.3f rollback_replay_ms_p95=%.3f rollback_replay_ms_max=%.3f rollback_replay_samples=%d zero_error_rollback_replay_count=%d source=MassPipeline"),
+      TEXT("CrowdDemoPerformanceCheckpoint role=server round_id=%d fixed_step_ms_p50=%.3f fixed_step_ms_p95=%.3f fixed_step_ms_max=%.3f business_prepare_ms_p95=%.3f business_prepare_ms_max=%.3f flow_ms_p95=%.3f flow_ms_max=%.3f topology_ms_p95=%.3f topology_ms_max=%.3f demand_ms_p95=%.3f demand_ms_max=%.3f plan_ms_p95=%.3f plan_ms_max=%.3f guidance_ms_p95=%.3f guidance_ms_max=%.3f guidance_compose_ms_p95=%.3f guidance_compose_ms_max=%.3f local_predictive_ms_p95=%.3f local_predictive_ms_max=%.3f particle_stage_ms_p95=%.3f particle_stage_ms_max=%.3f facing_finalize_ms_p95=%.3f facing_finalize_ms_max=%.3f commit_ms_p95=%.3f commit_ms_max=%.3f topology_builds=%d topology_cache_hits=%d demand_full_builds=%d demand_population_updates=%d steps_per_game_frame_p50=%.3f steps_per_game_frame_p95=%.3f steps_per_game_frame_max=%d catchup_frame_count=%d catchup_cpu_budget_hit_count=%d catchup_cpu_budget_consecutive_max=%d max_step_limit_hit_count=%d boundary_pending_frames=%d boundary_stale_results=%d ordinary_block_wait_count=%d backlog_ms_p95=%.3f backlog_ms_max=%.3f worker_queue_ms_p95=%.3f worker_run_ms_p95=%.3f worker_critical_ms_p95=%.3f simulation_realtime_factor=%.3f rollback_replay_ms_p95=%.3f rollback_replay_ms_max=%.3f rollback_replay_samples=%d zero_error_rollback_replay_count=%d source=MassPipeline"),
       RoundResultPacket.RoundId,
       Performance.FixedStepPipelineMsP50,
       Performance.FixedStepPipelineMsP95,
@@ -1146,7 +1146,14 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
       Performance.CatchupCpuBudgetHitCount,
       Performance.CatchupCpuBudgetConsecutiveMax,
       Performance.MaxFixedStepsPerFrameHitCount,
+      Performance.BoundaryPendingFrameCount,
+      Performance.BoundaryStaleResultCount,
+      Performance.OrdinaryBlockWaitCount,
+      Performance.FixedStepBacklogMsP95,
       Performance.FixedStepBacklogMsMax,
+      Performance.WorkerQueueMsP95,
+      Performance.WorkerRunMsP95,
+      Performance.WorkerCriticalPathMsP95,
       Performance.SimulationRealtimeFactor,
       Performance.RollbackReplayMsP95,
       Performance.RollbackReplayMsMax,

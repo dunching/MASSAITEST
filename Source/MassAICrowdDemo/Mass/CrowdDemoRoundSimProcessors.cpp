@@ -1227,8 +1227,10 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
   FCrowdDemoCorrectionFrame Correction;
   float ReceiveServerTime = 0.0f;
   int32 DiagnosticCorrectionFixedStep = INDEX_NONE;
+  bool bAppliedAuthoritativeFrame = false;
   if (World->GetNetMode() == NM_Client && Pipeline->PopCorrectionForBoundary(Correction, ReceiveServerTime))
   {
+    bAppliedAuthoritativeFrame = true;
     const double CorrectionApplyStartSeconds = FPlatformTime::Seconds();
     DiagnosticCorrectionFixedStep = FMath::Max(0, FMath::RoundToInt(
       (Correction.ServerTimeSeconds - Pipeline->GetActivePlan().StartServerTimeSeconds)
@@ -1413,6 +1415,7 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
   FCrowdDemoRoundResultPacket Result;
   if (World->GetNetMode() == NM_Client && Pipeline->PopRoundResultForBoundary(Result))
   {
+    bAppliedAuthoritativeFrame = true;
     const TArray<FCrowdDemoRoundAgentState> BeforeResult = GatherStates();
     Pipeline->RecordRoundResultComparisonAndApplied(BeforeResult, Result);
     TMap<int32, const FCrowdDemoRoundAgentState*> ResultById;
@@ -1445,6 +1448,11 @@ void UCrowdDemoRoundPlanApplyProcessor::Execute(FMassEntityManager& EntityManage
       }
     });
     Pipeline->SetSimulatedServerTimeForCorrection(Result.EndServerTimeSeconds);
+  }
+
+  if (bAppliedAuthoritativeFrame)
+  {
+    Pipeline->InvalidateInFlightBoundaryForAuthoritativeState();
   }
 
   // On clients the next plan is intentionally held until the old round result
@@ -1874,8 +1882,13 @@ void UCrowdDemoRoundTargetPolarTopologyBuildProcessor::Execute(
       BoundaryWorkInput.FlowConfig =
         FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreFlowConfig(
           Pipeline->GetRules().FlowFieldConfig);
+      const bool bUseCachedTopology =
+        bStaticTargetForRound && Runtime.Topology.bValid
+        && Runtime.TopologySummary.bValid;
       if (!Pipeline->StageBoundaryTargetTopologyWork(
-          Runtime.Cohort.CapabilityProfileKey, BoundaryWorkInput))
+          Runtime.Cohort.CapabilityProfileKey, BoundaryWorkInput,
+          bUseCachedTopology ? &Runtime.Topology : nullptr,
+          bUseCachedTopology ? &Runtime.TopologySummary : nullptr))
       {
         UE_LOG(LogTemp, Error,
           TEXT("VIOLATION CrowdDemoTargetTopologyStageRejected step=%d profile_key=%u"),
@@ -1883,6 +1896,7 @@ void UCrowdDemoRoundTargetPolarTopologyBuildProcessor::Execute(
           Runtime.Cohort.CapabilityProfileKey);
         return;
       }
+      Pipeline->RecordTargetTopologyPerformance(!bUseCachedTopology);
       if (Pipeline->IsBoundarySnapshotCurrent()) continue;
       const bool bBuildTopology = !bStaticTargetForRound || !Runtime.Topology.bValid;
       if (bBuildTopology)
@@ -1891,7 +1905,6 @@ void UCrowdDemoRoundTargetPolarTopologyBuildProcessor::Execute(
           Settings, Pipeline->GetRules().FlowFieldConfig,
           Runtime.Topology, Runtime.TopologySummary);
       }
-      Pipeline->RecordTargetTopologyPerformance(bBuildTopology);
       Runtime.TopologyRoundHash = FoldTargetHash(
         FoldTargetHash(Runtime.TopologyRoundHash,
           static_cast<uint32>(Pipeline->GetCurrentFixedStepIndex())),
@@ -1920,13 +1933,23 @@ void UCrowdDemoRoundTargetPolarTopologyBuildProcessor::Execute(
   BoundaryWorkInput.FlowConfig =
     FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreFlowConfig(
       Pipeline->GetRules().FlowFieldConfig);
-  if (!Pipeline->StageBoundaryTargetTopologyWork(0, BoundaryWorkInput))
+  const bool bUseCachedTopology =
+    bStaticTargetForRound
+    && Pipeline->GetPreparedTargetRegionTopology().bValid
+    && Pipeline->GetTargetRegionTopologySummary().bValid;
+  if (!Pipeline->StageBoundaryTargetTopologyWork(
+      0, BoundaryWorkInput,
+      bUseCachedTopology
+        ? &Pipeline->GetPreparedTargetRegionTopology() : nullptr,
+      bUseCachedTopology
+        ? &Pipeline->GetTargetRegionTopologySummary() : nullptr))
   {
     UE_LOG(LogTemp, Error,
       TEXT("VIOLATION CrowdDemoTargetTopologyStageRejected step=%d profile_key=0"),
       Pipeline->GetCurrentFixedStepIndex());
     return;
   }
+  Pipeline->RecordTargetTopologyPerformance(!bUseCachedTopology);
   if (Pipeline->IsBoundarySnapshotCurrent()) return;
   const bool bBuildTopology = !bStaticTargetForRound
     || !Pipeline->GetPreparedTargetRegionTopology().bValid;
@@ -1937,7 +1960,6 @@ void UCrowdDemoRoundTargetPolarTopologyBuildProcessor::Execute(
       Pipeline->GetPreparedTargetRegionTopology(),
       Pipeline->GetTargetRegionTopologySummary());
   }
-  Pipeline->RecordTargetTopologyPerformance(bBuildTopology);
   Pipeline->RecordTargetRegionTopologyStep();
   if (!Pipeline->GetTargetRegionTopologySummary().bValid)
   {
@@ -6059,24 +6081,135 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
     static_cast<uint8>(ECrowdDemoRoundPerformanceStage::Count)] = {};
   int32 ExecutedSteps = 0;
   bool bHitCatchupCpuBudget = false;
-  // A completed round has no next movement step, but its boundary must still be
-  // allowed to activate the queued plan. Do not invoke the dynamic processor
-  // twice at the same boundary: DebugGame Mass query setup is measurable even
-  // when the subsystem gate correctly turns the second call into a no-op.
-  bool bPlanApplyExecutedForBoundary = false;
-  if (!Pipeline->IsActive())
+  // Plans, corrections, and authoritative round results must invalidate the
+  // old generation before an in-flight result is polled or committed.
+  PlanApplyProcessor->CallExecute(EntityManager, Context);
+
+  // Consume the single in-flight boundary before gathering another request.
+  // Pending work never blocks the game thread and leaves the step open.
+  if (Pipeline->IsStepInProgress())
   {
-    PlanApplyProcessor->CallExecute(EntityManager, Context);
-    bPlanApplyExecutedForBoundary = true;
+    const ECrowdBoundaryPollResult PollResult =
+      Pipeline->PollBoundaryWork();
+    if (PollResult == ECrowdBoundaryPollResult::Pending)
+    {
+      Pipeline->RecordPipelineFramePerformance(
+        0, TargetServerTime, false, false);
+      ConsecutiveCatchupCpuBudgetHitFrames = 0;
+      return;
+    }
+    if (PollResult == ECrowdBoundaryPollResult::Failed)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoBoundaryPollFailed step=%d"),
+        Pipeline->GetCurrentFixedStepIndex());
+      Pipeline->FailFixedStep();
+      Pipeline->RecordPipelineFramePerformance(
+        0, TargetServerTime, false, false);
+      return;
+    }
+
+    const auto MeasureCompletedStage =
+      [Pipeline, &PipelineFrameStageMilliseconds](
+        const ECrowdDemoRoundPerformanceStage Stage, auto&& Work)
+    {
+      const double StartSeconds = FPlatformTime::Seconds();
+      Work();
+      const float Milliseconds = static_cast<float>(
+        (FPlatformTime::Seconds() - StartSeconds) * 1000.0);
+      PipelineFrameStageMilliseconds[static_cast<uint8>(Stage)] +=
+        Milliseconds;
+      Pipeline->RecordPerformanceStage(Stage, Milliseconds);
+    };
+
+    MeasureCompletedStage(
+      ECrowdDemoRoundPerformanceStage::FacingFinalize, [&]
+    {
+      if (Pipeline->GetRules().Scenario
+        == ECrowdDemoScenario::SimRoundSoftPressure)
+      {
+        MovementWorkProcessor->CallExecute(EntityManager, Context);
+        ParticleConstraintProcessor->CallExecute(EntityManager, Context);
+      }
+      FacingFinalizeProcessor->CallExecute(EntityManager, Context);
+    });
+
+    const bool bRequiresCombatCommit = Pipeline->IsRangedProjectileCombat()
+      || (Pipeline->GetRules().Scenario
+          == ECrowdDemoScenario::SimRoundSoftPressure
+        && Pipeline->GetRules().SoftPressureTestCase
+          == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse);
+    if ((bRequiresCombatCommit
+        && !Pipeline->IsPreparedCombatBoundaryCommitCurrent())
+      || !Pipeline->IsPreparedMovementBoundaryCommitCurrent())
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoBoundaryPreparedCommitMissing step=%d combat=%d"),
+        Pipeline->GetCurrentFixedStepIndex(),
+        bRequiresCombatCommit ? 1 : 0);
+      Pipeline->FailFixedStep();
+      Pipeline->RecordPipelineFramePerformance(
+        0, TargetServerTime, false, false);
+      return;
+    }
+
+    bool bFinalCommitApplied = true;
+    MeasureCompletedStage(ECrowdDemoRoundPerformanceStage::Commit, [&]
+    {
+      const double CommitStartSeconds = FPlatformTime::Seconds();
+      FacingFinalizeProcessor->CallExecute(EntityManager, Context);
+      bFinalCommitApplied =
+        !Pipeline->IsPreparedMovementBoundaryCommitCurrent()
+        && Pipeline->IsMovementFinalizeAppliedCurrent()
+        && (!bRequiresCombatCommit
+          || !Pipeline->IsPreparedCombatBoundaryCommitCurrent());
+      if (!bFinalCommitApplied)
+        return;
+      if (!Pipeline->MarkBoundaryCommitted(
+          (FPlatformTime::Seconds() - CommitStartSeconds) * 1000.0))
+      {
+        bFinalCommitApplied = false;
+        return;
+      }
+      if (World->GetNetMode() == NM_Client)
+        ClientPredictionCommitProcessor->CallExecute(EntityManager, Context);
+      else
+        AuthorityCommitProcessor->CallExecute(EntityManager, Context);
+      PostFinalizeMetricsProcessor->CallExecute(EntityManager, Context);
+      if (World->GetNetMode() != NM_Client)
+        CheckpointPublisherProcessor->CallExecute(EntityManager, Context);
+    });
+    if (!bFinalCommitApplied)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoBoundaryFinalCommitRejected step=%d"),
+        Pipeline->GetCurrentFixedStepIndex());
+      Pipeline->FailFixedStep();
+      Pipeline->RecordPipelineFramePerformance(
+        0, TargetServerTime, false, false);
+      return;
+    }
+
+    Pipeline->RecordFixedStepPerformance(
+      Pipeline->GetCurrentBoundaryWallMilliseconds());
+    Pipeline->FinishFixedStep();
+    ExecutedSteps = 1;
   }
-  while (ExecutedSteps < MaxFixedStepsPerFrame)
+
+  if (ExecutedSteps < MaxFixedStepsPerFrame)
   {
-    if (!bPlanApplyExecutedForBoundary)
+    const auto TrySubmitBoundary = [&]()
+    {
+    if (ExecutedSteps > 0)
+    {
+      // FinishFixedStep advances the shared plan-apply boundary. Give queued
+      // plans and authority frames one ordered apply point before gathering
+      // the next immutable request.
       PlanApplyProcessor->CallExecute(EntityManager, Context);
-    bPlanApplyExecutedForBoundary = false;
+    }
     if (!Pipeline->TryBeginFixedStep(TargetServerTime))
     {
-      break;
+      return;
     }
     BoundaryGatherProcessor->CallExecute(EntityManager, Context);
     if (!Pipeline->IsBoundarySnapshotCurrent())
@@ -6085,9 +6218,9 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
         TEXT("VIOLATION CrowdDemoBoundaryGatherMissing step=%d revision=%d"),
         Pipeline->GetCurrentFixedStepIndex(),
         Pipeline->GetCurrentPlanRevision());
-      break;
+      Pipeline->FailFixedStep();
+      return;
     }
-    const double FixedStepStartSeconds = FPlatformTime::Seconds();
     const auto MeasureStage = [Pipeline, &PipelineFrameStageMilliseconds](
       const ECrowdDemoRoundPerformanceStage Stage, auto&& Work)
     {
@@ -6175,93 +6308,24 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
     MeasureStage(ECrowdDemoRoundPerformanceStage::FacingFinalize, [&]
     {
       FacingFinalizeProcessor->CallExecute(EntityManager, Context);
-      if (Pipeline->WaitBoundaryWork())
-      {
-        if (Pipeline->GetRules().Scenario
-          == ECrowdDemoScenario::SimRoundSoftPressure)
-        {
-          MovementWorkProcessor->CallExecute(EntityManager, Context);
-          ParticleConstraintProcessor->CallExecute(EntityManager, Context);
-        }
-        FacingFinalizeProcessor->CallExecute(EntityManager, Context);
-      }
     });
-    const bool bRequiresCombatCommit = Pipeline->IsRangedProjectileCombat()
-      || (Pipeline->GetRules().Scenario
-          == ECrowdDemoScenario::SimRoundSoftPressure
-        && Pipeline->GetRules().SoftPressureTestCase
-          == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse);
-    if (bRequiresCombatCommit
-      && !Pipeline->IsPreparedCombatBoundaryCommitCurrent())
+    if (Pipeline->GetBoundaryTransactionState()
+      == ECrowdBoundaryTransactionState::Working)
     {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoCombatBoundaryCommitMissing step=%d"),
-        Pipeline->GetCurrentFixedStepIndex());
-      break;
+      // The result is intentionally consumed by a later game frame.
+      return;
     }
-    if (!Pipeline->IsPreparedMovementBoundaryCommitCurrent())
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoMovementBoundaryCommitMissing step=%d"),
-        Pipeline->GetCurrentFixedStepIndex());
-      break;
-    }
-    bool bFinalCommitApplied = true;
-    MeasureStage(ECrowdDemoRoundPerformanceStage::Commit, [&]
-    {
-      const double CommitStartSeconds = FPlatformTime::Seconds();
-      FacingFinalizeProcessor->CallExecute(EntityManager, Context);
-      bFinalCommitApplied =
-        !Pipeline->IsPreparedMovementBoundaryCommitCurrent()
-        && Pipeline->IsMovementFinalizeAppliedCurrent()
-        && (!bRequiresCombatCommit
-          || !Pipeline->IsPreparedCombatBoundaryCommitCurrent());
-      if (!bFinalCommitApplied)
-        return;
-      if (!Pipeline->MarkBoundaryCommitted(
-          (FPlatformTime::Seconds() - CommitStartSeconds) * 1000.0))
-      {
-        bFinalCommitApplied = false;
-        return;
-      }
-      if (World->GetNetMode() == NM_Client)
-      {
-        ClientPredictionCommitProcessor->CallExecute(EntityManager, Context);
-      }
-      else
-      {
-        AuthorityCommitProcessor->CallExecute(EntityManager, Context);
-      }
-      PostFinalizeMetricsProcessor->CallExecute(EntityManager, Context);
-      if (World->GetNetMode() != NM_Client)
-        CheckpointPublisherProcessor->CallExecute(EntityManager, Context);
-      Pipeline->FinishFixedStep();
-    });
-    if (!bFinalCommitApplied)
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoBoundaryFinalCommitRejected step=%d"),
-        Pipeline->GetCurrentFixedStepIndex());
-      break;
-    }
-    Pipeline->RecordFixedStepPerformance(static_cast<float>(
-      (FPlatformTime::Seconds() - FixedStepStartSeconds) * 1000.0));
-    ++ExecutedSteps;
-    const bool bBacklogRemains = Pipeline->IsActive()
-      && Pipeline->GetSimulatedServerTimeSeconds() + Pipeline->GetCurrentFixedStepSeconds()
-        <= TargetServerTime + KINDA_SMALL_NUMBER;
-    const double PipelineFrameCpuMilliseconds =
-      (FPlatformTime::Seconds() - PipelineFrameStartSeconds) * 1000.0;
-    if (bBacklogRemains
-      && PipelineFrameCpuMilliseconds >= MaxFixedStepCatchupCpuMilliseconds)
-    {
-      bHitCatchupCpuBudget = true;
-      break;
-    }
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoBoundaryDispatchDidNotEnterWorking step=%d state=%d"),
+      Pipeline->GetCurrentFixedStepIndex(),
+      static_cast<int32>(Pipeline->GetBoundaryTransactionState()));
+    Pipeline->FailFixedStep();
+    };
+    TrySubmitBoundary();
   }
   const bool bHitFixedStepLimit = ExecutedSteps >= MaxFixedStepsPerFrame
     && Pipeline->IsActive()
-    && Pipeline->GetSimulatedServerTimeSeconds() + Pipeline->GetCurrentFixedStepSeconds()
+    && Pipeline->GetScheduledServerTimeSeconds() + Pipeline->GetCurrentFixedStepSeconds()
       <= TargetServerTime + KINDA_SMALL_NUMBER;
   Pipeline->RecordPipelineFramePerformance(
     ExecutedSteps, TargetServerTime, bHitFixedStepLimit, bHitCatchupCpuBudget);
@@ -6274,7 +6338,7 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
       const double PipelineFrameCpuMilliseconds =
         (FPlatformTime::Seconds() - PipelineFrameStartSeconds) * 1000.0;
       const float BacklogMilliseconds = FMath::Max(
-        0.0f, TargetServerTime - Pipeline->GetSimulatedServerTimeSeconds()) * 1000.0f;
+        0.0f, TargetServerTime - Pipeline->GetScheduledServerTimeSeconds()) * 1000.0f;
       UE_LOG(LogTemp, Display,
         TEXT("CrowdDemoCatchupBudget role=%s steps=%d cpu_ms=%.3f backlog_ms=%.3f consecutive=%d stages_ms=[business=%.3f flow=%.3f topology=%.3f demand=%.3f plan=%.3f guidance=%.3f compose=%.3f local=%.3f particle=%.3f facing_finalize=%.3f commit=%.3f] source=MassPipeline"),
         World->GetNetMode() == NM_Client ? TEXT("client") : TEXT("server"),

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "HAL/Event.h"
 #include "MassCrowdRuntimeBridge.h"
 #include "MassEntityHandle.h"
 #include "Tasks/Task.h"
@@ -139,6 +138,13 @@ enum class ECrowdBoundaryTransactionState : uint8
   Failed
 };
 
+enum class ECrowdBoundaryPollResult : uint8
+{
+  Pending = 0,
+  Ready,
+  Failed
+};
+
 struct FCrowdBoundaryPhaseTimings
 {
   double GatherMilliseconds = 0.0;
@@ -150,11 +156,19 @@ struct FCrowdBoundaryPhaseTimings
   double CommitMilliseconds = 0.0;
 };
 
+struct FCrowdBoundaryTaskTimings
+{
+  double QueueMilliseconds = 0.0;
+  double ExecutionMilliseconds = 0.0;
+  double EndToEndMilliseconds = 0.0;
+};
+
 struct FCrowdBoundaryCompletedTask
 {
   FCrowdBoundaryTaskKey Key;
   uint32 TelemetryId = 0;
   FCrowdBoundaryTaskResult Result;
+  FCrowdBoundaryTaskTimings Timings;
 };
 
 struct FCrowdBoundaryOrchestratorResult
@@ -347,7 +361,7 @@ public:
     FCrowdBoundaryTaskBody&& Body);
 
   bool Dispatch();
-  bool WaitAndDrain();
+  ECrowdBoundaryPollResult PollAndDrain();
 
   bool SealMergedPlan(
     const FCrowdMassCommitPlan& CommitPlan,
@@ -382,7 +396,6 @@ private:
   FCrowdMassBoundarySnapshot Snapshot;
   FCrowdBoundaryPhaseTimings Timings;
   TArray<TUniquePtr<FTaskNode>> Nodes;
-  FEventRef CompletionEvent{EEventMode::ManualReset};
   UE::Tasks::FTask CompletionTask;
   ECrowdBoundaryTransactionState State =
     ECrowdBoundaryTransactionState::Idle;

@@ -6,6 +6,14 @@
 
 [INFERRED][HIGH] 本矩阵是继续拆分 archetype 前的约束：中间数据所有权未收敛前，不把同一份兼容债务复制到多个 archetype。
 
+## 1.1 2026-07-30 异步Boundary目标覆盖
+
+[COMPUTED][HIGH] 当前查询数量与持久Fragment所有权仍按下表执行；旧“一次Dispatch、一次Wait”已替换为单槽Runner的跨帧Dispatch/Poll，唯一GT writer合同不变。
+
+[INFERRED][HIGH] 目标查询顺序为Plan/Correction Apply→Result完整预验证与唯一Commit→Post-Commit Publish→下一Request canonical Gather/Submit→Visual。Pending帧不执行Commit或新Gather，只继续其他GT与视觉阶段。
+
+[INFERRED][HIGH] 目标架构继续保留完整集合预验证和唯一写回，不以减少Mass遍历为理由合并两者；详细线程与Mailbox合同见`AsyncFixedStepBoundaryArchitecture.md`。
+
 ## 2. Fixed-step 查询矩阵
 
 | 阶段 | 当前 Mass 遍历 | 所有权与保留理由 | 状态 |
@@ -56,9 +64,9 @@
 
 [INFERRED][HIGH] P1允许保留独立验证遍历和持久诊断写回；它必须删除的是WORK输入对基础fragments的重复读取、提交后立即等待造成的虚假并行，以及验证失败后的任何部分写入。
 
-[COMPUTED][HIGH] 2026-07-23最终检查点：公共Runtime record/CommitPlan以StableEntityRef排序，旧Round不存在`Async/TFuture/Future.Get`，Business/Combat与Movement/Particle/Facing进入同一typed DAG，完整验证后由唯一writer提交。P1查询所有权合同已关闭。
+[COMPUTED][HIGH] 2026-07-23最终检查点：公共Runtime record/CommitPlan以StableEntityRef排序，旧Round不存在`Async/TFuture/Future.Get`，Business/Combat与Movement/Particle/Facing进入同一typed DAG，完整验证后由唯一writer提交。P1查询所有权和原子提交合同在当时关闭，但非阻塞调度未关闭并由AB阶段接管。
 
-[COMPUTED][HIGH] 2026-07-28复核：Round生产路径仍只有一次canonical gather、一次Dispatch、一次Wait和一个最终写入入口；J/P4通过`FCrowdMassBoundaryRunner`提交实体移动，场景Coordinator不拥有第二套Mass位置写入。7948–7951 Round与7939 J回归无VIOLATION。
+[COMPUTED][HIGH] 2026-07-30当前Round生产路径每步只有一次canonical gather、一次Dispatch、跨帧非阻塞Poll和一个最终写入入口；Mixed/Friendly也通过持久`FCrowdMassBoundaryRunner`提交实体移动，场景Coordinator不拥有第二套Mass位置写入。
 
 [COMPUTED][HIGH] 第26切片把上一boundary的`ConsecutiveFinalSettleSteps`并入`BoundaryGather`，因此FacingFinalize由3次Mass遍历降为2次。剩余两次分别承担“写入前完整集合预验证”和“唯一原子提交”，当前没有证据支持在不削弱整批失败原子性的前提下继续合并。
 

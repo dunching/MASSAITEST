@@ -47,7 +47,9 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
       && Coordinator.Contains(TEXT("ECrowdReliableStateKind::Task"))
       && Coordinator.Contains(TEXT("DrainClientApplyFrames")));
   TestTrue(TEXT("scene movement uses product boundary and Nav flow"),
-    Coordinator.Contains(TEXT("FCrowdMassBoundaryRunner Runner"))
+    Coordinator.Contains(
+      TEXT("MakeUnique<FCrowdMassBoundaryRunner>()"))
+      && Coordinator.Contains(TEXT("PollAndCommitProductBoundary"))
       && Coordinator.Contains(TEXT("BuildOrRefreshNavGraph"))
       && Coordinator.Contains(TEXT("AcquireFlow"))
       && Coordinator.Contains(TEXT("ApplyProductBoundaryCommit")));

@@ -24,10 +24,15 @@ private:
   TWeakObjectPtr<ACrowdDemoReplicator> CachedVisualOwner;
   double LastVisualLogSeconds = 0.0;
   double LastTargetMarkerDrawSeconds = -1.0;
+  double LastScenarioStateLabelDrawSeconds = -1.0;
   uint32 LastVisualStateMask = 0;
   int32 LastHitFlashActiveCount = 0;
   uint64 PresentationSequence = 0;
   TSet<FCrowdStableEntityRef> PresentedEntities;
+  TMap<int32, uint32> LastScenarioStateSignatureByAgentId;
+  FString ScenarioStateSidecarPath;
+  int32 LastScenarioStateRoundId = INDEX_NONE;
   bool bPresentationProfileRegistered = false;
   bool bRebuildInstancesNextFrame = false;
+  bool bScenarioStateOptionsParsed = false;
 };

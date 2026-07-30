@@ -129,6 +129,12 @@ void ACrowdDemoFriendlyLogisticsCoordinator::BeginPlay()
 void ACrowdDemoFriendlyLogisticsCoordinator::EndPlay(
   const EEndPlayReason::Type EndPlayReason)
 {
+  if (BehaviorSourceRuntime && PendingProductBoundary.IsValid())
+  {
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      PendingProductBoundary->PendingCommandCheckpoint);
+  }
+  PendingProductBoundary.Reset();
   if (BehaviorSourceRuntime && bBehaviorEntitiesRegistered)
   {
     TArray<FCrowdStableEntityRef> EntityRefs;
@@ -159,14 +165,18 @@ void ACrowdDemoFriendlyLogisticsCoordinator::Tick(const float DeltaSeconds)
     while (ProductAccumulatorSeconds >= ProductFixedStepSeconds
       && ExecutedSteps < 4)
     {
-      ProductAccumulatorSeconds -= ProductFixedStepSeconds;
-      if (!RunProductBoundary(ProductFixedStepSeconds))
+      const EProductBoundaryAdvance Advance =
+        RunProductBoundary(ProductFixedStepSeconds);
+      if (Advance == EProductBoundaryAdvance::Pending)
+        break;
+      if (Advance == EProductBoundaryAdvance::Failed)
       {
         UE_LOG(LogTemp, Error,
           TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=product_boundary step=%d"),
           ProductFixedStepIndex);
         break;
       }
+      ProductAccumulatorSeconds -= ProductFixedStepSeconds;
       AdvanceObservedState();
       ++ExecutedSteps;
     }
@@ -220,7 +230,8 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::TryInitialize()
   return true;
 }
 
-bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
+ACrowdDemoFriendlyLogisticsCoordinator::EProductBoundaryAdvance
+ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   const float FixedStepSeconds)
 {
   UWorld* World = GetWorld();
@@ -228,16 +239,22 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     World ? World->GetSubsystem<UCrowdDemoMassSubsystem>() : nullptr;
   UMassCrowdRuntimeSubsystem* Runtime =
     World ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>() : nullptr;
+  if (PendingProductBoundary.IsValid())
+  {
+    return Mass
+      ? PollAndCommitProductBoundary(*Mass)
+      : EProductBoundaryAdvance::Failed;
+  }
   if (!Mass || !Runtime || !bInitialized
     || Mass->GetTrackedAgentCount() != FriendlyPopulation)
-    return false;
+    return EProductBoundaryAdvance::Failed;
 
   FCrowdMassBoundarySnapshot Snapshot;
   TArray<FCrowdMassCommitTarget> Targets;
   if (!Mass->BuildProductBoundarySnapshot(
       ProductFixedStepIndex, ProductPlanRevision,
       Snapshot, Targets))
-    return false;
+    return EProductBoundaryAdvance::Failed;
   AuthorityLocations.Reset();
   for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
     AuthorityLocations.Add(
@@ -263,7 +280,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       Binding.ProfileKey = CrowdDemoBehaviorSchemas::FullProfile;
       if (!BehaviorSourceRuntime->RegisterEntity(
           Agent.AgentFacts.StableEntityRef, Binding))
-        return false;
+        return EProductBoundaryAdvance::Failed;
       BehaviorEntityRefsBySlot.Add(
         Agent.AgentFacts.StableEntityRef.StableEntityId,
         Agent.AgentFacts.StableEntityRef);
@@ -281,11 +298,11 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       continue;
     if (RegisteredRef && RegisteredRef->IsValid()
       && !BehaviorSourceRuntime->RemoveEntity(*RegisteredRef))
-      return false;
+      return EProductBoundaryAdvance::Failed;
     FCrowdCapabilityBinding Binding;
     Binding.ProfileKey = CrowdDemoBehaviorSchemas::FullProfile;
     if (!BehaviorSourceRuntime->RegisterEntity(CurrentRef, Binding))
-      return false;
+      return EProductBoundaryAdvance::Failed;
     BehaviorEntityRefsBySlot.Add(
       CurrentRef.StableEntityId, CurrentRef);
   }
@@ -316,7 +333,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
         {
           return Agent.AgentFacts.StableEntityRef == Carrier;
         });
-    if (!CarrierAgent) return false;
+    if (!CarrierAgent) return EProductBoundaryAdvance::Failed;
     FCrowdDemoFriendlyLogisticsPlanningFact PlanningFact;
     PlanningFact.EntityRef = Carrier;
     PlanningFact.TaskRef = Task.TaskRef;
@@ -336,14 +353,14 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
           ProductFixedStepIndex,
           static_cast<uint64>(ProductFixedStepIndex) + 1,
           PlanningFact, PlannerDecision))
-      return false;
+      return EProductBoundaryAdvance::Failed;
     StagedPlannerDecisionHash = PlannerDecision.StableHash;
   }
   else
   {
     if (!FCrowdDemoBusinessScenarioContract::EvaluateNoBusiness(
         ProductFixedStepIndex, StagedPlannerDecisionHash))
-      return false;
+      return EProductBoundaryAdvance::Failed;
   }
 
   TArray<FCrowdDemoPlanningRuntimeEntityFact> RuntimeFacts;
@@ -367,12 +384,12 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       ProductFixedStepIndex,
       RuntimeFacts,
       Decisions))
-    return false;
+    return EProductBoundaryAdvance::Failed;
   FCrowdBehaviorPreparedBoundary PreparedBehavior;
   if (!BehaviorSourceRuntime->PrepareBoundary(
       ProductFixedStepIndex, PreparedBehavior)
     || !BehaviorSourceRuntime->ValidatePrepared(PreparedBehavior))
-    return false;
+    return EProductBoundaryAdvance::Failed;
   FVector ResolvedObjective = Objective;
   if (bHasPlannerDecision)
   {
@@ -384,7 +401,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
         });
     if (!CarrierBehavior
       || !CarrierBehavior->ResolvedChannels.MovementGoal.bHasGoal)
-      return false;
+      return EProductBoundaryAdvance::Failed;
     ResolvedObjective =
       CarrierBehavior->ResolvedChannels.MovementGoal.Location;
   }
@@ -397,7 +414,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       UE_LOG(LogTemp, Warning,
         TEXT("CrowdDemoFriendlyLogistics diagnostic=nav_graph_failed reason=%s"),
         *Runtime->GetNavGraphResource().FailureReason);
-      return false;
+      return EProductBoundaryAdvance::Failed;
     }
     const FCrowdNavGraphResource& GraphResource =
       Runtime->GetNavGraphResource();
@@ -412,7 +429,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
         TEXT("CrowdDemoFriendlyLogistics diagnostic=objective_attach_failed objective=%s nodes=%d"),
         *ResolvedObjective.ToCompactString(), Graph.IsValid()
           ? Graph->Nodes.Num() : 0);
-      return false;
+      return EProductBoundaryAdvance::Failed;
     }
     FCrowdNavFlowHandle Handle;
     const FCrowdNavFlowKey Key{
@@ -422,27 +439,27 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       UE_LOG(LogTemp, Warning,
         TEXT("CrowdDemoFriendlyLogistics diagnostic=flow_acquire_failed goal=%llu layer=%u"),
         GoalNodeId, NavLayer);
-      return false;
+      return EProductBoundaryAdvance::Failed;
     }
     Flow = Runtime->ResolveFlow(Handle);
     const bool bReleased = Runtime->ReleaseFlow(Handle);
     if (!Flow.IsValid() || !bReleased)
-      return false;
+      return EProductBoundaryAdvance::Failed;
   }
 
-  struct FProductMovementWork
-  {
-    FCrowdMassCommitPlan Plan;
-    bool bCompleted = false;
-  };
   const TSharedRef<FProductMovementWork, ESPMode::ThreadSafe> Work =
     MakeShared<FProductMovementWork, ESPMode::ThreadSafe>();
   const float AcceptanceRadius = AcceptanceRadiusCm;
   const float CarrierSpeed = MaximumCarrierSpeedCmps;
-  FCrowdMassBoundaryRunner Runner;
-  if (!Runner.Begin(Snapshot, 0.0))
-    return false;
-  if (!Runner.AddTask(
+  TUniquePtr<FPendingProductBoundary> Pending =
+    MakeUnique<FPendingProductBoundary>();
+  Pending->Runner = MakeUnique<FCrowdMassBoundaryRunner>();
+  const FCrowdBoundaryTransactionId TransactionId =
+    FCrowdBoundaryTransactionId::FromSnapshot(
+      Snapshot, ProductBoundaryGeneration);
+  if (!Pending->Runner->Begin(Snapshot, 0.0, TransactionId))
+    return EProductBoundaryAdvance::Failed;
+  if (!Pending->Runner->AddTask(
       {{3}, {301}, 0}, {},
       [Snapshot, Carrier, ResolvedObjective, Graph, Flow,
         FixedStepSeconds, Work, AcceptanceRadius, CarrierSpeed]()
@@ -527,16 +544,75 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
         Work->bCompleted = true;
         return FCrowdBoundaryTaskResult::Success(PlanHash);
       }))
-    return false;
-  if (!Runner.Dispatch() || !Runner.WaitAndDrain()
-    || !Work->bCompleted)
+    return EProductBoundaryAdvance::Failed;
+  if (!Pending->Runner->Dispatch())
+    return EProductBoundaryAdvance::Failed;
+  Pending->Work = Work;
+  Pending->Snapshot = Snapshot;
+  Pending->Targets = MoveTemp(Targets);
+  Pending->PreparedBehavior = MoveTemp(PreparedBehavior);
+  Pending->Task = Task;
+  Pending->Carrier = Carrier;
+  Pending->PlannerDecisionHash = StagedPlannerDecisionHash;
+  Pending->PendingCommandCheckpoint = PendingCommandCheckpoint;
+  Pending->bMoveToSource = bMoveToSource;
+  Pending->bMoveToSink = bMoveToSink;
+  PendingRollback.bCommitted = true;
+  PendingProductBoundary = MoveTemp(Pending);
+  return EProductBoundaryAdvance::Pending;
+}
+
+ACrowdDemoFriendlyLogisticsCoordinator::EProductBoundaryAdvance
+ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
+  UCrowdDemoMassSubsystem& MassSubsystem)
+{
+  if (!PendingProductBoundary.IsValid()
+    || !PendingProductBoundary->Runner.IsValid()
+    || !PendingProductBoundary->Work.IsValid())
+    return EProductBoundaryAdvance::Failed;
+
+  FPendingProductBoundary& Pending = *PendingProductBoundary;
+  FCrowdMassBoundaryRunner& Runner = *Pending.Runner;
+  const ECrowdBoundaryPollResult PollResult = Runner.PollAndDrain();
+  if (PollResult == ECrowdBoundaryPollResult::Pending)
+    return EProductBoundaryAdvance::Pending;
+
+  const auto FailPending = [this]()
+  {
+    if (BehaviorSourceRuntime && PendingProductBoundary.IsValid())
+    {
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        PendingProductBoundary->PendingCommandCheckpoint);
+    }
+    PendingProductBoundary.Reset();
+    ++ProductBoundaryGeneration;
+    if (ProductBoundaryGeneration == 0)
+      ProductBoundaryGeneration = 1;
+    return EProductBoundaryAdvance::Failed;
+  };
+  if (PollResult == ECrowdBoundaryPollResult::Failed
+    || !Pending.Work->bCompleted)
   {
     const FCrowdBoundaryOrchestratorResult Result = Runner.BuildResult();
     UE_LOG(LogTemp, Warning,
       TEXT("CrowdDemoFriendlyLogistics diagnostic=runner_work_failed state=%d tasks=%d"),
       static_cast<int32>(Result.State), Result.Tasks.Num());
-    return false;
+    return FailPending();
   }
+
+  UCrowdDemoMassSubsystem* Mass = &MassSubsystem;
+  const FCrowdMassBoundarySnapshot& Snapshot = Pending.Snapshot;
+  const TArray<FCrowdMassCommitTarget>& Targets = Pending.Targets;
+  const FCrowdBehaviorPreparedBoundary& PreparedBehavior =
+    Pending.PreparedBehavior;
+  const FCrowdLogisticsTaskFact& Task = Pending.Task;
+  const FCrowdStableEntityRef Carrier = Pending.Carrier;
+  const uint64 StagedPlannerDecisionHash =
+    Pending.PlannerDecisionHash;
+  const bool bMoveToSource = Pending.bMoveToSource;
+  const bool bMoveToSink = Pending.bMoveToSink;
+  const TSharedPtr<FProductMovementWork, ESPMode::ThreadSafe>& Work =
+    Pending.Work;
 
   TArray<FCrowdBoundaryPreparedPatch> Patches;
   FCrowdLogisticsPreparedPatch LogisticsPatch;
@@ -554,7 +630,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     : nullptr;
   if (CarrierBehavior
     && CarrierBehavior->ResolvedChannels.Business.Num() > 1)
-    return false;
+    return FailPending();
   if (CarrierBehavior
     && CarrierBehavior->ResolvedChannels.Business.Num() == 1)
   {
@@ -563,7 +639,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     PlannerCommitId = Contribution.CommitId;
     if (Contribution.InstigatorRef != Carrier
       || Contribution.TargetRef != Task.TaskRef)
-      return false;
+      return FailPending();
     if (Contribution.AdapterId
         == CrowdDemoBehaviorAdapterIds::CargoPickup
       && bMoveToSource)
@@ -580,7 +656,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     }
     else
     {
-      return false;
+      return FailPending();
     }
     bHasLogisticsPatch = true;
   }
@@ -592,7 +668,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       Store.GetSink().Revision};
     if (Store.Prepare(Request, LogisticsPatch)
       != ECrowdLogisticsPrepareResult::Prepared)
-      return false;
+      return FailPending();
     FCrowdBoundaryPreparedPatch& Patch =
       Patches.AddDefaulted_GetRef();
     Patch.ApplyPhase = {2};
@@ -612,7 +688,7 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       Work->Plan, Patches, Targets, 0.0)
     || !Runner.MarkValidated(0.0)
     || !Mass->ApplyProductBoundaryCommit(Work->Plan, Targets))
-    return false;
+    return FailPending();
   if (bHasLogisticsPatch)
   {
     Store.ApplyPrepared(LogisticsPatch);
@@ -620,10 +696,9 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     ++AppliedCount;
   }
   if (!Runner.MarkCommitted(0.0))
-    return false;
+    return FailPending();
   checkf(BehaviorSourceRuntime->CommitPrepared(PreparedBehavior),
     TEXT("Validated Friendly behavior transaction changed before apply"));
-  PendingRollback.bCommitted = true;
   LastProductCommitHash = Runner.GetCommitEnvelope().StableHash;
   LastPlannerDecisionHash = StagedPlannerDecisionHash;
 
@@ -642,7 +717,11 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   if (bHasLogisticsPatch)
     PublishState();
   ++ProductFixedStepIndex;
-  return true;
+  PendingProductBoundary.Reset();
+  ++ProductBoundaryGeneration;
+  if (ProductBoundaryGeneration == 0)
+    ProductBoundaryGeneration = 1;
+  return EProductBoundaryAdvance::Committed;
 }
 
 void ACrowdDemoFriendlyLogisticsCoordinator::PublishMovementCorrections(

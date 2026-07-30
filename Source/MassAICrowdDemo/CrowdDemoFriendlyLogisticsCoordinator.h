@@ -11,6 +11,7 @@
 class APlayerController;
 class AMassCrowdReplicationActor;
 class UMassCrowdPresentationSubsystem;
+class UCrowdDemoMassSubsystem;
 
 UCLASS()
 class MASSAICROWDDEMO_API ACrowdDemoFriendlyLogisticsCoordinator final
@@ -26,6 +27,34 @@ public:
   virtual void Tick(float DeltaSeconds) override;
 
 private:
+  enum class EProductBoundaryAdvance : uint8
+  {
+    Pending,
+    Committed,
+    Failed
+  };
+
+  struct FProductMovementWork
+  {
+    FCrowdMassCommitPlan Plan;
+    bool bCompleted = false;
+  };
+
+  struct FPendingProductBoundary
+  {
+    TUniquePtr<FCrowdMassBoundaryRunner> Runner;
+    TSharedPtr<FProductMovementWork, ESPMode::ThreadSafe> Work;
+    FCrowdMassBoundarySnapshot Snapshot;
+    TArray<FCrowdMassCommitTarget> Targets;
+    FCrowdBehaviorPreparedBoundary PreparedBehavior;
+    FCrowdLogisticsTaskFact Task;
+    FCrowdStableEntityRef Carrier;
+    uint64 PlannerDecisionHash = 0;
+    int32 PendingCommandCheckpoint = 0;
+    bool bMoveToSource = false;
+    bool bMoveToSink = false;
+  };
+
   FCrowdLogisticsTransactionStore Store;
   FCrowdBehaviorSourceRuntime* BehaviorSourceRuntime = nullptr;
   TMap<uint64, FCrowdStableEntityRef> BehaviorEntityRefsBySlot;
@@ -73,6 +102,8 @@ private:
   uint64 LastProductCommitHash = 0;
   uint64 LastPlannerDecisionHash = 0;
   uint64 PresentationSequence = 0;
+  uint64 ProductBoundaryGeneration = 1;
+  TUniquePtr<FPendingProductBoundary> PendingProductBoundary;
   int32 CargoAttachCount = 0;
   int32 CargoDetachCount = 0;
   int32 CargoVisibleCount = 0;
@@ -95,7 +126,9 @@ private:
   bool bDeliveredEvidenceRequested = false;
 
   bool TryInitialize();
-  bool RunProductBoundary(float FixedStepSeconds);
+  EProductBoundaryAdvance RunProductBoundary(float FixedStepSeconds);
+  EProductBoundaryAdvance PollAndCommitProductBoundary(
+    UCrowdDemoMassSubsystem& Mass);
   void PublishMovementCorrections(
     const FCrowdMassCommitPlan& Plan);
   bool IsCarrierWithin(

@@ -555,6 +555,14 @@ void ACrowdDemoMixedSandboxCoordinator::BeginPlay()
 void ACrowdDemoMixedSandboxCoordinator::EndPlay(
   const EEndPlayReason::Type EndPlayReason)
 {
+  if (PendingMixedMovement.IsValid()
+    && PendingMixedMovement->Finalize)
+  {
+    TUniqueFunction<void(bool, int32, uint64)> Finalize =
+      MoveTemp(PendingMixedMovement->Finalize);
+    PendingMixedMovement.Reset();
+    Finalize(false, 0, 0);
+  }
   if (UWorld* World = GetWorld())
   {
     if (HasAuthority())
@@ -625,8 +633,17 @@ void ACrowdDemoMixedSandboxCoordinator::Tick(const float DeltaSeconds)
   if (HasAuthority() && World->GetTimeSeconds() >= MixedStartDelaySeconds)
   {
     FixedStepAccumulatorSeconds += FMath::Max(DeltaSeconds, 0.0f);
+    if (PendingMixedMovement.IsValid()
+      && !PollProductMovementBoundary())
+    {
+      ++StaleRejectCount;
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=boundary_poll fixed_step=%lld"),
+        FixedStepIndex);
+    }
     int32 Steps = 0;
-    while (FixedStepAccumulatorSeconds >= MixedFixedStepSeconds && Steps < 8)
+    while (!PendingMixedMovement.IsValid()
+      && FixedStepAccumulatorSeconds >= MixedFixedStepSeconds && Steps < 8)
     {
       FixedStepAccumulatorSeconds -= MixedFixedStepSeconds;
       AdvanceServerFixedStep();
@@ -1338,7 +1355,6 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   const double StartSeconds = FPlatformTime::Seconds();
   double EvaluationEndSeconds = StartSeconds;
   double PrepareEndSeconds = StartSeconds;
-  double MovementEndSeconds = StartSeconds;
   ++FixedStepIndex;
   if (!RebuildSpatialSafety())
   {
@@ -1652,21 +1668,54 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   const int32 StagedRangedAttackIntentCount =
     RangedAttackIntentCount
     + PreparedAttack.RangedIntentCount;
-  int32 StagedSafetyHolds = 0;
-  uint64 StagedBoundaryCommitHash = 0;
-  if (!RunProductMovementBoundary(
-      PreparedBehavior, StagedSlots,
-      StagedSafetyHolds, StagedBoundaryCommitHash))
+  const TSharedRef<TArray<FSlotState>, ESPMode::ThreadSafe>
+    StagedSlotsState =
+      MakeShared<TArray<FSlotState>, ESPMode::ThreadSafe>(
+        MoveTemp(StagedSlots));
+  TUniqueFunction<void(bool, int32, uint64)> FinalizeBoundary =
+    [this,
+      StagedSlotsState,
+      StartSeconds,
+      EvaluationEndSeconds,
+      PrepareEndSeconds,
+      OriginalPendingSourceCommandCount,
+      PreparedBehavior,
+      PreparedFacts = MoveTemp(PreparedFacts),
+      PreparedProjectile = MoveTemp(PreparedProjectile),
+      StagedBusinessLedger = MoveTemp(StagedBusinessLedger),
+      StagedBehaviorTransitionCount,
+      StagedDuplicateCommitCount,
+      StagedSeenBehaviorBits,
+      StagedPendingCombatDeathSlot,
+      PlannerDecisionHash = PlannerDecisionBatch.StableHash,
+      StagedProjectileSpawnedCount,
+      StagedProjectileImpactCount,
+      StagedProjectileDamageCount,
+      StagedProjectileExpiredCount,
+      StagedProjectileActiveCount,
+      StagedProjectileDuplicateCount,
+      StagedProjectileTraceHash,
+      bStagedProjectileBatchSpawned,
+      StagedAttackIntentCount,
+      StagedAttackImpactCount,
+      StagedAttackDamageCount,
+      StagedAttackDeathCount,
+      StagedAttackTargetSwitches,
+      StagedMeleeAttackIntentCount,
+      StagedMidRangeAttackIntentCount,
+      StagedRangedAttackIntentCount](
+        const bool bMovementSucceeded,
+        const int32 StagedSafetyHolds,
+        const uint64 StagedBoundaryCommitHash) mutable
   {
-    BehaviorSourceRuntime->RollbackPendingCommandsTo(
-      OriginalPendingSourceCommandCount);
-    ++StaleRejectCount;
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=product_boundary fixed_step=%lld"),
-      FixedStepIndex);
-    return;
-  }
-  MovementEndSeconds = FPlatformTime::Seconds();
+    if (!bMovementSucceeded)
+    {
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        OriginalPendingSourceCommandCount);
+      return;
+    }
+    TArray<FSlotState>& StagedSlots = *StagedSlotsState;
+    const double MovementEndSeconds = FPlatformTime::Seconds();
   UMassEntitySubsystem* ProjectileEntitySubsystem =
     GetWorld()
       ? GetWorld()->GetSubsystem<UMassEntitySubsystem>()
@@ -1691,7 +1740,7 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   PendingCombatDeathSlot = StagedPendingCombatDeathSlot;
   SafetyHoldCount += StagedSafetyHolds;
   LastBoundaryCommitHash = StagedBoundaryCommitHash;
-  LastPlannerDecisionHash = PlannerDecisionBatch.StableHash;
+  LastPlannerDecisionHash = PlannerDecisionHash;
   ProjectileSpawnedCount = StagedProjectileSpawnedCount;
   ProjectileImpactCount = StagedProjectileImpactCount;
   ProjectileDamageCount = StagedProjectileDamageCount;
@@ -1794,6 +1843,19 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       (EndSeconds - StartSeconds) * 1000.0);
   }
   if (ServerStepMilliseconds.Num() > 2048) ServerStepMilliseconds.RemoveAt(0, 512);
+  };
+
+  if (!BeginProductMovementBoundary(
+      PreparedBehavior, StagedSlotsState,
+      MoveTemp(FinalizeBoundary)))
+  {
+    BehaviorSourceRuntime->RollbackPendingCommandsTo(
+      OriginalPendingSourceCommandCount);
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedSandbox role=server stage=product_boundary_submit fixed_step=%lld"),
+      FixedStepIndex);
+  }
 }
 
 bool ACrowdDemoMixedSandboxCoordinator::PlanBusinessBoundary(
@@ -1978,12 +2040,15 @@ bool ACrowdDemoMixedSandboxCoordinator::PlanBusinessBoundary(
   return true;
 }
 
-bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
+bool ACrowdDemoMixedSandboxCoordinator::BeginProductMovementBoundary(
   const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
-  TArray<FSlotState>& InOutSlots,
-  int32& OutSafetyHolds,
-  uint64& OutCommitHash)
+  const TSharedRef<TArray<FSlotState>, ESPMode::ThreadSafe>&
+    InOutSlotsState,
+  TUniqueFunction<void(bool, int32, uint64)>&& Finalize)
 {
+  if (PendingMixedMovement.IsValid() || !Finalize)
+    return false;
+  TArray<FSlotState>& InOutSlots = *InOutSlotsState;
   const double ProductStartSeconds =
     FPlatformTime::Seconds();
   const auto RejectBoundary = [this](const TCHAR* Reason)
@@ -2322,28 +2387,21 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
     }
   }
 
-  struct FMixedMovementWork
-  {
-    FCrowdMassCommitPlan Plan;
-    TArray<FCrowdLocalPredictiveGrantState> GrantStates;
-    TMap<int32, int32> BlockedAgeByAgentId;
-    double MovementMilliseconds = 0.0;
-    double ParticleMilliseconds = 0.0;
-    double FacingMilliseconds = 0.0;
-    int32 SafetyHolds = 0;
-    int32 FailureCode = 0;
-    bool bCompleted = false;
-  };
   const TSharedRef<FMixedMovementWork, ESPMode::ThreadSafe> Work =
     MakeShared<FMixedMovementWork, ESPMode::ThreadSafe>();
   const double GatherEndSeconds =
     FPlatformTime::Seconds();
-  FCrowdMassBoundaryRunner Runner;
-  if (!Runner.Begin(Snapshot, 0.0))
+  TUniquePtr<FPendingMixedMovement> Pending =
+    MakeUnique<FPendingMixedMovement>();
+  Pending->Runner = MakeUnique<FCrowdMassBoundaryRunner>();
+  const FCrowdBoundaryTransactionId TransactionId =
+    FCrowdBoundaryTransactionId::FromSnapshot(
+      Snapshot, ProductBoundaryGeneration);
+  if (!Pending->Runner->Begin(Snapshot, 0.0, TransactionId))
     return RejectBoundary(TEXT("runner_begin"));
   PipelineInput.ParticleTemplate.Snapshot =
     MoveTemp(Snapshot);
-  if (!Runner.AddTask(
+  if (!Pending->Runner->AddTask(
       {{3}, {301}, 0}, {},
       [PipelineInput = MoveTemp(PipelineInput),
        ResolvedVelocities = MoveTemp(ResolvedVelocities),
@@ -2430,15 +2488,84 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
         return FCrowdBoundaryTaskResult::Success(WorkHash);
       }))
     return RejectBoundary(TEXT("runner_add"));
-  if (!Runner.Dispatch() || !Runner.WaitAndDrain()
-    || !Work->bCompleted
-    )
+  if (!Pending->Runner->Dispatch())
+    return RejectBoundary(TEXT("runner_dispatch"));
+  Pending->Work = Work;
+  Pending->StagedSlots = InOutSlotsState;
+  Pending->Snapshot = Snapshot;
+  Pending->Targets = MoveTemp(Targets);
+  Pending->PreparedBehavior = PreparedBehavior;
+  Pending->ResolvedInteractionLayers =
+    MoveTemp(ResolvedInteractionLayers);
+  Pending->ResolvedAttachedNodeIds =
+    MoveTemp(ResolvedAttachedNodeIds);
+  Pending->Finalize = MoveTemp(Finalize);
+  Pending->ProductStartSeconds = ProductStartSeconds;
+  Pending->GatherEndSeconds = GatherEndSeconds;
+  PendingMixedMovement = MoveTemp(Pending);
+  return true;
+}
+
+bool ACrowdDemoMixedSandboxCoordinator::PollProductMovementBoundary()
+{
+  if (!PendingMixedMovement.IsValid()
+    || !PendingMixedMovement->Runner.IsValid()
+    || !PendingMixedMovement->Work.IsValid()
+    || !PendingMixedMovement->StagedSlots.IsValid()
+    || !PendingMixedMovement->Finalize)
+    return false;
+  FPendingMixedMovement& Pending = *PendingMixedMovement;
+  FCrowdMassBoundaryRunner& Runner = *Pending.Runner;
+  const ECrowdBoundaryPollResult PollResult = Runner.PollAndDrain();
+  if (PollResult == ECrowdBoundaryPollResult::Pending)
+    return true;
+
+  const auto Complete = [this](
+    const bool bSucceeded,
+    const int32 SafetyHolds,
+    const uint64 CommitHash)
   {
+    TUniqueFunction<void(bool, int32, uint64)> Finalize =
+      MoveTemp(PendingMixedMovement->Finalize);
+    PendingMixedMovement.Reset();
+    ++ProductBoundaryGeneration;
+    if (ProductBoundaryGeneration == 0)
+      ProductBoundaryGeneration = 1;
+    Finalize(bSucceeded, SafetyHolds, CommitHash);
+  };
+  const auto RejectBoundary = [this, &Complete](const TCHAR* Reason)
+  {
+    const int32 FailureCode = PendingMixedMovement.IsValid()
+      && PendingMixedMovement->Work.IsValid()
+      ? PendingMixedMovement->Work->FailureCode
+      : INDEX_NONE;
     UE_LOG(LogTemp, Warning,
-      TEXT("CrowdDemoMixedSandboxBoundaryWorkReject code=%d fixed_step=%lld"),
-      Work->FailureCode, FixedStepIndex);
+      TEXT("CrowdDemoMixedSandboxBoundaryReject reason=%s code=%d fixed_step=%lld"),
+      Reason, FailureCode, FixedStepIndex);
+    Complete(false, 0, 0);
+    return false;
+  };
+  if (PollResult == ECrowdBoundaryPollResult::Failed
+    || !Pending.Work->bCompleted)
     return RejectBoundary(TEXT("runner_work"));
-  }
+
+  UWorld* World = GetWorld();
+  UMassEntitySubsystem* EntitySubsystem =
+    World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+  if (!EntitySubsystem)
+    return RejectBoundary(TEXT("missing_entity_subsystem"));
+  TArray<FSlotState>& InOutSlots = *Pending.StagedSlots;
+  const TArray<uint32>& ResolvedInteractionLayers =
+    Pending.ResolvedInteractionLayers;
+  const TArray<uint64>& ResolvedAttachedNodeIds =
+    Pending.ResolvedAttachedNodeIds;
+  const FCrowdBehaviorPreparedBoundary& PreparedBehavior =
+    Pending.PreparedBehavior;
+  const TArray<FCrowdMassCommitTarget>& Targets = Pending.Targets;
+  const TSharedPtr<FMixedMovementWork, ESPMode::ThreadSafe>& Work =
+    Pending.Work;
+  const double ProductStartSeconds = Pending.ProductStartSeconds;
+  const double GatherEndSeconds = Pending.GatherEndSeconds;
   const double WorkEndSeconds =
     FPlatformTime::Seconds();
   const double SafetyStartSeconds = FPlatformTime::Seconds();
@@ -2567,8 +2694,8 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
   }
   MixedLocalPredictiveGrantStates =
     MoveTemp(Work->GrantStates);
-  OutSafetyHolds = Work->SafetyHolds;
-  OutCommitHash = Runner.GetCommitEnvelope().StableHash;
+  const int32 SafetyHolds = Work->SafetyHolds;
+  const uint64 CommitHash = Runner.GetCommitEnvelope().StableHash;
   checkf(Runner.MarkCommitted(0.0),
     TEXT("Validated Mixed boundary failed during final apply"));
   if (Config.PopulationLimit == MaximumMixedPopulation
@@ -2587,6 +2714,7 @@ bool ACrowdDemoMixedSandboxCoordinator::RunProductMovementBoundary(
       (SafetyEndSeconds - SafetyStartSeconds) * 1000.0,
       (ProductEndSeconds - SafetyEndSeconds) * 1000.0);
   }
+  Complete(true, SafetyHolds, CommitHash);
   return true;
 }
 

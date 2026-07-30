@@ -1,12 +1,43 @@
 #include "MassCrowdBoundaryRunner.h"
 
+FCrowdBoundaryTransactionId FCrowdBoundaryTransactionId::FromSnapshot(
+  const FCrowdMassBoundarySnapshot& Snapshot,
+  const uint64 Generation)
+{
+  FCrowdBoundaryTransactionId Result;
+  Result.Generation = Generation;
+  Result.PlanRevision = Snapshot.PlanRevision >= 0
+    ? static_cast<uint64>(Snapshot.PlanRevision)
+    : 0;
+  Result.FixedStepIndex = Snapshot.FixedStepIndex;
+  Result.SnapshotHash = Snapshot.StableHash;
+  return Result;
+}
+
 bool FCrowdMassBoundaryRunner::Begin(
   const FCrowdMassBoundarySnapshot& InSnapshot,
   const double GatherMilliseconds)
 {
-  if (bDispatched || bWaited
+  return Begin(
+    InSnapshot,
+    GatherMilliseconds,
+    FCrowdBoundaryTransactionId::FromSnapshot(InSnapshot, 1));
+}
+
+bool FCrowdMassBoundaryRunner::Begin(
+  const FCrowdMassBoundarySnapshot& InSnapshot,
+  const double GatherMilliseconds,
+  const FCrowdBoundaryTransactionId& InTransactionId)
+{
+  if (bDispatched || bDrained
     || Orchestrator.GetSnapshot().bValid)
     return false;
+  const FCrowdBoundaryTransactionId Expected =
+    FCrowdBoundaryTransactionId::FromSnapshot(
+      InSnapshot, InTransactionId.Generation);
+  if (!InTransactionId.IsValid() || InTransactionId != Expected)
+    return false;
+  TransactionId = InTransactionId;
   return Orchestrator.Begin(InSnapshot, GatherMilliseconds);
 }
 
@@ -16,7 +47,7 @@ bool FCrowdMassBoundaryRunner::AddTask(
   FCrowdBoundaryTaskBody&& Body,
   const bool bRequireOffGameThread)
 {
-  if (bDispatched || bWaited)
+  if (bDispatched || bDrained)
     return false;
   return Orchestrator.AddTask(
     Key, Prerequisites, MoveTemp(Body), bRequireOffGameThread);
@@ -26,25 +57,28 @@ bool FCrowdMassBoundaryRunner::AddTask(
   FCrowdBoundaryTaskDescriptor Descriptor,
   FCrowdBoundaryTaskBody&& Body)
 {
-  if (bDispatched || bWaited)
+  if (bDispatched || bDrained)
     return false;
   return Orchestrator.AddTask(MoveTemp(Descriptor), MoveTemp(Body));
 }
 
 bool FCrowdMassBoundaryRunner::Dispatch()
 {
-  if (bDispatched || bWaited)
+  if (bDispatched || bDrained)
     return false;
   bDispatched = Orchestrator.Dispatch();
   return bDispatched;
 }
 
-bool FCrowdMassBoundaryRunner::WaitAndDrain()
+ECrowdBoundaryPollResult FCrowdMassBoundaryRunner::PollAndDrain()
 {
-  if (!bDispatched || bWaited)
-    return false;
-  bWaited = true;
-  return Orchestrator.WaitAndDrain();
+  if (!bDispatched || bDrained)
+    return ECrowdBoundaryPollResult::Failed;
+  const ECrowdBoundaryPollResult Result =
+    Orchestrator.PollAndDrain();
+  if (Result != ECrowdBoundaryPollResult::Pending)
+    bDrained = true;
+  return Result;
 }
 
 bool FCrowdMassBoundaryRunner::ValidatePreparedPatches(
@@ -118,7 +152,9 @@ bool FCrowdMassBoundaryRunner::BuildAndSealCommit(
 {
   const FCrowdMassBoundarySnapshot& Snapshot =
     Orchestrator.GetSnapshot();
-  if (!bWaited
+  if (!bDrained
+    || Orchestrator.GetState()
+      != ECrowdBoundaryTransactionState::Merging
     || !FCrowdMassRuntimeBridge::ValidateCommitTargets(
       MovementPlan, Targets)
     || !ValidatePreparedPatches(Snapshot, PreparedPatches, Targets)

@@ -577,6 +577,33 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ProcessorSource.Contains(TEXT("TFuture<"))
       || ProcessorSource.Contains(TEXT("Future.Get()"))
       || ProcessorSource.Contains(TEXT("Async(")));
+  TestFalse(TEXT("Round production source has no blocking boundary drain"),
+    ProcessorSource.Contains(TEXT("WaitAndDrain("))
+      || PipelineSource.Contains(TEXT("WaitAndDrain("))
+      || ProcessorSource.Contains(TEXT("CompletionEvent->Wait("))
+      || PipelineSource.Contains(TEXT("CompletionEvent->Wait(")));
+  const int32 FixedStepExecuteStart = ProcessorSource.Find(TEXT(
+    "void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute"));
+  const int32 FirstPlanApplyCall = ProcessorSource.Find(
+    TEXT("PlanApplyProcessor->CallExecute(EntityManager, Context)"),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    FixedStepExecuteStart);
+  const int32 BoundaryPollCall = ProcessorSource.Find(
+    TEXT("Pipeline->PollBoundaryWork()"),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    FixedStepExecuteStart);
+  TestTrue(TEXT("authority apply precedes in-flight result poll"),
+    FixedStepExecuteStart != INDEX_NONE
+      && FirstPlanApplyCall > FixedStepExecuteStart
+      && BoundaryPollCall > FirstPlanApplyCall);
+  TestTrue(TEXT("applied authority frame invalidates the in-flight generation"),
+    ProcessorSource.Contains(TEXT(
+      "Pipeline->InvalidateInFlightBoundaryForAuthoritativeState()")));
+  TestTrue(TEXT("correction arrival reopens plan apply boundary"),
+    PipelineSource.Contains(TEXT(
+      "LastClaimedPlanApplyBoundarySequence = MAX_uint64;"))
+      && PipelineSource.Contains(TEXT(
+        "InvalidateInFlightBoundaryForAuthoritativeState()")));
   const int32 PublishStart = PipelineSource.Find(
     TEXT("bool UCrowdDemoRoundSimPipelineSubsystem::PublishBoundarySnapshot"));
   const int32 FindFormationStart = PipelineSource.Find(

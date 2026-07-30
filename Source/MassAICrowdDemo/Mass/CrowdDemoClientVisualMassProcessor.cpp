@@ -4,14 +4,19 @@
 #include "Mass/CrowdDemoMassFragments.h"
 #include "Mass/CrowdDemoPresentationAdapter.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
+#include "Mass/CrowdDemoT7AcceptanceOracle.h"
 #include "Mass/CrowdDemoVatPlaybackKernel.h"
 #include "MassCrowdPresentationSubsystem.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
+#include "HAL/FileManager.h"
 #include "Misc/CommandLine.h"
+#include "Misc/DateTime.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
+#include "Misc/Paths.h"
 #include "HAL/PlatformTime.h"
 #include "MassExecutionContext.h"
 
@@ -23,6 +28,113 @@ namespace
   constexpr float RoundSimMaxInterpolationDurationSeconds = 0.5f;
   constexpr float TargetMarkerRedrawSeconds = 0.20f;
   constexpr float TargetMarkerLifetimeSeconds = 0.24f;
+  constexpr float ScenarioStateLabelRedrawSeconds = 0.10f;
+  constexpr float ScenarioStateLabelLifetimeSeconds = 0.14f;
+
+  struct FCrowdDemoScenarioStateLabel
+  {
+    int32 AgentId = INDEX_NONE;
+    int32 LifecycleSerial = 0;
+    int32 FormationIndex = INDEX_NONE;
+    int32 AuthoritySampleFixedStepIndex = INDEX_NONE;
+    bool bPreRoundAuthoritySample = false;
+    bool bSampleEdgeToleranceMatch = false;
+    FVector DisplayLocation = FVector::ZeroVector;
+    FVector AuthoritativeLocation = FVector::ZeroVector;
+    FCrowdDemoCombatNetState Actual;
+    FCrowdDemoT7AcceptanceEvaluation Evaluation;
+  };
+
+  FString EscapeScenarioJsonString(FString Value)
+  {
+    Value.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
+    Value.ReplaceInline(TEXT("\""), TEXT("\\\""));
+    Value.ReplaceInline(TEXT("\r"), TEXT("\\r"));
+    Value.ReplaceInline(TEXT("\n"), TEXT("\\n"));
+    return Value;
+  }
+
+  uint32 BuildScenarioStateSignature(
+    const FCrowdDemoT7AcceptanceEvaluation& Evaluation,
+    const FCrowdDemoCombatNetState& Actual,
+    const bool bPreRoundAuthoritySample,
+    const bool bSampleEdgeToleranceMatch)
+  {
+    uint32 Hash = GetTypeHash(
+      static_cast<uint8>(Evaluation.ExpectedStage));
+    Hash = HashCombineFast(Hash, GetTypeHash(Actual.bAlive));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(Actual.BusinessState)));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(Actual.AttackPhase)));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(Actual.ReactiveMode)));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(Actual.VisualState)));
+    Hash = HashCombineFast(Hash, GetTypeHash(Actual.BusinessStateRevision));
+    Hash = HashCombineFast(Hash, GetTypeHash(Actual.ReactiveRevision));
+    Hash = HashCombineFast(Hash, GetTypeHash(Actual.VisualRevision));
+    Hash = HashCombineFast(Hash, GetTypeHash(Actual.HitFlashRevision));
+    Hash = HashCombineFast(Hash, GetTypeHash(Actual.ApexCount));
+    Hash = HashCombineFast(Hash, GetTypeHash(Actual.LandingCount));
+    Hash = HashCombineFast(Hash, Evaluation.bMatches ? 1u : 0u);
+    Hash = HashCombineFast(Hash, bPreRoundAuthoritySample ? 1u : 0u);
+    Hash = HashCombineFast(Hash, bSampleEdgeToleranceMatch ? 1u : 0u);
+    return Hash;
+  }
+
+  FString BuildScenarioStateEventJson(
+    const int32 RoundId,
+    const int32 ObservationFixedStepIndex,
+    const float ServerTimeSeconds,
+    const FCrowdDemoScenarioStateLabel& Label)
+  {
+    return FString::Printf(
+      TEXT("{\"kind\":\"state\",\"version\":1,\"utc_ticks\":%lld,\"round_id\":%d,\"fixed_step\":%d,\"observation_fixed_step\":%d,\"server_time\":%.6f,\"pre_round_sample\":%d,\"sample_edge_tolerance\":%d,\"agent_id\":%d,\"lifecycle_serial\":%d,\"formation_index\":%d,\"expected_stage\":%d,\"expected\":\"%s\",\"actual\":\"%s\",\"business\":%d,\"attack\":%d,\"reactive\":%d,\"visual\":%d,\"alive\":%d,\"health\":%.3f,\"z\":%.3f,\"vertical_velocity\":%.3f,\"apex_count\":%d,\"landing_count\":%d,\"hit_flash_revision\":%d,\"match\":%d}\n"),
+      static_cast<long long>(FDateTime::UtcNow().GetTicks()),
+      RoundId,
+      Label.AuthoritySampleFixedStepIndex,
+      ObservationFixedStepIndex,
+      ServerTimeSeconds,
+      Label.bPreRoundAuthoritySample ? 1 : 0,
+      Label.bSampleEdgeToleranceMatch ? 1 : 0,
+      Label.AgentId,
+      Label.LifecycleSerial,
+      Label.FormationIndex,
+      static_cast<int32>(Label.Evaluation.ExpectedStage),
+      *EscapeScenarioJsonString(Label.Evaluation.ExpectedLabel),
+      *EscapeScenarioJsonString(Label.Evaluation.ActualLabel),
+      static_cast<int32>(Label.Actual.BusinessState),
+      static_cast<int32>(Label.Actual.AttackPhase),
+      static_cast<int32>(Label.Actual.ReactiveMode),
+      static_cast<int32>(Label.Actual.VisualState),
+      Label.Actual.bAlive != 0 ? 1 : 0,
+      Label.Actual.Health,
+      Label.AuthoritativeLocation.Z,
+      Label.Actual.VerticalReactiveVelocityCmps,
+      Label.Actual.ApexCount,
+      Label.Actual.LandingCount,
+      Label.Actual.HitFlashRevision,
+      Label.Evaluation.bMatches ? 1 : 0);
+  }
+
+  int32 ResolveAuthoritySampleFixedStepIndex(
+    const UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
+    const float ServerSampleTimeSeconds)
+  {
+    if (ServerSampleTimeSeconds <= 0.0f)
+    {
+      return Pipeline.GetCurrentFixedStepIndex();
+    }
+    const float FixedStepSeconds = FMath::Max(
+      Pipeline.GetCurrentFixedStepSeconds(), KINDA_SMALL_NUMBER);
+    const int32 SampleFixedStepIndex = FMath::RoundToInt(
+      (ServerSampleTimeSeconds
+        - Pipeline.GetActivePlan().StartServerTimeSeconds)
+      / FixedStepSeconds) - 1;
+    return FMath::Clamp(
+      SampleFixedStepIndex, 0, Pipeline.GetCurrentFixedStepIndex());
+  }
 
   void DrawCircleXY(
     UWorld& World,
@@ -320,6 +432,59 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   int32 VatPlaybackCount = 0;
   int32 ActiveHitFlashCount = 0;
   int32 VisualStateCounts[FCrowdDemoVatPlaybackKernel::ClipCount] = {};
+  const bool bT7AcceptanceScenario = Pipeline->IsActive()
+    && Pipeline->GetRules().Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && Pipeline->GetRules().SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse;
+  if (!bScenarioStateOptionsParsed)
+  {
+    bScenarioStateOptionsParsed = true;
+    FParse::Value(
+      FCommandLine::Get(),
+      TEXT("CrowdDemoScenarioStateSidecar="),
+      ScenarioStateSidecarPath);
+    ScenarioStateSidecarPath.TrimQuotesInline();
+    if (!ScenarioStateSidecarPath.IsEmpty()
+      && FPaths::IsRelative(ScenarioStateSidecarPath))
+    {
+      ScenarioStateSidecarPath = FPaths::ConvertRelativePathToFull(
+        FPaths::ProjectSavedDir(), ScenarioStateSidecarPath);
+    }
+  }
+  static const bool bDrawScenarioStateLabels = FParse::Param(
+    FCommandLine::Get(), TEXT("CrowdDemoDrawScenarioStateLabels"));
+  const bool bCaptureScenarioState =
+    bT7AcceptanceScenario
+    && (bDrawScenarioStateLabels
+      || !ScenarioStateSidecarPath.IsEmpty());
+  TArray<FCrowdDemoScenarioStateLabel> ScenarioStateLabels;
+  FString ScenarioStateSidecarAppend;
+  if (bCaptureScenarioState
+    && LastScenarioStateRoundId != Pipeline->GetCurrentRoundId())
+  {
+    LastScenarioStateRoundId = Pipeline->GetCurrentRoundId();
+    LastScenarioStateSignatureByAgentId.Reset();
+    if (!ScenarioStateSidecarPath.IsEmpty())
+    {
+      IFileManager::Get().MakeDirectory(
+        *FPaths::GetPath(ScenarioStateSidecarPath), true);
+      const FString Metadata = FString::Printf(
+        TEXT("{\"kind\":\"metadata\",\"version\":1,\"utc_ticks\":%lld,\"scenario\":\"T7\",\"round_id\":%d,\"fixed_step_seconds\":%.9f,\"events\":[30,60,90]}\n"),
+        static_cast<long long>(FDateTime::UtcNow().GetTicks()),
+        Pipeline->GetCurrentRoundId(),
+        Pipeline->GetCurrentFixedStepSeconds());
+      if (!FFileHelper::SaveStringToFile(
+          Metadata,
+          *ScenarioStateSidecarPath,
+          FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoScenarioStateSidecar stage=initialize path=%s"),
+          *ScenarioStateSidecarPath);
+      }
+    }
+  }
   TMap<int32, bool> OpenSpawnParticleActiveByAgentId;
   if (Pipeline->IsOpenSpawnRelaxation())
   {
@@ -504,6 +669,77 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         FMath::Abs(Offset.RoundSimYawOffsetDegrees),
         bSmoothingActive);
 
+      if (bCaptureScenarioState)
+      {
+        const FCrowdDemoRoundBoundaryFormationFact* Formation =
+          Pipeline->FindBoundaryFormationFact(Identities[It].Id);
+        if (Formation)
+        {
+          FCrowdDemoScenarioStateLabel& Label =
+            ScenarioStateLabels.AddDefaulted_GetRef();
+          Label.AgentId = Identities[It].Id;
+          Label.LifecycleSerial = Identities[It].LifecycleSerial;
+          Label.FormationIndex = Formation->FormationIndex;
+          Label.AuthoritySampleFixedStepIndex =
+            ResolveAuthoritySampleFixedStepIndex(
+              *Pipeline, Authority.ServerSampleTimeSeconds);
+          Label.bPreRoundAuthoritySample =
+            Authority.ServerSampleTimeSeconds + KINDA_SMALL_NUMBER
+              < Pipeline->GetActivePlan().StartServerTimeSeconds;
+          Label.DisplayLocation = Offset.DisplayLocation;
+          Label.AuthoritativeLocation = SimState.Location;
+          Label.Actual = Authority.Combat;
+          Label.Evaluation = FCrowdDemoT7AcceptanceOracle::Evaluate(
+            Formation->FormationIndex,
+            Label.AuthoritySampleFixedStepIndex,
+            Authority.Combat);
+          if (!Label.bPreRoundAuthoritySample
+            && Label.Evaluation.bValid
+            && !Label.Evaluation.bMatches)
+          {
+            const FCrowdDemoT7AcceptanceEvaluation PreviousStepEvaluation =
+              FCrowdDemoT7AcceptanceOracle::Evaluate(
+                Formation->FormationIndex,
+                FMath::Max(
+                  0, Label.AuthoritySampleFixedStepIndex - 1),
+                Authority.Combat);
+            const FCrowdDemoT7AcceptanceEvaluation NextStepEvaluation =
+              FCrowdDemoT7AcceptanceOracle::Evaluate(
+                Formation->FormationIndex,
+                Label.AuthoritySampleFixedStepIndex + 1,
+                Authority.Combat);
+            Label.bSampleEdgeToleranceMatch =
+              PreviousStepEvaluation.bMatches
+              || NextStepEvaluation.bMatches;
+            if (Label.bSampleEdgeToleranceMatch)
+            {
+              Label.Evaluation.bMatches = true;
+              Label.Evaluation.ExpectedLabel += TEXT(" [sample edge]");
+            }
+          }
+          if (Label.Evaluation.bValid
+            && !ScenarioStateSidecarPath.IsEmpty())
+          {
+            const uint32 Signature = BuildScenarioStateSignature(
+              Label.Evaluation, Label.Actual,
+              Label.bPreRoundAuthoritySample,
+              Label.bSampleEdgeToleranceMatch);
+            const uint32* PreviousSignature =
+              LastScenarioStateSignatureByAgentId.Find(Label.AgentId);
+            if (!PreviousSignature || *PreviousSignature != Signature)
+            {
+              LastScenarioStateSignatureByAgentId.Add(
+                Label.AgentId, Signature);
+              ScenarioStateSidecarAppend += BuildScenarioStateEventJson(
+                Pipeline->GetCurrentRoundId(),
+                Pipeline->GetCurrentFixedStepIndex(),
+                Authority.ServerSampleTimeSeconds,
+                Label);
+            }
+          }
+        }
+      }
+
       const FTransform InstanceTransform = MakeInstanceTransform(
         Offset.DisplayLocation,
         Offset.DisplayYawDegrees);
@@ -593,6 +829,18 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   {
     return;
   }
+  if (!ScenarioStateSidecarAppend.IsEmpty()
+    && !FFileHelper::SaveStringToFile(
+      ScenarioStateSidecarAppend,
+      *ScenarioStateSidecarPath,
+      FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,
+      &IFileManager::Get(),
+      FILEWRITE_Append))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoScenarioStateSidecar stage=append path=%s"),
+      *ScenarioStateSidecarPath);
+  }
   const int32 ProductInstanceCount =
     Presentation->GetInstanceCount(1);
   if (ProductInstanceCount != SubmittedCount)
@@ -611,6 +859,68 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   {
     LastTargetMarkerDrawSeconds = NowSeconds;
     DrawTargetAcceptanceMarkers(*World, *Pipeline);
+  }
+  if (bDrawScenarioStateLabels
+    && bT7AcceptanceScenario
+    && (LastScenarioStateLabelDrawSeconds < 0.0
+      || NowSeconds - LastScenarioStateLabelDrawSeconds
+        >= ScenarioStateLabelRedrawSeconds))
+  {
+    LastScenarioStateLabelDrawSeconds = NowSeconds;
+    for (const FCrowdDemoScenarioStateLabel& Label : ScenarioStateLabels)
+    {
+      if (!Label.Evaluation.bValid) continue;
+      const int32 RepresentativeGroup =
+        Label.FormationIndex == 0 ? 0
+        : Label.FormationIndex == 4 ? 1
+        : Label.FormationIndex == 8 ? 2
+        : Label.FormationIndex == 12 ? 3
+        : Label.FormationIndex == 14 ? 4
+        : Label.FormationIndex == 16 ? 5
+        : INDEX_NONE;
+      if (RepresentativeGroup == INDEX_NONE) continue;
+      const FString Text = FString::Printf(
+        TEXT("[REP] F%d A%d/O%d %s\n%s\n%s"),
+        Label.FormationIndex,
+        Label.AuthoritySampleFixedStepIndex,
+        Pipeline->GetCurrentFixedStepIndex(),
+        Label.bPreRoundAuthoritySample
+          ? TEXT("[WAIT]")
+          : (Label.bSampleEdgeToleranceMatch
+              ? TEXT("[EDGE]")
+              : (Label.Evaluation.bMatches ? TEXT("[PASS]") : TEXT("[FAIL]"))),
+        *Label.Evaluation.ExpectedLabel,
+        *Label.Evaluation.ActualLabel);
+      const FVector LabelLocation =
+        Label.DisplayLocation
+        + FVector(
+          (static_cast<float>(RepresentativeGroup % 3) - 1.0f) * 650.0f,
+          RepresentativeGroup < 3 ? -400.0f : 400.0f,
+          RepresentativeGroup < 3 ? 140.0f : 220.0f);
+      const FColor LabelColor = Label.bPreRoundAuthoritySample
+        ? FColor::Yellow
+        : (Label.bSampleEdgeToleranceMatch
+            ? FColor::Yellow
+            : (Label.Evaluation.bMatches ? FColor::Green : FColor::Red));
+      DrawDebugLine(
+        World,
+        Label.DisplayLocation + FVector(0.0f, 0.0f, 45.0f),
+        LabelLocation,
+        LabelColor,
+        false,
+        ScenarioStateLabelLifetimeSeconds,
+        0,
+        1.5f);
+      DrawDebugString(
+        World,
+        LabelLocation,
+        Text,
+        nullptr,
+        LabelColor,
+        ScenarioStateLabelLifetimeSeconds,
+        true,
+        0.72f);
+    }
   }
   uint32 VisualStateMask = 0;
   for (int32 ClipIndex = 0; ClipIndex < FCrowdDemoVatPlaybackKernel::ClipCount; ++ClipIndex)

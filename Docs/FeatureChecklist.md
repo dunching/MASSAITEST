@@ -2,7 +2,17 @@
 
 [INFERRED][HIGH] 本表只在生产调用链和对应专项门同时满足时勾选。接口、Codec或测试夹具存在但未接入生产，不得标为完整通过；Behavior Source现行状态以`EntityBehaviorSourceArchitecture.md`为准。
 
-[COMPUTED][HIGH] T9 Mixed Combat Integration、DP0–DP6、PJ0–PJ6、S0–S6和R0–R7均已关闭。pre-T9提交`5b947389`只作为历史恢复基线；当前未关闭的游戏循环阶段是T10。
+[COMPUTED][HIGH] T9 Mixed Combat Integration、DP0–DP6、PJ0–PJ6、S0–S6和R0–R7均已关闭。pre-T9提交`5b947389`只作为历史恢复基线；当前未关闭的游戏循环阶段是T10，另有独立性能架构阶段AB1–AB6尚未关闭。
+
+## AB0–AB6 异步Fixed-Step Boundary检查表
+
+- [x] [INFERRED][HIGH] AB0：详细架构文档已区分GT Processor、非GT Mass Work Processor与Boundary Work Stage，并冻结Thread Pool DAG、Mailbox、Request/Result、事务身份和完成定义。
+- [x] [COMPUTED][HIGH] AB1：Runtime阻塞等待接口已删除；`PollAndDrain()`、Task queue/run/critical-path和`ordinary_block_wait_count`已接入。
+- [x] [COMPUTED][HIGH] AB2：Runner即每World深度1 Mailbox，事务身份与Generation失效合同已实现。
+- [x] [COMPUTED][HIGH] AB3：跨Game Frame Result消费和Request生产代码已接入；8822 T5S功能、稳定性和性能门通过。
+- [x] [COMPUTED][HIGH] AB4：T5M/T6A/T6S/T6M推广、Worker Topology缓存与共享Flow lookup已完成；四图独立双端门通过。
+- [ ] [COMPUTED][HIGH] AB5：Round/Mixed/Friendly生产Wait已清零；依赖手工多次`CallExecute()`的动态Stage Adapter尚未退出Round生产路径。
+- [ ] [COMPUTED][HIGH] AB6：四构建、MassCrowd 65/65、CrowdDemo 134/134和T5/T6五图独立双端门已通过；单进程双PIE、确定性、Correction、teardown、全场景和FFmpeg最终门尚未通过。
 
 ## T9 Mixed Combat Integration检查表
 
@@ -173,6 +183,7 @@
 - [x] [COMPUTED][HIGH] T5S inside=`20/20`、coverage=`16/16`；当前版性能门通过。
 - [x] [COMPUTED][HIGH] T6A corridor/completed/inside/coverage=`20/20/20/20`；T6S七类profile技术门通过。
 - [x] [COMPUTED][HIGH] T7新增阶段证据后的普通运行8781/8783连续通过；Round内shader/loading/PSO帧为0。历史8777冷运行112.235ms仍保留为未唯一归因证据。
+- [x] [COMPUTED][HIGH] 2026-07-29 T7可解释验收首切片完成：六类代表实体的expected/actual引线标签区分authority sample step、client observation step、pre-Round WAIT与±1 step EDGE；全部20实体状态变化写入JSONL sidecar；`CaptureCrowdDemo.ps1 -T7StateAcceptance`按实际Knockback/KnockUp/Death事件生成step 30/60/90短片、contact sheet和manifest。7971原始帧确认3×2标签布局可读；最终7972端到端短录制观察20/20 Formation、60条状态事件、WAIT/EDGE/mismatch=`20/4/0`、事件sample/observation=`30/31、63/63、91/94`、长冻结0；Development `-DisableUnity`与`CrowdDemo.Acceptance.T7.StateOracle` 1/1通过。
 - [x] [COMPUTED][HIGH] T5M 8785技术、性能与稳定诊断通过；无merge block/chatter。
 - [x] [COMPUTED][HIGH] T6M 8790的Round末inside/coverage=`20/20`且安全、同步、性能通过；AcquireThenHold资格有效期间不要求持续重排Region，最后90步18/17保留为过程诊断。
 - [ ] [COMPUTED][HIGH] 单进程DebugGame PIE和当前版人工审片未完成。

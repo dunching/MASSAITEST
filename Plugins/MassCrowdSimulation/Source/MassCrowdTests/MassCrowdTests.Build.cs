@@ -4,6 +4,8 @@ public class MassCrowdTests : ModuleRules
 {
   public MassCrowdTests(ReadOnlyTargetRules Target) : base(Target)
   {
+    bUseUnity = false;
+
     PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
     CppStandard = CppStandardVersion.Cpp20;
     PrivateDependencyModuleNames.AddRange(new[]

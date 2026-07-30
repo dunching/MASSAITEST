@@ -1,5 +1,15 @@
 # MassAI Crowd Demo 当前架构
 
+## 0.0.2 2026-07-30 异步Fixed-Step Boundary覆盖说明
+
+[COMPUTED][HIGH] 2026-07-30当前Round生产代码由单一GT `UCrowdDemoRoundSimFixedStepPipelineProcessor`驱动深度1 Runner Mailbox：帧首`PollBoundaryWork()`，Pending立即返回，Ready完整提交；帧尾最多Gather/Dispatch一个新事务。Runtime已删除`WaitAndDrain/FEvent.Wait`，Mixed与Friendly也使用持久Runner跨帧消费。全部`ROUND_DYNAMIC_FLAGS`阶段Adapter仍要求GT并由总控手工`CallExecute()`，这是AB5尚未关闭的剩余重构。
+
+[COMPUTED][HIGH] 当前实现遵循每World深度1 Mailbox合同：GT非阻塞消费完整Result、原子Commit并生产下一不可变Request；UE::Tasks Worker消费Request并发布Result；Pending时GT立即返回且客户端继续视觉插值。
+
+[COMPUTED][HIGH] Plan、Correction与权威RoundResult在每帧Mailbox Poll之前应用；Correction会重开PlanApply boundary，并使在途Generation失效。失效只断开GT mailbox，旧Worker闭包仍只持有不可变Snapshot/线程安全WorkState并可自然释放。8827 T5S普通Correction流、双端hash与性能门通过。
+
+[COMPUTED][HIGH] AB1–AB4已完成：T5S/T5M/T6A/T6S/T6M独立双端功能与性能门、MassCrowd 65/65、CrowdDemo 134/134及Development/DebugGame × ForceUnity/DisableUnity四构建通过。AB5仍有内部`CallExecute()`适配器，AB6仍缺单进程双PIE、Correction/teardown、全场景与FFmpeg门；因此只能汇报“异步核心与首批场景通过”，不得汇报“生产验收全部完成”。
+
 ## 0.0.1 2026-07-29 T9覆盖说明
 
 [COMPUTED][HIGH] T9在DP0–DP6之后新增通用Attack Profile/State/Intent与Host Attack Adapter。业务Planner只决定Acquire/Windup/Commit/Recovery/Cooldown及目标，Movement继续由Standard Sources和安全链处理；Melee/MidRange经一次Boundary稳定Spatial Index执行相对Sweep，Ranged生成Mass Projectile，三类Impact统一进入Combat Resolver与Prepared Health/Death提交。
@@ -80,7 +90,7 @@
 | 审计问题 | 当前源码事实 | P0 决定 |
 |---|---|---|
 | canonical gather 后仍读哪些事实 | [COMPUTED][HIGH] `BoundaryGather`一次读取Runtime/运动/Formation/Facing及Combat业务事实；Combat prepare消费不可变business overlay。Facing prepare只做完整集合只读验证，最终`ApplyPreparedCommit`先复核目标集合再执行唯一运动/视觉写回遍历。FlowSample诊断遍历仍保留。 | [INFERRED][HIGH] P1继续把剩余Target/Particle诊断变成prepared patch；允许独立完整集合验证遍历。 |
-| WORK 调度 | [COMPUTED][HIGH] Round即时`Async/Future.Get`为0；SoftPressure每个boundary一次Orchestrator Dispatch和一次completion-event Wait，真实worker链覆盖SharedFlow、TargetTopology、TargetDemand、TargetPlan、TargetGuidance、Movement、Particle与FacingFinalize/MovementFinalize，且Movement直接消费worker SharedFlow/Target结果。GT仍保留SharedFlow/Target同步副本，Business仍是屏障，Obstacle仍是旧同步Movement路径。 | [INFERRED][HIGH] P1继续删除同步副本、迁移Business/Combat与Obstacle，同时维持单次Dispatch/Wait。 |
+| WORK 调度 | [COMPUTED][HIGH] Round即时`Async/Future.Get`为0；SoftPressure每个boundary一次Orchestrator Dispatch和一次completion-event Wait，真实worker链覆盖SharedFlow、TargetTopology、TargetDemand、TargetPlan、TargetGuidance、Movement、Particle与FacingFinalize/MovementFinalize，且Movement直接消费worker SharedFlow/Target结果。GT仍保留SharedFlow/Target同步副本，Business仍是屏障，Obstacle仍是旧同步Movement路径。 | [COMPUTED][HIGH] 该行右侧原P1“维持单次Dispatch/Wait”目标已由2026-07-30 AB架构取代；现行目标是单槽Mailbox和普通Tick零Wait。 |
 | Nav所有权 | [COMPUTED][HIGH] Core持有Graph/Flow数据与kernel，Runtime只有静态Recast提取器；Round Pipeline和J Coordinator分别持有资源或cache，插件没有World级生命周期所有者。 | [INFERRED][HIGH] P2由Runtime subsystem统一持有静态cooked Recast派生Graph及Flow cache。 |
 | J绕过公共层 | [COMPUTED][HIGH] J直接管理LifecycleWorld、Graph/Flow cache、O(N)安全检查、全量状态Multicast和ISM实例。 | [INFERRED][HIGH] P5前这些只能视为Demo验收组合，不能视为插件产品路径闭环。 |
 | 物流事实归属 | [COMPUTED][HIGH] 当前Runtime只有通用Behavior/BusinessCommitRequest，Cargo carrier ledger与业务规则位于Demo Adapter。 | [INFERRED][HIGH] P4采用混合边界：Runtime公开Task/Cargo/Inventory POD与事务合同，库存权威、Planner和仓库策略留在宿主Adapter。 |
@@ -221,7 +231,7 @@ RoundPlanApply
 
 [COMPUTED][HIGH] `FCrowdMassBoundaryOrchestrator`提供依赖任务键、不可变prepared patch、事务状态、稳定CommitPlan hash及Gather/Queue/Work/Wait/Merge/Validate/Commit计时；Runtime record使用`FCrowdStableEntityRef`与`FCrowdAgentFacts`。旧Round已消费Orchestrator且即时`Async/Future.Get`为0。
 
-[COMPUTED][HIGH] 2026-07-23 P1关闭：canonical gather包含完整Combat业务事实；Business/Combat、SharedFlow、按Cohort拆分的Target四段、Obstacle、Movement、Particle与Facing均进入一次Dispatch/Wait的typed Worker DAG，唯一GT writer在完整CommitEnvelope验证后提交。源码无`Async/TFuture/Future.Get`；8132 T2、8137 T6、8138 T7、8139 T8双端门通过，fixed-step p95分别=`2.581/5.140/1.853/1.525ms`。
+[COMPUTED][HIGH] 2026-07-23历史P1关闭：canonical gather包含完整Combat业务事实；Business/Combat、SharedFlow、按Cohort拆分的Target四段、Obstacle、Movement、Particle与Facing均进入一次Dispatch/Wait的typed Worker DAG，唯一GT writer在完整CommitEnvelope验证后提交。源码无`Async/TFuture/Future.Get`；8132 T2、8137 T6、8138 T7、8139 T8双端门通过。该关闭仅保留为typed DAG与原子提交证据；一次Wait不再属于最终合同。
 
 [COMPUTED][HIGH] `UMassCrowdRuntimeSubsystem`按World拥有Nav Graph与Flow cache；8122 `NavFlowProductSmall`真实验证98节点、234有向边、4层、2个有引用Flow资源、cache hit=1、9504字节，并与20实体P1 boundary同时运行。P2已关闭。
 

@@ -177,6 +177,16 @@ HitFlashProfileKey
 
 [INFERRED][HIGH] T7 真实关卡门包括：全部20实体可见；每种VisualState至少有稳定样本；knockback requested/realized可核对；knock-up apex与landing只发生一次；Hard/Swept/Obstacle/Bounds=0；hit flash revision与可见改色次数一致；无Cube占位、隐藏实例、视觉owner错误或correction后动画重启。
 
+[COMPUTED][HIGH] 2026-07-29 T7首个可解释验收切片已接入：客户端为Idle/Move/Attack/Knockback/KnockUp/Death各显示一个带引线的代表实体标签，包含Formation、权威样本step、客户端观察step、expected、actual及匹配状态；全部20实体的权威复制样本状态变化写入JSONL sidecar。expected按复制样本ServerTime映射到Round fixed-step，不直接拿客户端当前step与旧复制样本硬比较。
+
+[COMPUTED][HIGH] T7的确定性事件表为：Formation 12–13在step 30进入Knockback；Formation 14–15在step 60进入KnockUp，并在当前参数下预期step 79 apex、step 98 landing、step 104恢复；Formation 16–19在step 90进入Death。Formation 0–3/4–7/8–11分别持续表达Idle/Move/Attack。
+
+[COMPUTED][HIGH] `CaptureCrowdDemo.ps1 -T7StateAcceptance`不按预期step的墙钟估算切片，而是从sidecar中首次实际Knockback、KnockUp和Death记录反算录像偏移，生成step 30/60/90三段短片、各自contact sheet与acceptance manifest。这样网络复制延迟会显示为authority sample step与observation step差值，但不会把切片放在动作发生前。
+
+[INFERRED][HIGH] `WAIT`表示Round开始前的bootstrap复制样本；`EDGE`表示复制样本时间量化到边界step，但实际状态可由相邻±1 step解释；两者均在manifest单列。只有超过该单step边界容差的expected/actual差异才计入运行期mismatch并显示红色`FAIL`。
+
+[INFERRED][HIGH] T7人工审片必须分别确认：step 30短片中HitReact/Knockback进入、水平位移和恢复连续；step 60短片中KnockUp上升、单次apex、单次landing及恢复连续；step 90短片中Alive/Health、Business=Dead与Visual=Death一致。FFmpeg冻结检测和亮度检查只负责影像可用性，业务PASS来自sidecar、双端日志及现有技术门。
+
 ### T8 Ranged Projectile Combat Small
 
 [INFERRED][HIGH] T8 首轮使用10个射手与10个静止目标，并从合法、无重叠、已满足射程的稳定位置直接开始；本轮不启用 Target Region Transport。它只验证 AcquireTarget→Windup→Fire→Recovery 与投射物命中，命中后复用 T7 的统一 HitFact/HitResponse。

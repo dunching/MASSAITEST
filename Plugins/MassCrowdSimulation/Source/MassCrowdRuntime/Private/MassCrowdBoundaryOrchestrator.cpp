@@ -66,12 +66,21 @@ namespace
 
 struct FCrowdMassBoundaryOrchestrator::FTaskNode
 {
+  struct FTelemetry
+  {
+    double EnqueueSeconds = 0.0;
+    double StartSeconds = 0.0;
+    double FinishSeconds = 0.0;
+  };
+
   FCrowdBoundaryTaskDescriptor Descriptor;
   FCrowdBoundaryTaskKey Key;
   TArray<FCrowdBoundaryTaskKey> Prerequisites;
   FCrowdBoundaryTaskBody Body;
   TSharedRef<FCrowdBoundaryTaskResult, ESPMode::ThreadSafe> Result =
     MakeShared<FCrowdBoundaryTaskResult, ESPMode::ThreadSafe>();
+  TSharedRef<FTelemetry, ESPMode::ThreadSafe> Telemetry =
+    MakeShared<FTelemetry, ESPMode::ThreadSafe>();
   UE::Tasks::FTask Task;
   bool bRequireOffGameThread = true;
 };
@@ -226,7 +235,6 @@ bool FCrowdMassBoundaryOrchestrator::Begin(
   Timings.GatherMilliseconds = FMath::Max(0.0, GatherMilliseconds);
   CommitPlanHash = 0;
   Nodes.Reset();
-  CompletionEvent->Reset();
   CompletionTask = {};
   State = ECrowdBoundaryTransactionState::Gathering;
   return true;
@@ -377,22 +385,28 @@ bool FCrowdMassBoundaryOrchestrator::Dispatch()
       FCrowdBoundaryTaskBody Body = MoveTemp(Node->Body);
       const TSharedRef<FCrowdBoundaryTaskResult, ESPMode::ThreadSafe>
         Result = Node->Result;
+      const TSharedRef<FTaskNode::FTelemetry, ESPMode::ThreadSafe>
+        Telemetry = Node->Telemetry;
+      Telemetry->EnqueueSeconds = FPlatformTime::Seconds();
       Node->Task = UE::Tasks::Launch(
         TEXT("MassCrowdBoundaryWork"),
-        [Body = MoveTemp(Body), Result,
+        [Body = MoveTemp(Body), Result, Telemetry,
           PrerequisiteResults = MoveTemp(PrerequisiteResults)]() mutable
         {
+          Telemetry->StartSeconds = FPlatformTime::Seconds();
           for (const auto& PrerequisiteResult : PrerequisiteResults)
           {
             if (!PrerequisiteResult->bSucceeded)
             {
               *Result = FCrowdBoundaryTaskResult::Failure();
               Result->bRanOffGameThread = !IsInGameThread();
+              Telemetry->FinishSeconds = FPlatformTime::Seconds();
               return;
             }
           }
           *Result = Body();
           Result->bRanOffGameThread = !IsInGameThread();
+          Telemetry->FinishSeconds = FPlatformTime::Seconds();
         },
         UE::Tasks::Prerequisites(PrerequisiteTasks),
         UE::Tasks::ETaskPriority::Normal,
@@ -411,10 +425,9 @@ bool FCrowdMassBoundaryOrchestrator::Dispatch()
   AllTasks.Reserve(Nodes.Num());
   for (const TUniquePtr<FTaskNode>& Node : Nodes)
     AllTasks.Add(Node->Task);
-  FEvent* const Completion = CompletionEvent.Get();
   CompletionTask = UE::Tasks::Launch(
     TEXT("MassCrowdBoundaryCompletion"),
-    [Completion] { Completion->Trigger(); },
+    [] {},
     UE::Tasks::Prerequisites(AllTasks),
     UE::Tasks::ETaskPriority::Normal,
     UE::Tasks::EExtendedTaskPriority::None,
@@ -426,18 +439,20 @@ bool FCrowdMassBoundaryOrchestrator::Dispatch()
   return true;
 }
 
-bool FCrowdMassBoundaryOrchestrator::WaitAndDrain()
+ECrowdBoundaryPollResult
+FCrowdMassBoundaryOrchestrator::PollAndDrain()
 {
   if (!IsInGameThread()
     || State != ECrowdBoundaryTransactionState::Working)
   {
     Fail();
-    return false;
+    return ECrowdBoundaryPollResult::Failed;
   }
-  const double WaitStart = FPlatformTime::Seconds();
-  CompletionEvent->Wait();
+  if (!CompletionTask.IsValid() || !CompletionTask.IsCompleted())
+    return ECrowdBoundaryPollResult::Pending;
+
   const double WorkEnd = FPlatformTime::Seconds();
-  Timings.WaitMilliseconds = (WorkEnd - WaitStart) * 1000.0;
+  Timings.WaitMilliseconds = 0.0;
   Timings.WorkMilliseconds = (WorkEnd - WorkStartSeconds) * 1000.0;
   for (const TUniquePtr<FTaskNode>& Node : Nodes)
   {
@@ -446,11 +461,11 @@ bool FCrowdMassBoundaryOrchestrator::WaitAndDrain()
         && !Node->Result->bRanOffGameThread))
     {
       Fail();
-      return false;
+      return ECrowdBoundaryPollResult::Failed;
     }
   }
   State = ECrowdBoundaryTransactionState::Merging;
-  return true;
+  return ECrowdBoundaryPollResult::Ready;
 }
 
 bool FCrowdMassBoundaryOrchestrator::SealMergedPlan(
@@ -637,8 +652,27 @@ FCrowdMassBoundaryOrchestrator::BuildResult() const
     State == ECrowdBoundaryTransactionState::Committed;
   Result.Tasks.Reserve(Nodes.Num());
   for (const TUniquePtr<FTaskNode>& Node : Nodes)
+  {
+    FCrowdBoundaryTaskTimings TaskTimings;
+    if (Node->Telemetry->StartSeconds > 0.0)
+    {
+      TaskTimings.QueueMilliseconds =
+        (Node->Telemetry->StartSeconds
+          - Node->Telemetry->EnqueueSeconds) * 1000.0;
+    }
+    if (Node->Telemetry->FinishSeconds > 0.0)
+    {
+      TaskTimings.ExecutionMilliseconds =
+        (Node->Telemetry->FinishSeconds
+          - Node->Telemetry->StartSeconds) * 1000.0;
+      TaskTimings.EndToEndMilliseconds =
+        (Node->Telemetry->FinishSeconds
+          - Node->Telemetry->EnqueueSeconds) * 1000.0;
+    }
     Result.Tasks.Add({
-      Node->Key, Node->Descriptor.TelemetryId, *Node->Result});
+      Node->Key, Node->Descriptor.TelemetryId, *Node->Result,
+      TaskTimings});
+  }
   Result.Tasks.Sort([](const auto& A, const auto& B)
   {
     return A.Key < B.Key;

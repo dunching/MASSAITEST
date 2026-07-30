@@ -6,6 +6,8 @@
 
 [COMPUTED][HIGH] Behavior Source详细合同和关闭状态由`EntityBehaviorSourceArchitecture.md`管理；本文件只管理模块责任与依赖，不以模块存在推断端到端功能完成。
 
+[COMPUTED][HIGH] 2026-07-30 `MassCrowdRuntime`已拥有Runner单槽Mailbox、非阻塞Orchestrator状态、事务envelope和Task telemetry；Core继续只承载纯POD/Kernel，Demo拥有Round GT Coordinator和宿主Adapter。详细合同见`AsyncFixedStepBoundaryArchitecture.md`。生产`WaitAndDrain()`已删除，真实场景和最终性能门尚未关闭。
+
 ## 2. 产品边界
 
 ```text

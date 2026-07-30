@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Algo/Reverse.h"
+#include "HAL/Event.h"
 #include "HAL/PlatformProcess.h"
 #include "MassCrowdBoundaryOrchestrator.h"
 #include "MassCrowdBoundaryRunner.h"
@@ -196,6 +197,22 @@ namespace
     }
     return Targets;
   }
+
+  template<typename TBoundary>
+  ECrowdBoundaryPollResult PollUntilTerminal(TBoundary& Boundary)
+  {
+    const double Deadline = FPlatformTime::Seconds() + 5.0;
+    ECrowdBoundaryPollResult Result =
+      ECrowdBoundaryPollResult::Pending;
+    while (Result == ECrowdBoundaryPollResult::Pending
+      && FPlatformTime::Seconds() < Deadline)
+    {
+      Result = Boundary.PollAndDrain();
+      if (Result == ECrowdBoundaryPollResult::Pending)
+        FPlatformProcess::SleepNoStats(0.001f);
+    }
+    return Result;
+  }
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -230,8 +247,8 @@ bool FMassCrowdBoundaryOrchestratorDependencyTest::RunTest(
     {{3}, {301}, 0}, MovementPrerequisites,
     [] { return FCrowdBoundaryTaskResult::Success(14); }));
   TestTrue(TEXT("graph dispatches once"), Orchestrator.Dispatch());
-  FPlatformProcess::SleepNoStats(0.01f);
-  TestTrue(TEXT("all dependency fronts drain"), Orchestrator.WaitAndDrain());
+  TestEqual(TEXT("all dependency fronts drain"),
+    PollUntilTerminal(Orchestrator), ECrowdBoundaryPollResult::Ready);
 
   const FCrowdMassCommitPlan Plan = MakeCommitPlan(Snapshot);
   TestTrue(TEXT("stable merged plan sealed"),
@@ -271,8 +288,8 @@ bool FMassCrowdBoundaryOrchestratorFailureTest::RunTest(
     {{3}, {301}, 0}, Prerequisites,
     [] { return FCrowdBoundaryTaskResult::Success(99); }));
   TestTrue(TEXT("valid graph dispatches"), Orchestrator.Dispatch());
-  TestFalse(TEXT("failed prerequisite rejects terminal transaction"),
-    Orchestrator.WaitAndDrain());
+  TestEqual(TEXT("failed prerequisite rejects terminal transaction"),
+    PollUntilTerminal(Orchestrator), ECrowdBoundaryPollResult::Failed);
   TestEqual(TEXT("state is fail-closed"), Orchestrator.GetState(),
     ECrowdBoundaryTransactionState::Failed);
   TestFalse(TEXT("failed transaction cannot seal plan"),
@@ -311,7 +328,8 @@ bool FMassCrowdBoundaryGenericDescriptorTest::RunTest(
     Consumer,
     [] { return FCrowdBoundaryTaskResult::Success(0xdef); }));
   TestTrue(TEXT("schema-compatible DAG dispatches"), Valid.Dispatch());
-  TestTrue(TEXT("schema-compatible DAG drains"), Valid.WaitAndDrain());
+  TestEqual(TEXT("schema-compatible DAG drains"),
+    PollUntilTerminal(Valid), ECrowdBoundaryPollResult::Ready);
   const FCrowdBoundaryOrchestratorResult Result = Valid.BuildResult();
   TestEqual(TEXT("telemetry id follows stable task descriptor"),
     Result.Tasks.Last().TelemetryId, 9102u);
@@ -494,8 +512,8 @@ bool FMassCrowdBoundaryCommitEnvelopeTest::RunTest(
     {{3}, {301}, 0}, {},
     [] { return FCrowdBoundaryTaskResult::Success(7); }));
   TestTrue(TEXT("orchestrator dispatches"), Orchestrator.Dispatch());
-  FPlatformProcess::SleepNoStats(0.01f);
-  TestTrue(TEXT("orchestrator drains once"), Orchestrator.WaitAndDrain());
+  TestEqual(TEXT("orchestrator drains once"),
+    PollUntilTerminal(Orchestrator), ECrowdBoundaryPollResult::Ready);
   TestTrue(TEXT("full envelope seals"),
     Orchestrator.SealMergedEnvelope(ForwardEnvelope, 0.0));
   TestEqual(TEXT("reported hash covers patches"),
@@ -535,8 +553,10 @@ bool FMassCrowdBoundaryRunnerAtomicValidationTest::RunTest(
     [] { return FCrowdBoundaryTaskResult::Success(17); }));
   TestTrue(TEXT("runner dispatches exactly once"), Runner.Dispatch());
   TestFalse(TEXT("second dispatch rejected"), Runner.Dispatch());
-  TestTrue(TEXT("runner waits exactly once"), Runner.WaitAndDrain());
-  TestFalse(TEXT("second wait rejected"), Runner.WaitAndDrain());
+  TestEqual(TEXT("runner drains exactly once"),
+    PollUntilTerminal(Runner), ECrowdBoundaryPollResult::Ready);
+  TestEqual(TEXT("second drain rejected"), Runner.PollAndDrain(),
+    ECrowdBoundaryPollResult::Failed);
 
   TArray<FCrowdMassCommitTarget> StaleTargets = Targets;
   StaleTargets.Last().EntityRef.LifecycleSerial += 1;
@@ -553,7 +573,8 @@ bool FMassCrowdBoundaryRunnerAtomicValidationTest::RunTest(
     {{3}, {301}, 0}, {},
     [] { return FCrowdBoundaryTaskResult::Success(18); }));
   TestTrue(TEXT("valid runner dispatches"), ValidRunner.Dispatch());
-  TestTrue(TEXT("valid runner waits"), ValidRunner.WaitAndDrain());
+  TestEqual(TEXT("valid runner drains"),
+    PollUntilTerminal(ValidRunner), ECrowdBoundaryPollResult::Ready);
   TestTrue(TEXT("complete target set seals"),
     ValidRunner.BuildAndSealCommit(
       MovementPlan, MakeArrayView(&Patch, 1), Targets, 0.0));
@@ -563,6 +584,48 @@ bool FMassCrowdBoundaryRunnerAtomicValidationTest::RunTest(
     ValidRunner.MarkCommitted(0.0));
   TestEqual(TEXT("runner itself never applies host patches"),
     AppliedValue, 0);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdBoundaryNonBlockingPollTest,
+  "MassCrowd.Runtime.BoundaryOrchestrator.NonBlockingPollAndIdentity",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdBoundaryNonBlockingPollTest::RunTest(
+  const FString& Parameters)
+{
+  const FCrowdMassBoundarySnapshot Snapshot = MakeBoundarySnapshot();
+  FEventRef Gate(EEventMode::ManualReset);
+  FCrowdMassBoundaryRunner Runner;
+  const FCrowdBoundaryTransactionId Transaction =
+    FCrowdBoundaryTransactionId::FromSnapshot(Snapshot, 7);
+  TestTrue(TEXT("explicit transaction begins"),
+    Runner.Begin(Snapshot, 0.0, Transaction));
+  FEvent* const GatePtr = Gate.Get();
+  TestTrue(TEXT("gated work queues"), Runner.AddTask(
+    {{3}, {301}, 0}, {},
+    [GatePtr]
+    {
+      GatePtr->Wait();
+      return FCrowdBoundaryTaskResult::Success(77);
+    }));
+  TestTrue(TEXT("gated work dispatches"), Runner.Dispatch());
+  TestEqual(TEXT("unfinished work reports pending without waiting"),
+    Runner.PollAndDrain(), ECrowdBoundaryPollResult::Pending);
+  Gate->Trigger();
+  TestEqual(TEXT("released work becomes ready"),
+    PollUntilTerminal(Runner), ECrowdBoundaryPollResult::Ready);
+  TestTrue(TEXT("runner retains exact transaction identity"),
+    Runner.MatchesTransaction(Transaction));
+  TestTrue(TEXT("worker timing is reported"),
+    Runner.BuildResult().Tasks[0].Timings.ExecutionMilliseconds >= 0.0);
+
+  FCrowdMassBoundaryRunner Mismatch;
+  FCrowdBoundaryTransactionId Wrong = Transaction;
+  ++Wrong.SnapshotHash;
+  TestFalse(TEXT("snapshot identity mismatch is rejected"),
+    Mismatch.Begin(Snapshot, 0.0, Wrong));
   return true;
 }
 

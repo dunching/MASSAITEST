@@ -120,6 +120,34 @@ private:
     bool bActive = false;
   };
 
+  struct FMixedMovementWork
+  {
+    FCrowdMassCommitPlan Plan;
+    TArray<FCrowdLocalPredictiveGrantState> GrantStates;
+    TMap<int32, int32> BlockedAgeByAgentId;
+    double MovementMilliseconds = 0.0;
+    double ParticleMilliseconds = 0.0;
+    double FacingMilliseconds = 0.0;
+    int32 SafetyHolds = 0;
+    int32 FailureCode = 0;
+    bool bCompleted = false;
+  };
+
+  struct FPendingMixedMovement
+  {
+    TUniquePtr<FCrowdMassBoundaryRunner> Runner;
+    TSharedPtr<FMixedMovementWork, ESPMode::ThreadSafe> Work;
+    TSharedPtr<TArray<FSlotState>, ESPMode::ThreadSafe> StagedSlots;
+    FCrowdMassBoundarySnapshot Snapshot;
+    TArray<FCrowdMassCommitTarget> Targets;
+    FCrowdBehaviorPreparedBoundary PreparedBehavior;
+    TArray<uint32> ResolvedInteractionLayers;
+    TArray<uint64> ResolvedAttachedNodeIds;
+    TUniqueFunction<void(bool, int32, uint64)> Finalize;
+    double ProductStartSeconds = 0.0;
+    double GatherEndSeconds = 0.0;
+  };
+
   UPROPERTY(ReplicatedUsing=OnRep_Config, Transient)
   FCrowdDemoMixedSandboxConfig Config;
 
@@ -161,6 +189,8 @@ private:
   uint64 LastBoundaryCommitHash = 0;
   uint64 LastPlannerDecisionHash = 0;
   uint64 PresentationSequence = 0;
+  uint64 ProductBoundaryGeneration = 1;
+  TUniquePtr<FPendingMixedMovement> PendingMixedMovement;
   uint32 LastConsumedBaselineRevision = 0;
   uint32 RelevantSetRevision = 1;
   int32 PendingRespawnSlot = INDEX_NONE;
@@ -229,11 +259,11 @@ private:
     FCrowdDemoPreparedAttackBoundary& OutAttack,
     FCrowdPreparedProjectileBoundary& OutProjectile,
     FCrowdDemoPreparedAttackHealthPatch& OutHealthPatch);
-  bool RunProductMovementBoundary(
+  bool BeginProductMovementBoundary(
     const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
-    TArray<FSlotState>& InOutSlots,
-    int32& OutSafetyHolds,
-    uint64& OutCommitHash);
+    const TSharedRef<TArray<FSlotState>, ESPMode::ThreadSafe>& InOutSlots,
+    TUniqueFunction<void(bool, int32, uint64)>&& Finalize);
+  bool PollProductMovementBoundary();
   bool GetOrBuildFlow(
     const FVector& Objective,
     const FCrowdNavSurfaceFlow*& OutFlow,
