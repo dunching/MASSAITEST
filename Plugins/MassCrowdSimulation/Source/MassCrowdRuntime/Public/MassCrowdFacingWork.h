@@ -25,4 +25,9 @@ class MASSCROWDRUNTIME_API FCrowdMassFacingWork
 public:
   static FCrowdMassFacingWorkOutput Resolve(
     const FCrowdMassFacingWorkInput& Input);
+
+  static FCrowdMassFacingWorkOutput ResolveSharded(
+    const FCrowdMassFacingWorkInput& Input,
+    int32 ShardSize,
+    bool bReverseDispatchOrder = false);
 };

@@ -354,10 +354,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   UInstancedStaticMeshComponent* Instances = Replicator
     ? Replicator->GetCrowdInstancesForClientVisuals()
     : nullptr;
-  UInstancedStaticMeshComponent* HitFlashInstances = Replicator
-    ? Replicator->GetCrowdHitFlashInstancesForClientVisuals()
-    : nullptr;
-  if (!Replicator || !Instances || !HitFlashInstances)
+  if (!Replicator || !Instances)
   {
     return;
   }
@@ -370,10 +367,6 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   if (Instances->NumCustomDataFloats != 3)
   {
     Instances->NumCustomDataFloats = 3;
-  }
-  if (HitFlashInstances->NumCustomDataFloats != 3)
-  {
-    HitFlashInstances->NumCustomDataFloats = 3;
   }
   const bool bRebuildInstances = bRebuildInstancesNextFrame || bOwnerChanged;
   if (bRebuildInstances && bPresentationProfileRegistered)
@@ -398,8 +391,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
     Replicator->ClearCrowdVisualInstances();
     Replicator->RecordVisualInstanceRebuild();
     TSharedRef<FCrowdDemoIsmPresentationSink> Sink =
-      MakeShared<FCrowdDemoIsmPresentationSink>(
-        *Instances, *HitFlashInstances);
+      MakeShared<FCrowdDemoIsmPresentationSink>(*Instances);
     if (!Presentation->RegisterProfile(1, Sink))
     {
       const bool bRecoveredStaleOwner =
@@ -407,8 +399,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         && Presentation->UnregisterProfile(1)
         && Presentation->RegisterProfile(
           1,
-          MakeShared<FCrowdDemoIsmPresentationSink>(
-            *Instances, *HitFlashInstances));
+          MakeShared<FCrowdDemoIsmPresentationSink>(*Instances));
       if (!bRecoveredStaleOwner)
       {
         UE_LOG(LogTemp, Error,
@@ -848,7 +839,6 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
     bRebuildInstancesNextFrame = true;
   }
   Instances->MarkRenderStateDirty();
-  HitFlashInstances->MarkRenderStateDirty();
   const double NowSeconds = World->GetTimeSeconds();
   static const bool bDrawTargetAcceptanceMarkers = FParse::Param(
     FCommandLine::Get(), TEXT("CrowdDemoDrawTargetAcceptanceMarkers"));

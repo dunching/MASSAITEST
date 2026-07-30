@@ -10,6 +10,8 @@
 
 [INFERRED][HIGH] 本文是异步Boundary线程、Processor、Mailbox和调度合同的事实源；当前代码事实仍以`CurrentArchitecture.md`为准，实施顺序以`PhasePlan.md`为准，查询所有权以`MassQueryOwnershipMatrix.md`为准，验收门以`TestScenarioMatrix.md`为准。
 
+[INFERRED][HIGH] 本文继续约束当前深度1完整Boundary及PW迁移期的强一致Domain；下一代“Worker持久权威镜像、连续调度、GT每帧交换可变Dirty Result Batch”目标不由本文替代描述，详细合同见`PersistentWorkerSimulationArchitecture.md`。
+
 ## 1. 目标与非目标
 
 ### 1.1 目标

@@ -51,10 +51,30 @@ void UMassCrowdRuntimeSubsystem::Initialize(
   NavGraphResource = {};
   FlowCache.Reset();
   verify(BehaviorSourceRuntime.InitializeFromRegisteredProviders());
+  AsyncSimulationRuntime =
+    MakeUnique<FCrowdAsyncSimulationRuntime>();
+  WorkerShadowSync =
+    MakeUnique<FCrowdWorkerBoundaryShadowSync>();
+  WorkerResultApplyProxy =
+    MakeUnique<FCrowdWorkerResultApplyProxy>();
+  WorkerMovementAuthority =
+    MakeUnique<FCrowdWorkerMovementAuthority>();
 }
 
 void UMassCrowdRuntimeSubsystem::Deinitialize()
 {
+  if (WorkerShadowSync)
+  {
+    WorkerShadowSync->ResetQuiescent();
+    WorkerShadowSync.Reset();
+  }
+  WorkerMovementAuthority.Reset();
+  WorkerResultApplyProxy.Reset();
+  if (AsyncSimulationRuntime)
+  {
+    AsyncSimulationRuntime->StopAndDrain(5.0);
+    AsyncSimulationRuntime.Reset();
+  }
   FlowCache.Reset();
   BehaviorSourceRuntime.Reset();
   NavGraphResource = {};

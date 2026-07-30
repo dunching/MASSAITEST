@@ -374,6 +374,21 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
     FCrowdMassSharedFlowWork::BuildPreferred(FlowInput);
   TestEqual(TEXT("Runtime shared flow preferred input order stable"),
     FlowReverse.StableHash, FlowForward.StableHash);
+  for (const int32 ShardSize : {1, 2, 7})
+  {
+    const FCrowdMassSharedFlowSampleOutput ShardedForward =
+      FCrowdMassSharedFlowWork::BuildPreferredSharded(
+        FlowInput, ShardSize, false);
+    const FCrowdMassSharedFlowSampleOutput ShardedReverse =
+      FCrowdMassSharedFlowWork::BuildPreferredSharded(
+        FlowInput, ShardSize, true);
+    TestTrue(TEXT("Runtime shared flow shard completes"),
+      ShardedForward.bValid && ShardedReverse.bValid);
+    TestEqual(TEXT("Runtime shared flow shard size stable"),
+      ShardedForward.StableHash, FlowForward.StableHash);
+    TestEqual(TEXT("Runtime shared flow dispatch order stable"),
+      ShardedReverse.StableHash, FlowForward.StableHash);
+  }
   const FCrowdMassSharedFlowAgentInput DuplicateFlowAgent =
     FlowInput.Agents[0];
   FlowInput.Agents.Add(DuplicateFlowAgent);
@@ -778,6 +793,21 @@ bool FMassCrowdRuntimeFacingFinalizeWorkTest::RunTest(
 
   const FCrowdMassFacingWorkOutput FacingLegacy =
     FCrowdMassFacingWork::Resolve(Input.Facing);
+  for (const int32 ShardSize : {1, 2, 7})
+  {
+    const FCrowdMassFacingWorkOutput ShardedForward =
+      FCrowdMassFacingWork::ResolveSharded(
+        Input.Facing, ShardSize, false);
+    const FCrowdMassFacingWorkOutput ShardedReverse =
+      FCrowdMassFacingWork::ResolveSharded(
+        Input.Facing, ShardSize, true);
+    TestTrue(TEXT("facing shard completes"),
+      ShardedForward.bCompleted && ShardedReverse.bCompleted);
+    TestEqual(TEXT("facing shard size stable"),
+      ShardedForward.StableHash, FacingLegacy.StableHash);
+    TestEqual(TEXT("facing dispatch order stable"),
+      ShardedReverse.StableHash, FacingLegacy.StableHash);
+  }
   FCrowdMassMovementFinalizeWorkInput FinalizeLegacyInput;
   TArray<FCrowdMassCommitTarget> LegacyTargets;
   TestTrue(TEXT("legacy facing output builds finalize input"),

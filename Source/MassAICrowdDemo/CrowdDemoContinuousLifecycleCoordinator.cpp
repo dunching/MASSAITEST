@@ -757,17 +757,14 @@ void ACrowdDemoContinuousLifecycleCoordinator::SyncClientVisualsIncremental()
     ? World->GetSubsystem<UMassCrowdPresentationSubsystem>() : nullptr;
   UInstancedStaticMeshComponent* Instances = Replicator
     ? Replicator->GetCrowdInstancesForClientVisuals() : nullptr;
-  UInstancedStaticMeshComponent* HitFlashInstances = Replicator
-    ? Replicator->GetCrowdHitFlashInstancesForClientVisuals() : nullptr;
-  if (!Replicator || !Presentation || !Instances || !HitFlashInstances)
+  if (!Replicator || !Presentation || !Instances)
     return;
 
   if (!bClientVisualsInitialized)
   {
     Replicator->ClearCrowdVisualInstances();
     const TSharedRef<FCrowdDemoIsmPresentationSink> Sink =
-      MakeShared<FCrowdDemoIsmPresentationSink>(
-        *Instances, *HitFlashInstances);
+      MakeShared<FCrowdDemoIsmPresentationSink>(*Instances);
     if (!Presentation->RegisterProfile(1, Sink))
     {
       UE_LOG(LogTemp, Error,
@@ -824,15 +821,13 @@ void ACrowdDemoContinuousLifecycleCoordinator::SyncClientVisualsIncremental()
     }
   }
   if (Instances->GetInstanceCount() != LifecycleWorld.GetActiveEntityCount()
-    || HitFlashInstances->GetInstanceCount() != LifecycleWorld.GetActiveEntityCount()
     || Presentation->GetInstanceCount(1)
       != LifecycleWorld.GetActiveEntityCount())
   {
     UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoContinuousLifecycle role=client stage=visual_count active=%d visual=%d hit_flash=%d tracked=%d"),
+      TEXT("VIOLATION CrowdDemoContinuousLifecycle role=client stage=visual_count active=%d visual=%d tracked=%d"),
       LifecycleWorld.GetActiveEntityCount(),
       Instances->GetInstanceCount(),
-      HitFlashInstances->GetInstanceCount(),
       Presentation->GetInstanceCount(1));
     return;
   }

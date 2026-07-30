@@ -90,8 +90,16 @@ bool FCrowdBehaviorSourceRuntimeAtomicTest::RunTest(
     Prepared.Entities[0].ResolvedChannels.bMovementLocked);
   TestEqual(TEXT("cargo presentation remains"),
     Prepared.Entities[0].ResolvedChannels.Presentation.Num(), 1);
+  TestEqual(TEXT("uncommitted commands are not journaled"),
+    Runtime.GetWorkerInputCommandJournal().Num(), 0);
   TestTrue(TEXT("prepared boundary commits"),
     Runtime.CommitPrepared(Prepared));
+  TestEqual(TEXT("committed commands enter worker input journal"),
+    Runtime.GetWorkerInputCommandJournal().Num(), 6);
+  TestTrue(TEXT("worker input journal acknowledges atomically"),
+    Runtime.AcknowledgeWorkerInputCommands(6));
+  TestEqual(TEXT("acknowledged journal drains"),
+    Runtime.GetWorkerInputCommandJournal().Num(), 0);
 
   const FCrowdBehaviorSourceSet* Committed =
     Runtime.FindSourceSet(EntityRef);

@@ -1,4 +1,5 @@
 #include "CrowdDemoFriendlyLogisticsCoordinator.h"
+#include "Mass/CrowdDemoWorkerInputSync.h"
 #include "CrowdDemoBusinessScenarioContract.h"
 #include "CrowdDemoBusinessSourceProvider.h"
 #include "CrowdDemoFriendlyLogisticsTestDirector.h"
@@ -255,6 +256,15 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       ProductFixedStepIndex, ProductPlanRevision,
       Snapshot, Targets))
     return EProductBoundaryAdvance::Failed;
+  if (!FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
+      *World, Snapshot, FixedStepSeconds,
+      static_cast<double>(ProductFixedStepIndex + 1)
+        * FixedStepSeconds))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFriendlyWorkerShadowInputSync step=%d"),
+      ProductFixedStepIndex);
+  }
   AuthorityLocations.Reset();
   for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
     AuthorityLocations.Add(
@@ -1151,7 +1161,6 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::SyncClientPresentation()
     }
     if (!Replicator
       || !Replicator->GetCrowdInstancesForClientVisuals()
-      || !Replicator->GetCrowdHitFlashInstancesForClientVisuals()
       || !Replicator->GetCargoInstancesForClientVisuals())
     {
       return false;
@@ -1160,7 +1169,6 @@ bool ACrowdDemoFriendlyLogisticsCoordinator::SyncClientPresentation()
       FriendlyPresentationProfile,
       MakeShared<FCrowdDemoIsmPresentationSink>(
         *Replicator->GetCrowdInstancesForClientVisuals(),
-        *Replicator->GetCrowdHitFlashInstancesForClientVisuals(),
         Replicator->GetCargoInstancesForClientVisuals()));
     if (!bPresentationProfileRegistered)
     {

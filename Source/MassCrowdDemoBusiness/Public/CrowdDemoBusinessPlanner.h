@@ -206,6 +206,121 @@ struct FCrowdDemoPlannerDecisionBatch
   bool bValid = false;
 };
 
+namespace CrowdDemoCanonicalPlannerPayload
+{
+  inline FCrowdStableEntityRef Ref(
+    const FCrowdStableEntityRef& Value)
+  {
+    FCrowdStableEntityRef Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.ProviderId = Value.ProviderId;
+    Out.StableEntityId = Value.StableEntityId;
+    Out.LifecycleSerial = Value.LifecycleSerial;
+    return Out;
+  }
+
+  template<typename T>
+  T Copy(const T& Value)
+  {
+    return Value;
+  }
+
+  inline FCrowdFollowEntityPayload Copy(
+    const FCrowdFollowEntityPayload& Value)
+  {
+    FCrowdFollowEntityPayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.TargetRef = Ref(Value.TargetRef);
+    Out.LocalOffset = Value.LocalOffset;
+    Out.MaximumSpeedCmps = Value.MaximumSpeedCmps;
+    Out.AcceptanceRadiusCm = Value.AcceptanceRadiusCm;
+    Out.PositionGain = Value.PositionGain;
+    return Out;
+  }
+
+  inline FCrowdPursueEntityPayload Copy(
+    const FCrowdPursueEntityPayload& Value)
+  {
+    FCrowdPursueEntityPayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.TargetRef = Ref(Value.TargetRef);
+    Out.MaximumSpeedCmps = Value.MaximumSpeedCmps;
+    Out.AcceptanceRadiusCm = Value.AcceptanceRadiusCm;
+    Out.MaximumPredictionSeconds = Value.MaximumPredictionSeconds;
+    return Out;
+  }
+
+  inline FCrowdFleeFromEntityPayload Copy(
+    const FCrowdFleeFromEntityPayload& Value)
+  {
+    FCrowdFleeFromEntityPayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.TargetRef = Ref(Value.TargetRef);
+    Out.MaximumSpeedCmps = Value.MaximumSpeedCmps;
+    Out.SafeDistanceCm = Value.SafeDistanceCm;
+    Out.MaximumPredictionSeconds = Value.MaximumPredictionSeconds;
+    return Out;
+  }
+
+  inline FCrowdMaintainDistancePayload Copy(
+    const FCrowdMaintainDistancePayload& Value)
+  {
+    FCrowdMaintainDistancePayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.TargetRef = Ref(Value.TargetRef);
+    Out.MinimumDistanceCm = Value.MinimumDistanceCm;
+    Out.MaximumDistanceCm = Value.MaximumDistanceCm;
+    Out.HysteresisCm = Value.HysteresisCm;
+    Out.MaximumCorrectionSpeedCmps =
+      Value.MaximumCorrectionSpeedCmps;
+    return Out;
+  }
+
+  inline FCrowdFaceEntityPayload Copy(
+    const FCrowdFaceEntityPayload& Value)
+  {
+    FCrowdFaceEntityPayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.TargetRef = Ref(Value.TargetRef);
+    return Out;
+  }
+
+  inline FCrowdSpeedLimitPayload Copy(
+    const FCrowdSpeedLimitPayload& Value)
+  {
+    FCrowdSpeedLimitPayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.MaximumSpeedCmps = Value.MaximumSpeedCmps;
+    Out.AllowedNavLayerMask = Value.AllowedNavLayerMask;
+    return Out;
+  }
+
+  inline FCrowdTimedImpulsePayload Copy(
+    const FCrowdTimedImpulsePayload& Value)
+  {
+    FCrowdTimedImpulsePayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.InitialVelocity = Value.InitialVelocity;
+    Out.DecayMode = Value.DecayMode;
+    return Out;
+  }
+
+  inline FCrowdDemoBehaviorSourcePayload Copy(
+    const FCrowdDemoBehaviorSourcePayload& Value)
+  {
+    FCrowdDemoBehaviorSourcePayload Out;
+    FMemory::Memzero(&Out, sizeof(Out));
+    Out.Vector = Value.Vector;
+    Out.TargetRef = Ref(Value.TargetRef);
+    Out.CommitId = Value.CommitId;
+    Out.PrimaryId = Value.PrimaryId;
+    Out.SecondaryId = Value.SecondaryId;
+    Out.Quantity = Value.Quantity;
+    Out.Flags = Value.Flags;
+    return Out;
+  }
+}
+
 class MASSCROWDDEMOBUSINESS_API FCrowdDemoPlannerWriter
 {
 public:
@@ -231,8 +346,10 @@ public:
     Entry.SourceTypeId = TypeId;
     Entry.Priority = Priority;
     Entry.LifetimeSteps = LifetimeSteps;
+    const PayloadType Canonical =
+      CrowdDemoCanonicalPlannerPayload::Copy(Payload);
     return Entry.Payload.Set(
-      CrowdStandardSources::PayloadSchema(TypeId), Payload);
+      CrowdStandardSources::PayloadSchema(TypeId), Canonical);
   }
 
   bool AddDemo(
@@ -290,6 +407,13 @@ public:
     const FCrowdDemoBusinessPlannerRegistry& Registry,
     const FCrowdDemoPlanningSnapshot& Snapshot,
     FCrowdDemoPlannerDecisionBatch& OutBatch);
+
+  static bool EvaluateSharded(
+    const FCrowdDemoBusinessPlannerRegistry& Registry,
+    const FCrowdDemoPlanningSnapshot& Snapshot,
+    int32 ShardSize,
+    FCrowdDemoPlannerDecisionBatch& OutBatch,
+    bool bReverseDispatchOrder = false);
 
   static bool BuildMixedAssignment(
     int32 SlotIndex,

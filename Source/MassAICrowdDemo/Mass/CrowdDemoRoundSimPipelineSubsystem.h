@@ -238,6 +238,7 @@ struct FCrowdDemoSoftPressureRollbackSnapshot
   int32 DynamicFlowAnchorCellKey = INDEX_NONE;
   int32 DynamicFlowIntegrationRebuildCount = 0;
   uint32 DynamicFlowRoundHash = 2166136261u;
+  int32 DynamicFlowRoundHashFixedStepIndex = INDEX_NONE;
   uint64 TargetRegionPlanResourceKey = 0;
   FCrowdDemoTargetRegionQuotaExecutionState TargetRegionQuotaExecution;
   FCrowdDemoTargetRegionPlanValidationResult TargetRegionPlanValidation;
@@ -365,6 +366,17 @@ struct FCrowdDemoPreparedMovementBoundaryCommit
   bool bValid = false;
 };
 
+struct FCrowdDemoWorkerMovementTailExecution
+{
+  FCrowdMassBoundaryWorkGraphOutput GraphOutput;
+  FCrowdMassFacingFinalizeWorkOutput Output;
+  TArray<FCrowdMassFinalKinematicState> ObstacleKinematics;
+  TMap<int32, int32> ConsecutiveSettleStepsByAgentId;
+  TMap<int32, bool> FinalSettledByAgentId;
+  uint64 StableHash = 0;
+  TAtomic<bool> bCompleted{false};
+};
+
 struct FCrowdDemoBoundaryFacingWorkState
 {
   struct FTargetTopologySlot
@@ -385,15 +397,19 @@ struct FCrowdDemoBoundaryFacingWorkState
   };
   FCrowdMassBoundaryWorkGraphInput GraphInput;
   FCrowdMassBoundaryWorkGraphOutput GraphOutput;
+  FCrowdMassMovementPipelineWorkInput MovementShadowInput;
   TMap<int32, int32> SharedFlowIndexByAgentId;
   FCrowdDemoBoundaryBusinessWorkInput BusinessInput;
   FCrowdDemoBoundaryBusinessWorkOutput BusinessOutput;
+  FCrowdMassFacingWorkInput FacingShadowInput;
   FCrowdDemoSharedFlowFieldConfig ObstacleConfig;
   TArray<FCrowdMassFinalKinematicState> ObstacleKinematics;
   float ObstacleFixedStepSeconds = 0.0f;
   float ObstacleMaxReprojectDeltaCm = 0.0f;
   TArray<FTargetTopologySlot> TargetTopologySlots;
   FCrowdMassFacingFinalizeWorkOutput Output;
+  TSharedPtr<FCrowdDemoWorkerMovementTailExecution,
+    ESPMode::ThreadSafe> WorkerMovementTail;
   TMap<int32, int32> PreviousSettleStepsByAgentId;
   TMap<int32, bool> TerminalOwnerByAgentId;
   TMap<int32, int32> ConsecutiveSettleStepsByAgentId;
@@ -404,6 +420,10 @@ struct FCrowdDemoBoundaryFacingWorkState
   bool bParticleStaged = false;
   bool bObstacleStaged = false;
   bool bMovementConsumed = false;
+  bool bMovementShadowInputValid = false;
+  bool bWorkerMovementTailSubmitted = false;
+  bool bWorkerMovementTailConsumed = false;
+  uint64 WorkerMovementSequence = 0;
   bool bParticleConsumed = false;
   bool bCompleted = false;
 };
@@ -1115,6 +1135,7 @@ private:
   int32 DynamicFlowAnchorCellKey = INDEX_NONE;
   int32 DynamicFlowIntegrationRebuildCount = 0;
   uint32 DynamicFlowRoundHash = 2166136261u;
+  int32 DynamicFlowRoundHashFixedStepIndex = INDEX_NONE;
   bool bDynamicFlowIntegrationCacheInvalidated = false;
   FCrowdDemoTargetFact TargetFact;
   bool bTargetStabilityDiagnosticPlanEnabled = false;
@@ -1263,6 +1284,7 @@ private:
   uint64 PlanApplyBoundarySequence = 0;
   uint64 LastClaimedPlanApplyBoundarySequence = MAX_uint64;
   uint64 BoundaryGeneration = 1;
+  uint64 NextWorkerTaskSequence = 1;
   int32 BoundaryPendingFrameCount = 0;
   int32 BoundaryStaleResultCount = 0;
   int32 BoundaryOrdinaryBlockWaitCount = 0;

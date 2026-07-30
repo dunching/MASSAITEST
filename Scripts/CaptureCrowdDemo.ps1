@@ -27,7 +27,8 @@ param(
   [switch]$NoMinimizeDesktop,
   [switch]$T7StateAcceptance,
   [double]$EventSliceLeadSeconds = 1.0,
-  [double]$EventSliceTailSeconds = 3.0
+  [double]$EventSliceTailSeconds = 3.0,
+  [string]$CommonExtraArgs = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -253,6 +254,9 @@ $VideoPath = Join-Path $LogDir "crowd_demo_phase_f.mp4"
 $StateSidecarPath = Join-Path $LogDir "scenario_state_events.jsonl"
 $AcceptanceManifestPath = Join-Path $LogDir "acceptance_manifest.json"
 $CommonArgs = "-CrowdDemoEntityCount=$EntityCount -CrowdDemoScenario=$Scenario -CrowdDemoDurationSeconds=$DurationSeconds -unattended -NoSound"
+if (![string]::IsNullOrWhiteSpace($CommonExtraArgs)) {
+  $CommonArgs = "$CommonArgs $CommonExtraArgs"
+}
 if ($RequireClientReady) {
   $CommonArgs = "$CommonArgs -CrowdDemoRequireClientReady -CrowdDemoReadyLeadSeconds=3 -CrowdDemoReadyTimeoutSeconds=60"
 }

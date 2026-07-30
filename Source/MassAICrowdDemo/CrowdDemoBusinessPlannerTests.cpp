@@ -151,6 +151,21 @@ bool FCrowdDemoBusinessPlannerDeterminismTest::RunTest(
     ForwardBatch.Decisions.Num(), 20);
   TestEqual(TEXT("decision order independent"),
     ForwardBatch.StableHash, ReverseBatch.StableHash);
+  for (const int32 ShardSize : {1, 3, 7, 20})
+  {
+    FCrowdDemoPlannerDecisionBatch ShardedForward;
+    FCrowdDemoPlannerDecisionBatch ShardedReverse;
+    TestTrue(TEXT("business shard evaluates"),
+      FCrowdDemoBusinessPlannerRunner::EvaluateSharded(
+        Registry, Forward, ShardSize, ShardedForward, false));
+    TestTrue(TEXT("business reverse shard evaluates"),
+      FCrowdDemoBusinessPlannerRunner::EvaluateSharded(
+        Registry, Forward, ShardSize, ShardedReverse, true));
+    TestEqual(TEXT("business shard size stable"),
+      ShardedForward.StableHash, ForwardBatch.StableHash);
+    TestEqual(TEXT("business dispatch order stable"),
+      ShardedReverse.StableHash, ForwardBatch.StableHash);
+  }
   int32 AttackIntentCount = 0;
   for (const FCrowdDemoPlannerDecision& Decision
     : ForwardBatch.Decisions)

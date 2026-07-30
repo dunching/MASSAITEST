@@ -225,6 +225,21 @@ public:
   {
     return PendingCommands.Num();
   }
+  TConstArrayView<FCrowdBehaviorSourceCommand>
+  GetPendingCommands() const
+  {
+    return PendingCommands;
+  }
+  TConstArrayView<FCrowdBehaviorSourceCommand>
+  GetWorkerInputCommandJournal() const
+  {
+    return WorkerInputCommandJournal;
+  }
+  bool AcknowledgeWorkerInputCommands(int32 Count);
+  bool HasWorkerInputCommandJournalOverflowed() const
+  {
+    return bWorkerInputCommandJournalOverflowed;
+  }
   void RollbackPendingCommandsTo(int32 Count);
 
   const FCrowdBehaviorSourceSet* FindSourceSet(
@@ -262,9 +277,11 @@ private:
   TMap<FCrowdStableEntityRef, FCrowdResolvedBehaviorChannels>
     LastResolvedChannels;
   TArray<FCrowdBehaviorSourceCommand> PendingCommands;
+  TArray<FCrowdBehaviorSourceCommand> WorkerInputCommandJournal;
   TArray<FCrowdBehaviorCapabilityBindingUpdate> PendingBindingUpdates;
   TArray<FCrowdBehaviorSourceEvent> LastCommittedEvents;
   uint64 RegistryHash = 0;
   uint64 ContextSchemaHash = 0;
+  bool bWorkerInputCommandJournalOverflowed = false;
   bool bInitialized = false;
 };

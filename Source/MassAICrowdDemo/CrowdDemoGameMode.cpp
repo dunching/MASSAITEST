@@ -21,7 +21,7 @@ namespace
   {
     int32 Count = 500;
     FParse::Value(FCommandLine::Get(), TEXT("CrowdDemoEntityCount="), Count);
-    return FMath::Clamp(Count, 1, 2000);
+    return FMath::Clamp(Count, 1, 10000);
   }
 
   const ACrowdDemoScenarioConfigActor* FindScenarioConfig(const UWorld& World)

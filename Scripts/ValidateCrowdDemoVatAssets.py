@@ -5,6 +5,8 @@ import unreal
 
 ROOT = "/Game/CrowdDemo/VAT/T7"
 CLIPS = ("Idle", "Move", "Attack", "HitReact", "Death")
+RUNTIME_PARENT_PATH = ROOT + "/Materials/M_CrowdDemoBug_Runtime_VAT"
+LEGACY_HIT_FLASH_PATH = ROOT + "/Materials/MI_CrowdDemoBug_Runtime_HitFlash_VAT"
 
 
 def require(path, expected_type):
@@ -35,10 +37,9 @@ def main():
         ROOT + "/Materials/MI_CrowdDemoBug_Runtime_VAT", unreal.MaterialInstanceConstant
     )
     materials.append(runtime_material)
-    hit_flash_material = require(
-        ROOT + "/Materials/MI_CrowdDemoBug_Runtime_HitFlash_VAT", unreal.MaterialInstanceConstant
-    )
-    materials.append(hit_flash_material)
+    runtime_parent = require(RUNTIME_PARENT_PATH, unreal.Material)
+    if unreal.EditorAssetLibrary.does_asset_exist(LEGACY_HIT_FLASH_PATH):
+        raise RuntimeError("Legacy duplicate-ISM hit-flash material still exists")
 
     if data.get_editor_property("skeletal_mesh").get_path_name() != skeletal.get_path_name():
         raise RuntimeError("VAT data asset skeletal mesh reference mismatch")
@@ -68,24 +69,76 @@ def main():
         raise RuntimeError("VAT texture has invalid dimensions")
     if any(material.get_editor_property("parent") is None for material in materials):
         raise RuntimeError("VAT material instance is missing its official AnimToTexture parent")
+    if runtime_material.get_editor_property("parent").get_path_name() != runtime_parent.get_path_name():
+        raise RuntimeError("Runtime VAT material does not use the project hit-flash parent")
     auto_play = unreal.MaterialEditingLibrary.get_material_instance_static_switch_parameter_value(
         runtime_material, "AutoPlay"
     )
     if auto_play:
         raise RuntimeError("Runtime VAT material must use per-instance manual frame playback")
-    hit_flash_auto_play = unreal.MaterialEditingLibrary.get_material_instance_static_switch_parameter_value(
-        hit_flash_material, "AutoPlay"
+    hit_flash_color = unreal.MaterialEditingLibrary.get_material_instance_vector_parameter_value(
+        runtime_material, "HitFlashColor"
     )
-    if hit_flash_auto_play:
-        raise RuntimeError("Hit-flash VAT material must use per-instance manual frame playback")
+    hit_flash_emissive = unreal.MaterialEditingLibrary.get_material_instance_scalar_parameter_value(
+        runtime_material, "HitFlashEmissiveStrength"
+    )
+    if hit_flash_color != unreal.LinearColor(1.0, 1.0, 1.0, 1.0):
+        raise RuntimeError(f"Runtime VAT hit-flash color must default to white: {hit_flash_color}")
+    if abs(hit_flash_emissive - 1.0) > 0.0001:
+        raise RuntimeError(
+            f"Runtime VAT hit-flash emissive strength must default to 1: {hit_flash_emissive}"
+        )
     runtime_body_color = unreal.MaterialEditingLibrary.get_material_instance_vector_parameter_value(
         runtime_material, "BodyColor"
     )
-    hit_flash_body_color = unreal.MaterialEditingLibrary.get_material_instance_vector_parameter_value(
-        hit_flash_material, "BodyColor"
+    root_attributes = unreal.MaterialEditingLibrary.get_material_property_input_node(
+        runtime_parent, unreal.MaterialProperty.MP_MATERIAL_ATTRIBUTES
     )
-    if runtime_body_color == hit_flash_body_color:
-        raise RuntimeError("Runtime and hit-flash VAT materials must have distinct BodyColor values")
+    if not isinstance(root_attributes, unreal.MaterialExpressionMakeMaterialAttributes):
+        raise RuntimeError("Runtime VAT parent does not publish rebuilt Material Attributes")
+    connected_inputs = unreal.MaterialEditingLibrary.get_inputs_for_material_expression(
+        runtime_parent, root_attributes
+    )
+    connected_inputs = [node for node in connected_inputs if node]
+    if len(connected_inputs) < 27:
+        raise RuntimeError(
+            "Runtime VAT parent does not preserve every material attribute input: "
+            f"connected={len(connected_inputs)}"
+        )
+
+    graph_nodes = []
+    pending_nodes = [root_attributes]
+    visited_paths = set()
+    while pending_nodes:
+        node = pending_nodes.pop()
+        node_path = node.get_path_name()
+        if node_path in visited_paths:
+            continue
+        visited_paths.add(node_path)
+        graph_nodes.append(node)
+        pending_nodes.extend(
+            input_node
+            for input_node in unreal.MaterialEditingLibrary.get_inputs_for_material_expression(
+                runtime_parent, node
+            )
+            if input_node
+        )
+    custom_data_nodes = [
+        expression
+        for expression in graph_nodes
+        if isinstance(expression, unreal.MaterialExpressionPerInstanceCustomData)
+    ]
+    if not any(
+        node.get_editor_property("data_index") == 2
+        and abs(node.get_editor_property("const_default_value")) <= 0.0001
+        for node in custom_data_nodes
+    ):
+        raise RuntimeError("Runtime VAT parent is missing per-instance custom data slot 2")
+    if not any(
+        isinstance(expression, unreal.MaterialExpressionBreakMaterialAttributes)
+        for expression in graph_nodes
+    ):
+        raise RuntimeError("Runtime VAT parent is missing the original attribute passthrough")
     bounds = static.get_bounding_box()
     bounds_size = bounds.max - bounds.min
 
@@ -94,9 +147,10 @@ def main():
         f"skeletal={skeletal.get_path_name()} static={static.get_path_name()} "
         f"sequences={len(sequences)} ranges={baked_ranges} uv_count={uv_count} "
         f"textures={[(item.blueprint_get_size_x(), item.blueprint_get_size_y()) for item in textures]} "
-        f"materials={len(materials)} runtime_manual=2 "
+        f"materials={len(materials)} runtime_manual=1 custom_data_slot=2 "
         f"bounds_cm=({bounds_size.x:.3f},{bounds_size.y:.3f},{bounds_size.z:.3f}) "
-        f"runtime_color={runtime_body_color} hit_flash_color={hit_flash_body_color}"
+        f"runtime_color={runtime_body_color} hit_flash_color={hit_flash_color} "
+        f"hit_flash_emissive={hit_flash_emissive}"
     )
 
 

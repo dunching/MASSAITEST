@@ -416,10 +416,12 @@ void FCrowdBehaviorSourceRuntime::Reset()
   SourceSets.Reset();
   LastResolvedChannels.Reset();
   PendingCommands.Reset();
+  WorkerInputCommandJournal.Reset();
   PendingBindingUpdates.Reset();
   LastCommittedEvents.Reset();
   RegistryHash = 0;
   ContextSchemaHash = 0;
+  bWorkerInputCommandJournalOverflowed = false;
   bInitialized = false;
 }
 
@@ -469,6 +471,17 @@ bool FCrowdBehaviorSourceRuntime::QueueCommand(
     || PendingCommands.Num() >= 4096)
     return false;
   PendingCommands.Add(Command);
+  return true;
+}
+
+bool FCrowdBehaviorSourceRuntime::AcknowledgeWorkerInputCommands(
+  const int32 Count)
+{
+  if (Count < 0 || Count > WorkerInputCommandJournal.Num())
+    return false;
+  if (Count > 0)
+    WorkerInputCommandJournal.RemoveAt(
+      0, Count, EAllowShrinking::No);
   return true;
 }
 
@@ -692,6 +705,15 @@ bool FCrowdBehaviorSourceRuntime::CommitPrepared(
     LastResolvedChannels.Add(
       Entity.EntityRef, Entity.ResolvedChannels);
     LastCommittedEvents.Append(Entity.Events);
+  }
+  for (const FCrowdBehaviorSourceCommand& Command : PendingCommands)
+  {
+    if (Command.EffectiveFixedStep > Prepared.FixedStepIndex)
+      continue;
+    if (WorkerInputCommandJournal.Num() < 4096)
+      WorkerInputCommandJournal.Add(Command);
+    else
+      bWorkerInputCommandJournalOverflowed = true;
   }
   PendingCommands.RemoveAll([&](const auto& Command)
   {

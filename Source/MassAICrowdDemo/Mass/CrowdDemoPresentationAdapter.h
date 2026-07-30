@@ -11,7 +11,6 @@ class FCrowdDemoIsmPresentationSink final
 public:
   FCrowdDemoIsmPresentationSink(
     UInstancedStaticMeshComponent& InInstances,
-    UInstancedStaticMeshComponent& InHitFlashInstances,
     UInstancedStaticMeshComponent* InCargoInstances = nullptr);
 
   virtual int32 AddInstance(
@@ -25,6 +24,5 @@ public:
 
 private:
   TWeakObjectPtr<UInstancedStaticMeshComponent> Instances;
-  TWeakObjectPtr<UInstancedStaticMeshComponent> HitFlashInstances;
   TWeakObjectPtr<UInstancedStaticMeshComponent> CargoInstances;
 };

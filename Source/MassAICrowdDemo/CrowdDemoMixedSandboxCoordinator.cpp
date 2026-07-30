@@ -1,4 +1,5 @@
 #include "CrowdDemoMixedSandboxCoordinator.h"
+#include "Mass/CrowdDemoWorkerInputSync.h"
 
 #include "Camera/CameraActor.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -2219,6 +2220,15 @@ bool ACrowdDemoMixedSandboxCoordinator::BeginProductMovementBoundary(
     Snapshot);
   if (!Snapshot.bValid)
     return RejectBoundary(TEXT("snapshot"));
+  if (!World || !FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
+      *World, Snapshot, MixedFixedStepSeconds,
+      static_cast<double>(FixedStepIndex + 1)
+        * MixedFixedStepSeconds))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedWorkerShadowInputSync step=%lld"),
+      FixedStepIndex);
+  }
 
   FCrowdMassBoundaryWorkGraphInput PipelineInput;
   PipelineInput.Movement.Guidance.FixedStepIndex =
@@ -3658,15 +3668,13 @@ void ACrowdDemoMixedSandboxCoordinator::SyncClientVisualsIncremental()
     ? World->GetSubsystem<UMassCrowdPresentationSubsystem>() : nullptr;
   UInstancedStaticMeshComponent* Instances = Replicator
     ? Replicator->GetCrowdInstancesForClientVisuals() : nullptr;
-  UInstancedStaticMeshComponent* HitFlash = Replicator
-    ? Replicator->GetCrowdHitFlashInstancesForClientVisuals() : nullptr;
-  if (!Replicator || !Presentation || !Instances || !HitFlash) return;
+  if (!Replicator || !Presentation || !Instances) return;
 
   if (!bClientVisualsInitialized)
   {
     Replicator->ClearCrowdVisualInstances();
     const TSharedRef<FCrowdDemoIsmPresentationSink> Sink =
-      MakeShared<FCrowdDemoIsmPresentationSink>(*Instances, *HitFlash);
+      MakeShared<FCrowdDemoIsmPresentationSink>(*Instances);
     if (!Presentation->RegisterProfile(
         MixedPresentationProfileKey, Sink))
     {
@@ -3749,12 +3757,11 @@ void ACrowdDemoMixedSandboxCoordinator::SyncClientVisualsIncremental()
     return;
   }
   PresentedEntitiesByStableId = MoveTemp(NextPresented);
-  if (Instances->GetInstanceCount() != LifecycleWorld.GetActiveEntityCount()
-    || HitFlash->GetInstanceCount() != LifecycleWorld.GetActiveEntityCount())
+  if (Instances->GetInstanceCount() != LifecycleWorld.GetActiveEntityCount())
   {
     UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoMixedSandbox role=client stage=visual_count active=%d visual=%d flash=%d"),
-      LifecycleWorld.GetActiveEntityCount(), Instances->GetInstanceCount(), HitFlash->GetInstanceCount());
+      TEXT("VIOLATION CrowdDemoMixedSandbox role=client stage=visual_count active=%d visual=%d"),
+      LifecycleWorld.GetActiveEntityCount(), Instances->GetInstanceCount());
     ++StaleRejectCount;
     return;
   }

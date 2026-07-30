@@ -208,7 +208,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [COMPUTED][HIGH] T7 已接入五状态业务/视觉事实、确定性测试 HitFact、击退/击飞/落地、真实 VAT ISM 与同步 ServerTime 播放，并已通过自动化、单轮双端技术门和近景人工审片。
 
-[COMPUTED][HIGH] 命中闪色事实、HitFlashIntensity和红色同帧VAT overlay已接入；T7近景录像已证明完整受击动作可辨识。T8进一步实现并验证了10射手+10静止目标的目标选择、windup、Mass projectile、swept hit、damage、客户端事件视觉与统一HitResponse。
+[COMPUTED][HIGH] 命中闪色事实与HitFlashIntensity已接入；当前由主体VAT材质读取PICD slot 2独立闪白单个实例，不再使用红色同帧overlay ISM。9208 T7逐帧录像证明Knockback/KnockUp/Death分别只改变目标实例且无副本或重影。T8进一步实现并验证了10射手+10静止目标的目标选择、windup、Mass projectile、swept hit、damage、客户端事件视觉与统一HitResponse。
 
 [INFERRED][HIGH] T8 Small本身只证明静止目标远程投射物链；PJ6另以20/100/500实体和4/20/100并发Projectile关闭模块化规模门。两者仍不能外推为远程Transport handoff、T9混合战斗或原工程迁移已经成立。
 
@@ -244,7 +244,7 @@ Shared Flow / Transport决定去哪个可行区域
 
 [COMPUTED][HIGH] Demo现有地图已提供独立`-CrowdDemoContinuousLifecycle`入口：固定Round agent数为0，10个真实Mass entity逐步增长到20硬上限，再持续执行membership迁移、Death/BusinessRecycle despawn和同槽位高LifecycleSerial respawn；T1 active/inactive没有被复用为生命周期。
 
-[COMPUTED][HIGH] 8777双端运行中，序列12把slot 2 serial 1按Death销毁，序列13以serial 2重生；客户端普通/HitFlash ISM按StableEntityRef增量Add/Remove/Update，检查点active/visible=`20/20`，序列18双端entity-set hash=`14341810777549134372`一致，stale reject=0且无VIOLATION。[INFERRED][HIGH] 这只建立持续生命周期基线，不等同于H的统一Behavior或J的混合Sandbox已完成。
+[COMPUTED][HIGH] 8777双端运行中，序列12把slot 2 serial 1按Death销毁，序列13以serial 2重生；该历史运行使用普通/HitFlash双ISM。当前客户端只按StableEntityRef增量Add/Remove/Update主体ISM，`HitFlashIntensity`位于同一实例slot 2；9203序列44持续生命周期门通过且entity-set hash=`12305161180829922642`。[INFERRED][HIGH] 这只建立持续生命周期与单主体表现基线，不等同于H的统一Behavior或J的混合Sandbox已完成。
 
 ## 2026-07-23 阶段 H 统一 Behavior 基线
 

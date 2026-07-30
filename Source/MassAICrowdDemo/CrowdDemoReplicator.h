@@ -52,7 +52,6 @@ public:
   virtual void Tick(float DeltaSeconds) override;
   virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
   UInstancedStaticMeshComponent* GetCrowdInstancesForClientVisuals() const;
-  UInstancedStaticMeshComponent* GetCrowdHitFlashInstancesForClientVisuals() const;
   UInstancedStaticMeshComponent* GetCargoInstancesForClientVisuals() const;
   void ClearCrowdVisualInstances();
   int32 GetCrowdVisualInstanceCount() const;
@@ -96,9 +95,6 @@ protected:
 
   UPROPERTY(VisibleAnywhere)
   TObjectPtr<UInstancedStaticMeshComponent> CrowdInstances;
-
-  UPROPERTY(VisibleAnywhere)
-  TObjectPtr<UInstancedStaticMeshComponent> CrowdHitFlashInstances;
 
   UPROPERTY(VisibleAnywhere)
   TObjectPtr<UInstancedStaticMeshComponent> CargoInstances;

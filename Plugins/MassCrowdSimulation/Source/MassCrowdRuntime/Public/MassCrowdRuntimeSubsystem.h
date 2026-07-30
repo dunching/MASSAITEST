@@ -1,8 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassCrowdAsyncSimulationRuntime.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdNavRuntime.h"
+#include "MassCrowdWorkerResultApply.h"
+#include "MassCrowdWorkerMovementAuthority.h"
+#include "MassCrowdWorkerShadowSync.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "MassCrowdRuntimeSubsystem.generated.h"
 
@@ -86,10 +90,63 @@ public:
     return BehaviorSourceRuntime;
   }
 
+  FCrowdAsyncSimulationRuntime& GetAsyncSimulationRuntime()
+  {
+    check(AsyncSimulationRuntime);
+    return *AsyncSimulationRuntime;
+  }
+
+  const FCrowdAsyncSimulationRuntime& GetAsyncSimulationRuntime() const
+  {
+    check(AsyncSimulationRuntime);
+    return *AsyncSimulationRuntime;
+  }
+
+  FCrowdWorkerBoundaryShadowSync& GetWorkerShadowSync()
+  {
+    check(WorkerShadowSync);
+    return *WorkerShadowSync;
+  }
+
+  const FCrowdWorkerBoundaryShadowSync& GetWorkerShadowSync() const
+  {
+    check(WorkerShadowSync);
+    return *WorkerShadowSync;
+  }
+
+  FCrowdWorkerResultApplyProxy& GetWorkerResultApplyProxy()
+  {
+    check(WorkerResultApplyProxy);
+    return *WorkerResultApplyProxy;
+  }
+
+  const FCrowdWorkerResultApplyProxy& GetWorkerResultApplyProxy() const
+  {
+    check(WorkerResultApplyProxy);
+    return *WorkerResultApplyProxy;
+  }
+
+  FCrowdWorkerMovementAuthority& GetWorkerMovementAuthority()
+  {
+    check(WorkerMovementAuthority);
+    return *WorkerMovementAuthority;
+  }
+
+  const FCrowdWorkerMovementAuthority&
+    GetWorkerMovementAuthority() const
+  {
+    check(WorkerMovementAuthority);
+    return *WorkerMovementAuthority;
+  }
+
 private:
   TUniquePtr<ICrowdNavDataProvider> NavDataProvider;
   FCrowdNavGraphResource NavGraphResource;
   FCrowdNavSurfaceGraphBuildConfig GraphBuildConfig;
   FCrowdNavFlowCache FlowCache;
   FCrowdBehaviorSourceRuntime BehaviorSourceRuntime;
+  TUniquePtr<FCrowdAsyncSimulationRuntime> AsyncSimulationRuntime;
+  TUniquePtr<FCrowdWorkerBoundaryShadowSync> WorkerShadowSync;
+  TUniquePtr<FCrowdWorkerResultApplyProxy> WorkerResultApplyProxy;
+  TUniquePtr<FCrowdWorkerMovementAuthority> WorkerMovementAuthority;
 };

@@ -1,5 +1,7 @@
 #include "MassCrowdSharedFlowWork.h"
 
+#include "Async/ParallelFor.h"
+
 #define Fold SharedFlowWork_Fold
 #define QuantizeFloat SharedFlowWork_QuantizeFloat
 #define ObstaclesMatch SharedFlowWork_ObstaclesMatch
@@ -195,6 +197,86 @@ FCrowdMassSharedFlowSampleOutput FCrowdMassSharedFlowWork::BuildPreferred(
   }
   Output.StableHash = Hash;
   Output.bValid = Output.Agents.Num() == Agents.Num();
+  return Output;
+}
+
+FCrowdMassSharedFlowSampleOutput
+FCrowdMassSharedFlowWork::BuildPreferredSharded(
+  const FCrowdMassSharedFlowSampleInput& Input,
+  const int32 ShardSize,
+  const bool bReverseDispatchOrder)
+{
+  FCrowdMassSharedFlowSampleOutput Output;
+  Output.FixedStepIndex = Input.FixedStepIndex;
+  Output.PlanRevision = Input.PlanRevision;
+  if (ShardSize <= 0 || Input.Agents.IsEmpty())
+    return Output;
+
+  TArray<FCrowdMassSharedFlowAgentInput> SortedAgents =
+    Input.Agents;
+  SortedAgents.Sort([](const auto& A, const auto& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
+  const int32 ShardCount =
+    FMath::DivideAndRoundUp(SortedAgents.Num(), ShardSize);
+  TArray<FCrowdMassSharedFlowSampleOutput> ShardOutputs;
+  ShardOutputs.SetNum(ShardCount);
+  ParallelFor(ShardCount, [&](const int32 DispatchIndex)
+  {
+    const int32 ShardIndex = bReverseDispatchOrder
+      ? ShardCount - DispatchIndex - 1
+      : DispatchIndex;
+    const int32 Begin = ShardIndex * ShardSize;
+    const int32 Count = FMath::Min(
+      ShardSize, SortedAgents.Num() - Begin);
+    FCrowdMassSharedFlowSampleInput ShardInput;
+    ShardInput.FixedStepIndex = Input.FixedStepIndex;
+    ShardInput.PlanRevision = Input.PlanRevision;
+    ShardInput.FixedStepSeconds = Input.FixedStepSeconds;
+    ShardInput.Fields = Input.Fields;
+    ShardInput.Agents.Append(
+      SortedAgents.GetData() + Begin, Count);
+    ShardOutputs[ShardIndex] = BuildPreferred(ShardInput);
+  });
+
+  for (const FCrowdMassSharedFlowSampleOutput& Shard
+    : ShardOutputs)
+  {
+    if (!Shard.bValid)
+      return Output;
+    Output.Agents.Append(Shard.Agents);
+    Output.RecoveredAgentCount += Shard.RecoveredAgentCount;
+    Output.DesiredSegmentViolationCount +=
+      Shard.DesiredSegmentViolationCount;
+    Output.SourceAttachmentSuccessCount +=
+      Shard.SourceAttachmentSuccessCount;
+    Output.UnreachableSampleCount +=
+      Shard.UnreachableSampleCount;
+  }
+  Output.Agents.Sort([](const auto& A, const auto& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
+  uint32 Hash = Fold(
+    2166136261u, static_cast<uint32>(Input.FixedStepIndex));
+  Hash = Fold(Hash, static_cast<uint32>(Input.PlanRevision));
+  for (const FCrowdMassSharedFlowAgentOutput& Result
+    : Output.Agents)
+  {
+    Hash = Fold(Hash, static_cast<uint32>(Result.AgentId));
+    Hash = Fold(
+      Hash, static_cast<uint32>(Result.Sample.StableCellKey));
+    Hash = Fold(
+      Hash, static_cast<uint32>(Result.Sample.IntegrationCost));
+    Hash = Fold(
+      Hash, QuantizeFloat(Result.Sample.FlowDirection.X, 32767.0f));
+    Hash = Fold(
+      Hash, QuantizeFloat(Result.Sample.FlowDirection.Y, 32767.0f));
+    Hash = Fold(Hash, Result.Candidate.StableHash);
+  }
+  Output.StableHash = Hash;
+  Output.bValid = Output.Agents.Num() == SortedAgents.Num();
   return Output;
 }
 

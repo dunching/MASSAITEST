@@ -1,5 +1,7 @@
 #include "CrowdDemoBusinessPlanner.h"
 
+#include "Async/ParallelFor.h"
+
 #include "CrowdDemoBusinessAdapters.h"
 
 namespace CrowdDemoBusinessPlannerPrivate
@@ -121,7 +123,7 @@ namespace CrowdDemoBusinessPlannerPrivate
 
   bool AddFaceMovement(FCrowdDemoPlannerWriter& Writer)
   {
-    FCrowdFaceMovementPayload Facing;
+    FCrowdFaceMovementPayload Facing{};
     Facing.MinimumSpeedCmps = 1.0f;
     return Writer.AddStandard(
       CrowdDemoBehaviorControllerIds::Facing, 1,
@@ -133,7 +135,7 @@ namespace CrowdDemoBusinessPlannerPrivate
     const FCrowdStableEntityRef& TargetRef,
     const uint64 FactRevision)
   {
-    FCrowdFaceEntityPayload Facing;
+    FCrowdFaceEntityPayload Facing{};
     Facing.TargetRef = TargetRef;
     return Writer.AddStandard(
         CrowdDemoBehaviorControllerIds::Facing, 1,
@@ -147,7 +149,7 @@ namespace CrowdDemoBusinessPlannerPrivate
     FCrowdDemoPlannerWriter& Writer,
     const FCrowdDemoPlanningSnapshot& Snapshot)
   {
-    FCrowdSpeedLimitPayload Limit;
+    FCrowdSpeedLimitPayload Limit{};
     Limit.MaximumSpeedCmps =
       Snapshot.Settings.PopulationLimit >= 500
       ? Snapshot.Settings.ScaleMaximumSpeedCmps
@@ -178,7 +180,7 @@ namespace CrowdDemoBusinessPlannerPrivate
         FindObjective(Snapshot, Agent.EntityRef, ObjectiveId);
       if (!Objective) return false;
 
-      FCrowdArriveAtLocationPayload Move;
+      FCrowdArriveAtLocationPayload Move{};
       Move.TargetLocation = FVector3f(Objective->Location);
       Move.MaximumSpeedCmps = Snapshot.Settings.MaximumSpeedCmps;
       Move.AcceptanceRadiusCm = 80.0f;
@@ -192,7 +194,7 @@ namespace CrowdDemoBusinessPlannerPrivate
 
       if (Agent.bCarrying)
       {
-        FCrowdDemoBehaviorSourcePayload Carry;
+        FCrowdDemoBehaviorSourcePayload Carry{};
         Carry.PrimaryId = 1;
         Carry.SecondaryId = 1;
         if (!Writer.AddDemo(
@@ -213,7 +215,7 @@ namespace CrowdDemoBusinessPlannerPrivate
         const ECrowdDemoBusinessCommitKind Kind = Agent.bCarrying
           ? ECrowdDemoBusinessCommitKind::CargoDeliver
           : ECrowdDemoBusinessCommitKind::CargoPickup;
-        FCrowdDemoBehaviorSourcePayload Interaction;
+        FCrowdDemoBehaviorSourcePayload Interaction{};
         Interaction.PrimaryId = Agent.bCarrying
           ? CrowdDemoBehaviorAdapterIds::CargoDeliver
           : CrowdDemoBehaviorAdapterIds::CargoPickup;
@@ -254,12 +256,12 @@ namespace CrowdDemoBusinessPlannerPrivate
       const FCrowdDemoPlannerAgentFact* Target = SelectPeer(
         Snapshot, Agent, CrowdDemoBusinessPlanners::GuardFlee);
       if (!Target) return AddSpeedLimit(Writer, Snapshot);
-      FCrowdPursueEntityPayload Pursue;
+      FCrowdPursueEntityPayload Pursue{};
       Pursue.TargetRef = Target->EntityRef;
       Pursue.MaximumSpeedCmps = Snapshot.Settings.MaximumSpeedCmps;
       Pursue.AcceptanceRadiusCm = 140.0f;
       Pursue.MaximumPredictionSeconds = 0.25f;
-      FCrowdMaintainDistancePayload DistanceBand;
+      FCrowdMaintainDistancePayload DistanceBand{};
       DistanceBand.TargetRef = Target->EntityRef;
       DistanceBand.MinimumDistanceCm = 130.0f;
       DistanceBand.MaximumDistanceCm = 180.0f;
@@ -285,7 +287,7 @@ namespace CrowdDemoBusinessPlannerPrivate
         && Snapshot.FixedStepIndex - Agent.LastAttackFixedStep
           >= Snapshot.Settings.AttackCooldownSteps)
       {
-        FCrowdDemoHostIntent Attack;
+        FCrowdDemoHostIntent Attack{};
         Attack.ActionTypeId =
           CrowdDemoBusinessActions::Attack;
         Attack.PayloadTypeId =
@@ -300,7 +302,7 @@ namespace CrowdDemoBusinessPlannerPrivate
           Snapshot.FixedStepIndex, Agent.TransitionRevision,
           Agent.EntityRef, {}, Target->EntityRef,
           Attack.PayloadTypeId, Attack.Quantity);
-        FCrowdMovementLockPayload Lock;
+        FCrowdMovementLockPayload Lock{};
         if (!Writer.AddHostIntent(Attack)
           || !Writer.AddStandard(
             CrowdDemoBehaviorControllerIds::Reaction, 1,
@@ -329,7 +331,7 @@ namespace CrowdDemoBusinessPlannerPrivate
         const FCrowdDemoPlannerAgentFact* Target = SelectPeer(
           Snapshot, Agent, CrowdDemoBusinessPlanners::PursueAttack);
         if (!Target) return AddSpeedLimit(Writer, Snapshot);
-        FCrowdFleeFromEntityPayload Flee;
+        FCrowdFleeFromEntityPayload Flee{};
         Flee.TargetRef = Target->EntityRef;
         Flee.MaximumSpeedCmps = Snapshot.Settings.MaximumSpeedCmps;
         Flee.SafeDistanceCm = 1000.0f;
@@ -341,7 +343,7 @@ namespace CrowdDemoBusinessPlannerPrivate
           && AddFaceEntity(
             Writer, Target->EntityRef, Snapshot.FactRevision);
       }
-      FCrowdMoveToLocationPayload Move;
+      FCrowdMoveToLocationPayload Move{};
       Move.TargetLocation = FVector3f(Agent.Position);
       Move.MaximumSpeedCmps = 350.0f;
       Move.AcceptanceRadiusCm = 120.0f;
@@ -376,7 +378,7 @@ namespace CrowdDemoBusinessPlannerPrivate
           Snapshot, Agent.EntityRef,
           CrowdDemoBusinessObjectives::RoamRoute);
         if (!Objective) return false;
-        FCrowdMoveToLocationPayload Move;
+        FCrowdMoveToLocationPayload Move{};
         Move.TargetLocation = FVector3f(Objective->Location);
         Move.MaximumSpeedCmps = 400.0f;
         Move.AcceptanceRadiusCm = 100.0f;
@@ -387,7 +389,7 @@ namespace CrowdDemoBusinessPlannerPrivate
       }
       else
       {
-        FCrowdWanderSteeringPayload Wander;
+        FCrowdWanderSteeringPayload Wander{};
         Wander.SpeedCmps = 300.0f;
         Wander.ReselectIntervalSteps = 45;
         if (!Writer.AddStandard(
@@ -421,19 +423,19 @@ namespace CrowdDemoBusinessPlannerPrivate
       const FVector LocalOffset(
         -160.0 - 80.0 * (EscortIndex / 2),
         EscortIndex % 2 == 0 ? -100.0 : 100.0, 0.0);
-      FCrowdFollowEntityPayload Follow;
+      FCrowdFollowEntityPayload Follow{};
       Follow.TargetRef = Anchor->EntityRef;
       Follow.LocalOffset = FVector3f(LocalOffset);
       Follow.MaximumSpeedCmps = 450.0f;
       Follow.AcceptanceRadiusCm = 60.0f;
       Follow.PositionGain = 1.5f;
-      FCrowdMaintainDistancePayload DistanceBand;
+      FCrowdMaintainDistancePayload DistanceBand{};
       DistanceBand.TargetRef = Anchor->EntityRef;
       DistanceBand.MinimumDistanceCm = 120.0f;
       DistanceBand.MaximumDistanceCm = 300.0f;
       DistanceBand.HysteresisCm = 15.0f;
       DistanceBand.MaximumCorrectionSpeedCmps = 100.0f;
-      FCrowdFormationOffsetPayload Formation;
+      FCrowdFormationOffsetPayload Formation{};
       Formation.PositionGain = 1.0f;
       Formation.MaximumCorrectionSpeedCmps = 120.0f;
       return Writer.AddStandard(
@@ -518,12 +520,12 @@ namespace CrowdDemoBusinessPlannerPrivate
         return false;
       }
 
-      FCrowdPursueEntityPayload Pursue;
+      FCrowdPursueEntityPayload Pursue{};
       Pursue.TargetRef = Target->EntityRef;
       Pursue.MaximumSpeedCmps = Snapshot.Settings.MaximumSpeedCmps;
       Pursue.AcceptanceRadiusCm = MinimumDistance;
       Pursue.MaximumPredictionSeconds = 0.25f;
-      FCrowdMaintainDistancePayload Distance;
+      FCrowdMaintainDistancePayload Distance{};
       Distance.TargetRef = Target->EntityRef;
       Distance.MinimumDistanceCm = MinimumDistance;
       Distance.MaximumDistanceCm = MaximumDistance;
@@ -542,7 +544,7 @@ namespace CrowdDemoBusinessPlannerPrivate
       if (Agent.AttackState.Phase
         == ECrowdDemoAttackPlannerPhase::Commit)
       {
-        FCrowdMovementLockPayload Lock;
+        FCrowdMovementLockPayload Lock{};
         if (!Writer.AddStandard(
             CrowdDemoBehaviorControllerIds::Reaction, 1,
             CrowdStandardSources::MovementLock, Lock, 1))
@@ -844,8 +846,10 @@ bool FCrowdDemoPlannerWriter::AddDemo(
   Entry.SourceTypeId = TypeId;
   Entry.Priority = Priority;
   Entry.LifetimeSteps = LifetimeSteps;
+  const FCrowdDemoBehaviorSourcePayload Canonical =
+    CrowdDemoCanonicalPlannerPayload::Copy(Payload);
   return Entry.Payload.Set(
-    CrowdDemoBehaviorSchemas::Standard, Payload);
+    CrowdDemoBehaviorSchemas::Standard, Canonical);
 }
 
 bool FCrowdDemoPlannerWriter::AddContext(
@@ -940,6 +944,65 @@ bool FCrowdDemoBusinessPlannerRunner::BuildDefaultRegistry(
     && OutRegistry.Freeze();
 }
 
+namespace
+{
+  bool EvaluatePlannerAgent(
+    const FCrowdDemoBusinessPlannerRegistry& Registry,
+    const FCrowdDemoPlanningSnapshot& Snapshot,
+    const FCrowdDemoPlannerAgentFact& Agent,
+    FCrowdDemoPlannerDecision& OutDecision)
+  {
+    OutDecision = {};
+    const ICrowdDemoBusinessPlanner* Planner =
+      Registry.Find(Agent.Assignment.PlannerId);
+    if (!Planner) return false;
+    OutDecision.EntityRef = Agent.EntityRef;
+    OutDecision.PlannerId = Agent.Assignment.PlannerId;
+    OutDecision.TaskRef = Agent.TaskRef;
+    if (Agent.Health <= 0)
+    {
+      FCrowdMovementLockPayload Lock{};
+      FCrowdDemoPlannerWriter Writer(OutDecision);
+      if (!Writer.AddStandard(
+          CrowdDemoBehaviorControllerIds::Reaction, 2,
+          CrowdStandardSources::MovementLock, Lock))
+        return false;
+    }
+    else
+    {
+      FCrowdDemoPlannerWriter Writer(OutDecision);
+      if (!Planner->Evaluate(Snapshot, Agent, Writer))
+        return false;
+      for (const FCrowdDemoContextRequest& Request
+        : OutDecision.ContextRequests)
+      {
+        if (!OutDecision.TargetRef.IsValid()
+          && Request.Kind
+            == ECrowdDemoContextRequestKind::TargetKinematics)
+          OutDecision.TargetRef = Request.SubjectRef;
+      }
+      if (Agent.HitReactionUntilFixedStep
+        > Snapshot.FixedStepIndex)
+      {
+        FCrowdTimedImpulsePayload Impulse{};
+        Impulse.InitialVelocity =
+          FVector3f(Agent.HitReactionVelocity);
+        Impulse.DecayMode = ECrowdImpulseDecayMode::Linear;
+        if (!Writer.AddStandard(
+            CrowdDemoBehaviorControllerIds::Reaction, 3,
+            CrowdStandardSources::TimedImpulse, Impulse,
+            static_cast<int32>(
+              Agent.HitReactionUntilFixedStep
+                - Snapshot.FixedStepIndex)))
+          return false;
+      }
+    }
+    OutDecision.DiagnosticLabel =
+      DiagnosticLabelFor(Snapshot, Agent, OutDecision);
+    return OutDecision.Finalize();
+  }
+}
+
 bool FCrowdDemoBusinessPlannerRunner::Evaluate(
   const FCrowdDemoBusinessPlannerRegistry& Registry,
   const FCrowdDemoPlanningSnapshot& Snapshot,
@@ -966,56 +1029,66 @@ bool FCrowdDemoBusinessPlannerRunner::Evaluate(
   uint64 BatchHash = FnvOffset;
   for (const FCrowdDemoPlannerAgentFact& Agent : Snapshot.Agents)
   {
-    const ICrowdDemoBusinessPlanner* Planner =
-      Registry.Find(Agent.Assignment.PlannerId);
-    if (!Planner) return false;
-    FCrowdDemoPlannerDecision Decision;
-    Decision.EntityRef = Agent.EntityRef;
-    Decision.PlannerId = Agent.Assignment.PlannerId;
-    Decision.TaskRef = Agent.TaskRef;
-    if (Agent.Health <= 0)
-    {
-      FCrowdMovementLockPayload Lock;
-      FCrowdDemoPlannerWriter Writer(Decision);
-      if (!Writer.AddStandard(
-          CrowdDemoBehaviorControllerIds::Reaction, 2,
-          CrowdStandardSources::MovementLock, Lock))
-        return false;
-    }
-    else
-    {
-      FCrowdDemoPlannerWriter Writer(Decision);
-      if (!Planner->Evaluate(Snapshot, Agent, Writer))
-        return false;
-      for (const FCrowdDemoContextRequest& Request
-        : Decision.ContextRequests)
-      {
-        if (!Decision.TargetRef.IsValid()
-          && Request.Kind
-            == ECrowdDemoContextRequestKind::TargetKinematics)
-          Decision.TargetRef = Request.SubjectRef;
-      }
-      if (Agent.HitReactionUntilFixedStep
-        > Snapshot.FixedStepIndex)
-      {
-        FCrowdTimedImpulsePayload Impulse;
-        Impulse.InitialVelocity =
-          FVector3f(Agent.HitReactionVelocity);
-        Impulse.DecayMode = ECrowdImpulseDecayMode::Linear;
-        if (!Writer.AddStandard(
-            CrowdDemoBehaviorControllerIds::Reaction, 3,
-            CrowdStandardSources::TimedImpulse, Impulse,
-            static_cast<int32>(
-              Agent.HitReactionUntilFixedStep
-                - Snapshot.FixedStepIndex)))
-          return false;
-      }
-    }
-    Decision.DiagnosticLabel =
-      DiagnosticLabelFor(Snapshot, Agent, Decision);
-    if (!Decision.Finalize()) return false;
+    FCrowdDemoPlannerDecision Decision{};
+    if (!EvaluatePlannerAgent(
+        Registry, Snapshot, Agent, Decision))
+      return false;
     FoldIntegral(BatchHash, Decision.StableHash);
     OutBatch.Decisions.Add(MoveTemp(Decision));
+  }
+  OutBatch.StableHash = BatchHash == 0 ? 1 : BatchHash;
+  OutBatch.bValid = true;
+  return true;
+}
+
+bool FCrowdDemoBusinessPlannerRunner::EvaluateSharded(
+  const FCrowdDemoBusinessPlannerRegistry& Registry,
+  const FCrowdDemoPlanningSnapshot& Snapshot,
+  const int32 ShardSize,
+  FCrowdDemoPlannerDecisionBatch& OutBatch,
+  const bool bReverseDispatchOrder)
+{
+  OutBatch = {};
+  if (ShardSize <= 0 || !Registry.IsFrozen()
+    || Registry.GetStableHash() == 0
+    || !Snapshot.bValid || Snapshot.StableHash == 0)
+    return false;
+  if (Snapshot.ScenarioId
+      == CrowdDemoBusinessScenarios::NoBusiness)
+    return Evaluate(Registry, Snapshot, OutBatch);
+  const int32 ShardCount = FMath::DivideAndRoundUp(
+    Snapshot.Agents.Num(), ShardSize);
+  TArray<FCrowdDemoPlannerDecision> Decisions;
+  TArray<uint8> Valid;
+  Decisions.SetNum(Snapshot.Agents.Num());
+  Valid.Init(0, Snapshot.Agents.Num());
+  ParallelFor(ShardCount, [&](const int32 DispatchIndex)
+  {
+    const int32 ShardIndex = bReverseDispatchOrder
+      ? ShardCount - DispatchIndex - 1
+      : DispatchIndex;
+    const int32 Begin = ShardIndex * ShardSize;
+    const int32 End = FMath::Min(
+      Begin + ShardSize, Snapshot.Agents.Num());
+    for (int32 Index = Begin; Index < End; ++Index)
+    {
+      Valid[Index] = EvaluatePlannerAgent(
+        Registry, Snapshot, Snapshot.Agents[Index],
+        Decisions[Index]) ? 1 : 0;
+    }
+  });
+  OutBatch.ScenarioId = Snapshot.ScenarioId;
+  OutBatch.FixedStepIndex = Snapshot.FixedStepIndex;
+  uint64 BatchHash = FnvOffset;
+  for (int32 Index = 0; Index < Decisions.Num(); ++Index)
+  {
+    if (Valid[Index] == 0)
+    {
+      OutBatch = {};
+      return false;
+    }
+    FoldIntegral(BatchHash, Decisions[Index].StableHash);
+    OutBatch.Decisions.Add(MoveTemp(Decisions[Index]));
   }
   OutBatch.StableHash = BatchHash == 0 ? 1 : BatchHash;
   OutBatch.bValid = true;

@@ -6,6 +6,22 @@
 
 [COMPUTED][HIGH] pre-T9提交`5b947389`固定DP0–DP6证据；T9现已由8517双端真实门关闭，不能再沿用“尚未执行”的历史断言。
 
+## PW持久Worker目标验证矩阵
+
+[COMPUTED][HIGH] PW0–PW8已完成。Production Movement由`PersistentRuntimeAuthority`单独拥有；Particle、Target、Combat因fail-closed证据不足继续留在强一致Boundary。最终自动化为MassCrowd 83/83、CrowdDemo 135/135，Development/DebugGame Editor `-DisableUnity`均通过。
+
+| 门 | 目标条件 | 当前状态 |
+|---|---|---|
+| Input/Mirror合同 | [INFERRED][HIGH] 首次全量后只同步Lifecycle/Command/Resource/Dirty输入；Sequence缺口触发Resnapshot；Worker不读取Mass/World/UObject | [COMPUTED][HIGH] PASS：Round/Mixed/Friendly已接入；命令只在Prepared Commit成功后进入有界Journal并在Worker Batch接受后ACK；定向2/2与Runtime缺序列/Resnapshot专项通过 |
+| 可变Batch交换 | [INFERRED][HIGH] GT每帧只交换一次冻结Published Batch并完整消费0/10/9999项；不追逐实时尾部、不固定实体配额 | [COMPUTED][HIGH] PASS：0/1/10/9999、同实体latest-wins、有序Event、三槽不可变和并发压力均通过；生产GT每帧一次Exchange |
+| State/Event背压 | [INFERRED][HIGH] 同实体State latest-wins；Spawn/Despawn/Combat Event/Correction不丢失；有界队列满时fail-closed | [COMPUTED][HIGH] PASS：输入/Event容量和Violation锁存专项通过；1k–10k持续运行的Input Queue及ordered event depth均为0 |
+| Worker所有权 | [INFERRED][HIGH] 已迁移字段只有Worker Writer；Mass为代理；无输入Echo、双写或旧Generation提交 | [COMPUTED][HIGH] PASS：Production Movement只消费`PersistentRuntimeAuthority` Domain Tail，普通Movement输入Echo被拒绝；Shadow/Canary不与Production并行写 |
+| Shadow等价 | [INFERRED][HIGH] Mirror实体/Lifecycle/资源Hash与Mass一致；低耦合Kernel在任务乱序、Shard变化下与现行Boundary结果一致 | [COMPUTED][HIGH] PASS：SharedFlow/Facing/Business乱序与Shard 1–64稳定，Dynamic Flow Hash改为每Fixed Step一次并进入rollback snapshot |
+| 生命周期 | [INFERRED][HIGH] Worker在执行时Correction、Plan替换、PIE停止、地图切换和Subsystem Deinitialize均无悬空访问或旧结果应用 | [COMPUTED][HIGH] PASS：跨Round绝对Simulation Time、Correction Revision、单进程双PIE独立Runtime和双World teardown通过 |
+| 规模吞吐 | [INFERRED][HIGH] 1k/2k/5k/10k逐级记录Mirror lag、Simulation lag、scan coverage、Task critical、publish-to-consume和GT apply；无持续积压 | [COMPUTED][HIGH] PASS：9174/9175/9177/9179均到step 300且队列为0；10k Worker lag=`9.677ms`、scan=`1.549ms`、owner pump=`2.988ms`、GT apply=`0.403ms`。完整强一致Demo Boundary约145ms/step，不标记10k实时 |
+| 视觉连续性 | [INFERRED][HIGH] 可变Batch下无长冻结、批次跳变、错误状态或Correction闪回；录屏与FFmpeg门通过 | [COMPUTED][HIGH] PASS：9180 T7 Production录屏20实体、58状态事件、0 mismatch、0 freeze，knockback/knockup/death三段切片已生成 |
+| 单主体ISM闪色 | [INFERRED][HIGH] PICD slot 2只改变受击目标；无第二ISM、红色副本、重影或Z-fighting；0/1/10/9999与swap-remove守恒 | [COMPUTED][HIGH] 表现PASS、最终切片BLOCKED：9208逐帧显示Knockback 2个、KnockUp 2个约5帧衰减、Death 4个目标闪白，实例始终20；自动化与构建全过。9207/9213 Mixed 500在fixed-step 93触发既有PW `RequiresResnapshot`，未把该失败误记为材质回退 |
+
 ## AB异步Boundary验证矩阵
 
 | 门 | 目标条件 | 当前状态 |

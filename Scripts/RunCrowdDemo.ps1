@@ -34,6 +34,7 @@ param(
   [double]$MaxClientFrameP95Ms = 33.333,
   [double]$MaxVisualProcessorP95Ms = 16.667,
   [double]$MaxCollapsedStepsP95 = 1.0,
+  [string]$CommonExtraArgs = "",
   [string]$ClientExtraArgs = "",
   [switch]$NoClient
 )
@@ -64,6 +65,9 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $ServerLog = Join-Path $LogDir "server.log"
 $ClientLog = Join-Path $LogDir "client.log"
 $CommonArgs = "-CrowdDemoEntityCount=$EntityCount -CrowdDemoScenario=$Scenario -CrowdDemoDurationSeconds=$DurationSeconds -unattended -NoSound"
+if (![string]::IsNullOrWhiteSpace($CommonExtraArgs)) {
+  $CommonArgs = "$CommonArgs $CommonExtraArgs"
+}
 if ($ContinuousLifecycle) {
   $CommonArgs = "$CommonArgs -CrowdDemoContinuousLifecycle -CrowdDemoContinuousStartDelay=$ContinuousStartDelaySeconds"
 }

@@ -81,4 +81,9 @@ public:
 
   static FCrowdMassSharedFlowSampleOutput BuildPreferred(
     const FCrowdMassSharedFlowSampleInput& Input);
+
+  static FCrowdMassSharedFlowSampleOutput BuildPreferredSharded(
+    const FCrowdMassSharedFlowSampleInput& Input,
+    int32 ShardSize,
+    bool bReverseDispatchOrder = false);
 };

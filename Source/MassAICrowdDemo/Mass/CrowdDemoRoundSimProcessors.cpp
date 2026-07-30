@@ -1,5 +1,6 @@
 #include "Mass/CrowdDemoRoundSimProcessors.h"
 #include "Mass/CrowdDemoRoundInitialStateKernel.h"
+#include "Mass/CrowdDemoWorkerInputSync.h"
 
 #include "Mass/CrowdDemoMassFragments.h"
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
@@ -1762,6 +1763,15 @@ void UCrowdDemoRoundBoundaryGatherProcessor::Execute(
       TEXT("VIOLATION CrowdDemoBoundaryGatherInvalid step=%d records=%d"),
       Pipeline->GetCurrentFixedStepIndex(), Records.Num());
     return;
+  }
+  if (!World || !FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
+      *World, Pipeline->GetBoundarySnapshot(),
+      Pipeline->GetCurrentFixedStepSeconds(),
+      Pipeline->GetCurrentStepEndServerTimeSeconds()))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoWorkerShadowInputSync step=%d"),
+      Pipeline->GetCurrentFixedStepIndex());
   }
   const double GatherMilliseconds =
     (FPlatformTime::Seconds() - GatherStartSeconds) * 1000.0;
@@ -6023,6 +6033,34 @@ void UCrowdDemoRoundCheckpointPublisherProcessor::Execute(FMassEntityManager& En
     States.Num());
 }
 
+UCrowdDemoWorkerResultApplyProcessor::
+UCrowdDemoWorkerResultApplyProcessor()
+{
+  ExecutionFlags = static_cast<int32>(
+    EProcessorExecutionFlags::Server
+    | EProcessorExecutionFlags::Client
+    | EProcessorExecutionFlags::Standalone);
+  ProcessingPhase = EMassProcessingPhase::PrePhysics;
+  bRequiresGameThreadExecution = true;
+  bAutoRegisterWithProcessingPhases = false;
+}
+
+void UCrowdDemoWorkerResultApplyProcessor::Execute(
+  FMassEntityManager& EntityManager,
+  FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  if (!World) return;
+  ++ConsumerFrameSequence;
+  if (!FCrowdDemoWorkerInputSync::ConsumePublishedResults(
+      *World, ConsumerFrameSequence))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoWorkerResultApplyFailed consumer_frame=%llu"),
+      ConsumerFrameSequence);
+  }
+}
+
 UCrowdDemoRoundSimFixedStepPipelineProcessor::UCrowdDemoRoundSimFixedStepPipelineProcessor()
 {
   ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::Server | EProcessorExecutionFlags::Client | EProcessorExecutionFlags::Standalone);
@@ -6062,6 +6100,9 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::InitializeInternal(
   AuthorityCommitProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundAuthorityCommitProcessor>(*this, Owner, EntityManager);
   ClientPredictionCommitProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundClientPredictionCommitProcessor>(*this, Owner, EntityManager);
   CheckpointPublisherProcessor = MakeDynamicRoundProcessor<UCrowdDemoRoundCheckpointPublisherProcessor>(*this, Owner, EntityManager);
+  WorkerResultApplyProcessor =
+    MakeDynamicRoundProcessor<UCrowdDemoWorkerResultApplyProcessor>(
+      *this, Owner, EntityManager);
 }
 
 void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
@@ -6074,6 +6115,7 @@ void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(
   {
     return;
   }
+  WorkerResultApplyProcessor->CallExecute(EntityManager, Context);
 
   const float TargetServerTime = GetRoundPipelineServerTime(*World);
   const double PipelineFrameStartSeconds = FPlatformTime::Seconds();

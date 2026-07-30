@@ -4,10 +4,59 @@
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoCombatStateKernel.h"
 #include "Mass/CrowdDemoMassCrowdRuntimeAdapter.h"
+#include "Mass/CrowdDemoWorkerInputSync.h"
 #include "CrowdDemoVatShowcasePlanner.h"
+#include "MassCrowdRuntimeSubsystem.h"
+#include "MassCrowdWorkerConsistencyDomains.h"
 
 namespace
 {
+  struct FCrowdDemoOwnedSharedFlowShadowInput
+  {
+    int32 FixedStepIndex = INDEX_NONE;
+    int32 PlanRevision = INDEX_NONE;
+    float FixedStepSeconds = 0.0f;
+    TArray<FCrowdSharedFlowField> Fields;
+    TArray<FCrowdMassSharedFlowAgentInput> Agents;
+
+    bool Capture(const FCrowdMassSharedFlowSampleInput& Input)
+    {
+      FixedStepIndex = Input.FixedStepIndex;
+      PlanRevision = Input.PlanRevision;
+      FixedStepSeconds = Input.FixedStepSeconds;
+      Agents = Input.Agents;
+      Fields.Reset(Input.Fields.Num());
+      for (const FCrowdSharedFlowField* Field : Input.Fields)
+      {
+        if (!Field) return false;
+        Fields.Add(*Field);
+      }
+      return FixedStepIndex >= 0
+        && PlanRevision >= 0
+        && FixedStepSeconds > 0.0f
+        && !Fields.IsEmpty()
+        && !Agents.IsEmpty();
+    }
+
+    uint64 Execute(
+      const int32 ShardSize,
+      const bool bReverseDispatchOrder) const
+    {
+      FCrowdMassSharedFlowSampleInput Input;
+      Input.FixedStepIndex = FixedStepIndex;
+      Input.PlanRevision = PlanRevision;
+      Input.FixedStepSeconds = FixedStepSeconds;
+      Input.Agents = Agents;
+      Input.Fields.Reserve(Fields.Num());
+      for (const FCrowdSharedFlowField& Field : Fields)
+        Input.Fields.Add(&Field);
+      const FCrowdMassSharedFlowSampleOutput Output =
+        FCrowdMassSharedFlowWork::BuildPreferredSharded(
+          Input, ShardSize, bReverseDispatchOrder);
+      return Output.bValid ? Output.StableHash : 0;
+    }
+  };
+
   class FCrowdDemoBoundaryHashPayload final
     : public ICrowdBoundaryPreparedPatchPayload
   {
@@ -398,6 +447,153 @@ namespace
     return Hash;
   }
 
+  uint64 CalculateMovementTailHash(
+    const FCrowdMassBoundaryWorkGraphOutput& GraphOutput,
+    const FCrowdMassFacingFinalizeWorkOutput& Output,
+    const TConstArrayView<FCrowdMassFinalKinematicState>
+      ObstacleKinematics = {})
+  {
+    if (!GraphOutput.Movement.bCompleted
+      || !Output.bCompleted)
+      return 0;
+    uint64 Hash = 14695981039346656037ull;
+    Hash = FoldBoundaryHash(
+      Hash, GraphOutput.Movement.StableHash);
+    if (GraphOutput.Particle.bCompleted)
+    {
+      Hash = FoldBoundaryHash(
+        Hash, GraphOutput.Particle.StableHash);
+    }
+    else
+    {
+      if (ObstacleKinematics.IsEmpty()) return 0;
+      for (const FCrowdMassFinalKinematicState& Kinematic
+        : ObstacleKinematics)
+      {
+        Hash = FoldBoundaryHash(
+          Hash, static_cast<uint32>(Kinematic.AgentId));
+        Hash = FoldBoundaryHash(
+          Hash, GetTypeHash(Kinematic.Position));
+        Hash = FoldBoundaryHash(
+          Hash, GetTypeHash(Kinematic.Velocity));
+      }
+    }
+    Hash = FoldBoundaryHash(Hash, Output.StableHash);
+    return Hash;
+  }
+
+  bool RunWorkerMovementTail(
+    FCrowdMassBoundaryWorkGraphInput GraphInput,
+    FCrowdMassMovementPipelineWorkInput MovementInput,
+    TMap<int32, int32> PreviousSettleStepsByAgentId,
+    TMap<int32, bool> TerminalOwnerByAgentId,
+    FCrowdMassBoundarySnapshot Snapshot,
+    const bool bUseObstacleConstraint,
+    const FCrowdDemoSharedFlowFieldConfig ObstacleConfig,
+    const float ObstacleFixedStepSeconds,
+    FCrowdDemoWorkerMovementTailExecution& OutExecution)
+  {
+    OutExecution.GraphOutput.Movement =
+      FCrowdMassMovementPipelineWork::Run(MovementInput);
+    if (bUseObstacleConstraint)
+    {
+      if (!OutExecution.GraphOutput.Movement.bCompleted)
+        return false;
+      const auto& Predicted =
+        OutExecution.GraphOutput.Movement.MovementPredict.Results;
+      TMap<int32, const FCrowdMassPredictedMovement*> ById;
+      for (const FCrowdMassPredictedMovement& Value : Predicted)
+      {
+        if (!Value.bValid || ById.Contains(Value.AgentId))
+          return false;
+        ById.Add(Value.AgentId, &Value);
+      }
+      for (const FCrowdMassBoundaryAgentRecord& Agent
+        : Snapshot.Agents)
+      {
+        const FCrowdMassPredictedMovement* const* Value =
+          ById.Find(Agent.Identity.AgentId);
+        if (!Value) return false;
+        const FCrowdDemoSharedFlowConstraintResult Result =
+          FCrowdDemoSharedFlowFieldKernel::ConstrainMovement(
+            ObstacleConfig, (*Value)->StartPosition,
+            (*Value)->PredictedPosition,
+            ObstacleFixedStepSeconds, false);
+        FCrowdMassFinalKinematicState& Kinematic =
+          OutExecution.ObstacleKinematics.AddDefaulted_GetRef();
+        Kinematic.AgentId = Agent.Identity.AgentId;
+        Kinematic.Position = Result.Location;
+        Kinematic.Velocity = Result.Velocity;
+        Kinematic.bValid = true;
+      }
+      OutExecution.ObstacleKinematics.Sort([](
+        const auto& A, const auto& B)
+      {
+        return A.AgentId < B.AgentId;
+      });
+      FCrowdMassFacingFinalizeWorkInput FacingInput;
+      if (!FCrowdMassBoundaryWorkGraph::
+        BuildFacingInputFromKinematics(
+          GraphInput, Snapshot,
+          OutExecution.GraphOutput.Movement,
+          OutExecution.ObstacleKinematics, FacingInput))
+        return false;
+      OutExecution.Output =
+        FCrowdMassFacingFinalizeWork::Run(FacingInput);
+      OutExecution.StableHash = CalculateMovementTailHash(
+        OutExecution.GraphOutput, OutExecution.Output,
+        OutExecution.ObstacleKinematics);
+      return OutExecution.Output.bCompleted
+        && OutExecution.StableHash != 0;
+    }
+    FCrowdMassParticlePipelineWorkInput ParticleInput;
+    if (!OutExecution.GraphOutput.Movement.bCompleted
+      || !FCrowdMassBoundaryWorkGraph::BuildParticleInput(
+        GraphInput, OutExecution.GraphOutput.Movement,
+        ParticleInput))
+      return false;
+    OutExecution.GraphOutput.Particle =
+      FCrowdMassParticlePipelineWork::Run(ParticleInput);
+    FCrowdMassFacingFinalizeWorkInput FacingInput;
+    if (!OutExecution.GraphOutput.Particle.bCompleted
+      || !FCrowdMassBoundaryWorkGraph::BuildFacingInput(
+        GraphInput, OutExecution.GraphOutput.Movement,
+        OutExecution.GraphOutput.Particle, FacingInput))
+      return false;
+    TMap<int32, const FCrowdParticleConstraintResult*> ParticleById;
+    for (const FCrowdParticleConstraintResult& Result
+      : OutExecution.GraphOutput.Particle.PublishPlan.PreparedResults)
+      ParticleById.Add(Result.AgentId, &Result);
+    for (FCrowdFacingInput& Agent : FacingInput.Facing.Agents)
+    {
+      const FCrowdParticleConstraintResult* const* ParticleResult =
+        ParticleById.Find(Agent.AgentId);
+      const int32* Previous =
+        PreviousSettleStepsByAgentId.Find(Agent.AgentId);
+      const bool* bTerminal =
+        TerminalOwnerByAgentId.Find(Agent.AgentId);
+      if (!ParticleResult || !Previous || !bTerminal)
+        return false;
+      const bool bSettledThisStep = *bTerminal
+        && FVector2f((*ParticleResult)->CorrectedVelocity.X,
+          (*ParticleResult)->CorrectedVelocity.Y).Size() <= 20.0f
+        && (*ParticleResult)->RealizedCorrection.Size2D() <= 1.0f;
+      const int32 Consecutive =
+        bSettledThisStep ? *Previous + 1 : 0;
+      Agent.bFinalPositionSettled = Consecutive >= 15;
+      OutExecution.ConsecutiveSettleStepsByAgentId.Add(
+        Agent.AgentId, Consecutive);
+      OutExecution.FinalSettledByAgentId.Add(
+        Agent.AgentId, Agent.bFinalPositionSettled);
+    }
+    OutExecution.Output =
+      FCrowdMassFacingFinalizeWork::Run(FacingInput);
+    OutExecution.StableHash = CalculateMovementTailHash(
+      OutExecution.GraphOutput, OutExecution.Output);
+    return OutExecution.Output.bCompleted
+      && OutExecution.StableHash != 0;
+  }
+
   uint64 MakeTargetPlanResourceKey(
     const uint32 CapabilityProfileKey,
     const FCrowdDemoTargetRegionFlowPlan& Plan)
@@ -631,6 +827,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::MarkBootstrapApplied(const int32 Agent
   RuntimeSharedFlowResource.IntegrationRebuildCount = 0;
   DynamicFlowIntegrationRebuildCount = 0;
   DynamicFlowRoundHash = 2166136261u;
+  DynamicFlowRoundHashFixedStepIndex = INDEX_NONE;
   bDynamicFlowIntegrationCacheInvalidated = false;
 }
 
@@ -830,6 +1027,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   RuntimeSharedFlowResource.IntegrationRebuildCount = 0;
   DynamicFlowIntegrationRebuildCount = 0;
   DynamicFlowRoundHash = 2166136261u;
+  DynamicFlowRoundHashFixedStepIndex = INDEX_NONE;
   bDynamicFlowIntegrationCacheInvalidated = false;
   bTargetStabilityDiagnosticPlanEnabled = FParse::Param(
       FCommandLine::Get(), TEXT("CrowdDemoTargetStabilityDiagnostic"))
@@ -1783,6 +1981,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           if (JoinedTargetCount != RecordById.Num())
             return FCrowdBoundaryTaskResult::Failure();
         }
+        State->MovementShadowInput = MovementInput;
+        State->bMovementShadowInputValid = true;
         State->GraphOutput.Movement =
           FCrowdMassMovementPipelineWork::Run(
             MovementInput);
@@ -1842,6 +2042,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           State->FinalSettledByAgentId.Add(
             Agent.AgentId, Agent.bFinalPositionSettled);
         }
+        State->FacingShadowInput = FacingInput.Facing;
         State->GraphOutput.FacingFinalize =
           FCrowdMassFacingFinalizeWork::Run(FacingInput);
         State->Output = State->GraphOutput.FacingFinalize;
@@ -1943,6 +2144,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
           if (!Record) return FCrowdBoundaryTaskResult::Failure();
           (*Record)->Guidance.BusinessOverride = Candidate;
         }
+        State->MovementShadowInput = MovementInput;
+        State->bMovementShadowInputValid = true;
         State->GraphOutput.Movement =
           FCrowdMassMovementPipelineWork::Run(MovementInput);
         return State->GraphOutput.Movement.bCompleted
@@ -2013,6 +2216,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
             State->GraphOutput.Movement,
             State->ObstacleKinematics, FacingInput))
           return FCrowdBoundaryTaskResult::Failure();
+        State->FacingShadowInput = FacingInput.Facing;
         State->Output =
           FCrowdMassFacingFinalizeWork::Run(FacingInput);
         State->GraphOutput.FacingFinalize = State->Output;
@@ -2056,8 +2260,20 @@ UCrowdDemoRoundSimPipelineSubsystem::PollBoundaryWork()
     return ECrowdBoundaryPollResult::Failed;
   }
 
-  const ECrowdBoundaryPollResult PollResult =
-    BoundaryOrchestrator->PollAndDrain();
+  ECrowdBoundaryPollResult PollResult =
+    ECrowdBoundaryPollResult::Failed;
+  const ECrowdBoundaryTransactionState TransactionState =
+    BoundaryOrchestrator->GetState();
+  if (TransactionState
+      == ECrowdBoundaryTransactionState::Working)
+  {
+    PollResult = BoundaryOrchestrator->PollAndDrain();
+  }
+  else if (TransactionState
+      == ECrowdBoundaryTransactionState::Merging)
+  {
+    PollResult = ECrowdBoundaryPollResult::Ready;
+  }
   if (PollResult == ECrowdBoundaryPollResult::Pending)
   {
     ++BoundaryPendingFrameCount;
@@ -2086,6 +2302,246 @@ UCrowdDemoRoundSimPipelineSubsystem::PollBoundaryWork()
     }
     return PollResult;
   }
+  if (!BoundaryFacingWorkState->bWorkerMovementTailSubmitted)
+  {
+    UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+      GetWorld()
+        ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+        : nullptr;
+    if (!RuntimeSubsystem)
+      return ECrowdBoundaryPollResult::Failed;
+    FCrowdWorkerMovementAuthority& MovementAuthority =
+      RuntimeSubsystem->GetWorkerMovementAuthority();
+    if (MovementAuthority.GetMode()
+        == ECrowdWorkerMovementAuthorityMode::Production)
+    {
+      const uint64 WorkSequence = NextWorkerTaskSequence++;
+      if (WorkSequence == 0 || NextWorkerTaskSequence == 0)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoWorkerTaskSequenceOverflow"));
+        return ECrowdBoundaryPollResult::Failed;
+      }
+      auto Tail =
+        MakeShared<FCrowdDemoWorkerMovementTailExecution,
+          ESPMode::ThreadSafe>();
+      Tail->GraphOutput = BoundaryFacingWorkState->GraphOutput;
+      Tail->Output = BoundaryFacingWorkState->Output;
+      Tail->ObstacleKinematics =
+        BoundaryFacingWorkState->ObstacleKinematics;
+      Tail->ConsecutiveSettleStepsByAgentId =
+        BoundaryFacingWorkState->ConsecutiveSettleStepsByAgentId;
+      Tail->FinalSettledByAgentId =
+        BoundaryFacingWorkState->FinalSettledByAgentId;
+      Tail->StableHash = CalculateMovementTailHash(
+        Tail->GraphOutput, Tail->Output,
+        Tail->ObstacleKinematics);
+      if (Tail->StableHash == 0
+        || !Tail->Output.bCompleted)
+        return ECrowdBoundaryPollResult::Failed;
+      Tail->bCompleted.Store(true);
+      BoundaryFacingWorkState->WorkerMovementTail = Tail;
+      BoundaryFacingWorkState->WorkerMovementSequence =
+        WorkSequence;
+      BoundaryFacingWorkState->bWorkerMovementTailSubmitted = true;
+    }
+  }
+  if (BoundaryFacingWorkState->bWorkerMovementTailSubmitted
+    && !BoundaryFacingWorkState->bWorkerMovementTailConsumed)
+  {
+    const auto& Tail = BoundaryFacingWorkState->WorkerMovementTail;
+    if (!Tail.IsValid() || !Tail->bCompleted.Load())
+    {
+      ++BoundaryPendingFrameCount;
+      return ECrowdBoundaryPollResult::Pending;
+    }
+    UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+      GetWorld()
+        ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+        : nullptr;
+    if (!RuntimeSubsystem)
+      return ECrowdBoundaryPollResult::Failed;
+    FCrowdWorkerMovementAuthority& MovementAuthority =
+      RuntimeSubsystem->GetWorkerMovementAuthority();
+    const ECrowdWorkerMovementAuthorityMode MovementMode =
+      MovementAuthority.GetMode();
+    const bool bRequireBoundaryComparison =
+      MovementMode
+        != ECrowdWorkerMovementAuthorityMode::Production;
+    const uint64 BoundaryTailHash =
+      bRequireBoundaryComparison
+        ? CalculateMovementTailHash(
+          BoundaryFacingWorkState->GraphOutput,
+          BoundaryFacingWorkState->Output,
+          BoundaryFacingWorkState->ObstacleKinematics)
+        : 0;
+    if (Tail->StableHash == 0
+      || (bRequireBoundaryComparison
+        && Tail->StableHash != BoundaryTailHash)
+      || !Tail->Output.bCompleted
+      || Tail->Output.Finalize.CommitPlan.Records.Num()
+        != BoundarySnapshot.Agents.Num())
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoWorkerMovementTailMismatch step=%d expected=%llu actual=%llu records=%d"),
+        GetCurrentFixedStepIndex(),
+        BoundaryTailHash,
+        Tail->StableHash,
+        Tail->Output.Finalize.CommitPlan.Records.Num());
+      BoundaryOrchestrator->Fail();
+      LastBoundaryTransactionResult =
+        BoundaryOrchestrator->BuildResult();
+      return ECrowdBoundaryPollResult::Failed;
+    }
+
+    TMap<FCrowdStableEntityRef, const FCrowdMassCommitRecord*>
+      BoundaryCommitByRef;
+    for (const FCrowdMassCommitRecord& Record
+      : BoundaryFacingWorkState->Output.Finalize.CommitPlan.Records)
+      BoundaryCommitByRef.Add(Record.EntityRef, &Record);
+    const uint64 MovementVersion =
+      BoundaryFacingWorkState->WorkerMovementSequence;
+    if (MovementVersion == 0)
+      return ECrowdBoundaryPollResult::Failed;
+    for (const FCrowdMassCommitRecord& Record
+      : Tail->Output.Finalize.CommitPlan.Records)
+    {
+      if (MovementMode
+          != ECrowdWorkerMovementAuthorityMode::Shadow
+        && !MovementAuthority.IsWorkerOwner(Record.EntityRef))
+        continue;
+      FCrowdWorkerMovementSample PreviousSample;
+      const bool bHasPrevious = MovementAuthority.Sample(
+        Record.EntityRef,
+        GetCurrentStepStartServerTimeSeconds(),
+        PreviousSample);
+      FCrowdWorkerMovementState MovementState;
+      MovementState.Position = Record.Movement.Position;
+      MovementState.Velocity = Record.Movement.Velocity;
+      MovementState.YawDegrees = Record.Movement.YawDegrees;
+      MovementState.SimulationTimeSeconds =
+        GetCurrentStepEndServerTimeSeconds();
+      MovementState.CorrectionRevision =
+        bHasPrevious ? PreviousSample.CorrectionRevision : 0;
+      FCrowdWorkerStatePatch Patch;
+      Patch.EntityRef = Record.EntityRef;
+      Patch.Generation =
+        MovementAuthority.GetMetrics().Generation;
+      Patch.WorkerEpoch = MovementVersion;
+      Patch.SourceInputSequence = MovementVersion;
+      Patch.DirtyMask = CrowdWorkerMovementFields::Movement;
+      Patch.State.StateRevision = MovementVersion;
+      if (!FCrowdWorkerMovementStateCodec::Encode(
+          MovementState, Patch.State.Payload))
+        return ECrowdBoundaryPollResult::Failed;
+      Patch.RecalculateStableHash();
+      if (MovementAuthority.AcceptPatch(Patch)
+          != ECrowdWorkerMovementAcceptResult::Accepted)
+        return ECrowdBoundaryPollResult::Failed;
+      if (MovementMode
+          == ECrowdWorkerMovementAuthorityMode::Shadow)
+      {
+        const FCrowdMassCommitRecord* const* BoundaryRecord =
+          BoundaryCommitByRef.Find(Record.EntityRef);
+        if (!BoundaryRecord)
+          return ECrowdBoundaryPollResult::Failed;
+        FCrowdWorkerMovementState ExpectedState = MovementState;
+        ExpectedState.Position = (*BoundaryRecord)->Movement.Position;
+        ExpectedState.Velocity = (*BoundaryRecord)->Movement.Velocity;
+        ExpectedState.YawDegrees =
+          (*BoundaryRecord)->Movement.YawDegrees;
+        if (!MovementAuthority.CompareShadow(
+            Record.EntityRef, ExpectedState,
+            0.001, 0.001, 0.001))
+          return ECrowdBoundaryPollResult::Failed;
+      }
+    }
+
+    if (MovementMode
+        == ECrowdWorkerMovementAuthorityMode::Production)
+    {
+      BoundaryFacingWorkState->GraphOutput.Movement =
+        Tail->GraphOutput.Movement;
+      BoundaryFacingWorkState->GraphOutput.Particle =
+        Tail->GraphOutput.Particle;
+      BoundaryFacingWorkState->ObstacleKinematics =
+        Tail->ObstacleKinematics;
+      BoundaryFacingWorkState->Output = Tail->Output;
+      if (!Tail->ConsecutiveSettleStepsByAgentId.IsEmpty())
+      {
+        BoundaryFacingWorkState->ConsecutiveSettleStepsByAgentId =
+          Tail->ConsecutiveSettleStepsByAgentId;
+        BoundaryFacingWorkState->FinalSettledByAgentId =
+          Tail->FinalSettledByAgentId;
+      }
+    }
+    else if (MovementMode
+        == ECrowdWorkerMovementAuthorityMode::Canary)
+    {
+      TMap<FCrowdStableEntityRef, const FCrowdMassCommitRecord*>
+        WorkerCommitByRef;
+      for (const FCrowdMassCommitRecord& Record
+        : Tail->Output.Finalize.CommitPlan.Records)
+        WorkerCommitByRef.Add(Record.EntityRef, &Record);
+      for (FCrowdMassCommitRecord& Record
+        : BoundaryFacingWorkState->Output.Finalize.CommitPlan.Records)
+      {
+        if (!MovementAuthority.IsWorkerOwner(Record.EntityRef))
+          continue;
+        const FCrowdMassCommitRecord* const* WorkerRecord =
+          WorkerCommitByRef.Find(Record.EntityRef);
+        if (!WorkerRecord)
+          return ECrowdBoundaryPollResult::Failed;
+        Record = **WorkerRecord;
+      }
+      for (const TPair<int32, int32>& Value
+        : Tail->ConsecutiveSettleStepsByAgentId)
+      {
+        const FCrowdMassBoundaryAgentRecord* Agent =
+          BoundarySnapshot.Agents.FindByPredicate(
+            [&Value](const FCrowdMassBoundaryAgentRecord& Candidate)
+            {
+              return Candidate.Identity.AgentId == Value.Key;
+            });
+        if (Agent && MovementAuthority.IsWorkerOwner(
+            Agent->AgentFacts.StableEntityRef))
+        {
+          BoundaryFacingWorkState->
+            ConsecutiveSettleStepsByAgentId.Add(
+              Value.Key, Value.Value);
+          BoundaryFacingWorkState->FinalSettledByAgentId.Add(
+            Value.Key,
+            Tail->FinalSettledByAgentId.FindRef(Value.Key));
+        }
+      }
+    }
+    BoundaryFacingWorkState->bWorkerMovementTailConsumed = true;
+    if (GetCurrentFixedStepIndex() == 0
+      || GetCurrentFixedStepIndex() % 300 == 0)
+    {
+      const FCrowdWorkerMovementAuthorityMetrics& MovementMetrics =
+        MovementAuthority.GetMetrics();
+      const FCrowdAsyncSimulationRuntimeMetrics RuntimeMetrics =
+        RuntimeSubsystem->GetAsyncSimulationRuntime().GetMetrics();
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoWorkerMovementCheckpoint mode=%d step=%d accepted=%llu corrections=%llu rejected_echo=%llu shadow_compares=%llu shadow_mismatches=%llu canaries=%d states=%d boundary_hash_required=%d production_submitted=%llu production_completed=%llu production_domain_tail=%d source=PersistentRuntimeAuthority"),
+        static_cast<int32>(MovementMode),
+        GetCurrentFixedStepIndex(),
+        MovementMetrics.AcceptedPatchCount,
+        MovementMetrics.AcceptedCorrectionCount,
+        MovementMetrics.RejectedEchoCount,
+        MovementMetrics.ShadowCompareCount,
+        MovementMetrics.ShadowMismatchCount,
+        MovementMetrics.CanaryEntityCount,
+        MovementMetrics.StateCount,
+        bRequireBoundaryComparison ? 1 : 0,
+        RuntimeMetrics.SubmittedProductionWorkCount,
+        RuntimeMetrics.CompletedProductionWorkCount,
+        MovementMode
+          == ECrowdWorkerMovementAuthorityMode::Production
+          ? 1 : 0);
+    }
+  }
   const auto FailCompletedWork = [this]()
   {
     BoundaryOrchestrator->Fail();
@@ -2107,6 +2563,216 @@ UCrowdDemoRoundSimPipelineSubsystem::PollBoundaryWork()
       TEXT("VIOLATION CrowdDemoBusinessWorkIncomplete step=%d"),
       GetCurrentFixedStepIndex());
     return FailCompletedWork();
+  }
+  FCrowdDemoOwnedSharedFlowShadowInput SharedFlowShadowInput;
+  if (!SharedFlowShadowInput.Capture(
+      BoundaryFacingWorkState->GraphInput.SharedFlow)
+    || !BoundaryFacingWorkState->GraphOutput.SharedFlow.bValid
+    || !BoundaryFacingWorkState->bMovementShadowInputValid
+    || !BoundaryFacingWorkState->GraphOutput.Movement.bCompleted
+    || !BoundaryFacingWorkState->Output.Facing.bCompleted
+    || BoundaryFacingWorkState->FacingShadowInput.Agents.IsEmpty()
+    || !GetWorld())
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoKernelShadowInputInvalid step=%d"),
+      GetCurrentFixedStepIndex());
+    return FailCompletedWork();
+  }
+  const int32 ShardSize =
+    1 + GetCurrentFixedStepIndex() % 64;
+  const bool bReverseDispatchOrder =
+    (GetCurrentFixedStepIndex() & 1) != 0;
+  FCrowdMassFacingWorkInput FacingShadowInput =
+    BoundaryFacingWorkState->FacingShadowInput;
+  FCrowdDemoBoundaryBusinessWorkInput BusinessShadowInput =
+    BoundaryFacingWorkState->BusinessInput;
+  if (!BoundaryFacingWorkState->bWorkerMovementTailSubmitted)
+  {
+    const uint64 WorkSequence = NextWorkerTaskSequence++;
+    if (WorkSequence == 0 || NextWorkerTaskSequence == 0)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoWorkerTaskSequenceOverflow"));
+      return FailCompletedWork();
+    }
+    FCrowdMassMovementPipelineWorkInput MovementShadowInput =
+      BoundaryFacingWorkState->MovementShadowInput;
+    UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+      GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>();
+    if (!RuntimeSubsystem)
+      return FailCompletedWork();
+    FCrowdWorkerMovementAuthority& MovementAuthority =
+      RuntimeSubsystem->GetWorkerMovementAuthority();
+    const bool bProductionMovement =
+      MovementAuthority.GetMode()
+        == ECrowdWorkerMovementAuthorityMode::Production;
+    if (MovementAuthority.GetMode()
+        != ECrowdWorkerMovementAuthorityMode::Shadow)
+    {
+      for (FCrowdMassGatherRecord& Record
+        : MovementShadowInput.Guidance.Records)
+      {
+        if (!MovementAuthority.IsWorkerOwner(
+            Record.AgentFacts.StableEntityRef))
+          continue;
+        FCrowdWorkerMovementSample Sample;
+        if (MovementAuthority.Sample(
+            Record.AgentFacts.StableEntityRef,
+            GetCurrentStepStartServerTimeSeconds(), Sample))
+        {
+          const bool bAuthorityCorrection =
+            !Record.State.Position.Equals(Sample.Position, 0.001)
+            || !Record.State.Velocity.Equals(
+              Sample.Velocity, 0.001)
+            || FMath::Abs(FMath::FindDeltaAngleDegrees(
+              Record.State.YawDegrees, Sample.YawDegrees)) > 0.001f;
+          if (bAuthorityCorrection)
+          {
+            FCrowdWorkerMovementState CorrectedState;
+            CorrectedState.Position = Record.State.Position;
+            CorrectedState.Velocity = Record.State.Velocity;
+            CorrectedState.YawDegrees = Record.State.YawDegrees;
+            CorrectedState.SimulationTimeSeconds =
+              GetCurrentStepStartServerTimeSeconds();
+            CorrectedState.CorrectionRevision =
+              Sample.CorrectionRevision + 1;
+            FCrowdWorkerCorrectionDelta Correction;
+            Correction.InputSequence = WorkSequence;
+            Correction.EntityRef =
+              Record.AgentFacts.StableEntityRef;
+            Correction.CorrectionRevision =
+              CorrectedState.CorrectionRevision;
+            Correction.DirtyMask =
+              CrowdWorkerMovementFields::Movement;
+            if (!FCrowdWorkerMovementStateCodec::Encode(
+                CorrectedState, Correction.FullState)
+              || MovementAuthority.ApplyCorrection(
+                Correction,
+                MovementAuthority.GetMetrics().Generation,
+                WorkSequence)
+                != ECrowdWorkerMovementAcceptResult::
+                  AcceptedCorrection)
+              return FailCompletedWork();
+          }
+          else
+          {
+            Record.State.Position = Sample.Position;
+            Record.State.Velocity = Sample.Velocity;
+            Record.State.YawDegrees = Sample.YawDegrees;
+          }
+        }
+        else if (GetCurrentFixedStepIndex() > 0)
+        {
+          UE_LOG(LogTemp, Error,
+            TEXT("VIOLATION CrowdDemoWorkerMovementStateMissing step=%d agent=%d"),
+            GetCurrentFixedStepIndex(), Record.Identity.AgentId);
+          return FailCompletedWork();
+        }
+      }
+    }
+    const uint64 ExpectedMovementTailHash =
+      bProductionMovement
+        ? 0
+        : CalculateMovementTailHash(
+          BoundaryFacingWorkState->GraphOutput,
+          BoundaryFacingWorkState->Output,
+          BoundaryFacingWorkState->ObstacleKinematics);
+    auto MovementTail =
+      MakeShared<FCrowdDemoWorkerMovementTailExecution,
+        ESPMode::ThreadSafe>();
+    BoundaryFacingWorkState->WorkerMovementTail = MovementTail;
+    BoundaryFacingWorkState->WorkerMovementSequence = WorkSequence;
+    FCrowdMassBoundaryWorkGraphInput MovementGraphInput =
+      BoundaryFacingWorkState->GraphInput;
+    TMap<int32, int32> MovementPreviousSettle =
+      BoundaryFacingWorkState->PreviousSettleStepsByAgentId;
+    TMap<int32, bool> MovementTerminalOwners =
+      BoundaryFacingWorkState->TerminalOwnerByAgentId;
+    FCrowdMassBoundarySnapshot MovementSnapshot =
+      BoundarySnapshot;
+    const bool bUseObstacleConstraint =
+      BoundaryFacingWorkState->bObstacleStaged;
+    const FCrowdDemoSharedFlowFieldConfig MovementObstacleConfig =
+      BoundaryFacingWorkState->ObstacleConfig;
+    const float MovementObstacleFixedStepSeconds =
+      BoundaryFacingWorkState->ObstacleFixedStepSeconds;
+    bool bSupportingShadowSubmitted = true;
+    if (!bProductionMovement)
+    {
+      bSupportingShadowSubmitted =
+        FCrowdDemoWorkerInputSync::SubmitShadowWork(
+          *GetWorld(),
+          FCrowdDemoWorkerInputSync::EShadowKernel::SharedFlow,
+          WorkSequence,
+          BoundaryFacingWorkState->GraphOutput.SharedFlow.StableHash,
+          [Input = MoveTemp(SharedFlowShadowInput),
+            ShardSize, bReverseDispatchOrder]
+          {
+            return Input.Execute(
+              ShardSize, bReverseDispatchOrder);
+          })
+        && FCrowdDemoWorkerInputSync::SubmitShadowWork(
+          *GetWorld(),
+          FCrowdDemoWorkerInputSync::EShadowKernel::Facing,
+          WorkSequence,
+          BoundaryFacingWorkState->Output.Facing.StableHash,
+          [Input = MoveTemp(FacingShadowInput),
+            ShardSize, bReverseDispatchOrder]
+          {
+            const FCrowdMassFacingWorkOutput Output =
+              FCrowdMassFacingWork::ResolveSharded(
+                Input, ShardSize, bReverseDispatchOrder);
+            return Output.bCompleted ? Output.StableHash : 0;
+          })
+        && FCrowdDemoWorkerInputSync::SubmitShadowWork(
+          *GetWorld(),
+          FCrowdDemoWorkerInputSync::EShadowKernel::Business,
+          WorkSequence,
+          BoundaryFacingWorkState->BusinessOutput.StableHash,
+          [Input = MoveTemp(BusinessShadowInput)]
+          {
+            const FCrowdDemoBoundaryBusinessWorkOutput Output =
+              RunBoundaryBusinessWork(Input);
+            return Output.bCompleted ? Output.StableHash : 0;
+          });
+    }
+    if (!bSupportingShadowSubmitted
+      || !FCrowdDemoWorkerInputSync::SubmitShadowWork(
+      *GetWorld(),
+      FCrowdDemoWorkerInputSync::EShadowKernel::Movement,
+      WorkSequence,
+      ExpectedMovementTailHash,
+      [MovementTail,
+        GraphInput = MoveTemp(MovementGraphInput),
+        Input = MoveTemp(MovementShadowInput),
+        Previous = MoveTemp(MovementPreviousSettle),
+        Terminal = MoveTemp(MovementTerminalOwners),
+        Snapshot = MoveTemp(MovementSnapshot),
+        bUseObstacleConstraint,
+        ObstacleConfig = MovementObstacleConfig,
+        ObstacleFixedStepSeconds =
+          MovementObstacleFixedStepSeconds]() mutable
+      {
+        const bool bCompleted = RunWorkerMovementTail(
+          MoveTemp(GraphInput), MoveTemp(Input),
+          MoveTemp(Previous), MoveTemp(Terminal),
+          MoveTemp(Snapshot), bUseObstacleConstraint,
+          ObstacleConfig, ObstacleFixedStepSeconds,
+          *MovementTail);
+        MovementTail->bCompleted.Store(true);
+        return bCompleted ? MovementTail->StableHash : 0;
+      },
+      !bProductionMovement))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoKernelShadowSubmitRejected step=%d"),
+        GetCurrentFixedStepIndex());
+      return FailCompletedWork();
+    }
+    BoundaryFacingWorkState->bWorkerMovementTailSubmitted = true;
+    ++BoundaryPendingFrameCount;
+    return ECrowdBoundaryPollResult::Pending;
   }
   PreparedBusinessGuidanceCandidates =
     BoundaryFacingWorkState->BusinessOutput.GuidanceCandidates;
@@ -2210,6 +2876,69 @@ UCrowdDemoRoundSimPipelineSubsystem::PollBoundaryWork()
       TEXT("VIOLATION CrowdDemoBusinessPreparedCommitRejected step=%d"),
       GetCurrentFixedStepIndex());
     return FailCompletedWork();
+  }
+  if (GetCurrentFixedStepIndex() == 0)
+  {
+    FCrowdWorkerConsistencyEvidence ParticleEvidence;
+    ParticleEvidence.Domain = ECrowdWorkerConsistencyDomain::
+      ParticleInteractionIsland;
+    ParticleEvidence.Generation = BoundaryGeneration;
+    ParticleEvidence.DomainKey = 1;
+    ParticleEvidence.InputEpoch = 1;
+    ParticleEvidence.EnvironmentRevision =
+      BoundaryFacingWorkState->GraphOutput.SharedFlow.StableHash;
+    ParticleEvidence.EntityCount = BoundarySnapshot.Agents.Num();
+    ParticleEvidence.bStableMembership = true;
+    ParticleEvidence.bNetworkSemanticsFrozen = true;
+    ParticleEvidence.bClosedInteractionBoundary = false;
+
+    FCrowdWorkerConsistencyEvidence TargetEvidence;
+    TargetEvidence.Domain =
+      ECrowdWorkerConsistencyDomain::TargetCohort;
+    TargetEvidence.Generation = BoundaryGeneration;
+    TargetEvidence.DomainKey = 2;
+    TargetEvidence.InputEpoch = 1;
+    TargetEvidence.EnvironmentRevision =
+      BoundaryFacingWorkState->GraphOutput.SharedFlow.StableHash;
+    TargetEvidence.EntityCount = BoundarySnapshot.Agents.Num();
+    TargetEvidence.bStableMembership = true;
+    TargetEvidence.bAtomicPlan =
+      !BoundaryFacingWorkState->TargetTopologySlots.IsEmpty();
+    TargetEvidence.bNetworkSemanticsFrozen = false;
+
+    FCrowdWorkerConsistencyEvidence CombatEvidence;
+    CombatEvidence.Domain =
+      ECrowdWorkerConsistencyDomain::CombatEventBoundary;
+    CombatEvidence.Generation = BoundaryGeneration;
+    CombatEvidence.DomainKey = 3;
+    CombatEvidence.InputEpoch = 1;
+    CombatEvidence.EntityCount = BoundarySnapshot.Agents.Num();
+    CombatEvidence.FirstEventSequence = 1;
+    CombatEvidence.LastEventSequence = 1;
+    CombatEvidence.EventCount = 1;
+    CombatEvidence.bStableMembership = true;
+    CombatEvidence.bOrderedEvents = true;
+    CombatEvidence.bIdempotencyProven = true;
+    CombatEvidence.bRollbackProven = false;
+    CombatEvidence.bNetworkSemanticsFrozen = true;
+
+    const FCrowdWorkerConsistencyEvaluation ParticleEvaluation =
+      FCrowdWorkerConsistencyDomainEvaluator::Evaluate(
+        ParticleEvidence);
+    const FCrowdWorkerConsistencyEvaluation TargetEvaluation =
+      FCrowdWorkerConsistencyDomainEvaluator::Evaluate(
+        TargetEvidence);
+    const FCrowdWorkerConsistencyEvaluation CombatEvaluation =
+      FCrowdWorkerConsistencyDomainEvaluator::Evaluate(
+        CombatEvidence);
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoConsistencyDomainCheckpoint particle_decision=%d particle_failure=%d target_decision=%d target_failure=%d combat_decision=%d combat_failure=%d source=FailClosedEvaluator"),
+      static_cast<int32>(ParticleEvaluation.Decision),
+      static_cast<int32>(ParticleEvaluation.Failure),
+      static_cast<int32>(TargetEvaluation.Decision),
+      static_cast<int32>(TargetEvaluation.Failure),
+      static_cast<int32>(CombatEvaluation.Decision),
+      static_cast<int32>(CombatEvaluation.Failure));
   }
   return ECrowdBoundaryPollResult::Ready;
 }
@@ -2791,11 +3520,19 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureDynamicSharedFlowField(
     Hash *= 16777619u;
     return Hash;
   };
-  DynamicFlowRoundHash = Fold(
-    DynamicFlowRoundHash, static_cast<uint32>(GetCurrentFixedStepIndex()));
-  DynamicFlowRoundHash = Fold(DynamicFlowRoundHash, static_cast<uint32>(DynamicFlowAnchorCellKey));
-  DynamicFlowRoundHash = Fold(DynamicFlowRoundHash, SharedFlowField.TopologyHash);
-  DynamicFlowRoundHash = Fold(DynamicFlowRoundHash, SharedFlowField.IntegrationHash);
+  const int32 FixedStepIndex = GetCurrentFixedStepIndex();
+  if (DynamicFlowRoundHashFixedStepIndex != FixedStepIndex)
+  {
+    DynamicFlowRoundHash = Fold(
+      DynamicFlowRoundHash, static_cast<uint32>(FixedStepIndex));
+    DynamicFlowRoundHash = Fold(
+      DynamicFlowRoundHash, static_cast<uint32>(DynamicFlowAnchorCellKey));
+    DynamicFlowRoundHash = Fold(
+      DynamicFlowRoundHash, SharedFlowField.TopologyHash);
+    DynamicFlowRoundHash = Fold(
+      DynamicFlowRoundHash, SharedFlowField.IntegrationHash);
+    DynamicFlowRoundHashFixedStepIndex = FixedStepIndex;
+  }
   LastCompareMetrics.FlowFieldRevision = SharedFlowField.Config.Revision;
   LastCompareMetrics.FlowFieldBuildHash = SharedFlowField.BuildHash;
   LastCompareMetrics.FlowFieldRebuildCount = SharedFlowFieldRebuildCount;
@@ -2968,6 +3705,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
   Snapshot.DynamicFlowAnchorCellKey = DynamicFlowAnchorCellKey;
   Snapshot.DynamicFlowIntegrationRebuildCount = DynamicFlowIntegrationRebuildCount;
   Snapshot.DynamicFlowRoundHash = DynamicFlowRoundHash;
+  Snapshot.DynamicFlowRoundHashFixedStepIndex =
+    DynamicFlowRoundHashFixedStepIndex;
   Snapshot.TargetRegionPlanResourceKey = PreparedTargetRegionPlan.bValid
     ? MakeTargetPlanResourceKey(0, PreparedTargetRegionPlan)
     : 0;
@@ -3151,6 +3890,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   RuntimeSharedFlowResource.IntegrationRebuildCount =
     Snapshot.DynamicFlowIntegrationRebuildCount;
   DynamicFlowRoundHash = Snapshot.DynamicFlowRoundHash;
+  DynamicFlowRoundHashFixedStepIndex =
+    Snapshot.DynamicFlowRoundHashFixedStepIndex;
   bDynamicFlowIntegrationCacheInvalidated = true;
   PreparedTargetRegionTopology = {};
   TargetRegionTopologySummary = {};

@@ -43,12 +43,6 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   CrowdInstances->SetMobility(EComponentMobility::Movable);
   CrowdInstances->NumCustomDataFloats = 3;
 
-  CrowdHitFlashInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("CrowdHitFlashInstances"));
-  CrowdHitFlashInstances->SetupAttachment(SceneRoot);
-  CrowdHitFlashInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-  CrowdHitFlashInstances->SetMobility(EComponentMobility::Movable);
-  CrowdHitFlashInstances->NumCustomDataFloats = 3;
-
   CargoInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(
     TEXT("CargoInstances"));
   CargoInstances->SetupAttachment(SceneRoot);
@@ -91,7 +85,6 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   if (VatMesh.Succeeded())
   {
     CrowdInstances->SetStaticMesh(VatMesh.Object);
-    CrowdHitFlashInstances->SetStaticMesh(VatMesh.Object);
     bVatRuntimeMeshLoaded = true;
   }
 
@@ -112,12 +105,6 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
     bVisualMaterialLoaded = true;
   }
 
-  static ConstructorHelpers::FObjectFinder<UMaterialInterface> VatHitFlashMaterial(
-    TEXT("/Game/CrowdDemo/VAT/T7/Materials/MI_CrowdDemoBug_Runtime_HitFlash_VAT.MI_CrowdDemoBug_Runtime_HitFlash_VAT"));
-  if (VatHitFlashMaterial.Succeeded())
-  {
-    CrowdHitFlashInstances->SetMaterial(0, VatHitFlashMaterial.Object);
-  }
 }
 
 void ACrowdDemoReplicator::BeginPlay()
@@ -133,15 +120,13 @@ void ACrowdDemoReplicator::BeginPlay()
     UMaterialInterface* CarrierMaterial = LoadObject<UMaterialInterface>(
       nullptr,
       TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-    if (CarrierMesh && CrowdInstances && CrowdHitFlashInstances)
+    if (CarrierMesh && CrowdInstances)
     {
       CrowdInstances->SetStaticMesh(CarrierMesh);
-      CrowdHitFlashInstances->SetStaticMesh(CarrierMesh);
     }
-    if (CarrierMaterial && CrowdInstances && CrowdHitFlashInstances)
+    if (CarrierMaterial && CrowdInstances)
     {
       CrowdInstances->SetMaterial(0, CarrierMaterial);
-      CrowdHitFlashInstances->SetMaterial(0, CarrierMaterial);
       if (UMaterialInstanceDynamic* DynamicCarrier =
         CrowdInstances->CreateDynamicMaterialInstance(0))
       {
@@ -251,12 +236,10 @@ void ACrowdDemoReplicator::RecordClientFramePhaseSample(
   const bool bAsyncLoading = IsAsyncLoading() || GetNumAsyncPackages() > 0;
   const bool bVisualAssetCompiling =
     (CrowdInstances && CrowdInstances->IsCompiling())
-    || (CrowdHitFlashInstances && CrowdHitFlashInstances->IsCompiling())
     || (ProjectileInstances && ProjectileInstances->IsCompiling())
     || (ProjectileImpactInstances && ProjectileImpactInstances->IsCompiling());
   const bool bVisualPsoPrecaching =
     (CrowdInstances && CrowdInstances->IsPSOPrecaching())
-    || (CrowdHitFlashInstances && CrowdHitFlashInstances->IsPSOPrecaching())
     || (ProjectileInstances && ProjectileInstances->IsPSOPrecaching())
     || (ProjectileImpactInstances && ProjectileImpactInstances->IsPSOPrecaching());
   if (bWarmup)
@@ -321,11 +304,6 @@ UInstancedStaticMeshComponent* ACrowdDemoReplicator::GetCrowdInstancesForClientV
   return CrowdInstances;
 }
 
-UInstancedStaticMeshComponent* ACrowdDemoReplicator::GetCrowdHitFlashInstancesForClientVisuals() const
-{
-  return CrowdHitFlashInstances;
-}
-
 UInstancedStaticMeshComponent*
 ACrowdDemoReplicator::GetCargoInstancesForClientVisuals() const
 {
@@ -338,11 +316,6 @@ void ACrowdDemoReplicator::ClearCrowdVisualInstances()
   {
     CrowdInstances->ClearInstances();
     CrowdInstances->MarkRenderStateDirty();
-  }
-  if (CrowdHitFlashInstances)
-  {
-    CrowdHitFlashInstances->ClearInstances();
-    CrowdHitFlashInstances->MarkRenderStateDirty();
   }
   EntityStates.Reset();
 }
@@ -929,7 +902,7 @@ int32 ACrowdDemoReplicator::ResolveEntityCount()
 {
   int32 Count = 500;
   FParse::Value(FCommandLine::Get(), TEXT("CrowdDemoEntityCount="), Count);
-  return FMath::Clamp(Count, 1, 2000);
+  return FMath::Clamp(Count, 1, 10000);
 }
 
 float ACrowdDemoReplicator::ResolveDurationSeconds()

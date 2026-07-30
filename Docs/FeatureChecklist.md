@@ -4,6 +4,20 @@
 
 [COMPUTED][HIGH] T9 Mixed Combat Integration、DP0–DP6、PJ0–PJ6、S0–S6和R0–R7均已关闭。pre-T9提交`5b947389`只作为历史恢复基线；当前未关闭的游戏循环阶段是T10，另有独立性能架构阶段AB1–AB6尚未关闭。
 
+## PW0–PW8 持久Worker Simulation Runtime检查表
+
+- [x] [INFERRED][HIGH] PW0：目标设计已冻结Worker权威镜像、单向输入/输出、可变Published Batch、Processor边界、Simulation Time、混合Consistency Domain和实施顺序；生产代码尚未迁移。
+- [x] [COMPUTED][HIGH] PW1：通用Schema Input/Result合同、Generation/Sequence门、显式Limits、Building/Published/Consuming三缓冲、State latest-wins、有界有序Event和GT单帧一次交换已实现；未接入Demo生产。Development/DebugGame Editor `-DisableUnity`、定向7/7、MassCrowd 72/72与CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW2：每World唯一Worker Runtime宿主、SoA Mirror、固定Simulation Clock、单Owner短Pump、显式队列边界、Invalidate/Stop/Resnapshot已实现；不访问Mass/World/UObject且不写生产结果。Development/DebugGame Editor `-DisableUnity`、定向10/10、MassCrowd 75/75与CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW3：Round/Mixed/Friendly已接入首次全量、后续Lifecycle/Dirty State/Resource/已提交Command增量；按Input Sequence比较Entity/Lifecycle、State与源Snapshot元数据Hash且不写Mass。Mixed实际300批含165条Command，Mixed/Friendly各连续600批保持`pending=0`、`superseded=0`、无Violation；Development/DebugGame `-DisableUnity`、定向2/2、MassCrowd 77/77与CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW4：SharedFlow/Facing/Business短Task Shard、每World Runtime异步Shadow Scheduler和生产逐批比较已接入；Task可乱序完成但结果按全局提交序交付，Shard大小1–64轮换且正反派发交替。9111 step 300累计900/900完成、in-flight=0、mismatch=0；Development/DebugGame `-DisableUnity`、MassCrowd 78/78、CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW5：Worker Owner可发布空或可变State Batch；GT Result Apply Processor每帧一次交换并只写Presentation/诊断代理，验证Owner Mask、Lifecycle、Publish/Event Sequence和Hash。0/1/10/9999及Exchange并发门、ResultApply 2/2、9112生产20 Patch零stale通过；Development/DebugGame `-DisableUnity`、MassCrowd 80/80、CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW6：Movement Position/Velocity/Facing字段Owner、普通输入Echo拒绝、Correction Revision、Client插值及Shadow→Canary→Production切换已关闭；Production最终Mass代理Writer消费Runtime尾链而非旧Boundary尾链。9118/9116/9117/9119覆盖Shadow、5实体Canary、Obstacle/SoftPressure Production；Development/DebugGame `-DisableUnity`、Movement 2/2、MassCrowd 82/82、CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW7：Particle/Target/Combat强一致Domain已接入显式Evidence与fail-closed迁移判定；定向自动化1/1及9121真实Round检查点通过，当前三类Domain均因缺少专项证明继续保留Boundary。
+- [x] [COMPUTED][HIGH] PW8：Production Movement单Owner、跨Round绝对Simulation Time、rollback-safe Dynamic Flow Hash、1k/2k/5k/10k持续扫描、单进程双PIE、Correction/teardown、T1–T9、Mixed/Friendly/Continuous及T7录屏/FFmpeg连续性门已关闭。最终规模step 300的接受状态数为`301000/602000/1505000/3010000`且队列均为0；10k Worker lag=`9.677ms`，但完整强一致Demo Boundary约145ms/step，不标记为10k实时游戏门。Development/DebugGame `-DisableUnity`、MassCrowd 83/83与CrowdDemo 135/135通过。
+
+- [ ] [COMPUTED][HIGH] 2026-07-30单主体ISM受击闪色：实现与主体表现门已完成。项目VAT父材质读取PICD slot 2，旧HitFlash MI/ISM和双份Add/Update/Remove已删除；0/1/10/9999与SwapRemove自动化、Development/DebugGame `-DisableUnity`、MassCrowd 83/83、CrowdDemo 137/137、T8、Continuous、Friendly、T7逐帧白闪及1k/2k/5k/10k服务端吞吐门通过。最终关闭仍被Mixed 500现有PW输入序列问题阻塞：9207与9213都在fixed-step 93收到`ECrowdWorkerShadowSubmitResult::RequiresResnapshot`，本切片按边界不修改PW Runtime。
+
 ## AB0–AB6 异步Fixed-Step Boundary检查表
 
 - [x] [INFERRED][HIGH] AB0：详细架构文档已区分GT Processor、非GT Mass Work Processor与Boundary Work Stage，并冻结Thread Pool DAG、Mailbox、Request/Result、事务身份和完成定义。

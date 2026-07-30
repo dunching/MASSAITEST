@@ -10,7 +10,7 @@
 
 [COMPUTED][HIGH] 截至 2026-07-16，T7 的测试 HitFact、受击运动、Death VisualState、真实 VAT 资产、同步 ServerTime ISM 播放、双端技术门和近景人工审片均已通过；T8 的静止目标选择、windup、轻量 Mass projectile、fixed-step swept hit、gameplay damage、客户端 Spawn/Impact/Expire 视觉事件和统一 HitResponse 也已通过独立 Small 验收。
 
-[COMPUTED][HIGH] 当前代码已有 Idle/Move/Attack/HitReact/Death、VisualRevision、StateStartServerTime 与 HitFlash 数据；客户端 representation 使用真实 VAT mesh/runtime material，并向主体与红色overlay提交同一Frame/PreviousFrame。8445近景录像已证明HitFlash与五类状态动作可辨识。
+[COMPUTED][HIGH] 当前代码已有 Idle/Move/Attack/HitReact/Death、VisualRevision、StateStartServerTime 与 HitFlash 数据；客户端 representation 只维护主体`CrowdInstances`，每实例写入`(Frame, PreviousFrame, HitFlashIntensity)`。项目自有VAT父材质从PICD slot 2在同一主体实例上混合白色与Emissive，不再创建红色overlay ISM。
 
 ## 2. 外部参考事实与复用边界
 
@@ -74,7 +74,7 @@ VisualState
 
 [INFERRED][HIGH] 资源生产的权威入口与帧合同见 `VatAssetProductionPipeline.md`。运行时代码不得继续使用原工程帧号；必须消费当前 DataAsset 的五段实际范围。
 
-[INFERRED][HIGH] VAT 材质 custom data 至少需要稳定分配 clip/playback 数据与 `HitFlashIntensity`；命中颜色和持续时间由共享 profile 定义。Client visual processor只消费权威/预测视觉事实并提交 ISM，不计算攻击、伤害或受击运动。
+[INFERRED][HIGH] VAT 材质 custom data固定为slot 0=`Frame`、slot 1=`PreviousFrame`、slot 2=`HitFlashIntensity`；`HitFlashColor`可配置且默认纯白，`HitFlashEmissiveStrength`默认`1.0`。Client visual processor只消费权威/预测视觉事实并提交主体ISM，不计算攻击、伤害或受击运动。
 
 ## 5. 远程攻击与投射物合同
 
@@ -203,6 +203,8 @@ HitFlashProfileKey
 
 [COMPUTED][HIGH] 8450 的 20 秒 1280×720 录像与密集 contact sheet 显示两排各10个实体、两排之间的10发齐射、Attack VAT、红色 impact/HitFlash 和目标 Death；未观察到隐藏实例、错误 visual owner 或明显 fixed-step 跳变。俯视镜头下 projectile 尺寸偏小，但可直接辨识。
 
+[COMPUTED][HIGH] 上述8450“红色HitFlash”是旧双ISM历史证据，不再描述当前实现。2026-07-30的9208录像逐帧确认当前单主体ISM白闪：Knockback只改变2个目标，KnockUp约5帧衰减，Death只改变4个目标；未受击实例保持原色，且不存在第二套HitFlash实例、红色副本、重影或Z-fighting。
+
 ### T9 Mixed Combat Integration Small
 
 [COMPUTED][HIGH] T9已在T7、T8独立门之后实现，用于混合Melee/MidRange/Ranged、移动目标、死亡、目标重选与TargetRegion/Flow计划重建；它没有替代T7/T8归因性验收。
@@ -224,6 +226,8 @@ HitFlashProfileKey
 [COMPUTED][HIGH] 原工程审计只保留为失败需求证据，不再作为资产来源。新的 `BuildCrowdDemoVatSource.py → BuildCrowdDemoVatAssets.py` 已从空源生成并烘焙独立五状态资源：Idle `0–24`、Move `25–49`、Attack `50–74`、HitReact `75–99`、Death `100–124`，总帧数125，Death合法。
 
 [COMPUTED][HIGH] `ValidateCrowdDemoVatAssets.py` 已验证1个骨骼网格、1个静态网格、5个AnimSequence、3张Bone VAT纹理、1个DataAsset、7个材质实例、UV通道数2和完整帧范围。资产生产门、T7 package、8447双端技术运行和8445近景录像均通过；Attack、HitReact、击飞落地与Death细动作已获得可靠人工结论。
+
+[COMPUTED][HIGH] 2026-07-30当前资产门更新为6个MaterialInstance、1个项目VAT父材质和1个手动运行时MI；验证器同时检查PICD[2]、白色默认参数、Emissive强度、Break/Make Material Attributes、WPO连接以及旧HitFlash MI不存在。旧7个材质实例结论仅保留为历史证据。
 
 [COMPUTED][HIGH] T7 与 T8 独立 Small 均已通过。T8 固定为10射手+10静止目标合法起始位置，不启用 Target Region Transport；该结果不证明移动目标、T9混合战斗、100/500投射物规模或真实远程群体运输已经成立。
 

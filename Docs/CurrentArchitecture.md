@@ -1,5 +1,27 @@
 # MassAI Crowd Demo 当前架构
 
+## 0.0.3 2026-07-30 持久Worker Simulation目标架构
+
+[COMPUTED][HIGH] PW1–PW8已进入混合生产架构：每World唯一`FCrowdAsyncSimulationRuntime`持有SoA Mirror、Simulation Clock、Input Queue和Published Exchange；Round/Mixed/Friendly只提交冻结输入，GT每帧一次消费Published Batch。Movement Production由`PersistentRuntimeAuthority`单独拥有，Particle、Target、Combat因PW7 fail-closed判定继续使用下方0.0.2的强一致Boundary。
+
+[COMPUTED][HIGH] PW1三缓冲保持Building/Published/Consuming显式槽位、同实体State latest-wins、不可覆盖Event有界有序、每Consumer Frame最多一次交换和Violation锁存；Development/DebugGame Editor `-DisableUnity`、PW1定向7/7、MassCrowd 72/72与CrowdDemo 134/134通过。
+
+[COMPUTED][HIGH] PW2 Runtime由`UMassCrowdRuntimeSubsystem`每World唯一持有，使用有界输入队列和短生命周期Owner Pump维护纯数据SoA镜像；Task不捕获Mass、World或UObject。Generation失效、活动Pump teardown和全量Resnapshot已由定向10/10覆盖；Development/DebugGame Editor `-DisableUnity`、MassCrowd 75/75与CrowdDemo 134/134通过。
+
+[COMPUTED][HIGH] PW3已把Round/Mixed/Friendly冻结Boundary Snapshot接入Worker Shadow：首次全量，随后只发Lifecycle、Dirty State、快照Resource和成功Prepared Commit后的Behavior Command Journal；Worker确认Input Sequence后比较Entity/Lifecycle、State Hash及源Snapshot元数据Hash。该路径只诊断、不写Mass；Mixed实际300批累计165条Command，Mixed/Friendly各连续600批无积压、无跳批、无Violation。
+
+[COMPUTED][HIGH] PW4已关闭：SharedFlow、Facing和Business支持稳定Shard归并，Business Payload按字段规范化以排除结构体padding；每World Runtime新增显式容量的短Task Shadow Scheduler、按Kernel Work Sequence门、跨Poll全局提交序交付及Invalidate/Stop排空。Round生产只复制自包含输入做Shadow，不写Mass；9111 step 300累计900项全部完成、in-flight=0、mismatch=0，Shard大小1–64轮换并交替正反派发。Development/DebugGame `-DisableUnity`、MassCrowd 78/78与CrowdDemo 134/134通过。
+
+[COMPUTED][HIGH] PW5已关闭：Worker Owner把接受输入对应的完整State或零项结果发布到三缓冲Exchange；GT `UCrowdDemoWorkerResultApplyProcessor`每帧一次交换，只写Presentation/诊断代理。应用门覆盖Generation/Publish/Event Sequence、Hash、字段Owner Mask和GT当前Lifecycle；9112首批20 Patch全部进入20个代理，stale/event为0。Development/DebugGame `-DisableUnity`、MassCrowd 80/80与CrowdDemo 134/134通过。
+
+[COMPUTED][HIGH] PW6最终生产路径已收敛：`FCrowdWorkerMovementAuthority`持有Movement字段Owner、双样本插值历史和Correction Revision；Canary/Production净化Worker Input Snapshot并拒绝GT回送Position/Velocity/Facing。Production直接接受已由短Task Boundary DAG完成的Movement Domain Tail并交给唯一Mass代理Writer，不再重复提交第二个Movement Task，也不要求旧Boundary Hash；Shadow/Canary仍执行独立比较但不是并行生产Writer。
+
+[COMPUTED][HIGH] PW7已关闭：`FCrowdWorkerConsistencyDomainEvaluator`把公共前置条件以及Particle闭合Island、Target原子Cohort Plan、Combat连续/幂等/回滚条件实现为显式Evidence、Decision与Failure。9121真实Round中三类Domain分别因开放Island、网络语义未冻结、缺少Rollback证明得到`KeepBoundary`且零Violation；当前Particle/Target/Combat集合提交语义继续留在Boundary，后续只有新专项证据才能改变判定。
+
+[COMPUTED][HIGH] PW8已关闭：跨Round输入使用绝对Simulation Time，Dynamic Flow Round Hash每Fixed Step只折叠一次并进入rollback snapshot；1k/2k/5k/10k均持续到step 300且Input Queue为0，10k接受`3010000`状态、Worker simulation lag=`9.677ms`。T1–T9、Mixed/Friendly/Continuous、单进程双PIE与T7 Production录屏通过；录屏含58状态事件、0 mismatch、0 freeze。Development/DebugGame `-DisableUnity`、MassCrowd 83/83和CrowdDemo 135/135通过。
+
+[COMPUTED][HIGH] 10k完整Demo的强一致Boundary约145ms/step，因此当前证据只证明Persistent Runtime/Exchange持续守恒，不证明整条游戏流水线10k实时。Particle/Target/Combat仍保留Boundary；Movement不存在GT/Mass与Worker双写。
+
 ## 0.0.2 2026-07-30 异步Fixed-Step Boundary覆盖说明
 
 [COMPUTED][HIGH] 2026-07-30当前Round生产代码由单一GT `UCrowdDemoRoundSimFixedStepPipelineProcessor`驱动深度1 Runner Mailbox：帧首`PollBoundaryWork()`，Pending立即返回，Ready完整提交；帧尾最多Gather/Dispatch一个新事务。Runtime已删除`WaitAndDrain/FEvent.Wait`，Mixed与Friendly也使用持久Runner跨帧消费。全部`ROUND_DYNAMIC_FLAGS`阶段Adapter仍要求GT并由总控手工`CallExecute()`，这是AB5尚未关闭的剩余重构。
@@ -379,13 +401,13 @@ RoundPlanApply
 
 [COMPUTED][HIGH] 阶段 F 已把真实Mass entity mutation放入`MassCrowdRuntime`的通用LifecycleStore，Networking adapter仅在协议状态副本通过后调用Runtime并提交。最小World真实验证snapshot create、不同fixed-step spawn、destroy后handle失效、Mass handle serial变化、StableEntityRef高serial槽位复用、membership原子迁移、stale correction/despawn拒绝和完整entity-set hash；Development/DebugGame、定向1/1、MassCrowd 24/24及CrowdDemo 109/109通过。[INFERRED][HIGH] 当前进入G，将该生产路径接入独立Demo continuous lifecycle场景，不使用T1 active标志冒充销毁。
 
-[COMPUTED][HIGH] 阶段 G 已新增独立`ACrowdDemoContinuousLifecycleCoordinator`与CLI入口；该入口在GameMode固定agent spawn之前分支，Round pipeline只空载运行且不拥有生命周期实体。Server以30Hz fixed-step和15-step操作间隔驱动E batches/F Runtime store，population硬上限20，交替执行Membership、Death/BusinessRecycle Despawn与同槽位高LifecycleSerial Respawn；Client用可靠operation wrapper应用同一batch并按StableEntityRef增量维护普通/HitFlash ISM。8777序列18双端entity-set hash=`14341810777549134372`一致，client active/visible检查点一致、max population=20、stale reject=0且无VIOLATION；Development/DebugGame、定向1/1、MassCrowd 24/24及CrowdDemo 110/110通过。[INFERRED][HIGH] 当前进入H，G没有提前实现统一Behavior、Cargo或混合Sandbox。
+[COMPUTED][HIGH] 阶段 G 已新增独立`ACrowdDemoContinuousLifecycleCoordinator`与CLI入口；该入口在GameMode固定agent spawn之前分支，Round pipeline只空载运行且不拥有生命周期实体。Server以30Hz fixed-step和15-step操作间隔驱动E batches/F Runtime store，population硬上限20，交替执行Membership、Death/BusinessRecycle Despawn与同槽位高LifecycleSerial Respawn；Client用可靠operation wrapper应用同一batch并按StableEntityRef增量维护主体ISM，受击闪色由同一实例PICD slot 2驱动。9203序列44双端entity-set hash=`12305161180829922642`一致，且单主体ISM计数门通过。[INFERRED][HIGH] 阶段G的旧双ISM证据已由当前单主体表现实现取代。
 
 [COMPUTED][HIGH] 阶段 H 新增`MassCrowdRuntimeBehavior`公共合同：transition先验证AgentFacts/Capability/provider，再输出显式Target、Objective、MovementProfile、InteractionIntent和可选BusinessCommitRequest，Commit只更新通用AgentFacts；Runtime不引用Demo。Demo的`CrowdDemoBehaviorAdapters`把基础行为、Cargo pickup/deliver和Attack路由到同一接口，业务ledger以CommitId幂等，且`FCrowdDemoHitFact::HitEventId`作为外部commit id接入既有damage kernel。定向2/2、MassCrowd 25/25、CrowdDemo 111/111与Development/DebugGame通过。[INFERRED][HIGH] 该阶段没有把H接口与G continuous lifecycle组合；组合运行属于J。
 
 [COMPUTED][HIGH] 阶段 I 新增`CrowdNavSurfaceGraph`与`MassCrowdNavSurfaceGraphExtractor`：Core以量化几何生成稳定节点/拓扑hash，layer-specific与closest-polygon attachment避免大多边形质心误判，Shared Flow以预构建反向邻接执行稳定Dijkstra；Runtime提取静态Recast tile/poly/portal并拒绝缺失、过窄、过陡或跨越落差的连接。8800真实地图运行通过98 nodes、234 directed edges、38 tiles、4 extracted/graph layers、13 overlap、76 reachable sloped edges、8/8 reachable markers、drop unreachable，topology hash=`9799951363989120452`；Development/DebugGame、定向3/3、MassCrowd 27/27与CrowdDemo 112/112通过。[INFERRED][HIGH] I本身没有把continuous lifecycle、Behavior、Combat或Logistics组合进probe；该组合由J完成。
 
-[COMPUTED][HIGH] 阶段 J 新增`ACrowdDemoMixedSandboxCoordinator`：GameMode在固定Round spawn前分支，20个真实Mass实体按30Hz boundary运行；行为由距离、Cargo carrier、Health与当前目标事实驱动，在HaulPickup/Deliver、Pursue/Attack、Guard/Flee及Wander/MoveTo间切换。所有移动目标attachment消费I的Recast图与Shared Flow，业务提交消费H provider/ledger并对同一CommitId即时重放验证幂等，死亡/业务回收与行为cohort变化消费E/F lifecycle batches。客户端用bounded状态包校正完整AgentFacts并增量维护普通/HitFlash ISM。8804 step600的Server/Client entity hash=`13154923896226232907`、membership hash=`13094526216572312548`一致；active/visible=`20/20`，最小同层间距=`71.51cm`且stale reject=0。[INFERRED][HIGH] 这是P0前的历史检查点；当前状态以本文1.1节、`EntityBehaviorSourceArchitecture.md`和`PhasePlan.md`为准。
+[COMPUTED][HIGH] 阶段 J 新增`ACrowdDemoMixedSandboxCoordinator`：GameMode在固定Round spawn前分支，20个真实Mass实体按30Hz boundary运行；行为由距离、Cargo carrier、Health与当前目标事实驱动，在HaulPickup/Deliver、Pursue/Attack、Guard/Flee及Wander/MoveTo间切换。所有移动目标attachment消费I的Recast图与Shared Flow，业务提交消费H provider/ledger并对同一CommitId即时重放验证幂等，死亡/业务回收与行为cohort变化消费E/F lifecycle batches。当前客户端用bounded状态包校正完整AgentFacts并增量维护单主体ISM；8804的普通/HitFlash双ISM描述只保留为历史检查点。[INFERRED][HIGH] 当前状态以本文1.1节、`EntityBehaviorSourceArchitecture.md`和`PhasePlan.md`为准。
 
 ## 2026-07-28 产品路径复核增量
 

@@ -47,5 +47,14 @@ public class MassAICrowdDemo : ModuleRules
       "RenderCore",
       "RHI"
     });
+
+    if (Target.bBuildEditor)
+    {
+      PrivateDependencyModuleNames.AddRange(new[]
+      {
+        "LevelEditor",
+        "UnrealEd"
+      });
+    }
   }
 }

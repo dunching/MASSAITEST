@@ -9,6 +9,21 @@
 class UCrowdDemoRoundSimPipelineSubsystem;
 
 UCLASS()
+class MASSAICROWDDEMO_API UCrowdDemoWorkerResultApplyProcessor
+  : public UMassProcessor
+{
+  GENERATED_BODY()
+public:
+  UCrowdDemoWorkerResultApplyProcessor();
+protected:
+  virtual void Execute(
+    FMassEntityManager& EntityManager,
+    FMassExecutionContext& Context) override;
+private:
+  uint64 ConsumerFrameSequence = 0;
+};
+
+UCLASS()
 class MASSAICROWDDEMO_API UCrowdDemoRoundPlanApplyProcessor : public UMassProcessor
 {
   GENERATED_BODY()
@@ -270,5 +285,6 @@ private:
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundAuthorityCommitProcessor> AuthorityCommitProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundClientPredictionCommitProcessor> ClientPredictionCommitProcessor;
   UPROPERTY(Transient) TObjectPtr<UCrowdDemoRoundCheckpointPublisherProcessor> CheckpointPublisherProcessor;
+  UPROPERTY(Transient) TObjectPtr<UCrowdDemoWorkerResultApplyProcessor> WorkerResultApplyProcessor;
   int32 ConsecutiveCatchupCpuBudgetHitFrames = 0;
 };

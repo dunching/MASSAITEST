@@ -14,6 +14,19 @@
 
 [INFERRED][HIGH] 目标架构继续保留完整集合预验证和唯一写回，不以减少Mass遍历为理由合并两者；详细线程与Mailbox合同见`AsyncFixedStepBoundaryArchitecture.md`。
 
+## 1.2 PW持久Worker目标查询与字段所有权
+
+[COMPUTED][HIGH] 下表是PW0冻结的目标矩阵，不描述当前生产查询；现行查询数量继续以下方第2节为准。
+
+| 目标阶段 | Mass访问 | 线程与生命周期 | 字段所有权 |
+|---|---|---|---|
+| `CrowdWorkerInputSyncProcessor` | [INFERRED][HIGH] 读取Lifecycle、Command、Resource Dirty和明确宿主输入；首次Generation允许完整初始化 | [INFERRED][HIGH] 需要World/UObject时GT；纯合法Query可非GT但必须在Phase内结束 | [INFERRED][HIGH] 只生产GT→Worker Input Batch，不写Worker结果字段 |
+| `FCrowdAsyncSimulationRuntime` | [INFERRED][HIGH] 不访问Mass Query、Fragment View或EntityManager | [INFERRED][HIGH] 跨Frame持久状态Owner；纯Kernel使用短UE Task Shard | [INFERRED][HIGH] 拥有已迁移Position/Velocity/Facing/Standing/Combat等Worker模拟字段 |
+| `CrowdWorkerResultApplyProcessor` | [INFERRED][HIGH] 按StableEntityRef/Lifecycle解析并批量写代理Fragment | [INFERRED][HIGH] GT固定Apply Phase；每帧交换一次不可变Published Batch | [INFERRED][HIGH] 只把Worker权威结果投影到Mass/Presentation/Networking代理 |
+| 现有Boundary Gather/Commit | [INFERRED][HIGH] 迁移期继续按第2节执行 | [INFERRED][HIGH] 当前GT Coordinator与非阻塞Runner | [INFERRED][HIGH] 只拥有尚未迁移或明确强一致的Particle/Target/Combat Domain字段 |
+
+[INFERRED][HIGH] PW迁移必须新增字段级Writer表；同一字段一旦切换为Worker权威，现有Boundary/Mass Writer必须在同一Canary门内退出，GT不得把消费后的代理字段作为普通输入Echo回Worker。
+
 ## 2. Fixed-step 查询矩阵
 
 | 阶段 | 当前 Mass 遍历 | 所有权与保留理由 | 状态 |

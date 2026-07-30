@@ -8,6 +8,10 @@
 
 [COMPUTED][HIGH] 2026-07-30 `MassCrowdRuntime`已拥有Runner单槽Mailbox、非阻塞Orchestrator状态、事务envelope和Task telemetry；Core继续只承载纯POD/Kernel，Demo拥有Round GT Coordinator和宿主Adapter。详细合同见`AsyncFixedStepBoundaryArchitecture.md`。生产`WaitAndDrain()`已删除，真实场景和最终性能门尚未关闭。
 
+[INFERRED][HIGH] PW0冻结的下一代目标由`MassCrowdRuntime`承载通用Input/Result合同、Sequence/Generation门、三缓冲Exchange和不含Demo语义的Worker Runtime基础；`MassAICrowdDemo`只拥有场景Input Sync、Result Apply、字段映射和迁移Canary。Core继续只承载纯Kernel，Networking/Presentation只消费版本化公共输出，不得反向控制Worker调度。详细合同见`PersistentWorkerSimulationArchitecture.md`。
+
+[COMPUTED][HIGH] 上述PW模块边界尚未实现，不能从本段推断生产代码已经拥有持久Worker镜像或可变Published Batch。
+
 ## 2. 产品边界
 
 ```text
