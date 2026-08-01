@@ -4,7 +4,7 @@
 
 namespace CrowdWorkerExchangePrivate
 {
-  bool IsFiniteNonNegative(const double Value)
+  bool ExchangeIsFiniteNonNegative(const double Value)
   {
     return FMath::IsFinite(Value) && Value >= 0.0;
   }
@@ -14,7 +14,10 @@ using namespace CrowdWorkerExchangePrivate;
 
 bool FCrowdWorkerPublishedExchange::ResetQuiescent(
   const uint64 InGeneration,
-  const FCrowdWorkerContractLimits& InLimits)
+  const FCrowdWorkerContractLimits& InLimits,
+  const uint64 InLastPublishedSequence,
+  const uint64 InLastAcceptedEventSequence,
+  const uint64 InLastConsumerFrameSequence)
 {
   if (InGeneration == 0 || !InLimits.IsValid())
     return false;
@@ -25,14 +28,14 @@ bool FCrowdWorkerPublishedExchange::ResetQuiescent(
   BuildingPatchIndices.Reset();
   Limits = InLimits;
   Generation = InGeneration;
-  LastPublishedSequence = 0;
-  LastAcceptedEventSequence = 0;
-  LastConsumerFrameSequence = 0;
+  LastPublishedSequence = InLastPublishedSequence;
+  LastAcceptedEventSequence = InLastAcceptedEventSequence;
+  LastConsumerFrameSequence = InLastConsumerFrameSequence;
   BuildingIndex = 0;
   PublishedIndex = INDEX_NONE;
   ConsumingIndex = INDEX_NONE;
   PendingOrderedEventCount = 0;
-  bHasConsumerAttempt = false;
+  bHasConsumerAttempt = InLastConsumerFrameSequence != 0;
   bViolation.Store(false);
   bInitialized = true;
   return true;
@@ -73,8 +76,10 @@ FCrowdWorkerPublishedExchange::AppendStatePatch(
   }
 
   FCrowdWorkerPublishedBatch& Building = Buffers[BuildingIndex];
+  const FCrowdWorkerStatePatchKey PatchKey{
+    Patch.EntityRef, Patch.StateFieldId};
   if (const int32* ExistingIndex =
-    BuildingPatchIndices.Find(Patch.EntityRef))
+    BuildingPatchIndices.Find(PatchKey))
   {
     FCrowdWorkerStatePatch& Existing =
       Building.StatePatches[*ExistingIndex];
@@ -109,7 +114,7 @@ FCrowdWorkerPublishedExchange::AppendStatePatch(
     return ECrowdWorkerAppendResult::Violation;
   }
   const int32 NewIndex = Building.StatePatches.Add(Patch);
-  BuildingPatchIndices.Add(Patch.EntityRef, NewIndex);
+  BuildingPatchIndices.Add(PatchKey, NewIndex);
   return ECrowdWorkerAppendResult::Appended;
 }
 
@@ -178,7 +183,7 @@ FCrowdWorkerPublishedExchange::TryPublishBuildingBatch(
   }
   if (Metadata.MinWorkerEpoch == 0
     || Metadata.MaxWorkerEpoch < Metadata.MinWorkerEpoch
-    || !IsFiniteNonNegative(
+    || !ExchangeIsFiniteNonNegative(
       Metadata.PublishedSimulationTimeSeconds))
   {
     LatchViolation();
@@ -196,23 +201,56 @@ FCrowdWorkerPublishedExchange::TryPublishBuildingBatch(
     const FCrowdWorkerStatePatch& A,
     const FCrowdWorkerStatePatch& B)
   {
-    return A.EntityRef < B.EntityRef;
+    if (A.EntityRef != B.EntityRef)
+      return A.EntityRef < B.EntityRef;
+    return A.StateFieldId < B.StateFieldId;
   });
   Building.Version = FCrowdWorkerPublishedBatch::CurrentVersion;
   Building.Generation = Metadata.Generation;
   Building.PublishSequence = Metadata.PublishSequence;
-  Building.MinWorkerEpoch = Metadata.MinWorkerEpoch;
-  Building.MaxWorkerEpoch = Metadata.MaxWorkerEpoch;
+  uint64 BuildingMinEpoch = Metadata.MinWorkerEpoch;
+  uint64 BuildingMaxEpoch = Metadata.MaxWorkerEpoch;
+  for (const FCrowdWorkerStatePatch& Patch :
+    Building.StatePatches)
+  {
+    BuildingMinEpoch = FMath::Min(
+      BuildingMinEpoch, Patch.WorkerEpoch);
+    BuildingMaxEpoch = FMath::Max(
+      BuildingMaxEpoch, Patch.WorkerEpoch);
+  }
+  for (const FCrowdWorkerGameplayEvent& Event :
+    Building.OrderedEvents)
+  {
+    BuildingMinEpoch = FMath::Min(
+      BuildingMinEpoch, Event.WorkerEpoch);
+    BuildingMaxEpoch = FMath::Max(
+      BuildingMaxEpoch, Event.WorkerEpoch);
+  }
+  Building.MinWorkerEpoch = BuildingMinEpoch;
+  Building.MaxWorkerEpoch = BuildingMaxEpoch;
   Building.LastAppliedInputSequence =
     Metadata.LastAppliedInputSequence;
   Building.PublishedSimulationTimeSeconds =
     Metadata.PublishedSimulationTimeSeconds;
   Building.RecalculateStableHash();
 
-  if (FCrowdWorkerPublishedBatchValidator::Validate(
-      Building, Limits, Generation, LastPublishedSequence)
-    != ECrowdWorkerPublishedValidationResult::Valid)
+  const ECrowdWorkerPublishedValidationResult ValidationResult =
+    FCrowdWorkerPublishedBatchValidator::Validate(
+      Building, Limits, Generation, LastPublishedSequence);
+  if (ValidationResult
+      != ECrowdWorkerPublishedValidationResult::Valid)
   {
+    UE_LOG(LogTemp, Error,
+      TEXT("CrowdWorkerExchangePublishRejected validation=%u generation=%llu publish=%llu epochs=%llu/%llu last_input=%llu patches=%d events=%d stable_hash=%llu"),
+      static_cast<uint32>(ValidationResult),
+      Building.Generation,
+      Building.PublishSequence,
+      Building.MinWorkerEpoch,
+      Building.MaxWorkerEpoch,
+      Building.LastAppliedInputSequence,
+      Building.StatePatches.Num(),
+      Building.OrderedEvents.Num(),
+      Building.StableHash);
     LatchViolation();
     return ECrowdWorkerPublishResult::Violation;
   }

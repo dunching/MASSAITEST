@@ -152,14 +152,16 @@ try {
           [bool](Select-String -Path $ServerLog -Pattern "CrowdDemoPerformanceCheckpoint role=server" -Quiet)
         $ClientComplete = (Test-Path -LiteralPath $ClientLog) -and
           [bool](Select-String -Path $ClientLog -Pattern "CrowdDemoRoundInputCheckpoint role=client" -Quiet)
-        if ($ServerComplete -and $ClientComplete) {
+        $ClientVisualComplete = (Test-Path -LiteralPath $ClientLog) -and
+          [bool](Select-String -Path $ClientLog -Pattern "CrowdDemoVisualPerformance role=client" -Quiet)
+        if ($ServerComplete -and $ClientComplete -and $ClientVisualComplete) {
           $ResultComplete = $true
           break
         }
         Start-Sleep -Milliseconds 500
       }
       if (!$ResultComplete) {
-        throw "CrowdDemo performance run timed out before server/client RoundResult completion"
+        throw "CrowdDemo performance run timed out before server/client RoundResult and client visual performance completion"
       }
       Start-Sleep -Seconds $ClientHoldSeconds
     }

@@ -9,6 +9,8 @@ namespace
 {
   constexpr uint64 FnvOffset64 = 14695981039346656037ull;
   constexpr uint64 FnvPrime64 = 1099511628211ull;
+  constexpr int32 MaxPendingBehaviorCommands = 4096;
+  constexpr int32 MaxBehaviorBindingUpdates = 16384;
   FCriticalSection ProviderRegistryMutex;
   TMap<
     FCrowdBehaviorProviderId,
@@ -54,6 +56,20 @@ namespace
     return Hash;
   }
 
+  bool AreBindingsEqual(
+    const FCrowdCapabilityBinding& A,
+    const FCrowdCapabilityBinding& B)
+  {
+    if (A.ProfileKey != B.ProfileKey
+      || A.ModifierRevision != B.ModifierRevision
+      || A.ModifierCount != B.ModifierCount)
+      return false;
+    for (uint8 Index = 0; Index < A.ModifierCount; ++Index)
+      if (!(A.Modifiers[Index] == B.Modifiers[Index]))
+        return false;
+    return true;
+  }
+
   uint64 CalculatePreparedEntityHash(
     const FCrowdBehaviorPreparedEntity& Entity)
   {
@@ -89,6 +105,15 @@ namespace
     for (const FCrowdBehaviorPreparedEntity& Entity : Prepared.Entities)
       FoldUnsigned(Hash, Entity.StableHash);
     return Hash;
+  }
+
+  uint64 CalculateSourceSetContentHash(
+    const FCrowdBehaviorSourceSet& SourceSet)
+  {
+    FCrowdBehaviorSourceSet Canonical = SourceSet;
+    Canonical.Revision = 1;
+    Canonical.RecalculateStableHash();
+    return Canonical.StableHash;
   }
 }
 
@@ -345,6 +370,12 @@ bool FCrowdBehaviorCapabilityBindingUpdate::IsValid() const
       EffectiveFixedStep, EntityRef, Binding);
 }
 
+void FCrowdBehaviorCapabilityBindingUpdate::RecalculateStableHash()
+{
+  StableHash = CalculateBindingUpdateHash(
+    EffectiveFixedStep, EntityRef, Binding);
+}
+
 bool FCrowdBehaviorSourceRuntime::InitializeFromRegisteredProviders()
 {
   Reset();
@@ -417,6 +448,8 @@ void FCrowdBehaviorSourceRuntime::Reset()
   LastResolvedChannels.Reset();
   PendingCommands.Reset();
   WorkerInputCommandJournal.Reset();
+  WorkerInputContextJournal.Reset();
+  WorkerInputBindingJournal.Reset();
   PendingBindingUpdates.Reset();
   LastCommittedEvents.Reset();
   RegistryHash = 0;
@@ -430,7 +463,9 @@ bool FCrowdBehaviorSourceRuntime::RegisterEntity(
   const FCrowdCapabilityBinding& Binding)
 {
   if (!bInitialized || !EntityRef.IsValid()
-    || SourceSets.Contains(EntityRef))
+    || SourceSets.Contains(EntityRef)
+    || PendingBindingUpdates.Num()
+      >= MaxBehaviorBindingUpdates)
     return false;
   FCrowdResolvedCapabilitySet Resolved;
   if (!CapabilityProfiles.Resolve(Binding, Resolved))
@@ -441,7 +476,14 @@ bool FCrowdBehaviorSourceRuntime::RegisterEntity(
   Set.Revision = 1;
   Set.RecalculateStableHash();
   if (!Set.IsValid()) return false;
+  FCrowdBehaviorCapabilityBindingUpdate InitialBinding;
+  InitialBinding.EffectiveFixedStep = 0;
+  InitialBinding.EntityRef = EntityRef;
+  InitialBinding.Binding = Binding;
+  InitialBinding.RecalculateStableHash();
+  if (!InitialBinding.IsValid()) return false;
   SourceSets.Add(EntityRef, MoveTemp(Set));
+  PendingBindingUpdates.Add(MoveTemp(InitialBinding));
   return true;
 }
 
@@ -452,6 +494,19 @@ bool FCrowdBehaviorSourceRuntime::RemoveEntity(
     return false;
   LastResolvedChannels.Remove(EntityRef);
   EvaluationContexts.Remove(EntityRef);
+  WorkerInputContextJournal.RemoveAll(
+    [&](const auto& Context)
+    {
+      return Context.EntityRef == EntityRef;
+    });
+  WorkerInputCommandJournal.RemoveAll([&](const auto& Command)
+  {
+    return Command.Handle.EntityRef == EntityRef;
+  });
+  WorkerInputBindingJournal.RemoveAll([&](const auto& Update)
+  {
+    return Update.EntityRef == EntityRef;
+  });
   PendingCommands.RemoveAll([&](const auto& Command)
   {
     return Command.Handle.EntityRef == EntityRef;
@@ -468,7 +523,7 @@ bool FCrowdBehaviorSourceRuntime::QueueCommand(
 {
   if (!bInitialized || !Command.IsValid()
     || !SourceSets.Contains(Command.Handle.EntityRef)
-    || PendingCommands.Num() >= 4096)
+    || PendingCommands.Num() >= MaxPendingBehaviorCommands)
     return false;
   PendingCommands.Add(Command);
   return true;
@@ -485,6 +540,28 @@ bool FCrowdBehaviorSourceRuntime::AcknowledgeWorkerInputCommands(
   return true;
 }
 
+bool FCrowdBehaviorSourceRuntime::AcknowledgeWorkerInputContexts(
+  const int32 Count)
+{
+  if (Count < 0 || Count > WorkerInputContextJournal.Num())
+    return false;
+  if (Count > 0)
+    WorkerInputContextJournal.RemoveAt(
+      0, Count, EAllowShrinking::No);
+  return true;
+}
+
+bool FCrowdBehaviorSourceRuntime::AcknowledgeWorkerInputBindings(
+  const int32 Count)
+{
+  if (Count < 0 || Count > WorkerInputBindingJournal.Num())
+    return false;
+  if (Count > 0)
+    WorkerInputBindingJournal.RemoveAt(
+      0, Count, EAllowShrinking::No);
+  return true;
+}
+
 bool FCrowdBehaviorSourceRuntime::QueueCapabilityBinding(
   const int64 EffectiveFixedStep,
   const FCrowdStableEntityRef EntityRef,
@@ -493,14 +570,14 @@ bool FCrowdBehaviorSourceRuntime::QueueCapabilityBinding(
   if (!bInitialized || EffectiveFixedStep < 0
     || !EntityRef.IsValid() || !Binding.IsValid()
     || !SourceSets.Contains(EntityRef)
-    || PendingBindingUpdates.Num() >= 1024)
+    || PendingBindingUpdates.Num()
+      >= MaxBehaviorBindingUpdates)
     return false;
   FCrowdBehaviorCapabilityBindingUpdate Update;
   Update.EffectiveFixedStep = EffectiveFixedStep;
   Update.EntityRef = EntityRef;
   Update.Binding = Binding;
-  Update.StableHash = CalculateBindingUpdateHash(
-    EffectiveFixedStep, EntityRef, Binding);
+  Update.RecalculateStableHash();
   PendingBindingUpdates.Add(Update);
   return true;
 }
@@ -578,8 +655,12 @@ bool FCrowdBehaviorSourceRuntime::PrepareBoundary(
         && Update.EntityRef == EntityRef)
       {
         if (!Update.IsValid()) return false;
-        BoundaryBase.CapabilityBinding = Update.Binding;
-        bBindingChanged = true;
+        if (!AreBindingsEqual(
+            BoundaryBase.CapabilityBinding, Update.Binding))
+        {
+          BoundaryBase.CapabilityBinding = Update.Binding;
+          bBindingChanged = true;
+        }
       }
     }
     if (bBindingChanged) BoundaryBase.RecalculateStableHash();
@@ -698,6 +779,34 @@ bool FCrowdBehaviorSourceRuntime::CommitPrepared(
   const FCrowdBehaviorPreparedBoundary& Prepared)
 {
   if (!ValidatePrepared(Prepared)) return false;
+  int32 DueCommandCount = 0;
+  for (const FCrowdBehaviorSourceCommand& Command : PendingCommands)
+    if (Command.EffectiveFixedStep <= Prepared.FixedStepIndex)
+      ++DueCommandCount;
+  int32 CommittedContextCount = 0;
+  int32 DueBindingCount = 0;
+  for (const FCrowdBehaviorCapabilityBindingUpdate& Update
+    : PendingBindingUpdates)
+    if (Update.EffectiveFixedStep <= Prepared.FixedStepIndex)
+      ++DueBindingCount;
+  for (const FCrowdBehaviorPreparedEntity& Entity : Prepared.Entities)
+  {
+    const FCrowdBehaviorEntityEvaluationContext* Context =
+      EvaluationContexts.Find(Entity.EntityRef);
+    if (Context
+      && Context->FixedStepIndex == Prepared.FixedStepIndex)
+      ++CommittedContextCount;
+  }
+  if (WorkerInputCommandJournal.Num() + DueCommandCount
+      > MaxPendingBehaviorCommands
+    || WorkerInputContextJournal.Num()
+      + CommittedContextCount > MaxPendingBehaviorCommands
+    || WorkerInputBindingJournal.Num() + DueBindingCount
+      > MaxBehaviorBindingUpdates)
+  {
+    bWorkerInputCommandJournalOverflowed = true;
+    return false;
+  }
   LastCommittedEvents.Reset();
   for (const FCrowdBehaviorPreparedEntity& Entity : Prepared.Entities)
   {
@@ -705,15 +814,90 @@ bool FCrowdBehaviorSourceRuntime::CommitPrepared(
     LastResolvedChannels.Add(
       Entity.EntityRef, Entity.ResolvedChannels);
     LastCommittedEvents.Append(Entity.Events);
+    const FCrowdBehaviorEntityEvaluationContext* Context =
+      EvaluationContexts.Find(Entity.EntityRef);
+    if (Context
+      && Context->FixedStepIndex == Prepared.FixedStepIndex)
+      WorkerInputContextJournal.Add(*Context);
   }
   for (const FCrowdBehaviorSourceCommand& Command : PendingCommands)
   {
     if (Command.EffectiveFixedStep > Prepared.FixedStepIndex)
       continue;
-    if (WorkerInputCommandJournal.Num() < 4096)
-      WorkerInputCommandJournal.Add(Command);
-    else
-      bWorkerInputCommandJournalOverflowed = true;
+    WorkerInputCommandJournal.Add(Command);
+  }
+  for (const FCrowdBehaviorCapabilityBindingUpdate& Update
+    : PendingBindingUpdates)
+  {
+    if (Update.EffectiveFixedStep <= Prepared.FixedStepIndex)
+      WorkerInputBindingJournal.Add(Update);
+  }
+  PendingCommands.RemoveAll([&](const auto& Command)
+  {
+    return Command.EffectiveFixedStep <= Prepared.FixedStepIndex;
+  });
+  PendingBindingUpdates.RemoveAll([&](const auto& Update)
+  {
+    return Update.EffectiveFixedStep <= Prepared.FixedStepIndex;
+  });
+  return true;
+}
+
+bool FCrowdBehaviorSourceRuntime::CommitWorkerPrepared(
+  const FCrowdBehaviorPreparedBoundary& Prepared,
+  const TConstArrayView<FCrowdBehaviorWorkerCommitEntity> WorkerEntities,
+  const TConstArrayView<FCrowdBehaviorSourceEvent> WorkerEvents)
+{
+  if (!ValidatePrepared(Prepared)
+    || WorkerEntities.Num() != Prepared.Entities.Num())
+    return false;
+
+  FCrowdStableEntityRef PreviousRef;
+  for (int32 Index = 0; Index < Prepared.Entities.Num(); ++Index)
+  {
+    const FCrowdBehaviorPreparedEntity& Expected =
+      Prepared.Entities[Index];
+    const FCrowdBehaviorWorkerCommitEntity& Worker =
+      WorkerEntities[Index];
+    if ((!PreviousRef.IsUnset() && !(PreviousRef < Worker.EntityRef))
+      || Worker.EntityRef != Expected.EntityRef
+      || Worker.SourceSet.EntityRef != Worker.EntityRef
+      || !Worker.SourceSet.IsValid()
+      || !Worker.ResolvedChannels.bValid
+      || (Worker.SourceSet.StableHash
+          != Expected.StagedSourceSet.StableHash
+        && (Worker.SourceSet.Revision
+            < Expected.StagedSourceSet.Revision
+          || CalculateSourceSetContentHash(Worker.SourceSet)
+            != CalculateSourceSetContentHash(
+              Expected.StagedSourceSet)))
+      || Worker.ResolvedChannels.StableHash
+        != Expected.ResolvedChannels.StableHash
+      || Worker.EvaluationContextHash
+        != Expected.EvaluationContextHash)
+      return false;
+    PreviousRef = Worker.EntityRef;
+  }
+  for (const FCrowdBehaviorSourceEvent& Event : WorkerEvents)
+  {
+    if (Event.Kind >= ECrowdBehaviorSourceEventKind::Count
+      || Event.FixedStepIndex < 0
+      || Event.FixedStepIndex > Prepared.FixedStepIndex
+      || !Event.Handle.IsValid()
+      || !Event.SourceTypeId.IsValid()
+      || !SourceSets.Contains(Event.Handle.EntityRef))
+      return false;
+  }
+
+  LastCommittedEvents.Reset(WorkerEvents.Num());
+  LastCommittedEvents.Append(WorkerEvents);
+  for (int32 Index = 0; Index < WorkerEntities.Num(); ++Index)
+  {
+    const FCrowdBehaviorWorkerCommitEntity& Worker =
+      WorkerEntities[Index];
+    SourceSets[Worker.EntityRef] = Worker.SourceSet;
+    LastResolvedChannels.Add(
+      Worker.EntityRef, Worker.ResolvedChannels);
   }
   PendingCommands.RemoveAll([&](const auto& Command)
   {

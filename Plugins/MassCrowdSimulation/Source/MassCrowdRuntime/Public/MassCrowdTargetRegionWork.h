@@ -93,4 +93,8 @@ public:
 
   static FCrowdMassTargetRegionGuidanceOutput BuildGuidance(
     const FCrowdMassTargetRegionGuidanceInput& Input);
+
+  static FCrowdMassTargetRegionGuidanceOutput BuildGuidanceSharded(
+    const FCrowdMassTargetRegionGuidanceInput& Input,
+    int32 ShardEntityCount = 128);
 };

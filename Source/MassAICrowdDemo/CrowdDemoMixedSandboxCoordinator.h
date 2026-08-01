@@ -15,6 +15,7 @@
 #include "MassCrowdNavRuntime.h"
 #include "MassCrowdProjectileBoundary.h"
 #include "MassCrowdProjectileMassStore.h"
+#include "MassCrowdWorkerProjectileDomain.h"
 #include "MassCrowdSpatialSafety.h"
 #include "Mass/CrowdDemoAttackHostAdapter.h"
 #include "CrowdDemoMixedSandboxCoordinator.generated.h"
@@ -133,6 +134,23 @@ private:
     bool bCompleted = false;
   };
 
+  struct FWorkerMixedCombatApplyState
+  {
+    FCrowdWorkerProjectileState ProjectileState;
+    bool bReady = false;
+    bool bApplyProduction = false;
+  };
+
+  struct FWorkerBehaviorApplyState
+  {
+    TArray<FCrowdBehaviorWorkerCommitEntity> Entities;
+    TArray<FCrowdBehaviorSourceEvent> Events;
+    TArray<FCrowdBusinessContribution> BusinessCommits;
+    uint64 InputSequence = 0;
+    bool bReady = false;
+    bool bApplyProduction = false;
+  };
+
   struct FPendingMixedMovement
   {
     TUniquePtr<FCrowdMassBoundaryRunner> Runner;
@@ -143,6 +161,16 @@ private:
     FCrowdBehaviorPreparedBoundary PreparedBehavior;
     TArray<uint32> ResolvedInteractionLayers;
     TArray<uint64> ResolvedAttachedNodeIds;
+    FCrowdStableEntityRef WorkerCombatAnchor;
+    FCrowdWorkerPayload ExpectedWorkerCombatHostResult;
+    uint64 ExpectedWorkerCombatControlRevision = 0;
+    uint64 ExpectedWorkerProjectileStableHash = 0;
+    uint64 WorkerBehaviorInputSequence = 0;
+    bool bRequireWorkerCombat = false;
+    TSharedPtr<FWorkerMixedCombatApplyState, ESPMode::ThreadSafe>
+      WorkerCombatApply;
+    TSharedPtr<FWorkerBehaviorApplyState, ESPMode::ThreadSafe>
+      WorkerBehaviorApply;
     TUniqueFunction<void(bool, int32, uint64)> Finalize;
     double ProductStartSeconds = 0.0;
     double GatherEndSeconds = 0.0;
@@ -191,6 +219,8 @@ private:
   uint64 PresentationSequence = 0;
   uint64 ProductBoundaryGeneration = 1;
   TUniquePtr<FPendingMixedMovement> PendingMixedMovement;
+  TWeakObjectPtr<AMassCrowdReplicationActor>
+    LastConsumedReplicationChannel;
   uint32 LastConsumedBaselineRevision = 0;
   uint32 RelevantSetRevision = 1;
   int32 PendingRespawnSlot = INDEX_NONE;
@@ -234,6 +264,8 @@ private:
   bool bClientApplyFailureLogged = false;
   bool bProjectileBatchSpawned = false;
   bool bMixedCombatIntegration = false;
+  bool bWorkerMixedCombatBootstrapped = false;
+  uint64 NextWorkerMixedCombatControlRevision = 1;
   double CaptureAtWorldSeconds = 0.0;
 
   bool TryInitializeServer();
@@ -259,9 +291,19 @@ private:
     FCrowdDemoPreparedAttackBoundary& OutAttack,
     FCrowdPreparedProjectileBoundary& OutProjectile,
     FCrowdDemoPreparedAttackHealthPatch& OutHealthPatch);
+  bool BuildWorkerMixedCombatControl(
+    const TArray<FSlotState>& InputSlots,
+    FCrowdWorkerProjectileControlResource& OutControl);
   bool BeginProductMovementBoundary(
     const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
     const TSharedRef<TArray<FSlotState>, ESPMode::ThreadSafe>& InOutSlots,
+    FCrowdWorkerProjectileControlResource&& WorkerCombatControl,
+    FCrowdWorkerPayload&& ExpectedWorkerCombatHostResult,
+    uint64 ExpectedWorkerProjectileStableHash,
+    const TSharedRef<FWorkerMixedCombatApplyState,
+      ESPMode::ThreadSafe>& WorkerCombatApply,
+    const TSharedRef<FWorkerBehaviorApplyState,
+      ESPMode::ThreadSafe>& WorkerBehaviorApply,
     TUniqueFunction<void(bool, int32, uint64)>&& Finalize);
   bool PollProductMovementBoundary();
   bool GetOrBuildFlow(

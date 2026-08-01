@@ -4,6 +4,19 @@
 
 [COMPUTED][HIGH] T9 Mixed Combat Integration、DP0–DP6、PJ0–PJ6、S0–S6和R0–R7均已关闭。pre-T9提交`5b947389`只作为历史恢复基线；当前未关闭的游戏循环阶段是T10，另有独立性能架构阶段AB1–AB6尚未关闭。
 
+## WA0–WA9 全面Worker权威检查表
+
+- [x] [COMPUTED][HIGH] WA0：全面Worker终态、Domain DAG、插件/项目边界、逐字段Ownership Matrix、Legacy四节点迁移地位和WA0–WA9顺序已冻结。
+- [x] [COMPUTED][HIGH] WA1：Work Ring、Time Wheel、Dependency Index、Dirty/Resource/Ordered Event Store、Checkpoint、Domain Registry、非阻塞短任务Shard Host、跨Poll续跑、固定Domain屏障、稳定Merge、Dependency漏标审计、Correction/Generation失效、in-flight teardown及传播预算延期已实现；四构建、RuntimeV2 11/11、MassCrowd 96/96通过，并修复ForceUnity私有辅助符号冲突。Synthetic Shadow默认关闭，未改变Production Writer。
+- [x] [COMPUTED][HIGH] WA2：版本化Nav/Flow/Environment与MovementControl Resource、Epoch边界交换、Time Wheel自主Movement、Worker Local Predictive/静态环境约束、稳定Domain执行Rank、Planning覆盖到期Movement去重、Shadow→封闭Canary→Production Writer切换均已实现。Development Editor `-DisableUnity`、RuntimeV2 19/19、20实体Obstacle Canary、Obstacle Production和SoftPressure Production通过；Production Movement状态从Worker Store读取，GT只提供版本化Guidance/Resource和迁移期代理应用。
+- [x] [COMPUTED][HIGH] WA3：Worker执行完整闭合Particle集合、唯一Pair审计、稳定双向约束、字段级NeedsRecompute传播与OutputDirty发布；Particle后最终状态成为下一Epoch Movement基线。独立Shadow/封闭Canary/Production Writer门已接入，Legacy Particle仅保留诊断/Canary对照，不再决定Production提交。Development Editor `-DisableUnity`、RuntimeV2 19/19、20实体SoftPressure Canary与Production均无硬失败。
+- [x] [COMPUTED][HIGH] WA4：Worker Target Executor持有Cohort Membership、Demand、Plan、Quota execution、Target Revision与Flow/Target资源订阅；Topology/Plan按Revision缓存，OutputDirty只发布变化代理。Shadow/封闭Canary/Production门已接入，Production停止Legacy Target资源发布并以Worker Target proxy驱动Guidance，同时保持BusinessOverride优先级。RuntimeV2 20/20、Development Editor DisableUnity、9424/9425/9431通过；9431到step 300为20/20 verified且无Violation。
+- [x] [COMPUTED][HIGH] WA5：Projectile/CombatReactive Domain与全局闭合集Writer、终态不回灌、ordered lifecycle/hit event已实现；Round T8及Mixed T9的Attack/Cooldown、Damage/Death/Hit React和同Epoch Combat→Movement均已切为Worker Commit Writer。9451/9452/9453完成T8 Shadow/闭合Canary/Production到step 300；9467/9468/9469完成T9 Shadow/闭合Canary/Production到step 600，三次业务计数和entity/membership/commit hash一致。Demo Combat状态、active Projectile checkpoint和event baseline已通过新Executor下一步逐字重放；Codec专项与RuntimeV2 21/21通过。
+- [x] [COMPUTED][HIGH] WA6：Lifecycle与Behavior Worker权威已关闭；覆盖同批StableEntityRef复用、LifecycleSerial失效、Capability Binding、Source/Command幂等、Business Commit Ledger、Worker prepared commit及Behavior→Movement同Epoch消费。RuntimeV2 24/24，T6M 9531、Friendly 9532、Mixed 9533 Production正式门通过。
+- [ ] [INFERRED][HIGH] WA7：Checkpoint/Delta/Late Join/Client Prediction/Correction。
+- [ ] [INFERRED][HIGH] WA8：删除四节点Boundary、Frame Transaction、完整Gather/Commit与旧Mailbox。
+- [ ] [INFERRED][HIGH] WA9：完整自动化、构建、场景、规模、网络、视觉与性能关闭门。
+
 ## PW0–PW8 持久Worker Simulation Runtime检查表
 
 - [x] [INFERRED][HIGH] PW0：目标设计已冻结Worker权威镜像、单向输入/输出、可变Published Batch、Processor边界、Simulation Time、混合Consistency Domain和实施顺序；生产代码尚未迁移。
@@ -25,8 +38,8 @@
 - [x] [COMPUTED][HIGH] AB2：Runner即每World深度1 Mailbox，事务身份与Generation失效合同已实现。
 - [x] [COMPUTED][HIGH] AB3：跨Game Frame Result消费和Request生产代码已接入；8822 T5S功能、稳定性和性能门通过。
 - [x] [COMPUTED][HIGH] AB4：T5M/T6A/T6S/T6M推广、Worker Topology缓存与共享Flow lookup已完成；四图独立双端门通过。
-- [ ] [COMPUTED][HIGH] AB5：Round/Mixed/Friendly生产Wait已清零；依赖手工多次`CallExecute()`的动态Stage Adapter尚未退出Round生产路径。
-- [ ] [COMPUTED][HIGH] AB6：四构建、MassCrowd 65/65、CrowdDemo 134/134和T5/T6五图独立双端门已通过；单进程双PIE、确定性、Correction、teardown、全场景和FFmpeg最终门尚未通过。
+- [ ] [INFERRED][HIGH] AB5：已重新定义为全面Worker权威门；四节点与1/0/1 Boundary证据降为Legacy基线。只有WA8删除Legacy Boundary且WA9新证据通过后关闭。
+- [ ] [INFERRED][HIGH] AB6：必须在全面Worker新路径上重跑双PIE、强制Correction、teardown/地图切换、完成顺序、全场景和FFmpeg；不复用PW8/四节点旧日志。
 
 ## T9 Mixed Combat Integration检查表
 
@@ -104,7 +117,7 @@
 - [x] [COMPUTED][HIGH] Rollback使用不可变资源引用与可变执行态，correction仍只在fixed boundary应用。
 - [x] [COMPUTED][HIGH] Compose、Local Predictive、MovementPredict、Particle和Facing已接入统一snapshot/prepared POD WORK输入链。
 - [x] [COMPUTED][HIGH] P1生产代码已收敛为一次gather/dispatch/wait/writer，Business/Combat、按Cohort Target、SharedFlow、Obstacle、Movement、Particle与Facing均由typed Worker DAG输出；8132/8137/8138/8139当前版本T2/T6/T7/T8双端复测通过。
-- [ ] [COMPUTED][HIGH] Mass archetype尚未按Base/Target/Combat/Projectile能力拆分。
+- [x] [COMPUTED][HIGH] Authority Mass archetype已按Base/Target/Combat bitset拆成四种精确template，Projectile继续使用独立archetype；Round与Replication Query对Combat bundle采用Optional并生成确定性默认事实。capability结构3/3和Base+Target真实功能已通过；其backlog性能回退归AB5继续处理。
 
 ## 生产运行与复制（与 Demo 验收分开）
 

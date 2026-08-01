@@ -16,6 +16,7 @@
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "MassCrowdPresentationSubsystem.h"
 #include "MassCrowdRuntimeSubsystem.h"
+#include "MassCrowdWorkerLifecycleBehaviorDomain.h"
 #include "MassCrowdRelevantSnapshot.h"
 #include "MassCrowdReplicationActor.h"
 #include "MassCrowdReplicationChannel.h"
@@ -256,15 +257,6 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       ProductFixedStepIndex, ProductPlanRevision,
       Snapshot, Targets))
     return EProductBoundaryAdvance::Failed;
-  if (!FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
-      *World, Snapshot, FixedStepSeconds,
-      static_cast<double>(ProductFixedStepIndex + 1)
-        * FixedStepSeconds))
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoFriendlyWorkerShadowInputSync step=%d"),
-      ProductFixedStepIndex);
-  }
   AuthorityLocations.Reset();
   for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
     AuthorityLocations.Add(
@@ -400,6 +392,25 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       ProductFixedStepIndex, PreparedBehavior)
     || !BehaviorSourceRuntime->ValidatePrepared(PreparedBehavior))
     return EProductBoundaryAdvance::Failed;
+  if (!FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
+      *World, Snapshot, FixedStepSeconds,
+      static_cast<double>(ProductFixedStepIndex + 1)
+        * FixedStepSeconds,
+      {}, &PreparedBehavior))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFriendlyWorkerInputSync step=%d"),
+      ProductFixedStepIndex);
+    return EProductBoundaryAdvance::Failed;
+  }
+  const uint64 WorkerBehaviorInputSequence =
+    Runtime->GetWorkerShadowSync().GetMetrics().
+      LastSubmittedInputSequence;
+  const bool bWorkerBehaviorProduction =
+    Runtime->GetWorkerBehaviorAuthority().GetMode()
+      == ECrowdWorkerBehaviorAuthorityMode::Production;
+  if (WorkerBehaviorInputSequence == 0)
+    return EProductBoundaryAdvance::Failed;
   FVector ResolvedObjective = Objective;
   if (bHasPlannerDecision)
   {
@@ -490,7 +501,11 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
             if (!FCrowdNavSurfaceGraphKernel::AttachClosest(
                 *Graph, Agent.State.Position, 1000.0f,
                 CurrentNodeId, CurrentLayer))
+            {
+              Work->FailurePosition = Agent.State.Position;
+              Work->FailureStage = 1;
               return FCrowdBoundaryTaskResult::Failure();
+            }
             const FCrowdNavSurfaceFlowNode* FlowNode =
               Flow->Nodes.FindByPredicate(
                 [CurrentNodeId](const auto& Node)
@@ -499,7 +514,14 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
                 });
             if (!FlowNode
               || FlowNode->IntegrationCostQ == MAX_uint32)
+            {
+              Work->FailurePosition = Agent.State.Position;
+              Work->FailureNodeId = CurrentNodeId;
+              Work->FailureGoalNodeId = Flow->GoalStableNodeId;
+              Work->FailureLayer = CurrentLayer;
+              Work->FailureStage = 2;
               return FCrowdBoundaryTaskResult::Failure();
+            }
             FVector Direction = FlowNode->Direction;
             const FVector ToObjective =
               ResolvedObjective - Agent.State.Position;
@@ -564,9 +586,13 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   Pending->Task = Task;
   Pending->Carrier = Carrier;
   Pending->PlannerDecisionHash = StagedPlannerDecisionHash;
+  Pending->WorkerBehaviorInputSequence =
+    WorkerBehaviorInputSequence;
   Pending->PendingCommandCheckpoint = PendingCommandCheckpoint;
   Pending->bMoveToSource = bMoveToSource;
   Pending->bMoveToSink = bMoveToSink;
+  Pending->bWorkerBehaviorProduction =
+    bWorkerBehaviorProduction;
   PendingRollback.bCommitted = true;
   PendingProductBoundary = MoveTemp(Pending);
   return EProductBoundaryAdvance::Pending;
@@ -605,8 +631,13 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
   {
     const FCrowdBoundaryOrchestratorResult Result = Runner.BuildResult();
     UE_LOG(LogTemp, Warning,
-      TEXT("CrowdDemoFriendlyLogistics diagnostic=runner_work_failed state=%d tasks=%d"),
-      static_cast<int32>(Result.State), Result.Tasks.Num());
+      TEXT("CrowdDemoFriendlyLogistics diagnostic=runner_work_failed state=%d tasks=%d failure_stage=%u position=%s node=%llu goal=%llu layer=%u"),
+      static_cast<int32>(Result.State), Result.Tasks.Num(),
+      Pending.Work->FailureStage,
+      *Pending.Work->FailurePosition.ToCompactString(),
+      Pending.Work->FailureNodeId,
+      Pending.Work->FailureGoalNodeId,
+      Pending.Work->FailureLayer);
     return FailPending();
   }
 
@@ -623,6 +654,91 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
   const bool bMoveToSink = Pending.bMoveToSink;
   const TSharedPtr<FProductMovementWork, ESPMode::ThreadSafe>& Work =
     Pending.Work;
+
+  TArray<FCrowdBehaviorWorkerCommitEntity> WorkerBehaviorEntities;
+  TArray<FCrowdBehaviorSourceEvent> WorkerBehaviorEvents;
+  TArray<FCrowdBusinessContribution> WorkerBusinessCommits;
+  if (Pending.bWorkerBehaviorProduction)
+  {
+    UWorld* World = GetWorld();
+    UMassCrowdRuntimeSubsystem* RuntimeSubsystem = World
+      ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+      : nullptr;
+    if (!RuntimeSubsystem
+      || Pending.WorkerBehaviorInputSequence == 0)
+      return FailPending();
+    FCrowdWorkerBehaviorAuthority& Authority =
+      RuntimeSubsystem->GetWorkerBehaviorAuthority();
+    const FCrowdWorkerBehaviorAuthorityMetrics& AuthorityMetrics =
+      Authority.GetMetrics();
+    if (AuthorityMetrics.bViolation)
+      return FailPending();
+    if (AuthorityMetrics.LastMatchedInputSequence
+        < Pending.WorkerBehaviorInputSequence)
+      return EProductBoundaryAdvance::Pending;
+    if (AuthorityMetrics.LastMatchedInputSequence
+        != Pending.WorkerBehaviorInputSequence)
+      return FailPending();
+    const FCrowdWorkerResultApplyProxy& Proxy =
+      RuntimeSubsystem->GetWorkerResultApplyProxy();
+    WorkerBehaviorEntities.Reserve(
+      PreparedBehavior.Entities.Num());
+    for (const FCrowdBehaviorPreparedEntity& Expected
+      : PreparedBehavior.Entities)
+    {
+      const FCrowdWorkerDomainProxyState* BehaviorProxy =
+        Proxy.FindDomain(
+          Expected.EntityRef, ECrowdWorkerField::Behavior);
+      FCrowdWorkerBehaviorState WorkerState;
+      if (!BehaviorProxy
+        || BehaviorProxy->SourceInputSequence
+          != Pending.WorkerBehaviorInputSequence
+        || !FCrowdWorkerBehaviorStateCodec::Decode(
+          BehaviorProxy->State.Payload, WorkerState)
+        || WorkerState.LastFixedStep
+          != PreparedBehavior.FixedStepIndex
+        || WorkerState.EvaluationContext.FixedStepIndex
+          != PreparedBehavior.FixedStepIndex
+        || WorkerState.SourceSet.EntityRef != Expected.EntityRef
+        || WorkerState.ResolvedChannels.StableHash
+          != Expected.ResolvedChannels.StableHash
+        || WorkerState.EvaluationContext.StableHash
+          != Expected.EvaluationContextHash)
+        return FailPending();
+      FCrowdBehaviorWorkerCommitEntity& Entity =
+        WorkerBehaviorEntities.AddDefaulted_GetRef();
+      Entity.EntityRef = Expected.EntityRef;
+      Entity.SourceSet = MoveTemp(WorkerState.SourceSet);
+      Entity.ResolvedChannels =
+        MoveTemp(WorkerState.ResolvedChannels);
+      Entity.EvaluationContextHash =
+        WorkerState.EvaluationContext.StableHash;
+    }
+    if (!Authority.PeekMatchedEvents(
+        Pending.WorkerBehaviorInputSequence,
+        WorkerBehaviorEvents, WorkerBusinessCommits))
+      return FailPending();
+    TArray<FCrowdBusinessContribution> ExpectedBusinessCommits;
+    for (const FCrowdBehaviorPreparedEntity& Entity
+      : PreparedBehavior.Entities)
+      ExpectedBusinessCommits.Append(
+        Entity.ResolvedChannels.Business);
+    if (ExpectedBusinessCommits.Num()
+        != WorkerBusinessCommits.Num())
+      return FailPending();
+    for (int32 Index = 0;
+      Index < ExpectedBusinessCommits.Num(); ++Index)
+    {
+      FCrowdWorkerPayload ExpectedPayload;
+      FCrowdWorkerPayload ActualPayload;
+      if (!FCrowdWorkerBusinessCommitEventCodec::Encode(
+          ExpectedBusinessCommits[Index], ExpectedPayload)
+        || !FCrowdWorkerBusinessCommitEventCodec::Encode(
+          WorkerBusinessCommits[Index], ActualPayload)
+        || ExpectedPayload != ActualPayload)
+        return FailPending();
+    }
+  }
 
   TArray<FCrowdBoundaryPreparedPatch> Patches;
   FCrowdLogisticsPreparedPatch LogisticsPatch;
@@ -707,8 +823,24 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
   }
   if (!Runner.MarkCommitted(0.0))
     return FailPending();
-  checkf(BehaviorSourceRuntime->CommitPrepared(PreparedBehavior),
+  const bool bBehaviorCommitted = Pending.bWorkerBehaviorProduction
+    ? BehaviorSourceRuntime->CommitWorkerPrepared(
+      PreparedBehavior, WorkerBehaviorEntities,
+      WorkerBehaviorEvents)
+    : BehaviorSourceRuntime->CommitPrepared(PreparedBehavior);
+  checkf(bBehaviorCommitted,
     TEXT("Validated Friendly behavior transaction changed before apply"));
+  if (Pending.bWorkerBehaviorProduction)
+  {
+    UMassCrowdRuntimeSubsystem* RuntimeSubsystem = GetWorld()
+      ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+      : nullptr;
+    checkf(RuntimeSubsystem
+        && RuntimeSubsystem->GetWorkerBehaviorAuthority().
+          AcknowledgeMatchedEvents(
+            Pending.WorkerBehaviorInputSequence),
+      TEXT("Validated Friendly Worker behavior events changed before ACK"));
+  }
   LastProductCommitHash = Runner.GetCommitEnvelope().StableHash;
   LastPlannerDecisionHash = StagedPlannerDecisionHash;
 

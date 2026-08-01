@@ -1830,7 +1830,8 @@ void FCrowdTargetRegionTransportKernel::BuildGuidanceWithExecution(
   const FCrowdTargetRegionFlowPlan& Plan,
   FCrowdTargetRegionQuotaExecutionState& InOutExecutionState,
   TArray<FCrowdTargetRegionGuidanceResult>& OutResults,
-  FCrowdTargetRegionGuidanceSummary& OutSummary)
+  FCrowdTargetRegionGuidanceSummary& OutSummary,
+  const int32 ShardEntityCount)
 {
   OutResults.Reset();
   OutSummary = {};
@@ -1926,24 +1927,34 @@ void FCrowdTargetRegionTransportKernel::BuildGuidanceWithExecution(
     if (AvailableByEdge[Index] < 0) bExecutionValid = false;
   }
   uint32 Hash = Fold(FnvOffset, 1);
-  for (const auto& Agent : Agents)
+  const int32 StableShardEntityCount =
+    FMath::Max(1, ShardEntityCount);
+  for (int32 ShardBegin = 0; ShardBegin < Agents.Num();
+    ShardBegin += StableShardEntityCount)
   {
-    auto& Result = OutResults.AddDefaulted_GetRef();
-    Result.AgentId = Agent.AgentId;
-    const auto* const* StatePtr = StateByAgent.Find(Agent.AgentId);
-    const auto* State = StatePtr ? *StatePtr : nullptr;
-    if (!State)
+    const int32 ShardEnd = FMath::Min(
+      Agents.Num(), ShardBegin + StableShardEntityCount);
+    for (int32 AgentIndex = ShardBegin;
+      AgentIndex < ShardEnd; ++AgentIndex)
     {
-      Result.Mode = ECrowdTargetRegionGuidanceMode::Unrouted;
-      ++OutSummary.UnroutedAgentCount;
-      if (OutSummary.FirstUnroutedAgentId == INDEX_NONE)
+      const FCrowdTargetRegionTransportAgent& Agent =
+        Agents[AgentIndex];
+      auto& Result = OutResults.AddDefaulted_GetRef();
+      Result.AgentId = Agent.AgentId;
+      const auto* const* StatePtr = StateByAgent.Find(Agent.AgentId);
+      const auto* State = StatePtr ? *StatePtr : nullptr;
+      if (!State)
       {
-        OutSummary.FirstUnroutedAgentId = Agent.AgentId;
-        OutSummary.FirstUnroutedCellKey = INDEX_NONE;
+        Result.Mode = ECrowdTargetRegionGuidanceMode::Unrouted;
+        ++OutSummary.UnroutedAgentCount;
+        if (OutSummary.FirstUnroutedAgentId == INDEX_NONE)
+        {
+          OutSummary.FirstUnroutedAgentId = Agent.AgentId;
+          OutSummary.FirstUnroutedCellKey = INDEX_NONE;
+        }
       }
-    }
-    else
-    {
+      else
+      {
       Result.CurrentCellKey = State->CurrentCellKey;
       Result.DemandRegionKey = State->CurrentRegionKey;
       const float Distance = (Agent.Location - Settings.TargetLocation).Size();
@@ -2075,11 +2086,12 @@ void FCrowdTargetRegionTransportKernel::BuildGuidanceWithExecution(
           }
         }
       }
+      }
+      const float Speed = Result.DesiredVelocity.Size();
+      if (Speed > Agent.MaxSpeedCmps && Agent.MaxSpeedCmps > 0.0f)
+        Result.DesiredVelocity = Result.DesiredVelocity.GetSafeNormal() * Agent.MaxSpeedCmps;
+      Result.DesiredVelocity = Quantize(Result.DesiredVelocity, Settings.VelocityQuantumCmps);
     }
-    const float Speed = Result.DesiredVelocity.Size();
-    if (Speed > Agent.MaxSpeedCmps && Agent.MaxSpeedCmps > 0.0f)
-      Result.DesiredVelocity = Result.DesiredVelocity.GetSafeNormal() * Agent.MaxSpeedCmps;
-    Result.DesiredVelocity = Quantize(Result.DesiredVelocity, Settings.VelocityQuantumCmps);
   }
   OutSummary.FarFlowAgentCount = 0;
   OutSummary.TransportAgentCount = 0;

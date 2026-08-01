@@ -306,7 +306,8 @@ UCrowdDemoClientVisualMassProcessor::UCrowdDemoClientVisualMassProcessor()
   bAutoRegisterWithProcessingPhases = false;
   QueryBasedPruning = EMassQueryBasedPruning::Never;
   ExecutionOrder.ExecuteAfter.Add(TEXT("MassReplicationProcessor"));
-  ExecutionOrder.ExecuteAfter.Add(TEXT("CrowdDemoRoundSimFixedStepPipelineProcessor"));
+  ExecutionOrder.ExecuteAfter.Add(
+    TEXT("CrowdDemo.Round.RequestSubmit"));
   bRequiresGameThreadExecution = true;
 }
 

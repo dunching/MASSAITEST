@@ -1,5 +1,29 @@
 # MassAI Crowd Demo 当前阶段计划
 
+## 2026-07-30 WA0–WA9 全面Worker权威
+
+[INFERRED][HIGH] 本阶段正式取代“四个GT Boundary Processor”为终态。通用基础设施属于`MassCrowdRuntime`，Demo规则与表现Adapter留在项目模块；详细合同以`FullWorkerAuthorityArchitecture.md`与`FullWorkerAuthorityOwnershipMatrix.md`为准。
+
+WA0. [x] [COMPUTED][HIGH] 已冻结全面Worker权威、固定Domain DAG、模块边界、字段Ownership Matrix、迁移顺序和最终删除门；`AB5FourNodeBoundaryContract.md`已标为历史合同。当前四节点原样作为Legacy Domain Adapter，未改变Production Writer。
+
+WA1. [x] [COMPUTED][HIGH] 已实现有界Work Ring、Time Wheel、Dependency Index、Dirty/Resource/Ordered Event Store、Checkpoint、纯C++ Domain Registry、10k默认容量、Runtime指标及默认关闭的Synthetic Shadow。Owner只派发短生命周期Shard并跨Poll续跑，不阻塞等待；同Domain Shard可并行，Domain之间按冻结DAG逐阶段Merge。稳定Merge覆盖正序、逆序和乱序完成；Dependency漏标、事件缺序/容量、Work容量均fail-closed；Correction Revision、Generation、in-flight Invalidate/teardown及传播轮数延期均有专项门。Development/DebugGame Editor × ForceUnity/DisableUnity四构建、RuntimeV2 11/11及完整MassCrowd 96/96通过；未改变Production Writer。
+
+WA2. [x] [COMPUTED][HIGH] Flow/Nav/环境/规则输入已进入版本化Resource Store并在Epoch边界交换；MovementPlanning→Movement→Particle→Facing由稳定执行Rank和Time Wheel自主调度。Planning同Epoch吞并旧到期Movement，避免双积分；Local Predictive与静态障碍约束均在Worker执行。20实体Obstacle封闭Canary、Obstacle全实体Production、SoftPressure全实体Production均无硬失败，RuntimeV2 19/19与Development Editor DisableUnity构建通过。Legacy Particle/Facing仍作为WA3前下游Adapter，不构成Movement Writer。
+
+WA3. [x] [COMPUTED][HIGH] Particle/Interaction已迁入Worker：MovementControl v6携带有效Particle几何、InteractionLayer、外部代理和约束配置；Worker执行闭合集合求解、唯一Pair审计和稳定双向约束，字段级Dependency将Movement变化转换为有界NeedsRecompute work，只有最终payload变化才发布Dirty Patch。Particle/Facing最终状态成为下一Epoch Movement基线。独立Canary/Production提交门关闭Legacy Particle Writer，旧求解仅保留诊断/对照。Development Editor DisableUnity、RuntimeV2 19/19、20实体SoftPressure Canary与Production通过。
+
+WA4. [x] [COMPUTED][HIGH] Target/Cohort已迁入Worker：TargetControl与完整Flow/Navigation资源按Revision在Epoch边界交换，纯C++ Target Executor持有Membership、Demand、Plan、Quota execution、Target Revision与Resource Dependency；未变Topology/Plan命中缓存，Membership变更只唤醒相关集合。独立Shadow/Canary/Production门只把原Legacy TargetRegion provider切给Worker，保留BusinessOverride优先级；Production停止发布Legacy Target资源并以Worker proxy构建Guidance。RuntimeV2 20/20、Development Editor DisableUnity、20实体Shadow 9424、Canary 9425和Production 9431通过；9431持续到step 300、verified=20且无Violation。迁移中发现并修复重复SnapshotHash反查输入序列及Legacy Particle覆盖Worker kinematics的双Writer窗口。
+
+WA5. [x] [COMPUTED][HIGH] 已关闭：通用Projectile/CombatReactive纯C++ Domain、ProjectileControl/State codec、TimeWheel、Impact→Hit ordered event与终态不回灌已实现；Demo纯C++扩展在Worker内推进Attack/Cooldown与Damage/Death/Hit React，发布逐实体Combat Patch和原子宿主汇总，并由MovementPlanning/Movement在同Epoch消费。T8 9451/9452/9453与T9 9467/9468/9469均按Shadow→闭合Canary→Production通过；T9三模式到step 600的业务计数、entity/membership/commit hash一致。Production提交的Agent Combat、ReactiveSteps、Projectile/Hit摘要和StableHash来自Worker结果，Legacy只保留逐字段对照。Demo Combat状态、active Projectile checkpoint与Ordered Event baseline已由新Executor下一步逐字重放专项证明；RuntimeV2最终21/21通过。
+
+WA6. [x] [COMPUTED][HIGH] 已关闭：Worker Lifecycle/Behavior Domain持有Capability Binding、Behavior State、Source Set、Command Journal与Business Commit Ledger；同批Lifecycle复用按Despawn→Spawn稳定排序，旧Lifecycle Work/Wakeup/Result统一拒绝。Production提交消费Worker prepared records并ACK对应输入序列，Movement同Epoch消费Behavior约束。RuntimeV2 24/24、T6M 9531、Friendly 9532与Mixed 9533正式门通过。
+
+WA7. [ ] [INFERRED][HIGH] Worker生成Checkpoint/Delta/Event Baseline，完成Late Join、Client预测Worker与Owner barrier Correction。
+
+WA8. [ ] [INFERRED][HIGH] 删除四个Round Boundary Processor、完整Mass Gather、Boundary Request/Result/Commit、Frame Transaction、旧Mailbox和全部Legacy Domain Writer；最终只保留Worker Input Sync与Result Apply模拟Processor。
+
+WA9. [ ] [INFERRED][HIGH] 完成自动化、四构建、真实场景、1k–10k、双PIE、Correction/teardown、网络、录像/FFmpeg与性能门后，关闭重定义后的AB5/AB6和WA阶段。
+
 ## 2026-07-30 PW0–PW8 持久Worker Simulation Runtime
 
 [INFERRED][HIGH] 本阶段在现有非阻塞Boundary之上建立每World持久Worker权威镜像、连续调度和可变Result Batch交换；它不把Mass Work Processor误当成常驻线程，也不允许GT与Worker双写同一模拟字段。详细设计以`PersistentWorkerSimulationArchitecture.md`为准。
@@ -36,9 +60,9 @@ AB3. [x] [COMPUTED][HIGH] Round跨帧消费/生产与T5S首图已经关闭；882
 
 AB4. [x] [COMPUTED][HIGH] T5M/T6A/T6S/T6M推广、Worker-side Topology cache和Request级Flow lookup已完成；8824/8825/8826/8823功能与性能门通过，当前不合并Cohort Task。
 
-AB5. [ ] [COMPUTED][HIGH] 全生产路径阻塞Wait已删除；Round动态Stage Adapter的`CallExecute()`收敛尚未完成。
+AB5. [ ] [INFERRED][HIGH] 已重新定义为全面Worker权威关闭门。四节点实现与9321/9322只作为Legacy基线；不再通过优化旧Boundary backlog关闭AB5。必须在WA8删除Legacy Boundary、WA9新路径完整验收后关闭。
 
-AB6. [ ] [COMPUTED][HIGH] 四构建、MassCrowd 65/65、CrowdDemo 134/134及T5/T6五图独立双端门已通过；单进程双PIE、确定性完成顺序、Correction、teardown、全场景与FFmpeg连续性仍待关闭。
+AB6. [ ] [INFERRED][HIGH] 必须在WA8之后使用全面Worker新路径重跑强制Pending Correction、确定性完成顺序、teardown/地图切换、T1–T9/Mixed/Friendly/Continuous、双PIE与FFmpeg；PW8及四节点日志只保留历史，不能充当关闭证据。
 
 ## 2026-07-29 T9 Mixed Combat Integration
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdWorkerShadowSync.h"
 
 class UWorld;
@@ -20,9 +21,18 @@ public:
     UWorld& World,
     const FCrowdMassBoundarySnapshot& Snapshot,
     double FixedSimulationQuantumSeconds,
-    double TargetSimulationTimeSeconds);
+    double TargetSimulationTimeSeconds,
+    TConstArrayView<FCrowdWorkerVersionedResourceInput>
+      AdditionalResources = {},
+    const FCrowdBehaviorPreparedBoundary* StagedBehavior = nullptr,
+    bool bAutonomousAfterBootstrap = false);
 
   static bool Poll(UWorld& World);
+
+  static bool StartClientFromNetworkCheckpoint(
+    UWorld& World,
+    const FCrowdWorkerNetworkCheckpoint& Checkpoint,
+    double FixedSimulationQuantumSeconds = 1.0 / 30.0);
 
   static bool ConsumePublishedResults(
     UWorld& World,

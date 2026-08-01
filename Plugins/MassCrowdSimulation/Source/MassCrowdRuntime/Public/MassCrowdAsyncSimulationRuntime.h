@@ -1,9 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Tasks/Task.h"
 #include "MassCrowdWorkerContracts.h"
 #include "MassCrowdWorkerExchange.h"
+#include "MassCrowdWorkerNetworkState.h"
+#include "MassCrowdWorkerRuntimeV2.h"
 
 enum class ECrowdAsyncSimulationRuntimeState : uint8
 {
@@ -25,6 +27,21 @@ enum class ECrowdAsyncSimulationSubmitResult : uint8
   RequiresResnapshot
 };
 
+enum class ECrowdAsyncSimulationInputFailure : uint8
+{
+  None = 0,
+  State,
+  Generation,
+  InvalidPayload,
+  Capacity,
+  StaleSequence,
+  SequenceGap,
+  ConflictingDuplicate,
+  TimeRegression,
+  ResnapshotRequired,
+  ApplyFailure
+};
+
 enum class ECrowdAsyncSimulationPollResult : uint8
 {
   Idle = 0,
@@ -32,6 +49,28 @@ enum class ECrowdAsyncSimulationPollResult : uint8
   StateChanged,
   Stopped,
   Failed
+};
+
+enum class ECrowdAsyncSimulationRestoreResult : uint8
+{
+  Restored = 0,
+  RejectedState,
+  RejectedGeneration,
+  RejectedCheckpoint,
+  RejectedBusy,
+  RestoreFailure
+};
+
+enum class ECrowdAsyncSimulationCorrectionResult : uint8
+{
+  Accepted = 0,
+  Duplicate,
+  RejectedState,
+  RejectedGeneration,
+  RejectedContract,
+  RejectedSequence,
+  RejectedCapacity,
+  RequiresResnapshot
 };
 
 enum class ECrowdAsyncShadowWorkSubmitResult : uint8
@@ -86,6 +125,10 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeConfig
   int32 MaxSimulationStepsPerPump = 0;
   int32 MaxPendingCommands = 0;
   int32 MaxInFlightShadowWorks = 0;
+  int32 MaxRetainedIntentBatches = 512;
+  int32 NetworkPublishIntervalEpochs = 300;
+  FCrowdWorkerRuntimeV2Config WorkerV2;
+  FCrowdWorkerNetworkStateConfig NetworkState;
 
   bool IsValid() const
   {
@@ -96,7 +139,11 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeConfig
       && MaxInputBatchesPerPump > 0
       && MaxSimulationStepsPerPump > 0
       && MaxPendingCommands > 0
-      && MaxInFlightShadowWorks > 0;
+      && MaxInFlightShadowWorks > 0
+      && MaxRetainedIntentBatches > 0
+      && NetworkPublishIntervalEpochs > 0
+      && WorkerV2.IsValid()
+      && NetworkState.IsValid();
   }
 };
 
@@ -124,7 +171,9 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeMetrics
 {
   uint64 Generation = 0;
   uint64 WorkerEpoch = 0;
+  uint64 LastAcceptedInputSequence = 0;
   uint64 LastAppliedInputSequence = 0;
+  uint64 QueuedInputSequenceWatermark = 0;
   uint64 OwnerPumpCount = 0;
   uint64 ResnapshotCount = 0;
   uint64 RejectedInputCount = 0;
@@ -133,6 +182,13 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeMetrics
   uint64 SubmittedProductionWorkCount = 0;
   uint64 CompletedProductionWorkCount = 0;
   uint64 ShadowHashMismatchCount = 0;
+  uint64 FullMirrorSerializationCount = 0;
+  uint64 AuthorityDigestCount = 0;
+  uint64 AuthorityCorrectionCount = 0;
+  uint64 AuthorityCorrectionEntityCount = 0;
+  uint64 AuthorityCorrectionScopeCount = 0;
+  uint64 ConsecutivePredictionEpochsWithoutCorrection = 0;
+  uint64 MaxPredictionEpochsWithoutCorrection = 0;
   int32 InputQueueDepth = 0;
   int32 InFlightShadowWorkCount = 0;
   int32 MirrorEntityCount = 0;
@@ -149,9 +205,23 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeMetrics
   double MaxTaskCriticalMs = 0.0;
   double LastPublishToConsumeMs = 0.0;
   double MaxPublishToConsumeMs = 0.0;
+  double LastCorrectionBeforePositionErrorCm = 0.0;
+  double LastCorrectionAfterPositionErrorCm = 0.0;
+  double LastCorrectionBeforeVelocityErrorCmps = 0.0;
+  double LastCorrectionAfterVelocityErrorCmps = 0.0;
+  double LastCorrectionBeforeYawErrorDegrees = 0.0;
+  double LastCorrectionAfterYawErrorDegrees = 0.0;
+  int32 LastCorrectionBeforeCombatMismatchCount = 0;
+  int32 LastCorrectionAfterCombatMismatchCount = 0;
+  int32 LastCorrectionEntityCount = 0;
+  int32 LastCorrectionScopeCount = 0;
   int32 LastPublishedPatchCount = 0;
   int32 LastPublishedEventCount = 0;
+  ECrowdAsyncSimulationInputFailure LastInputFailure =
+    ECrowdAsyncSimulationInputFailure::None;
   bool bRequiresResnapshot = false;
+  FCrowdWorkerRuntimeV2Metrics WorkerV2;
+  FCrowdWorkerNetworkStateMetrics NetworkState;
 };
 
 class MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntime
@@ -168,11 +238,15 @@ public:
   bool Start(
     const FCrowdAsyncSimulationRuntimeConfig& Config,
     uint64 InitialGeneration);
+  bool RegisterDomainExecutor(
+    TUniquePtr<ICrowdWorkerDomainExecutor> Executor);
 
   ECrowdAsyncSimulationSubmitResult SubmitResnapshot(
-    const FCrowdWorkerInputBatch& Batch);
-  ECrowdAsyncSimulationSubmitResult SubmitInput(
-    const FCrowdWorkerInputBatch& Batch);
+    const FCrowdWorkerIntentBatch& Batch);
+  ECrowdAsyncSimulationSubmitResult SubmitIntentBatch(
+    const FCrowdWorkerIntentBatch& Batch);
+  ECrowdAsyncSimulationRestoreResult RestoreNetworkCheckpoint(
+    const FCrowdWorkerNetworkCheckpoint& Checkpoint);
   ECrowdAsyncShadowWorkSubmitResult SubmitShadowWork(
     FCrowdAsyncShadowWorkSubmission&& Submission);
   int32 CollectCompletedShadowWork(
@@ -187,6 +261,27 @@ public:
   uint64 GetGeneration() const;
   bool RequiresResnapshot() const;
   bool ReadMirrorSnapshot(FCrowdWorkerMirrorSnapshot& OutSnapshot) const;
+  ECrowdWorkerNetworkReadResult ReadNetworkCheckpoint(
+    uint64 ExpectedGeneration,
+    FCrowdWorkerNetworkCheckpoint& OutCheckpoint) const;
+  ECrowdWorkerNetworkReadResult ReadNetworkIntents(
+    uint64 ExpectedGeneration,
+    uint64 AfterInputSequence,
+    TArray<FCrowdWorkerIntentBatch>& OutBatches) const;
+  ECrowdWorkerNetworkReadResult ReadAuthorityDigest(
+    uint64 ExpectedGeneration,
+    FCrowdWorkerAuthorityDigestBatch& OutDigest) const;
+  ECrowdWorkerNetworkReadResult CompareAuthorityDigest(
+    const FCrowdWorkerAuthorityDigestBatch& AuthorityDigest,
+    TArray<FCrowdWorkerAuthorityScopeKey>& OutMismatchedScopes) const;
+  ECrowdWorkerNetworkReadResult BuildAuthorityCorrection(
+    uint64 ExpectedGeneration,
+    uint64 AuthorityDigestSequence,
+    uint64 CorrectionSequence,
+    TConstArrayView<FCrowdWorkerAuthorityScopeKey> Scopes,
+    FCrowdWorkerAuthorityCorrectionBatch& OutCorrection) const;
+  ECrowdAsyncSimulationCorrectionResult SubmitAuthorityCorrection(
+    const FCrowdWorkerAuthorityCorrectionBatch& Correction);
   FCrowdAsyncSimulationRuntimeMetrics GetMetrics() const;
 
   ECrowdWorkerExchangeResult TryExchangePublishedBatch(
@@ -198,7 +293,7 @@ private:
   struct FSharedState;
 
   bool QueueInput(
-    const FCrowdWorkerInputBatch& Batch,
+    const FCrowdWorkerIntentBatch& Batch,
     bool bResnapshot,
     ECrowdAsyncSimulationSubmitResult& OutResult);
   void LaunchOwnerPump();
@@ -206,6 +301,7 @@ private:
   void CompleteStop();
 
   TSharedPtr<FSharedState, ESPMode::ThreadSafe> SharedState;
+  TUniquePtr<FCrowdWorkerDomainRegistry> PendingDomainRegistry;
   UE::Tasks::FTask OwnerTask;
   bool bOwnerTaskActive = false;
 };

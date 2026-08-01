@@ -3,9 +3,26 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "MassCrowdReplicationChannel.h"
+#include "MassCrowdWorkerPacketTransport.h"
+#include "MassCrowdWorkerReplicationAdapter.h"
 #include "MassCrowdReplicationActor.generated.h"
 
 class APlayerController;
+
+struct MASSCROWDNETWORKING_API FCrowdWorkerNetworkTrafficMetrics
+{
+  uint64 IntentBytes = 0;
+  uint64 CorrectionBytes = 0;
+  uint64 CheckpointBytes = 0;
+  uint64 DigestMismatchCount = 0;
+  uint64 CheckpointCount = 0;
+  uint64 ResyncCount = 0;
+  double IntentBytesPerSecond = 0.0;
+  double CorrectionBytesPerSecond = 0.0;
+  int32 LastCheckpointBytes = 0;
+  int32 LastCorrectionEntityCount = 0;
+  int32 LastCorrectionScopeCount = 0;
+};
 
 UCLASS(NotPlaceable)
 class MASSCROWDNETWORKING_API AMassCrowdReplicationActor final
@@ -16,6 +33,7 @@ class MASSCROWDNETWORKING_API AMassCrowdReplicationActor final
 public:
   AMassCrowdReplicationActor();
   virtual void BeginPlay() override;
+  virtual void Tick(float DeltaSeconds) override;
 
   static AMassCrowdReplicationActor* SpawnForController(
     APlayerController& Controller);
@@ -31,6 +49,17 @@ public:
     const FCrowdMovementCorrectionRecord& Correction);
   bool PublishMovementCorrections(
     TConstArrayView<FCrowdMovementCorrectionRecord> Corrections);
+  bool PublishWorkerCheckpoint(
+    const FCrowdWorkerNetworkCheckpoint& Checkpoint);
+  bool PublishWorkerIntents(
+    TConstArrayView<FCrowdWorkerIntentBatch> Batches);
+  bool ConsumeWorkerCheckpoint(
+    FCrowdWorkerNetworkCheckpoint& OutCheckpoint);
+  bool DrainWorkerIntents(
+    TArray<FCrowdWorkerIntentBatch>& OutBatches);
+  bool IsWorkerReady() const { return bWorkerClientReady; }
+  const FCrowdWorkerNetworkTrafficMetrics&
+    GetWorkerTrafficMetrics() const { return WorkerTrafficMetrics; }
 
   const FCrowdReplicationClientState& GetClientState() const
   {
@@ -108,19 +137,106 @@ protected:
   void ServerAckBaseline(uint32 Revision, uint64 ResumeSequence);
   UFUNCTION(Server, Reliable)
   void ServerRequestResync();
+  UFUNCTION(Client, Unreliable)
+  void ClientWorkerDigest(
+    uint64 Generation,
+    uint64 DigestSequence,
+    uint64 SimulationTick,
+    uint64 ThroughInputSequence,
+    const TArray<uint8>& Fields,
+    const TArray<uint8>& ScopeKinds,
+    const TArray<int64>& ScopeIds,
+    const TArray<uint32>& EntityCounts,
+    const TArray<uint64>& ScopeStableHashes,
+    uint64 StableHash);
+  UFUNCTION(Server, Reliable)
+  void ServerRequestWorkerCorrection(
+    uint64 Generation,
+    uint64 DigestSequence,
+    const TArray<uint8>& Fields,
+    const TArray<uint8>& ScopeKinds,
+    const TArray<int64>& ScopeIds);
+  UFUNCTION(Client, Reliable)
+  void ClientWorkerPacketBegin(
+    uint8 Kind,
+    uint64 Generation,
+    uint64 Sequence,
+    uint64 ObjectStableHash,
+    int32 TotalBytes,
+    int32 ChunkCount,
+    uint64 HeaderStableHash);
+  UFUNCTION(Client, Reliable)
+  void ClientWorkerPacketChunk(
+    uint64 Sequence,
+    int32 ChunkIndex,
+    const TArray<uint8>& Bytes,
+    uint64 ChunkStableHash);
+  UFUNCTION(Client, Reliable)
+  void ClientWorkerPacketEnd(
+    uint64 Sequence,
+    uint64 ObjectStableHash,
+    uint64 EndStableHash);
 
 private:
+  struct FOutgoingWorkerPacket
+  {
+    FCrowdWorkerPacketHeader Header;
+    TArray<FCrowdWorkerPacketChunk> Chunks;
+    FCrowdWorkerPacketEnd End;
+    int32 NextChunkIndex = 0;
+    bool bBeginSent = false;
+  };
+
   FCrowdReplicationChannelLimits Limits;
   FCrowdReplicationServerState ServerState;
   FCrowdReplicationClientState ClientState;
+  FCrowdWorkerNetworkStateConfig WorkerNetworkConfig;
+  FCrowdWorkerPacketTransportConfig WorkerPacketConfig;
+  FCrowdWorkerPacketAssembler WorkerPacketAssembler;
+  FCrowdWorkerReplicationClientGate WorkerClientGate;
+  FCrowdWorkerNetworkCheckpoint ReadyWorkerCheckpoint;
   TArray<FCrowdRelevantSnapshotEntityPayload> CompletedBaselineEntities;
   uint32 CompletedBaselineRevision = 0;
   uint64 CompletedResumeSequence = 0;
   bool bClientReady = false;
+  bool bWorkerCheckpointReady = false;
+  bool bWorkerClientReady = false;
+  uint64 LastWorkerSentGeneration = 0;
+  uint64 LastWorkerSentInputSequence = 0;
+  uint64 LastWorkerReceivedInputSequence = 0;
+  uint64 LastWorkerSentDigestSequence = 0;
+  uint64 NextWorkerCorrectionSequence = 1;
+  TArray<FOutgoingWorkerPacket> OutgoingWorkerPackets;
+  TArray<FCrowdWorkerIntentBatch> PendingWorkerIntents;
+  TOptional<FCrowdWorkerAuthorityDigestBatch> PendingAuthorityDigest;
+  TArray<FCrowdWorkerAuthorityCorrectionBatch>
+    PendingAuthorityCorrections;
+  TArray<FCrowdWorkerAuthorityCorrectionBatch>
+    PendingOutgoingAuthorityCorrections;
+  bool bWorkerCorrectionPending = false;
+  int64 OutgoingWorkerPacketBytes = 0;
+  FCrowdWorkerNetworkTrafficMetrics WorkerTrafficMetrics;
+  double WorkerTrafficWindowStartSeconds = 0.0;
+  uint64 WorkerTrafficWindowIntentBytes = 0;
+  uint64 WorkerTrafficWindowCorrectionBytes = 0;
 
   double NowSeconds() const;
   void HandleClientFailure(const TCHAR* Stage);
   void SendReliable(const FCrowdReliableStateRecord& Record);
   void SendReliableBatch(
     TConstArrayView<FCrowdReliableStateRecord> Records);
+  bool SendWorkerPacket(
+    ECrowdWorkerPacketKind Kind,
+    uint64 Generation,
+    uint64 Sequence,
+    uint64 ObjectStableHash,
+    TConstArrayView<uint8> Bytes);
+  void PumpOutgoingWorkerPackets();
+  void HandleCompletedWorkerPacket();
+  void PumpAuthorityDigest(
+    FCrowdAsyncSimulationRuntime& Runtime,
+    uint64 Generation);
+  void ProcessPendingAuthorityDigest(
+    FCrowdAsyncSimulationRuntime& Runtime);
+  void UpdateWorkerTrafficRates(double NowSeconds);
 };

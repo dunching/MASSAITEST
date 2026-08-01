@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "MassCrowdAgentFacts.h"
@@ -62,12 +62,42 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerCommandDelta
   bool IsValid(int32 MaxPayloadBytes) const;
 };
 
-struct MASSCROWDRUNTIME_API FCrowdWorkerStateDelta
+struct MASSCROWDRUNTIME_API FCrowdWorkerClockIntent
+{
+  uint64 InputSequence = 0;
+  uint64 SimulationTick = 0;
+
+  bool IsValid() const
+  {
+    return InputSequence != 0 && SimulationTick != 0;
+  }
+};
+
+enum class ECrowdWorkerExternalGameplayInputType : uint16
+{
+  InputSnapshot = 1,
+  Objective = 2,
+  GameplayFact = 3
+};
+
+struct MASSCROWDRUNTIME_API FCrowdWorkerExternalGameplayInput
 {
   uint64 InputSequence = 0;
   FCrowdStableEntityRef EntityRef;
+  uint16 InputTypeId = static_cast<uint16>(
+    ECrowdWorkerExternalGameplayInputType::InputSnapshot);
   uint64 DirtyMask = 0;
   FCrowdWorkerPayload FullState;
+
+  bool IsValid(int32 MaxPayloadBytes) const;
+};
+
+struct MASSCROWDRUNTIME_API FCrowdWorkerObjectiveRevisionDelta
+{
+  uint64 InputSequence = 0;
+  uint64 ObjectiveId = 0;
+  uint64 Revision = 0;
+  FCrowdWorkerPayload Payload;
 
   bool IsValid(int32 MaxPayloadBytes) const;
 };
@@ -82,6 +112,8 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerResourceDelta
   bool IsValid(int32 MaxPayloadBytes) const;
 };
 
+// Local movement-authority adapter input. This is not part of
+// FCrowdWorkerIntentBatch and is never encoded on the Intent channel.
 struct MASSCROWDRUNTIME_API FCrowdWorkerCorrectionDelta
 {
   uint64 InputSequence = 0;
@@ -93,21 +125,22 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerCorrectionDelta
   bool IsValid(int32 MaxPayloadBytes) const;
 };
 
-struct MASSCROWDRUNTIME_API FCrowdWorkerInputBatch
+struct MASSCROWDRUNTIME_API FCrowdWorkerIntentBatch
 {
-  static constexpr uint32 CurrentVersion = 1;
+  static constexpr uint32 CurrentVersion = 2;
 
   uint32 Version = CurrentVersion;
   uint64 Generation = 0;
   uint64 FirstInputSequence = 0;
   uint64 LastInputSequence = 0;
   double TargetSimulationTimeSeconds = 0.0;
+  FCrowdWorkerClockIntent Clock;
   TArray<FCrowdWorkerSpawnDelta> Spawns;
   TArray<FCrowdWorkerDespawnDelta> Despawns;
   TArray<FCrowdWorkerCommandDelta> Commands;
-  TArray<FCrowdWorkerStateDelta> StateDeltas;
+  TArray<FCrowdWorkerObjectiveRevisionDelta> ObjectiveRevisions;
+  TArray<FCrowdWorkerExternalGameplayInput> ExternalGameplayInputs;
   TArray<FCrowdWorkerResourceDelta> ResourceDeltas;
-  TArray<FCrowdWorkerCorrectionDelta> Corrections;
   uint64 StableHash = 0;
 
   int32 GetRecordCount() const;
@@ -126,6 +159,18 @@ enum class ECrowdWorkerInputAcceptResult : uint8
   RequiresResnapshot
 };
 
+enum class ECrowdWorkerInputFailure : uint8
+{
+  None = 0,
+  InvalidPayload,
+  GenerationMismatch,
+  StaleSequence,
+  SequenceGap,
+  ConflictingDuplicate,
+  TimeRegression,
+  ResnapshotRequired
+};
+
 class MASSCROWDRUNTIME_API FCrowdWorkerInputSequenceGate
 {
 public:
@@ -134,11 +179,12 @@ public:
     uint64 FirstExpectedInputSequence = 1);
 
   ECrowdWorkerInputAcceptResult Accept(
-    const FCrowdWorkerInputBatch& Batch,
+    const FCrowdWorkerIntentBatch& Batch,
     const FCrowdWorkerContractLimits& Limits);
 
   uint64 GetGeneration() const { return Generation; }
   uint64 GetNextExpectedInputSequence() const { return NextExpectedSequence; }
+  ECrowdWorkerInputFailure GetLastFailure() const { return LastFailure; }
   bool RequiresResnapshot() const { return bRequiresResnapshot; }
 
 private:
@@ -147,7 +193,10 @@ private:
   uint64 LastAcceptedFirstSequence = 0;
   uint64 LastAcceptedLastSequence = 0;
   uint64 LastAcceptedHash = 0;
+  uint64 LastTargetSimulationTick = 0;
   double LastTargetSimulationTimeSeconds = 0.0;
+  ECrowdWorkerInputFailure LastFailure =
+    ECrowdWorkerInputFailure::None;
   bool bHasAcceptedBatch = false;
   bool bRequiresResnapshot = false;
 };
@@ -166,6 +215,10 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerPublishedState
 struct MASSCROWDRUNTIME_API FCrowdWorkerStatePatch
 {
   FCrowdStableEntityRef EntityRef;
+  // Zero is the legacy aggregate payload. Runtime v2 uses a stable,
+  // non-zero domain field id so independent fields of one entity can
+  // coexist in the same published batch.
+  uint16 StateFieldId = 0;
   uint64 Generation = 0;
   uint64 WorkerEpoch = 0;
   uint64 SourceInputSequence = 0;
@@ -200,7 +253,7 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerGameplayEvent
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerPublishedBatch
 {
-  static constexpr uint32 CurrentVersion = 1;
+  static constexpr uint32 CurrentVersion = 2;
 
   uint32 Version = CurrentVersion;
   uint64 Generation = 0;

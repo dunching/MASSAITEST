@@ -72,11 +72,26 @@ namespace
     OutAgent.NetworkIdValue = NetworkIDs[EntityIndex].NetID.GetValue();
 
     const FCrowdDemoMassIdentityFragment& Identity = Identities[EntityIndex];
-    const FCrowdDemoMassStatsFragment& StatsFragment = Stats[EntityIndex];
-    const FCrowdDemoBusinessStateFragment& Business = Businesses[EntityIndex];
-    const FCrowdDemoRangedAttackFragment& Attack = Attacks[EntityIndex];
-    const FCrowdDemoReactiveMotionFragment& Reactive = Reactives[EntityIndex];
-    const FCrowdDemoHitFlashFragment& HitFlash = HitFlashes[EntityIndex];
+    const bool bHasCombatBundle = Stats.IsValidIndex(EntityIndex)
+      && Businesses.IsValidIndex(EntityIndex)
+      && Attacks.IsValidIndex(EntityIndex)
+      && Reactives.IsValidIndex(EntityIndex)
+      && HitFlashes.IsValidIndex(EntityIndex);
+    const FCrowdDemoMassStatsFragment DefaultStats;
+    const FCrowdDemoBusinessStateFragment DefaultBusiness;
+    const FCrowdDemoRangedAttackFragment DefaultAttack;
+    const FCrowdDemoReactiveMotionFragment DefaultReactive;
+    const FCrowdDemoHitFlashFragment DefaultHitFlash;
+    const FCrowdDemoMassStatsFragment& StatsFragment =
+      bHasCombatBundle ? Stats[EntityIndex] : DefaultStats;
+    const FCrowdDemoBusinessStateFragment& Business =
+      bHasCombatBundle ? Businesses[EntityIndex] : DefaultBusiness;
+    const FCrowdDemoRangedAttackFragment& Attack =
+      bHasCombatBundle ? Attacks[EntityIndex] : DefaultAttack;
+    const FCrowdDemoReactiveMotionFragment& Reactive =
+      bHasCombatBundle ? Reactives[EntityIndex] : DefaultReactive;
+    const FCrowdDemoHitFlashFragment& HitFlash =
+      bHasCombatBundle ? HitFlashes[EntityIndex] : DefaultHitFlash;
     const FCrowdDemoMassMovementFragment& Movement = Movements[EntityIndex];
     const FCrowdDemoMassVisualFragment& Visual = Visuals[EntityIndex];
     const FTransformFragment& Transform = Transforms[EntityIndex];
@@ -593,11 +608,16 @@ void ACrowdDemoMassClientBubbleInfo::GetLifetimeReplicatedProps(TArray<FLifetime
 void UCrowdDemoMassReplicator::AddRequirements(FMassEntityQuery& EntityQuery)
 {
   EntityQuery.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
-  EntityQuery.AddRequirement<FCrowdDemoMassStatsFragment>(EMassFragmentAccess::ReadOnly);
-  EntityQuery.AddRequirement<FCrowdDemoBusinessStateFragment>(EMassFragmentAccess::ReadOnly);
-  EntityQuery.AddRequirement<FCrowdDemoRangedAttackFragment>(EMassFragmentAccess::ReadOnly);
-  EntityQuery.AddRequirement<FCrowdDemoReactiveMotionFragment>(EMassFragmentAccess::ReadOnly);
-  EntityQuery.AddRequirement<FCrowdDemoHitFlashFragment>(EMassFragmentAccess::ReadOnly);
+  EntityQuery.AddRequirement<FCrowdDemoMassStatsFragment>(
+    EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
+  EntityQuery.AddRequirement<FCrowdDemoBusinessStateFragment>(
+    EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
+  EntityQuery.AddRequirement<FCrowdDemoRangedAttackFragment>(
+    EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
+  EntityQuery.AddRequirement<FCrowdDemoReactiveMotionFragment>(
+    EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
+  EntityQuery.AddRequirement<FCrowdDemoHitFlashFragment>(
+    EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional);
   EntityQuery.AddRequirement<FCrowdDemoMassMovementFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FCrowdDemoMassVisualFragment>(EMassFragmentAccess::ReadOnly);
   EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);

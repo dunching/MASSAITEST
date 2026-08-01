@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassCrowdWorkerContracts.h"
+#include "MassCrowdWorkerRuntimeV2.h"
 
 namespace CrowdWorkerResultFields
 {
@@ -45,7 +46,19 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerResultApplyMetrics
   uint64 LastAppliedEventSequence = 0;
   int32 CurrentEntityCount = 0;
   int32 ProxyStateCount = 0;
+  int32 DomainStateCount = 0;
+  uint64 AppliedDomainPatchCount = 0;
   bool bViolation = false;
+};
+
+struct MASSCROWDRUNTIME_API FCrowdWorkerDomainProxyState
+{
+  FCrowdStableEntityRef EntityRef;
+  ECrowdWorkerField Field = ECrowdWorkerField::Count;
+  FCrowdWorkerPublishedState State;
+  uint64 WorkerEpoch = 0;
+  uint64 SourceInputSequence = 0;
+  uint64 PublishSequence = 0;
 };
 
 class MASSCROWDRUNTIME_API FCrowdWorkerResultApplyProxy
@@ -54,6 +67,13 @@ public:
   bool ResetQuiescent(
     uint64 Generation,
     const FCrowdWorkerContractLimits& Limits);
+
+  bool ResetFromCheckpoint(
+    uint64 Generation,
+    const FCrowdWorkerContractLimits& Limits,
+    TConstArrayView<FCrowdStableEntityRef> EntityRefs,
+    uint64 LastAppliedInputSequence,
+    uint64 LastAppliedEventSequence);
 
   bool UpdateCurrentEntities(
     uint64 Generation,
@@ -64,6 +84,10 @@ public:
 
   const FCrowdWorkerPresentationDiagnosticProxyState* Find(
     const FCrowdStableEntityRef& EntityRef) const;
+
+  const FCrowdWorkerDomainProxyState* FindDomain(
+    const FCrowdStableEntityRef& EntityRef,
+    ECrowdWorkerField Field) const;
 
   const FCrowdWorkerResultApplyMetrics& GetMetrics() const
   {
@@ -77,6 +101,8 @@ private:
   TSet<FCrowdStableEntityRef> CurrentEntities;
   TMap<FCrowdStableEntityRef,
     FCrowdWorkerPresentationDiagnosticProxyState> ProxyStates;
+  TMap<FCrowdWorkerDirtyStateKey,
+    FCrowdWorkerDomainProxyState> DomainStates;
   FCrowdWorkerResultApplyMetrics Metrics;
   bool bInitialized = false;
 };

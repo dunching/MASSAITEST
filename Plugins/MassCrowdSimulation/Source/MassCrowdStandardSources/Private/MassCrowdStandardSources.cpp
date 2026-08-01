@@ -330,7 +330,7 @@ namespace
         || Payload.HysteresisCm < 0.0f
         || Payload.MaximumCorrectionSpeedCmps < 0.0f)
         return false;
-      FCrowdMaintainDistanceState State;
+      FCrowdMaintainDistanceState State{};
       if (Context.Instance.State.Size != 0
         && !Context.Instance.State.Get(
           CrowdStandardSources::MaintainDistanceStateSchema, State))
@@ -504,7 +504,7 @@ namespace
         || Payload.SpeedCmps < 0.0f
         || Payload.ReselectIntervalSteps == 0)
         return false;
-      FCrowdWanderSteeringState State;
+      FCrowdWanderSteeringState State{};
       if (Context.Instance.State.Size == 0)
       {
         State.RandomState =

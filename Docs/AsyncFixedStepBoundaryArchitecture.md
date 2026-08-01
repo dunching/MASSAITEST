@@ -6,7 +6,7 @@
 
 [COMPUTED][HIGH] 2026-07-30代码已完成AB1/AB2基础合同：Orchestrator/Runner使用`PollAndDrain()`和`FTask::IsCompleted()`，Runtime已删除`FEvent`与`WaitAndDrain()`；Runner自身就是每World深度1 Mailbox并携带Generation/PlanRevision/FixedStep/SnapshotHash事务身份。
 
-[COMPUTED][HIGH] Round、Friendly和Mixed生产入口已经改为跨Game Frame Poll；Round帧首最多消费一个旧事务、帧尾最多提交一个新事务。T5S/T5M/T6A/T6S/T6M独立双端关卡、MassCrowd 65/65、CrowdDemo 134/134及Development/DebugGame × ForceUnity/DisableUnity四构建已经通过；Round内部动态Stage Adapter收敛、单进程双PIE、Correction/teardown专项和FFmpeg连续性门尚未完成，因此不得外推为AB阶段已经生产验收关闭。
+[COMPUTED][HIGH] Round、Friendly和Mixed生产入口已经改为跨 Game Frame Poll；Round 每帧最多 Poll、Commit、Publish、Submit 各一次。2026-07-30 四节点直接执行切换后的 Development Editor `-DisableUnity`、插件事务定向 1/1 和项目架构 2/2 已通过；完整自动化、DebugGame/Unity 构建、单进程双 PIE、Correction/teardown 专项和 FFmpeg 连续性门仍须基于新代码重跑，因此不得外推为 AB 阶段已经生产验收关闭。
 
 [INFERRED][HIGH] 本文是异步Boundary线程、Processor、Mailbox和调度合同的事实源；当前代码事实仍以`CurrentArchitecture.md`为准，实施顺序以`PhasePlan.md`为准，查询所有权以`MassQueryOwnershipMatrix.md`为准，验收门以`TestScenarioMatrix.md`为准。
 
@@ -112,7 +112,7 @@ MassReplication
 → Client Visual Interpolation
 ```
 
-[COMPUTED][HIGH] 第一版由一个注册到Mass Phase的`UCrowdDemoRoundSimFixedStepPipelineProcessor`按固定顺序执行Result Commit/Post-Commit/Request Submit逻辑阶段；这样同一Game Frame可以先Commit已完成的第N步，再为第N+1步Gather并Submit，但不得等待第N+1步完成。逻辑阶段不需要拆成多个注册Processor。
+[COMPUTED][HIGH] 现行实现由四个显式注册到 `PrePhysics` 的 Processor 按 AuthorityInput、ResultCommit、PostCommit、RequestSubmit 顺序执行；同一 Game Frame 可以先 Commit 已完成的第 N 步，再为第 N+1 步 Gather 并 Submit，但不得等待第 N+1 步完成。旧单顶层 Processor 已删除。
 
 [INFERRED][HIGH] 现有多次手工`CallExecute()`且靠内部可变状态推断“Stage/Consume/Apply”的动态Processor模式必须退出目标生产路径。
 
@@ -416,8 +416,8 @@ sequenceDiagram
 
 | 当前实现 | 当前问题 | 目标归属 |
 |---|---|---|
-| `UCrowdDemoRoundSimFixedStepPipelineProcessor`单GT Coordinator | [COMPUTED][HIGH] `while`追赶已删除，帧首消费、帧尾生产已经生效；内部GT职责仍由动态Stage Adapter组装 | [INFERRED][HIGH] 保留单一注册Processor，将内部职责收敛为Result Commit、Post-Commit、Request Submit普通GT阶段函数 |
-| `ROUND_DYNAMIC_FLAGS`全部GT且由总控手工`CallExecute()` | [COMPUTED][HIGH] 内部Processor不是Mass图独立调度节点，职责依赖隐藏状态 | [INFERRED][HIGH] GT访问保留真实Processor；纯算法改为普通Work Stage |
+| 四个 Round Boundary Processor | [COMPUTED][HIGH] AuthorityInput、ResultCommit、PostCommit、RequestSubmit 已分别注册并声明显式顺序；旧单顶层 Processor 已删除 | [COMPUTED][HIGH] 四节点直接调用纯 C++ Stage；跨帧事务由 World Subsystem 持有 |
+| 原 `ROUND_DYNAMIC_FLAGS` 与手工 `CallExecute()` | [COMPUTED][HIGH] 生产源码已经清零，内部算法不再伪装为未注册 `UMassProcessor` 或 `UObject` Processor | [COMPUTED][HIGH] Mass 调度权只属于四个真实 Processor；阶段算法为普通 C++ Stage |
 | `FCrowdMassBoundaryOrchestrator::WaitAndDrain()` | [COMPUTED][HIGH] GT同步等待Completion Event | [INFERRED][HIGH] `Poll/TryConsume`非阻塞Mailbox |
 | Completion Task捕获裸`FEvent*` | [COMPUTED][HIGH] 跨帧后存在teardown生命周期风险 | [INFERRED][HIGH] Task完成后仅发布线程安全Result状态 |
 | `FacingFinalize`包围Dispatch后的Wait | [COMPUTED][HIGH] Stage指标吞并整条Worker等待 | [INFERRED][HIGH] Worker critical path与GT commit分别计时 |
@@ -476,9 +476,9 @@ AB3. [x] [COMPUTED][HIGH] Round代码与T5S真实门已完成：`bStepInProgress
 
 AB4. [x] [COMPUTED][HIGH] T5/T6推广与Worker优化已完成：Request级Flow lookup同时供Demand与Guidance复用，静态拓扑在Worker State跨Fixed Step缓存；8824 T5M、8825 T6A、8826 T6S和8823 T6M均通过功能与性能门。T6A/T6S分别只有7次Topology build并命中7329/6300次缓存；当前遥测没有要求在本切片合并Cohort Task。
 
-AB5. [ ] [COMPUTED][HIGH] Round、Mixed、Friendly和Continuous生产源码已无`WaitAndDrain/Event.Wait/Future.Get`；Round内部动态Stage Adapter仍通过`CallExecute()`组装/消费GT数据，尚未完成普通Builder/Adapter收敛。
+AB5. [ ] [COMPUTED][HIGH] 四节点目标合同已冻结到`AB5FourNodeBoundaryContract.md`；四个 Processor 已成为唯一生产路径，旧单顶层 Processor、UObject Stage Adapter、手工 `CallExecute()` 和阻塞 Wait 均已删除。通用 Frame Transaction/1-0-1 Mass 访问合同已下沉 `MassCrowdRuntime`；Base/Target/Combat template 与 Optional Query 已实现，最新四构建、MassCrowd 85/85、CrowdDemo 139/139通过。Base+Target T5S 9321/9322功能绿，但backlog p95=`170.807/136.398ms`未过`66.667ms`，尚缺该回退修复与完整真实场景矩阵。
 
-AB6. [ ] [COMPUTED][HIGH] 四构建、MassCrowd 65/65、CrowdDemo 134/134及T5S/T5M/T6A/T6S/T6M独立双端功能/性能门已通过；单进程双PIE、异步完成顺序确定性、Correction、teardown、T1–T9/Mixed/Friendly/Continuous全回归与FFmpeg连续性仍未关闭。
+AB6. [ ] [COMPUTED][HIGH] 当前四构建、MassCrowd 85/85、CrowdDemo 138/138、单进程双PIE及新T5S/T6M已通过；仍缺强制Pending Correction、异步完成顺序确定性、teardown/地图切换、T1–T9/Mixed/Friendly/Continuous全回归与FFmpeg连续性。
 
 ## 15. 完成定义
 

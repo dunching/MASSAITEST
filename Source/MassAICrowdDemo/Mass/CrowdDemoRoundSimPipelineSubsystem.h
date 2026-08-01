@@ -315,6 +315,7 @@ struct FCrowdDemoRoundBoundaryBusinessFact
   FVector LocalOffset = FVector::ZeroVector;
   float RadiusCm = 0.0f;
   float YawDegrees = 0.0f;
+  bool bHasCombatCapability = false;
   FCrowdDemoMassStatsFragment Stats;
   FCrowdDemoBusinessStateFragment Business;
   FCrowdDemoRangedAttackFragment Attack;
@@ -374,7 +375,17 @@ struct FCrowdDemoWorkerMovementTailExecution
   TMap<int32, int32> ConsecutiveSettleStepsByAgentId;
   TMap<int32, bool> FinalSettledByAgentId;
   uint64 StableHash = 0;
+  bool bUsesWorkerV2PreparedMovement = false;
+  bool bUsesWorkerV2PreparedParticle = false;
   TAtomic<bool> bCompleted{false};
+};
+
+struct FCrowdDemoWorkerV2MovementExpectation
+{
+  FCrowdStableEntityRef EntityRef;
+  FVector Position = FVector::ZeroVector;
+  FVector Velocity = FVector::ZeroVector;
+  double SimulationTimeSeconds = 0.0;
 };
 
 struct FCrowdDemoBoundaryFacingWorkState
@@ -421,6 +432,8 @@ struct FCrowdDemoBoundaryFacingWorkState
   bool bObstacleStaged = false;
   bool bMovementConsumed = false;
   bool bMovementShadowInputValid = false;
+  bool bWorkerV2InputSubmitted = false;
+  uint64 WorkerV2InputSequence = 0;
   bool bWorkerMovementTailSubmitted = false;
   bool bWorkerMovementTailConsumed = false;
   uint64 WorkerMovementSequence = 0;
@@ -441,12 +454,58 @@ private:
   TArray<float> CheckpointP95Samples;
 };
 
+struct FCrowdDemoRoundMassAccessCounts
+{
+  void Reset()
+  {
+    CanonicalGatherReadCount = 0;
+    IntermediateReadCount = 0;
+    CommitWriteCount = 0;
+  }
+  bool TryRecordCanonicalGatherRead(const bool bStepInProgress)
+  {
+    if (!bStepInProgress || CanonicalGatherReadCount != 0
+      || CommitWriteCount != 0)
+      return false;
+    ++CanonicalGatherReadCount;
+    return true;
+  }
+  bool TryRecordIntermediateRead(const bool bStepInProgress)
+  {
+    if (!bStepInProgress || CommitWriteCount != 0)
+      return false;
+    ++IntermediateReadCount;
+    return true;
+  }
+  bool TryBeginAtomicCommitWrite(const bool bStepInProgress)
+  {
+    if (!bStepInProgress || CanonicalGatherReadCount != 1
+      || IntermediateReadCount != 0 || CommitWriteCount != 0)
+      return false;
+    ++CommitWriteCount;
+    return true;
+  }
+  bool IsOrdinaryStepContractSatisfied() const
+  {
+    return CanonicalGatherReadCount == 1
+      && IntermediateReadCount == 0 && CommitWriteCount == 1;
+  }
+  uint8 CanonicalGatherReadCount = 0;
+  uint8 IntermediateReadCount = 0;
+  uint8 CommitWriteCount = 0;
+};
+
 UCLASS()
 class MASSAICROWDDEMO_API UCrowdDemoRoundSimPipelineSubsystem : public UWorldSubsystem
 {
   GENERATED_BODY()
 
 public:
+  uint64 AllocateWorkerResultConsumerFrameSequence()
+  {
+    return ++WorkerResultConsumerFrameSequence;
+  }
+
   void QueueBootstrap(const FCrowdDemoRoundBootstrapPacket& Packet);
   void QueueRoundPlan(const FCrowdDemoRoundPlanPacket& Packet);
   void QueueRoundResult(const FCrowdDemoRoundResultPacket& Packet);
@@ -456,6 +515,7 @@ public:
   void MarkBootstrapApplied(int32 AgentCount);
   bool PopDueRoundPlan(float BoundaryServerTimeSeconds, FCrowdDemoRoundPlanPacket& OutPacket);
   bool HasDueRoundPlan(float BoundaryServerTimeSeconds) const;
+  bool HasDueAuthorityInput(float BoundaryServerTimeSeconds) const;
   bool PopCorrectionForBoundary(FCrowdDemoCorrectionFrame& OutFrame, float& OutReceiveServerTimeSeconds);
   bool PopRoundResultForBoundary(FCrowdDemoRoundResultPacket& OutPacket);
 
@@ -468,6 +528,13 @@ public:
   bool TryBeginFixedStep(float TargetServerTimeSeconds);
   void FinishFixedStep();
   void FailFixedStep();
+  bool TryRecordCanonicalGatherRead();
+  bool TryBeginAtomicCommitWrite();
+  void RecordAuthorityMassWrite();
+  const FCrowdDemoRoundMassAccessCounts& GetCurrentStepMassAccessCounts() const
+  { return CurrentStepMassAccessCounts; }
+  uint64 GetAuthorityMassWriteCount() const
+  { return AuthorityMassWriteCount; }
   void InvalidateInFlightBoundaryForAuthoritativeState();
   bool IsStepInProgress() const { return bStepInProgress; }
   bool IsActive() const { return bPlanActive; }
@@ -496,6 +563,7 @@ public:
     FCrowdMassBoundarySnapshot&& Snapshot,
     TArray<FCrowdDemoRoundBoundaryFormationFact>&& FormationFacts,
     TArray<FCrowdDemoRoundBoundaryFacingFact>&& FacingFacts);
+  bool TryPublishWorkerProxyBoundarySnapshot();
   const FCrowdMassBoundarySnapshot& GetBoundarySnapshot() const
   { return BoundarySnapshot; }
   const FCrowdDemoRoundBoundaryFormationFact* FindBoundaryFormationFact(
@@ -654,10 +722,15 @@ public:
   { return PreparedRuntimeParticleResults; }
   void SetPreparedRuntimeFinalKinematics(
     TArray<FCrowdMassFinalKinematicState>&& Values)
-  { PreparedRuntimeFinalKinematics = MoveTemp(Values); }
+  {
+    if (!bPreparedRuntimeFinalKinematicsWorkerOwned)
+      PreparedRuntimeFinalKinematics = MoveTemp(Values);
+  }
   const TArray<FCrowdMassFinalKinematicState>&
     GetPreparedRuntimeFinalKinematics() const
   { return PreparedRuntimeFinalKinematics; }
+  bool ArePreparedRuntimeFinalKinematicsWorkerOwned() const
+  { return bPreparedRuntimeFinalKinematicsWorkerOwned; }
   void SetPreparedRuntimeFacingResults(TArray<FCrowdFacingResult>&& Values)
   { PreparedRuntimeFacingResults = MoveTemp(Values); }
   const TArray<FCrowdFacingResult>& GetPreparedRuntimeFacingResults() const
@@ -1084,6 +1157,15 @@ public:
   void LogStageOnce(const TCHAR* StageName, int32 AgentCount);
 
 private:
+  bool SubmitWorkerV2BoundaryInput();
+  bool DrainWorkerV2MovementShadowComparisons();
+  uint64 WorkerResultConsumerFrameSequence = 0;
+  uint64 WorkerProxyGatherBypassCount = 0;
+  uint64 WorkerProxyGatherFallbackCount = 0;
+  bool bCurrentStepUsedWorkerProxySnapshot = false;
+  FCrowdDemoRoundMassAccessCounts CurrentStepMassAccessCounts;
+  uint64 AuthorityMassWriteCount = 0;
+  uint64 MassAccessContractViolationCount = 0;
   FCrowdDemoRoundBootstrapPacket PendingBootstrap;
   TMap<int32, FCrowdDemoRoundPlanPacket> PendingPlans;
   TMap<int32, TPair<FCrowdDemoCorrectionFrame, float>> PendingCorrections;
@@ -1095,10 +1177,20 @@ private:
   FCrowdDemoRoundCompareMetrics LastCompletedRoundMetrics;
   FCrowdDemoCorrectionFrameMetrics LastCorrectionMetrics;
   FCrowdMassBoundarySnapshot BoundarySnapshot;
+  // Last accepted immutable input facts. Unlike BoundarySnapshot these survive
+  // FinishFixedStep so autonomous Worker epochs never need to echo Mass state
+  // back through the canonical gather path.
+  FCrowdMassBoundarySnapshot WorkerInputSnapshotCache;
   int32 MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
   TArray<FCrowdDemoRoundBoundaryFormationFact> BoundaryFormationFacts;
   TArray<FCrowdDemoRoundBoundaryFacingFact> BoundaryFacingFacts;
   TArray<FCrowdDemoRoundBoundaryBusinessFact> BoundaryBusinessFacts;
+  TArray<FCrowdDemoRoundBoundaryFormationFact>
+    WorkerInputFormationFactsCache;
+  TArray<FCrowdDemoRoundBoundaryFacingFact>
+    WorkerInputFacingFactsCache;
+  TArray<FCrowdDemoRoundBoundaryBusinessFact>
+    WorkerInputBusinessFactsCache;
   uint64 PreparedPlannerDecisionHash = 0;
   TUniquePtr<FCrowdMassBoundaryRunner> BoundaryOrchestrator;
   TSharedPtr<FCrowdDemoBoundaryFacingWorkState, ESPMode::ThreadSafe>
@@ -1119,6 +1211,7 @@ private:
   TArray<FCrowdMassPredictedMovement> PreparedRuntimePredictedMovements;
   TArray<FCrowdParticleConstraintResult> PreparedRuntimeParticleResults;
   TArray<FCrowdMassFinalKinematicState> PreparedRuntimeFinalKinematics;
+  bool bPreparedRuntimeFinalKinematicsWorkerOwned = false;
   TArray<FCrowdFacingResult> PreparedRuntimeFacingResults;
   TArray<FCrowdDemoPreparedFacingRollbackFact> PreparedFacingRollbackFacts;
   TArray<FCrowdDemoPreparedPostFinalizeAgentRecord>
@@ -1285,7 +1378,31 @@ private:
   uint64 LastClaimedPlanApplyBoundarySequence = MAX_uint64;
   uint64 BoundaryGeneration = 1;
   uint64 NextWorkerTaskSequence = 1;
+  uint64 NextWorkerV2MovementControlRevision = 1;
+  uint64 NextWorkerV2TargetControlRevision = 1;
+  uint64 NextWorkerV2ProjectileControlRevision = 1;
+  uint64 LastWorkerV2TargetControlSemanticHash = 0;
+  uint64 WorkerV2TargetControlPublishCount = 0;
+  uint64 WorkerV2TargetControlReuseCount = 0;
+  bool bWorkerV2ProjectileStateBootstrapped = false;
   int32 BoundaryPendingFrameCount = 0;
+  uint64 WorkerV2MovementShadowCompareCount = 0;
+  uint64 WorkerV2MovementShadowMismatchCount = 0;
+  double WorkerV2MovementPositionErrorMaxCm = 0.0;
+  double WorkerV2MovementVelocityErrorMaxCmps = 0.0;
+  double WorkerV2MovementYawErrorMaxDegrees = 0.0;
+  uint64 WorkerV2MovementStageCompareCount = 0;
+  uint64 WorkerV2MovementStageMismatchCount = 0;
+  uint64 WorkerV2MovementStageStaleSkipCount = 0;
+  uint64 WorkerV2MovementStageLastExpectedInputSequence = 0;
+  double WorkerV2MovementStagePositionErrorMaxCm = 0.0;
+  double WorkerV2MovementStageVelocityErrorMaxCmps = 0.0;
+  double WorkerV2MovementStageTimeErrorMaxSeconds = 0.0;
+  double WorkerV2MovementStageLastPositionErrorMaxCm = 0.0;
+  double WorkerV2MovementStageLastVelocityErrorMaxCmps = 0.0;
+  uint64 WorkerV2MovementStageLastMismatchCount = 0;
+  TMap<uint64, TArray<FCrowdDemoWorkerV2MovementExpectation>>
+    PendingWorkerV2MovementExpectations;
   int32 BoundaryStaleResultCount = 0;
   int32 BoundaryOrdinaryBlockWaitCount = 0;
   uint64 FormationMembershipHash = 0;

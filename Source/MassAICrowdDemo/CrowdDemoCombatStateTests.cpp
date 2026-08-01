@@ -3,7 +3,11 @@
 #include "Misc/Paths.h"
 
 #include "Mass/CrowdDemoCombatStateKernel.h"
+#include "Mass/CrowdDemoMassSubsystem.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
+#include "Mass/CrowdDemoWorkerCombatExtension.h"
+#include "MassCrowdWorkerCombatState.h"
+#include "MassEntityTemplate.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -40,6 +44,422 @@ namespace
     Hit.HitFlashProfileKey = 7;
     return Hit;
   }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoWorkerCombatCodecRoundTripTest,
+  "CrowdDemo.WorkerV2.WA5.CombatCodecRoundTrip",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoWorkerCombatCodecRoundTripTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoWorkerCombatHostInput Input;
+  Input.RoundId = 7;
+  Input.FixedStepIndex = 31;
+  Input.PlanRevision = 4;
+  Input.ServerTimeSeconds = 2.0f;
+  Input.FixedStepSeconds = 1.0f / 30.0f;
+  Input.AttackSettings.bEnabled = 1;
+  FCrowdDemoRangedCombatAgent& Agent =
+    Input.Agents.AddDefaulted_GetRef();
+  Agent.EntityRef = {0x44454d4fu, 11, 2};
+  Agent.AgentId = 11;
+  Agent.LifecycleSerial = 2;
+  Agent.FormationIndex = 3;
+  Agent.FactionId = 1;
+  Agent.NavLayer = 1;
+  Agent.Position = FVector(100.0f, 200.0f, 60.0f);
+  Agent.RadiusCm = 42.0f;
+  Agent.Combat = MakeAgent(11);
+  Agent.Combat.LifecycleSerial = 2;
+  Agent.Combat.AttackPhase = ECrowdDemoAttackPhase::Cooldown;
+  Agent.Combat.CooldownEndFixedStep = 40;
+
+  FCrowdWorkerPayload InputPayload;
+  FCrowdDemoWorkerCombatHostInput DecodedInput;
+  TestTrue(TEXT("host input encodes"),
+    FCrowdDemoWorkerCombatHostInputCodec::Encode(
+      Input, InputPayload));
+  TestTrue(TEXT("host input decodes"),
+    FCrowdDemoWorkerCombatHostInputCodec::Decode(
+      InputPayload, DecodedInput));
+  TestEqual(TEXT("cooldown survives codec"),
+    DecodedInput.Agents[0].Combat.CooldownEndFixedStep, 40);
+  TestEqual(TEXT("stable ref lifecycle survives codec"),
+    DecodedInput.Agents[0].EntityRef.LifecycleSerial, 2u);
+
+  FCrowdDemoWorkerCombatHostResult Result;
+  Result.FixedStepIndex = Input.FixedStepIndex;
+  Result.AttackSummary.bValid = true;
+  Result.AttackSummary.TargetAcquiredCount = 1;
+  Result.AttackSummary.AttackStateHash = 1234;
+  Result.HitSummary.bValid = true;
+  Result.HitSummary.AppliedHitCount = 1;
+  Result.HitSummary.DeathCount = 1;
+  Result.HitSummary.StableHash = 5678;
+  FCrowdWorkerPayload ResultPayload;
+  FCrowdDemoWorkerCombatHostResult DecodedResult;
+  TestTrue(TEXT("host result encodes"),
+    FCrowdDemoWorkerCombatHostResultCodec::Encode(
+      Result, ResultPayload));
+  TestTrue(TEXT("host result decodes"),
+    FCrowdDemoWorkerCombatHostResultCodec::Decode(
+      ResultPayload, DecodedResult));
+  TestEqual(TEXT("attack summary survives codec"),
+    DecodedResult.AttackSummary.AttackStateHash, 1234u);
+  TestEqual(TEXT("death summary survives codec"),
+    DecodedResult.HitSummary.DeathCount, 1);
+
+  FCrowdWorkerCombatState ZeroImpulseReactive;
+  ZeroImpulseReactive.SourceFixedStep = Input.FixedStepIndex;
+  ZeroImpulseReactive.bAlive = true;
+  ZeroImpulseReactive.bReactiveActive = true;
+  ZeroImpulseReactive.HostState = ResultPayload;
+  TestTrue(TEXT("zero-impulse timed HitReact is valid"),
+    ZeroImpulseReactive.IsValid());
+  FCrowdWorkerPayload CombatPayload;
+  FCrowdWorkerCombatState DecodedCombat;
+  TestTrue(TEXT("generic combat state encodes"),
+    FCrowdWorkerCombatStateCodec::Encode(
+      ZeroImpulseReactive, CombatPayload));
+  TestTrue(TEXT("generic combat state decodes"),
+    FCrowdWorkerCombatStateCodec::Decode(
+      CombatPayload, DecodedCombat));
+  TestTrue(TEXT("reactive flag survives generic codec"),
+    DecodedCombat.bReactiveActive);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoWorkerMixedCombatDomainTest,
+  "CrowdDemo.WorkerV2.WA5.MixedCombatDomain",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoWorkerMixedCombatDomainTest::RunTest(
+  const FString& Parameters)
+{
+  constexpr uint64 Generation = 43;
+  const FCrowdStableEntityRef AgentA{1, 1, 1};
+  const FCrowdStableEntityRef AgentB{1, 2, 1};
+  FCrowdDemoWorkerMixedCombatHostInput HostInput;
+  HostInput.FixedStepSeconds = 1.0f / 30.0f;
+  FCrowdDemoAttackProfileV1& Melee =
+    HostInput.Profiles.AddDefaulted_GetRef();
+  Melee.ProfileId = CrowdDemoAttackProfileIds::Melee;
+  Melee.PayloadTypeId = CrowdDemoAttackPayloadTypeIds::Melee;
+  Melee.EffectProfileId = 1;
+  Melee.Archetype = ECrowdDemoAttackArchetype::Melee;
+  Melee.WindupFixedSteps = 2;
+  Melee.RecoveryFixedSteps = 2;
+  Melee.CooldownFixedSteps = 3;
+  Melee.MaximumDistanceCm = 300.0f;
+  Melee.QueryRadiusCm = 80.0f;
+  Melee.MuzzleForwardOffsetCm = 42.0f;
+  Melee.Damage = 20;
+  FCrowdDemoWorkerMixedCombatAgent& A =
+    HostInput.Agents.AddDefaulted_GetRef();
+  A.EntityRef = AgentA;
+  A.FactionId = 1;
+  A.AttackProfileId = Melee.ProfileId;
+  A.Position = FVector::ZeroVector;
+  A.Facing = FVector::ForwardVector;
+  A.Health = 100;
+  FCrowdDemoWorkerMixedCombatAgent& B =
+    HostInput.Agents.AddDefaulted_GetRef();
+  B.EntityRef = AgentB;
+  B.FactionId = 2;
+  B.AttackProfileId = Melee.ProfileId;
+  B.Position = FVector(100.0f, 0.0f, 0.0f);
+  B.Facing = -FVector::ForwardVector;
+  B.Health = 100;
+
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("mixed combat resources reset"),
+    Resources.Reset(
+      FCrowdWorkerProjectileControlResourceCodec::
+        MaxEncodedBytes));
+  FCrowdWorkerEntityStateStore EntityStates;
+  TestTrue(TEXT("mixed combat entity store resets"),
+    EntityStates.Reset(8, 1024 * 1024));
+  FCrowdWorkerProjectileDomainExecutor Executor(
+    MakeCrowdDemoWorkerCombatExtension());
+  FCrowdWorkerDomainContext Context;
+  Context.Generation = Generation;
+  Context.FixedDeltaSeconds = HostInput.FixedStepSeconds;
+  Context.RuntimeMode = ECrowdWorkerRuntimeV2Mode::Production;
+  Context.EntityStates = &EntityStates;
+  Context.Resources = &Resources;
+  FCrowdWorkerWorkItem Work;
+  Work.Key.Domain = ECrowdWorkerDomainId::CombatReactive;
+  Work.Key.Kind = ECrowdWorkerWorkKind::Resource;
+  Work.Key.ScopeKey = CrowdWorkerResourceIds::ProjectileControl;
+  TArray<FCrowdWorkerWorkItem> WorkItems{Work};
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  uint64 NextEventSequence = 1;
+  int32 TotalMeleeIntents = 0;
+  int32 TotalDamage = 0;
+  int32 PublishedCombatStates = 0;
+  FCrowdWorkerProjectileState LatestProjectileState;
+  for (int32 Step = 0; Step < 20; ++Step)
+  {
+    HostInput.FixedStepIndex = Step;
+    FCrowdWorkerProjectileControlResource Control;
+    Control.Revision = static_cast<uint64>(Step + 1);
+    Control.AnchorEntity = AgentA;
+    Control.bReplaceState = Step == 0;
+    Control.Input.FixedStepIndex = Step;
+    Control.Input.ServerTimeSeconds =
+      Step * HostInput.FixedStepSeconds;
+    Control.Input.FixedStepSeconds =
+      HostInput.FixedStepSeconds;
+    FCrowdProjectileProfile& ProjectileProfile =
+      Control.Input.Profiles.AddDefaulted_GetRef();
+    ProjectileProfile.ProfileId =
+      CrowdDemoProjectileSchemas::ProjectileProfileId;
+    ProjectileProfile.RadiusCm = 12.0f;
+    ProjectileProfile.LifetimeFixedSteps = 60;
+    ProjectileProfile.MaxActiveProjectiles = 32;
+    ProjectileProfile.RecalculateStableHash();
+    FCrowdDemoRangedCombatSettings DamageSettings;
+    DamageSettings.bEnabled = 1;
+    DamageSettings.Damage = 20.0f;
+    Control.EffectProfiles.Add(
+      FCrowdDemoProjectileAdapters::BuildEffectProfile(
+        DamageSettings));
+    TestTrue(TEXT("mixed host input encodes"),
+      FCrowdDemoWorkerMixedCombatHostInputCodec::Encode(
+        HostInput, Control.HostCombatInput));
+    FCrowdWorkerPayload ControlPayload;
+    TestTrue(TEXT("mixed control encodes"),
+      FCrowdWorkerProjectileControlResourceCodec::Encode(
+        Control, ControlPayload));
+    TestEqual(TEXT("mixed control stages"),
+      Resources.StageBuilding({
+        CrowdWorkerResourceIds::ProjectileControl,
+        Control.Revision, MoveTemp(ControlPayload)}),
+      ECrowdWorkerQueueResult::Added);
+    TestTrue(TEXT("mixed control commits"),
+      Resources.CommitBuildingAtEpoch(Step + 1, ResourceEvents));
+    Context.WorkerEpoch = Step + 1;
+    Context.AbsoluteSimulationTick = Step + 1;
+    Context.LastAppliedInputSequence = Step + 1;
+    Context.NextOrderedEventSequence = NextEventSequence;
+    Context.SimulationTimeSeconds =
+      (Step + 1) * HostInput.FixedStepSeconds;
+    FCrowdWorkerDomainOutput Output;
+    TestTrue(TEXT("mixed combat step executes"),
+      Executor.Execute(Context, WorkItems, Output));
+    if (Output.DirtyStates.IsEmpty()) return false;
+    const FCrowdWorkerDirtyStateRecord* Projectile =
+      Output.DirtyStates.FindByPredicate([](const auto& Dirty)
+      {
+        return Dirty.Field == ECrowdWorkerField::Projectile;
+      });
+    FCrowdWorkerProjectileState ProjectileState;
+    FCrowdDemoWorkerMixedCombatHostResult Result;
+    TestTrue(TEXT("mixed projectile state decodes"),
+      Projectile
+        && FCrowdWorkerProjectileStateCodec::Decode(
+          Projectile->Payload, ProjectileState));
+    TestTrue(TEXT("mixed host result decodes"),
+      Projectile
+        && FCrowdDemoWorkerMixedCombatHostResultCodec::Decode(
+          ProjectileState.HostCombatResult, Result));
+    LatestProjectileState = ProjectileState;
+    TotalMeleeIntents += Result.MeleeIntentCount;
+    TotalDamage += Result.AppliedDamageCount;
+    for (const auto& Dirty : Output.DirtyStates)
+    {
+      if (Dirty.Field != ECrowdWorkerField::Combat) continue;
+      FCrowdWorkerCombatState Combat;
+      FCrowdDemoWorkerMixedCombatState Mixed;
+      TestTrue(TEXT("mixed generic combat decodes"),
+        FCrowdWorkerCombatStateCodec::Decode(
+          Dirty.Payload, Combat));
+      TestTrue(TEXT("mixed host combat decodes"),
+        FCrowdDemoWorkerMixedCombatStateCodec::Decode(
+          Combat.HostState, Mixed));
+      FCrowdDemoWorkerMixedCombatAgent* CheckpointAgent =
+        HostInput.Agents.FindByPredicate(
+          [&Dirty](const auto& Agent)
+          {
+            return Agent.EntityRef == Dirty.EntityRef;
+          });
+      TestNotNull(TEXT("mixed checkpoint agent exists"),
+        CheckpointAgent);
+      if (!CheckpointAgent) return false;
+      CheckpointAgent->Health = Mixed.Health;
+      CheckpointAgent->AttackState = Mixed.AttackState;
+      ++PublishedCombatStates;
+    }
+    if (!Output.OrderedEvents.IsEmpty())
+    {
+      for (int32 Index = 0; Index < Output.OrderedEvents.Num();
+        ++Index)
+      {
+        TestEqual(TEXT("mixed events stay contiguous"),
+          Output.OrderedEvents[Index].EventSequence,
+          NextEventSequence + static_cast<uint64>(Index));
+      }
+      NextEventSequence += Output.OrderedEvents.Num();
+    }
+  }
+  TestTrue(TEXT("mixed Worker emits melee intents"),
+    TotalMeleeIntents > 0);
+  TestTrue(TEXT("mixed Worker applies damage"),
+    TotalDamage > 0);
+  TestEqual(TEXT("mixed Worker publishes every combat state"),
+    PublishedCombatStates, 40);
+
+  // Restore a new pure-C++ executor from the complete Demo combat state,
+  // active projectile checkpoint and ordered-event baseline, then require the
+  // next atomic domain result to be byte-identical to the uninterrupted path.
+  HostInput.FixedStepIndex = 20;
+  TArray<FCrowdProjectileState> ActiveCheckpointProjectiles =
+    LatestProjectileState.Prepared.States;
+  ActiveCheckpointProjectiles.RemoveAll(
+    [](const FCrowdProjectileState& State)
+    {
+      return !State.bActive;
+    });
+  const auto BuildNextControl =
+    [&HostInput, &AgentA, &ActiveCheckpointProjectiles](
+      const bool bReplaceState,
+      FCrowdWorkerProjectileControlResource& OutControl)
+  {
+    OutControl = {};
+    OutControl.Revision = 21;
+    OutControl.AnchorEntity = AgentA;
+    OutControl.bReplaceState = bReplaceState;
+    OutControl.Input.FixedStepIndex = 20;
+    OutControl.Input.ServerTimeSeconds =
+      20 * HostInput.FixedStepSeconds;
+    OutControl.Input.FixedStepSeconds =
+      HostInput.FixedStepSeconds;
+    if (bReplaceState)
+      OutControl.Input.CurrentStates =
+        ActiveCheckpointProjectiles;
+    FCrowdProjectileProfile& ProjectileProfile =
+      OutControl.Input.Profiles.AddDefaulted_GetRef();
+    ProjectileProfile.ProfileId =
+      CrowdDemoProjectileSchemas::ProjectileProfileId;
+    ProjectileProfile.RadiusCm = 12.0f;
+    ProjectileProfile.LifetimeFixedSteps = 60;
+    ProjectileProfile.MaxActiveProjectiles = 32;
+    ProjectileProfile.RecalculateStableHash();
+    FCrowdDemoRangedCombatSettings DamageSettings;
+    DamageSettings.bEnabled = 1;
+    DamageSettings.Damage = 20.0f;
+    OutControl.EffectProfiles.Add(
+      FCrowdDemoProjectileAdapters::BuildEffectProfile(
+        DamageSettings));
+    return FCrowdDemoWorkerMixedCombatHostInputCodec::Encode(
+      HostInput, OutControl.HostCombatInput)
+      && OutControl.IsValid();
+  };
+  const auto CommitControl =
+    [this](FCrowdWorkerResourceStore& Store,
+      FCrowdWorkerProjectileControlResource& Control,
+      const uint64 Epoch)
+  {
+    FCrowdWorkerPayload Payload;
+    TArray<FCrowdWorkerResourceRevisionEvent> Events;
+    if (!FCrowdWorkerProjectileControlResourceCodec::Encode(
+          Control, Payload))
+      return false;
+    if (Store.StageBuilding({
+          CrowdWorkerResourceIds::ProjectileControl,
+          Control.Revision, MoveTemp(Payload)})
+        != ECrowdWorkerQueueResult::Added)
+      return false;
+    return Store.CommitBuildingAtEpoch(Epoch, Events);
+  };
+
+  FCrowdWorkerProjectileControlResource ContinuedControl;
+  TestTrue(TEXT("continued control builds"),
+    BuildNextControl(false, ContinuedControl));
+  TestTrue(TEXT("continued control commits"),
+    CommitControl(Resources, ContinuedControl, 21));
+  Context.WorkerEpoch = 21;
+  Context.AbsoluteSimulationTick = 21;
+  Context.LastAppliedInputSequence = 21;
+  Context.NextOrderedEventSequence = NextEventSequence;
+  Context.SimulationTimeSeconds =
+    21 * HostInput.FixedStepSeconds;
+  FCrowdWorkerDomainOutput ContinuedOutput;
+  TestTrue(TEXT("continued mixed step executes"),
+    Executor.Execute(Context, WorkItems, ContinuedOutput));
+
+  FCrowdWorkerResourceStore ReplayResources;
+  TestTrue(TEXT("replay resources reset"),
+    ReplayResources.Reset(
+      FCrowdWorkerProjectileControlResourceCodec::
+        MaxEncodedBytes));
+  FCrowdWorkerProjectileDomainExecutor ReplayExecutor(
+    MakeCrowdDemoWorkerCombatExtension());
+  FCrowdWorkerProjectileControlResource ReplayControl;
+  TestTrue(TEXT("replay control builds"),
+    BuildNextControl(true, ReplayControl));
+  TestTrue(TEXT("replay control commits"),
+    CommitControl(ReplayResources, ReplayControl, 21));
+  FCrowdWorkerDomainContext ReplayContext = Context;
+  ReplayContext.Resources = &ReplayResources;
+  FCrowdWorkerDomainOutput ReplayOutput;
+  TestTrue(TEXT("restored mixed step executes"),
+    ReplayExecutor.Execute(
+      ReplayContext, WorkItems, ReplayOutput));
+
+  const auto SortDirty = [](TArray<FCrowdWorkerDirtyStateRecord>& States)
+  {
+    States.Sort([](const auto& A, const auto& B)
+    {
+      if (A.EntityRef != B.EntityRef)
+        return A.EntityRef < B.EntityRef;
+      return static_cast<uint8>(A.Field)
+        < static_cast<uint8>(B.Field);
+    });
+  };
+  SortDirty(ContinuedOutput.DirtyStates);
+  SortDirty(ReplayOutput.DirtyStates);
+  TestEqual(TEXT("checkpoint replay dirty count"),
+    ReplayOutput.DirtyStates.Num(),
+    ContinuedOutput.DirtyStates.Num());
+  for (int32 Index = 0;
+    Index < ContinuedOutput.DirtyStates.Num()
+      && Index < ReplayOutput.DirtyStates.Num();
+    ++Index)
+  {
+    const auto& Expected = ContinuedOutput.DirtyStates[Index];
+    const auto& Actual = ReplayOutput.DirtyStates[Index];
+    TestEqual(TEXT("checkpoint replay entity"),
+      Actual.EntityRef, Expected.EntityRef);
+    TestEqual(TEXT("checkpoint replay field"),
+      static_cast<uint8>(Actual.Field),
+      static_cast<uint8>(Expected.Field));
+    TestEqual(TEXT("checkpoint replay revision"),
+      Actual.StateRevision, Expected.StateRevision);
+    TestTrue(TEXT("checkpoint replay payload bytes"),
+      Actual.Payload == Expected.Payload);
+  }
+  TestEqual(TEXT("checkpoint replay event count"),
+    ReplayOutput.OrderedEvents.Num(),
+    ContinuedOutput.OrderedEvents.Num());
+  for (int32 Index = 0;
+    Index < ContinuedOutput.OrderedEvents.Num()
+      && Index < ReplayOutput.OrderedEvents.Num();
+    ++Index)
+  {
+    const auto& Expected = ContinuedOutput.OrderedEvents[Index];
+    const auto& Actual = ReplayOutput.OrderedEvents[Index];
+    TestEqual(TEXT("checkpoint replay event sequence"),
+      Actual.EventSequence, Expected.EventSequence);
+    TestEqual(TEXT("checkpoint replay event id"),
+      Actual.EventId, Expected.EventId);
+    TestTrue(TEXT("checkpoint replay event payload"),
+      Actual.Payload == Expected.Payload);
+  }
+  return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -398,6 +818,77 @@ bool FCrowdDemoSf1CorrectionHistorySnapshotTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoCapabilityArchetypeCompositionTest,
+  "CrowdDemo.Architecture.CapabilityArchetypeComposition",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoCapabilityArchetypeCompositionTest::RunTest(
+  const FString& Parameters)
+{
+  const auto Build = [](const ECrowdDemoMassCapability Capabilities)
+  {
+    FMassEntityTemplateData TemplateData;
+    BuildCrowdDemoAuthorityTemplateData(
+      TemplateData, FMassEntityTemplateID(), Capabilities);
+    return TemplateData;
+  };
+  const FMassEntityTemplateData Base = Build(
+    ECrowdDemoMassCapability::Base);
+  const FMassEntityTemplateData Target = Build(
+    ECrowdDemoMassCapability::Base
+      | ECrowdDemoMassCapability::Target);
+  const FMassEntityTemplateData Combat = Build(
+    ECrowdDemoMassCapability::Base
+      | ECrowdDemoMassCapability::Combat);
+  const FMassEntityTemplateData TargetCombat = Build(
+    ECrowdDemoMassCapability::Base
+      | ECrowdDemoMassCapability::Target
+      | ECrowdDemoMassCapability::Combat);
+
+  const auto TestBase = [this](
+    const TCHAR* Name, const FMassEntityTemplateData& TemplateData)
+  {
+    TestTrue(FString::Printf(TEXT("%s has Base identity"), Name),
+      TemplateData.HasFragment<FCrowdDemoMassIdentityFragment>());
+    TestTrue(FString::Printf(TEXT("%s has Base movement"), Name),
+      TemplateData.HasFragment<FCrowdDemoMassMovementFragment>());
+    TestTrue(FString::Printf(TEXT("%s has Base visual"), Name),
+      TemplateData.HasFragment<FCrowdDemoMassVisualFragment>());
+  };
+  TestBase(TEXT("Base"), Base);
+  TestBase(TEXT("Target"), Target);
+  TestBase(TEXT("Combat"), Combat);
+  TestBase(TEXT("TargetCombat"), TargetCombat);
+
+  TestFalse(TEXT("Base has no Target tag"),
+    Base.HasTag<FCrowdDemoTargetCapabilityTag>());
+  TestFalse(TEXT("Base has no Combat tag"),
+    Base.HasTag<FCrowdDemoCombatCapabilityTag>());
+  TestFalse(TEXT("Base has no Combat stats"),
+    Base.HasFragment<FCrowdDemoMassStatsFragment>());
+  TestTrue(TEXT("Target has Target tag"),
+    Target.HasTag<FCrowdDemoTargetCapabilityTag>());
+  TestFalse(TEXT("Target has no Combat tag"),
+    Target.HasTag<FCrowdDemoCombatCapabilityTag>());
+  TestFalse(TEXT("Target has no Combat stats"),
+    Target.HasFragment<FCrowdDemoMassStatsFragment>());
+  TestFalse(TEXT("Combat has no Target tag"),
+    Combat.HasTag<FCrowdDemoTargetCapabilityTag>());
+  TestTrue(TEXT("Combat has Combat tag"),
+    Combat.HasTag<FCrowdDemoCombatCapabilityTag>());
+  TestTrue(TEXT("Combat has full Combat bundle"),
+    Combat.HasFragment<FCrowdDemoMassStatsFragment>()
+      && Combat.HasFragment<FCrowdDemoBusinessStateFragment>()
+      && Combat.HasFragment<FCrowdDemoRangedAttackFragment>()
+      && Combat.HasFragment<FCrowdDemoReactiveMotionFragment>()
+      && Combat.HasFragment<FCrowdDemoHitFlashFragment>());
+  TestTrue(TEXT("TargetCombat has both capability tags"),
+    TargetCombat.HasTag<FCrowdDemoTargetCapabilityTag>()
+      && TargetCombat.HasTag<FCrowdDemoCombatCapabilityTag>());
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoPostFinalizeMinimalQueryStructureTest,
   "CrowdDemo.Architecture.PostFinalizeMinimalQuery",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -413,11 +904,11 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     FFileHelper::LoadFileToString(ProcessorSource, *ProcessorPath));
 
   const FString ConfigureMarker =
-    TEXT("void UCrowdDemoRoundPostFinalizeMetricsProcessor::ConfigureQueries");
+    TEXT("void FCrowdDemoRoundPostFinalizeMetricsStage::ConfigureQueries");
   const FString ExecuteMarker =
-    TEXT("void UCrowdDemoRoundPostFinalizeMetricsProcessor::Execute");
+    TEXT("void FCrowdDemoRoundPostFinalizeMetricsStage::Execute");
   const FString CommitQueryMarker = TEXT(
-    "UCrowdDemoRoundAuthorityCommitProcessor::UCrowdDemoRoundAuthorityCommitProcessor");
+    "void FCrowdDemoRoundAuthorityCommitStage::Execute");
   const int32 ExecuteStart = ProcessorSource.Find(ExecuteMarker);
   const int32 CommitQueryStart = ProcessorSource.Find(
     CommitQueryMarker, ESearchCase::CaseSensitive,
@@ -440,36 +931,36 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       TEXT("GetPreparedPostFinalizeAgentRecords()")));
   TestFalse(TEXT("authority commit has no Mass query configuration"),
     ProcessorSource.Contains(TEXT(
-      "void UCrowdDemoRoundAuthorityCommitProcessor::ConfigureQueries")));
+      "void FCrowdDemoRoundAuthorityCommitStage::ConfigureQueries")));
   TestFalse(TEXT("client commit has no Mass query configuration"),
     ProcessorSource.Contains(TEXT(
-      "void UCrowdDemoRoundClientPredictionCommitProcessor::ConfigureQueries")));
+      "void FCrowdDemoRoundClientPredictionCommitStage::ConfigureQueries")));
   TestFalse(TEXT("legacy duplicate commit traversal is removed"),
     ProcessorSource.Contains(TEXT("CommitRoundState(")));
   TestFalse(TEXT("legacy commit query helper is removed"),
     ProcessorSource.Contains(TEXT("ConfigureCommitQuery(")));
   TestFalse(TEXT("checkpoint publisher has no Mass query configuration"),
     ProcessorSource.Contains(TEXT(
-      "void UCrowdDemoRoundCheckpointPublisherProcessor::ConfigureQueries")));
+      "void FCrowdDemoRoundCheckpointPublisherStage::ConfigureQueries")));
   const FString CheckpointExecuteMarker = TEXT(
-    "void UCrowdDemoRoundCheckpointPublisherProcessor::Execute");
-  const FString FixedPipelineCtorMarker = TEXT(
-    "UCrowdDemoRoundSimFixedStepPipelineProcessor::UCrowdDemoRoundSimFixedStepPipelineProcessor");
+    "void FCrowdDemoRoundCheckpointPublisherStage::Execute");
+  const FString WorkerResultStageMarker = TEXT(
+    "void FCrowdDemoWorkerResultApplyStage::Execute");
   const int32 CheckpointExecuteStart = ProcessorSource.Find(
     CheckpointExecuteMarker);
-  const int32 FixedPipelineCtorStart = ProcessorSource.Find(
-    FixedPipelineCtorMarker, ESearchCase::CaseSensitive,
+  const int32 WorkerResultStageStart = ProcessorSource.Find(
+    WorkerResultStageMarker, ESearchCase::CaseSensitive,
     ESearchDir::FromStart,
     CheckpointExecuteStart + CheckpointExecuteMarker.Len());
   TestTrue(TEXT("checkpoint publisher execute block found"),
     CheckpointExecuteStart != INDEX_NONE
-      && FixedPipelineCtorStart > CheckpointExecuteStart);
+      && WorkerResultStageStart > CheckpointExecuteStart);
   if (CheckpointExecuteStart != INDEX_NONE
-    && FixedPipelineCtorStart > CheckpointExecuteStart)
+    && WorkerResultStageStart > CheckpointExecuteStart)
   {
     const FString CheckpointBlock = ProcessorSource.Mid(
       CheckpointExecuteStart,
-      FixedPipelineCtorStart - CheckpointExecuteStart);
+      WorkerResultStageStart - CheckpointExecuteStart);
     TestFalse(TEXT("checkpoint publisher does not traverse a Mass query"),
       CheckpointBlock.Contains(TEXT("EntityQuery.")));
     TestTrue(TEXT("checkpoint publisher consumes prepared checkpoint states"),
@@ -480,10 +971,10 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       "UCrowdDemoRoundVisualStateResolveProcessor")));
 
   const FString FacingApplyMarker =
-    TEXT("bool UCrowdDemoRoundFacingFinalizeProcessor::ApplyPreparedCommit");
+    TEXT("bool FCrowdDemoRoundFacingFinalizeStage::ApplyPreparedCommit");
   const int32 FacingApplyStart = ProcessorSource.Find(FacingApplyMarker);
   const FString FacingExecuteMarker =
-    TEXT("void UCrowdDemoRoundFacingFinalizeProcessor::Execute");
+    TEXT("void FCrowdDemoRoundFacingFinalizeStage::Execute");
   const int32 FacingExecuteStart = ProcessorSource.Find(FacingExecuteMarker);
   if (FacingApplyStart != INDEX_NONE
     && FacingExecuteStart > FacingApplyStart)
@@ -492,7 +983,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       FacingApplyStart, FacingExecuteStart - FacingApplyStart);
     int32 ApplyTraversalCount = 0;
     int32 SearchFrom = 0;
-    const FString TraversalMarker = TEXT("EntityQuery.ForEachEntityChunk");
+    const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
     while (true)
     {
       const int32 Found = FacingApplyBlock.Find(
@@ -502,8 +993,11 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       ++ApplyTraversalCount;
       SearchFrom = Found + TraversalMarker.Len();
     }
-    TestEqual(TEXT("prepared apply validates before its atomic write traversal"),
-      ApplyTraversalCount, 2);
+    TestEqual(TEXT("prepared apply performs exactly one atomic write traversal"),
+      ApplyTraversalCount, 1);
+    TestTrue(TEXT("prepared apply validates against canonical snapshot"),
+      FacingApplyBlock.Contains(TEXT(
+        "Pipeline.GetBoundarySnapshot().Agents")));
     TestTrue(TEXT("prepared apply writes engine transform"),
       FacingApplyBlock.Contains(TEXT(
         "Transforms[It].SetTransform(Transform)")));
@@ -522,7 +1016,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       FacingExecuteStart, ExecuteStart - FacingExecuteStart);
     int32 FacingTraversalCount = 0;
     int32 SearchFrom = 0;
-    const FString TraversalMarker = TEXT("EntityQuery.ForEachEntityChunk");
+    const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
     while (true)
     {
       const int32 Found = FacingBlock.Find(
@@ -532,8 +1026,11 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       ++FacingTraversalCount;
       SearchFrom = Found + TraversalMarker.Len();
     }
-    TestEqual(TEXT("facing preparation performs one read-only set validation"),
-      FacingTraversalCount, 1);
+    TestEqual(TEXT("facing preparation performs no intermediate Mass read"),
+      FacingTraversalCount, 0);
+    TestTrue(TEXT("facing preparation validates against canonical snapshot"),
+      FacingBlock.Contains(TEXT(
+        "Pipeline->GetBoundarySnapshot().Agents")));
     TestTrue(TEXT("facing preparation dispatches worker work"),
       FacingBlock.Contains(TEXT("DispatchBoundaryFacingWork("))
         && FacingBlock.Contains(
@@ -556,6 +1053,22 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"));
   TestTrue(TEXT("pipeline source is readable"),
     FFileHelper::LoadFileToString(PipelineSource, *PipelinePath));
+  const FString BoundaryFrameHeaderPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Public/MassCrowdBoundaryFrameTransaction.h"));
+  TestFalse(TEXT("legacy plugin frame transaction is physically deleted"),
+    FPaths::FileExists(BoundaryFrameHeaderPath));
+  FString PipelineHeader;
+  const FString PipelineHeaderPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h"));
+  TestTrue(TEXT("pipeline header is readable"),
+    FFileHelper::LoadFileToString(
+      PipelineHeader, *PipelineHeaderPath));
+  TestFalse(TEXT("project pipeline owns no frame transaction"),
+    PipelineHeader.Contains(TEXT("FrameTransaction"))
+      || PipelineHeader.Contains(TEXT(
+        "MassCrowdBoundaryFrameTransaction")));
   TestTrue(TEXT("SoftPressure DAG runs real shared-flow work"),
     PipelineSource.Contains(
       TEXT("FCrowdMassSharedFlowWork::BuildPreferred(")));
@@ -582,20 +1095,33 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       || PipelineSource.Contains(TEXT("WaitAndDrain("))
       || ProcessorSource.Contains(TEXT("CompletionEvent->Wait("))
       || PipelineSource.Contains(TEXT("CompletionEvent->Wait(")));
-  const int32 FixedStepExecuteStart = ProcessorSource.Find(TEXT(
-    "void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute"));
-  const int32 FirstPlanApplyCall = ProcessorSource.Find(
-    TEXT("PlanApplyProcessor->CallExecute(EntityManager, Context)"),
+  TestFalse(TEXT("legacy fixed-step Execute is physically deleted"),
+    ProcessorSource.Contains(TEXT(
+      "void UCrowdDemoRoundSimFixedStepPipelineProcessor::Execute(")));
+  TestFalse(TEXT("production source has no manual Mass processor execution"),
+    ProcessorSource.Contains(TEXT("CallExecute(")));
+  TestFalse(TEXT("dynamic child-processor factory is physically deleted"),
+    ProcessorSource.Contains(TEXT("MakeDynamicRoundProcessor")));
+  TestFalse(TEXT("dynamic child-processor flags are physically deleted"),
+    ProcessorSource.Contains(TEXT("ROUND_DYNAMIC_FLAGS")));
+  const int32 AuthorityStageStart = ProcessorSource.Find(TEXT(
+    "ExecuteAuthorityInputStage("));
+  const int32 ResultStageStart = ProcessorSource.Find(TEXT(
+    "ExecuteResultCommitStage("));
+  const int32 PlanApplyCall = ProcessorSource.Find(
+    TEXT("PlanApply.Execute(EntityManager, Context)"),
     ESearchCase::CaseSensitive, ESearchDir::FromStart,
-    FixedStepExecuteStart);
+    AuthorityStageStart);
   const int32 BoundaryPollCall = ProcessorSource.Find(
     TEXT("Pipeline->PollBoundaryWork()"),
     ESearchCase::CaseSensitive, ESearchDir::FromStart,
-    FixedStepExecuteStart);
-  TestTrue(TEXT("authority apply precedes in-flight result poll"),
-    FixedStepExecuteStart != INDEX_NONE
-      && FirstPlanApplyCall > FixedStepExecuteStart
-      && BoundaryPollCall > FirstPlanApplyCall);
+    ResultStageStart);
+  TestTrue(TEXT("authority input and result poll have separate ordered stages"),
+    AuthorityStageStart != INDEX_NONE
+      && ResultStageStart > AuthorityStageStart
+      && PlanApplyCall > AuthorityStageStart
+      && PlanApplyCall < ResultStageStart
+      && BoundaryPollCall > ResultStageStart);
   TestTrue(TEXT("applied authority frame invalidates the in-flight generation"),
     ProcessorSource.Contains(TEXT(
       "Pipeline->InvalidateInFlightBoundaryForAuthoritativeState()")));
@@ -631,6 +1157,13 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     FFileHelper::LoadFileToString(FragmentHeader, *FragmentPath));
   TestFalse(TEXT("OpenSpawn fragment is physically deleted"),
     FragmentHeader.Contains(TEXT("FCrowdDemoOpenSpawnRelaxationFragment")));
+  TestTrue(TEXT("Target and Combat capability tags are explicit"),
+    FragmentHeader.Contains(TEXT(
+      "FCrowdDemoTargetCapabilityTag"))
+      && FragmentHeader.Contains(TEXT(
+        "FCrowdDemoCombatCapabilityTag"))
+      && FragmentHeader.Contains(TEXT(
+        "ECrowdDemoMassCapability")));
 
   const TCHAR* DeletedCompatibilityFragments[] = {
     TEXT("FCrowdDemoRoundMoveIntentFragment"),
@@ -658,6 +1191,113 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoMassSubsystem.cpp"));
   TestTrue(TEXT("Mass subsystem source is readable"),
     FFileHelper::LoadFileToString(MassSubsystemSource, *MassSubsystemPath));
+  TestTrue(TEXT("authority template cache contains four capability bitsets"),
+    MassSubsystemSource.Contains(TEXT(
+      "authority_capability_templates=4"))
+      && MassSubsystemSource.Contains(TEXT(
+        "GetCrowdDemoAuthorityTemplateID(Capabilities)"))
+      && MassSubsystemSource.Contains(TEXT(
+        "ECrowdDemoMassCapability::Target"))
+      && MassSubsystemSource.Contains(TEXT(
+        "ECrowdDemoMassCapability::Combat")));
+  TestTrue(TEXT("Target and Combat composition are conditional bundles"),
+    MassSubsystemSource.Contains(TEXT(
+      "TemplateData.AddTag<FCrowdDemoTargetCapabilityTag>()"))
+      && MassSubsystemSource.Contains(TEXT(
+        "TemplateData.AddTag<FCrowdDemoCombatCapabilityTag>()"))
+      && MassSubsystemSource.Contains(TEXT(
+        "TemplateData.AddFragment<FCrowdDemoMassStatsFragment>()"))
+      && MassSubsystemSource.Contains(TEXT(
+        "ResolveAuthorityCapabilityProfile(")));
+  TestTrue(TEXT("non-combat profiles do not receive the Combat bundle"),
+    MassSubsystemSource.Contains(TEXT(
+      "ECrowdDemoMassCapability Capabilities =\n      ECrowdDemoMassCapability::Base;"))
+      && MassSubsystemSource.Contains(TEXT(
+        "Capabilities |= ECrowdDemoMassCapability::Combat;")));
+  TestTrue(TEXT("Round queries consume Combat as an optional capability"),
+    ProcessorSource.Contains(TEXT(
+      "BusinessFact.bHasCombatCapability = bHasCombatBundle;"))
+      && ProcessorSource.Contains(TEXT(
+        "EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional"))
+      && ProcessorSource.Contains(TEXT(
+        "EMassFragmentAccess::ReadWrite, EMassFragmentPresence::Optional")));
+  FString ReplicationSource;
+  const FString ReplicationPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoMassReplication.cpp"));
+  TestTrue(TEXT("replication source is readable"),
+    FFileHelper::LoadFileToString(
+      ReplicationSource, *ReplicationPath));
+  TestTrue(TEXT("replication accepts missing Combat capability deterministically"),
+    ReplicationSource.Contains(TEXT(
+      "const bool bHasCombatBundle = Stats.IsValidIndex(EntityIndex)"))
+      && ReplicationSource.Contains(TEXT(
+        "bHasCombatBundle ? Stats[EntityIndex] : DefaultStats"))
+      && ReplicationSource.Contains(TEXT(
+        "EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional")));
+  TestTrue(TEXT("Worker Input Sync and Result Apply are registered"),
+    MassSubsystemSource.Contains(
+      TEXT("*WorkerInputSyncProcessor"))
+      && MassSubsystemSource.Contains(
+        TEXT("*WorkerResultApplyProcessor")));
+  TestFalse(TEXT("four legacy Round processors are not registered"),
+    MassSubsystemSource.Contains(TEXT("RoundAuthorityInputProcessor"))
+      || MassSubsystemSource.Contains(TEXT("RoundResultCommitProcessor"))
+      || MassSubsystemSource.Contains(TEXT("RoundPostCommitProcessor"))
+      || MassSubsystemSource.Contains(TEXT("RoundRequestSubmitProcessor")));
+  TestFalse(TEXT("legacy stage executor is physically deleted"),
+    MassSubsystemSource.Contains(TEXT("RoundSimPipelineProcessor"))
+      || ProcessorSource.Contains(TEXT(
+        "UCrowdDemoRoundSimFixedStepPipelineProcessor")));
+
+  FString ProcessorHeader;
+  const FString ProcessorHeaderPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.h"));
+  TestTrue(TEXT("Round processor header is readable"),
+    FFileHelper::LoadFileToString(
+      ProcessorHeader, *ProcessorHeaderPath));
+  int32 RegisteredRoundProcessorTypeCount = 0;
+  int32 ProcessorTypeSearchFrom = 0;
+  const FString ProcessorTypeMarker = TEXT(": public UMassProcessor");
+  while (true)
+  {
+    const int32 Found = ProcessorHeader.Find(
+      ProcessorTypeMarker, ESearchCase::CaseSensitive,
+      ESearchDir::FromStart, ProcessorTypeSearchFrom);
+    if (Found == INDEX_NONE) break;
+    ++RegisteredRoundProcessorTypeCount;
+    ProcessorTypeSearchFrom =
+      Found + ProcessorTypeMarker.Len();
+  }
+  TestEqual(TEXT("exactly two Worker adapter classes retain Mass scheduling authority"),
+    RegisteredRoundProcessorTypeCount, 2);
+  TestFalse(TEXT("no UObject stage adapters remain"),
+    ProcessorHeader.Contains(TEXT("Stage : public UObject"))
+      || ProcessorHeader.Contains(TEXT(
+        "UCrowdDemoRoundSimFixedStepPipelineProcessor")));
+  TestTrue(TEXT("two active nodes own their exact Mass queries"),
+    ProcessorHeader.Contains(TEXT(
+      "FMassEntityQuery InputSyncQuery"))
+      && ProcessorHeader.Contains(TEXT(
+        "FMassEntityQuery ResultCommitQuery"))
+      && ProcessorHeader.Contains(TEXT(
+        "FMassEntityQuery RequestSubmitQuery")));
+  TestTrue(TEXT("bootstrap and autonomous Mass access gates are explicit"),
+    PipelineSource.Contains(TEXT(
+      "TryRecordCanonicalGatherRead()"))
+      && PipelineSource.Contains(TEXT(
+        "TryBeginAtomicCommitWrite()"))
+      && PipelineSource.Contains(TEXT(
+        "IsOrdinaryStepContractSatisfied()"))
+      && PipelineSource.Contains(TEXT(
+        "bCurrentStepUsedWorkerProxySnapshot"))
+      && ProcessorSource.Contains(TEXT(
+        "Pipeline->TryRecordCanonicalGatherRead()"))
+      && ProcessorSource.Contains(TEXT(
+        "TryPublishWorkerProxyBoundarySnapshot()"))
+      && ProcessorSource.Contains(TEXT(
+        "Pipeline.TryBeginAtomicCommitWrite()")));
   for (const TCHAR* DeletedFragment : DeletedCompatibilityFragments)
   {
     TestFalse(FString::Printf(TEXT("Mass template excludes %s"), DeletedFragment),
@@ -736,15 +1376,15 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
 
   TestFalse(TEXT("movement work declares no Mass query"),
     ProcessorSource.Contains(TEXT(
-      "UCrowdDemoRoundMovementWorkProcessor::ConfigureQueries")));
+      "FCrowdDemoRoundMovementWorkStage::ConfigureQueries")));
   TestFalse(TEXT("obstacle stage declares no Mass query"),
     ProcessorSource.Contains(TEXT(
-      "UCrowdDemoRoundObstacleConstraintProcessor::ConfigureQueries")));
+      "FCrowdDemoRoundObstacleConstraintStage::ConfigureQueries")));
 
   const int32 MovementWorkBodyStart = ProcessorSource.Find(
-    TEXT("void UCrowdDemoRoundMovementWorkProcessor::Execute"));
+    TEXT("void FCrowdDemoRoundMovementWorkStage::Execute"));
   const int32 PostFinalizeStart = ProcessorSource.Find(
-    TEXT("void UCrowdDemoRoundPostFinalizeMetricsProcessor::Execute"),
+    TEXT("void FCrowdDemoRoundPostFinalizeMetricsStage::Execute"),
     ESearchCase::CaseSensitive, ESearchDir::FromStart,
     MovementWorkBodyStart);
   TestTrue(TEXT("movement work execute block found"),
@@ -755,7 +1395,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       MovementWorkBodyStart, PostFinalizeStart - MovementWorkBodyStart);
     int32 QueryTraversalCount = 0;
     int32 SearchFrom = 0;
-    const FString TraversalMarker = TEXT("EntityQuery.ForEachEntityChunk");
+    const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
     while (true)
     {
       const int32 Found = MovementWorkBody.Find(
@@ -772,9 +1412,9 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   }
 
   const int32 ObstacleBodyStart = ProcessorSource.Find(
-    TEXT("void UCrowdDemoRoundObstacleConstraintProcessor::Execute"));
+    TEXT("void FCrowdDemoRoundObstacleConstraintStage::Execute"));
   const int32 FacingFinalizeStart = ProcessorSource.Find(
-    TEXT("UCrowdDemoRoundFacingFinalizeProcessor::"),
+    TEXT("FCrowdDemoRoundFacingFinalizeStage::"),
     ESearchCase::CaseSensitive, ESearchDir::FromStart, ObstacleBodyStart);
   TestTrue(TEXT("obstacle execute block found"),
     ObstacleBodyStart != INDEX_NONE && FacingFinalizeStart > ObstacleBodyStart);
@@ -783,7 +1423,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     const FString ObstacleBody = ProcessorSource.Mid(
       ObstacleBodyStart, FacingFinalizeStart - ObstacleBodyStart);
     TestFalse(TEXT("obstacle stage has no Mass traversal"),
-      ObstacleBody.Contains(TEXT("EntityQuery.ForEachEntityChunk")));
+      ObstacleBody.Contains(TEXT("EntityQuery->ForEachEntityChunk")));
     TestTrue(TEXT("obstacle stage validates canonical boundary snapshot"),
       ObstacleBody.Contains(TEXT("IsBoundarySnapshotCurrent()")));
     TestTrue(TEXT("obstacle stage only stages immutable work"),
@@ -791,9 +1431,9 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   }
 
   const int32 FlowPreferredStart = ProcessorSource.Find(
-    TEXT("void UCrowdDemoRoundFlowPreferredVelocityProcessor::Execute"));
+    TEXT("void FCrowdDemoRoundFlowPreferredVelocityStage::Execute"));
   const int32 BoundaryGatherStart = ProcessorSource.Find(
-    TEXT("UCrowdDemoRoundBoundaryGatherProcessor::"),
+    TEXT("FCrowdDemoRoundBoundaryGatherStage::"),
     ESearchCase::CaseSensitive, ESearchDir::FromStart, FlowPreferredStart);
   TestTrue(TEXT("flow preferred execute block found"),
     FlowPreferredStart != INDEX_NONE && BoundaryGatherStart > FlowPreferredStart);
@@ -803,7 +1443,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       FlowPreferredStart, BoundaryGatherStart - FlowPreferredStart);
     int32 TraversalCount = 0;
     int32 SearchFrom = 0;
-    const FString TraversalMarker = TEXT("EntityQuery.ForEachEntityChunk");
+    const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
     while (true)
     {
       const int32 Found = FlowPreferredBody.Find(
@@ -822,9 +1462,9 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   }
 
   const int32 TargetGuidanceStart = ProcessorSource.Find(
-    TEXT("void UCrowdDemoRoundTargetRegionGuidanceProcessor::Execute"));
+    TEXT("void FCrowdDemoRoundTargetRegionGuidanceStage::Execute"));
   const int32 ParticleBoundaryStart = ProcessorSource.Find(
-    TEXT("UCrowdDemoRoundParticleConstraintProcessor::"),
+    TEXT("FCrowdDemoRoundParticleConstraintStage::"),
     ESearchCase::CaseSensitive, ESearchDir::FromStart, TargetGuidanceStart);
   TestTrue(TEXT("target guidance execute block found"),
     TargetGuidanceStart != INDEX_NONE
@@ -835,13 +1475,13 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     const FString TargetGuidanceBody = ProcessorSource.Mid(
       TargetGuidanceStart, ParticleBoundaryStart - TargetGuidanceStart);
     TestFalse(TEXT("target guidance does not traverse Mass"),
-      TargetGuidanceBody.Contains(TEXT("EntityQuery.ForEachEntityChunk")));
+      TargetGuidanceBody.Contains(TEXT("EntityQuery->ForEachEntityChunk")));
     TestTrue(TEXT("target guidance consumes the canonical boundary snapshot"),
       TargetGuidanceBody.Contains(TEXT("GetBoundarySnapshot().Agents")));
   }
   TestFalse(TEXT("target guidance declares no Mass query"),
     ProcessorSource.Contains(TEXT(
-      "UCrowdDemoRoundTargetRegionGuidanceProcessor::ConfigureQueries")));
+      "FCrowdDemoRoundTargetRegionGuidanceStage::ConfigureQueries")));
 
   const FString CombatWorkMarker =
     TEXT("FCrowdDemoBoundaryBusinessWorkOutput RunBoundaryBusinessWork");
@@ -861,7 +1501,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       CombatWorkStart, CorrectionIntervalStart - CombatWorkStart);
     int32 QueryTraversalCount = 0;
     int32 SearchFrom = 0;
-    const FString TraversalMarker = TEXT("EntityQuery.ForEachEntityChunk");
+    const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
     while (true)
     {
       const int32 Found = CombatBlock.Find(
@@ -910,11 +1550,11 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
 
   TestFalse(TEXT("particle processor has no Mass query seam"),
     ProcessorSource.Contains(
-      TEXT("void UCrowdDemoRoundParticleConstraintProcessor::ConfigureQueries")));
+      TEXT("void FCrowdDemoRoundParticleConstraintStage::ConfigureQueries")));
   const FString ParticleExecuteMarker =
-    TEXT("void UCrowdDemoRoundParticleConstraintProcessor::Execute");
+    TEXT("void FCrowdDemoRoundParticleConstraintStage::Execute");
   const FString ObstacleConstructorMarker =
-    TEXT("UCrowdDemoRoundObstacleConstraintProcessor::");
+    TEXT("FCrowdDemoRoundObstacleConstraintStage::");
   const int32 ParticleExecuteStart =
     ProcessorSource.Find(ParticleExecuteMarker);
   const int32 ObstacleConstructorStart = ProcessorSource.Find(
@@ -945,7 +1585,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   }
   TestTrue(TEXT("post-finalize commits prepared particle diagnostics"),
     ProcessorSource.Contains(
-      TEXT("UCrowdDemoRoundPostFinalizeMetricsProcessor::Execute"))
+      TEXT("FCrowdDemoRoundPostFinalizeMetricsStage::Execute"))
       && ProcessorSource.Contains(
         TEXT("CommitPreparedParticleDiagnostics()")));
 

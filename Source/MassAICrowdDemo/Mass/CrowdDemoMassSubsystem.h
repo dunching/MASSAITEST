@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
+#include "Mass/CrowdDemoMassFragments.h"
 #include "MassEntityHandle.h"
 #include "MassCrowdProjectileMassStore.h"
 #include "MassCrowdRuntimeBridge.h"
@@ -9,9 +10,17 @@
 #include "CrowdDemoMassSubsystem.generated.h"
 
 struct FMassEntityManager;
+struct FMassEntityTemplateData;
+struct FMassEntityTemplateID;
 class AActor;
 class UCrowdDemoClientVisualMassProcessor;
-class UCrowdDemoRoundSimFixedStepPipelineProcessor;
+class UCrowdDemoWorkerInputSyncProcessor;
+class UCrowdDemoWorkerResultApplyProcessor;
+
+MASSAICROWDDEMO_API void BuildCrowdDemoAuthorityTemplateData(
+  FMassEntityTemplateData& TemplateData,
+  const FMassEntityTemplateID& TemplateID,
+  ECrowdDemoMassCapability Capabilities);
 
 USTRUCT()
 struct FCrowdDemoMassSpawnResult
@@ -76,7 +85,6 @@ public:
   {
     return ProjectileStore.GetCapacity();
   }
-
 private:
   TArray<FMassEntityHandle> TrackedAgents;
   FCrowdMassProjectileStore ProjectileStore;
@@ -86,7 +94,12 @@ private:
     ECrowdDemoSoftPressureTestCase::CorridorRoute;
 
   UPROPERTY(Transient)
-  TObjectPtr<UCrowdDemoRoundSimFixedStepPipelineProcessor> RoundSimPipelineProcessor;
+  TObjectPtr<UCrowdDemoWorkerInputSyncProcessor>
+    WorkerInputSyncProcessor;
+
+  UPROPERTY(Transient)
+  TObjectPtr<UCrowdDemoWorkerResultApplyProcessor>
+    WorkerResultApplyProcessor;
 
   UPROPERTY(Transient)
   TObjectPtr<UCrowdDemoClientVisualMassProcessor> ClientVisualProcessor;

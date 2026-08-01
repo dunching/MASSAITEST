@@ -13,6 +13,28 @@ struct FCrowdDemoMassAgentTag : public FMassTag
   GENERATED_BODY()
 };
 
+UENUM()
+enum class ECrowdDemoMassCapability : uint8
+{
+  None = 0,
+  Base = 1 << 0,
+  Target = 1 << 1,
+  Combat = 1 << 2
+};
+ENUM_CLASS_FLAGS(ECrowdDemoMassCapability);
+
+USTRUCT()
+struct FCrowdDemoTargetCapabilityTag : public FMassTag
+{
+  GENERATED_BODY()
+};
+
+USTRUCT()
+struct FCrowdDemoCombatCapabilityTag : public FMassTag
+{
+  GENERATED_BODY()
+};
+
 USTRUCT()
 struct FCrowdDemoMassIdentityFragment : public FMassFragment
 {

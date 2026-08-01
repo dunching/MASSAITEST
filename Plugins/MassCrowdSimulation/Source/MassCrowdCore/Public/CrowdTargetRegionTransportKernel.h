@@ -397,7 +397,8 @@ public:
     const FCrowdTargetRegionFlowPlan& Plan,
     FCrowdTargetRegionQuotaExecutionState& InOutExecutionState,
     TArray<FCrowdTargetRegionGuidanceResult>& OutResults,
-    FCrowdTargetRegionGuidanceSummary& OutSummary);
+    FCrowdTargetRegionGuidanceSummary& OutSummary,
+    int32 ShardEntityCount = MAX_int32);
 
   static void BuildGuidance(
     TConstArrayView<FCrowdTargetRegionTransportAgent> Agents,

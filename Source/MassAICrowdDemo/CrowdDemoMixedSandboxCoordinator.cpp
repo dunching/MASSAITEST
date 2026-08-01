@@ -1,4 +1,5 @@
 #include "CrowdDemoMixedSandboxCoordinator.h"
+#include "Mass/CrowdDemoWorkerCombatExtension.h"
 #include "Mass/CrowdDemoWorkerInputSync.h"
 
 #include "Camera/CameraActor.h"
@@ -33,6 +34,7 @@
 namespace
 {
   constexpr double MixedFixedStepSeconds = 1.0 / 30.0;
+  constexpr double MixedMaximumFixedStepP95Ms = 66.667;
   constexpr int32 DefaultMixedPopulation = 20;
   constexpr int32 MaximumMixedPopulation = 500;
   constexpr int32 LifecycleIntervalSteps = 45;
@@ -48,6 +50,37 @@ namespace
   constexpr uint32 MixedProjectilePayloadTypeId = 9901;
   constexpr uint32 MixedProjectilePayloadSchemaId = 9901;
   constexpr uint32 MixedAgentPayloadVersion = 2;
+
+  enum class EWorkerMixedCombatAuthorityMode : uint8
+  {
+    Shadow = 0,
+    Canary,
+    Production
+  };
+
+  bool ResolveWorkerMixedCombatAuthorityMode(
+    EWorkerMixedCombatAuthorityMode& OutMode)
+  {
+    OutMode = EWorkerMixedCombatAuthorityMode::Shadow;
+    FString Value;
+    if (!FParse::Value(
+        FCommandLine::Get(),
+        TEXT("CrowdWorkerCombatMode="), Value))
+      return true;
+    if (Value.Equals(TEXT("Shadow"), ESearchCase::IgnoreCase))
+      return true;
+    if (Value.Equals(TEXT("Canary"), ESearchCase::IgnoreCase))
+    {
+      OutMode = EWorkerMixedCombatAuthorityMode::Canary;
+      return true;
+    }
+    if (Value.Equals(TEXT("Production"), ESearchCase::IgnoreCase))
+    {
+      OutMode = EWorkerMixedCombatAuthorityMode::Production;
+      return true;
+    }
+    return false;
+  }
 
   struct FMixedProjectileDamagePayload
   {
@@ -1176,6 +1209,95 @@ bool ACrowdDemoMixedSandboxCoordinator::PrepareProjectileBoundary(
   return OutHitCommit.IsValid();
 }
 
+bool ACrowdDemoMixedSandboxCoordinator::BuildWorkerMixedCombatControl(
+  const TArray<FSlotState>& InputSlots,
+  FCrowdWorkerProjectileControlResource& OutControl)
+{
+  OutControl = {};
+  if (!HasAuthority() || !bMixedCombatIntegration
+    || NextWorkerMixedCombatControlRevision == 0
+    || NextWorkerMixedCombatControlRevision
+      == TNumericLimits<uint64>::Max())
+    return false;
+  UWorld* World = GetWorld();
+  UMassEntitySubsystem* EntitySubsystem =
+    World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
+  if (!EntitySubsystem)
+    return false;
+
+  FCrowdDemoWorkerMixedCombatHostInput HostInput;
+  HostInput.FixedStepIndex = FixedStepIndex;
+  HostInput.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+  HostInput.Profiles = BuildMixedCombatAttackProfiles();
+  for (int32 SlotIndex = 1;
+    SlotIndex < InputSlots.Num(); ++SlotIndex)
+  {
+    const FSlotState& Slot = InputSlots[SlotIndex];
+    if (!Slot.bActive)
+      continue;
+    FCrowdDemoWorkerMixedCombatAgent& Agent =
+      HostInput.Agents.AddDefaulted_GetRef();
+    Agent.EntityRef = Slot.Facts.StableEntityRef;
+    Agent.FactionId = Slot.FactionId;
+    Agent.NavLayer = Slot.InteractionLayer;
+    Agent.AttackProfileId = Slot.AttackProfileId;
+    Agent.Position = Slot.Location;
+    Agent.Velocity = Slot.Velocity;
+    Agent.Facing =
+      FRotator(0.0f, Slot.YawDegrees, 0.0f).Vector();
+    Agent.Health = Slot.Health;
+    Agent.AttackState = Slot.AttackState;
+  }
+  HostInput.Agents.Sort([](const auto& A, const auto& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
+  if (HostInput.Agents.IsEmpty())
+    return false;
+
+  OutControl.Revision =
+    NextWorkerMixedCombatControlRevision;
+  OutControl.AnchorEntity =
+    HostInput.Agents[0].EntityRef;
+  OutControl.bReplaceState =
+    !bWorkerMixedCombatBootstrapped;
+  OutControl.Input.FixedStepIndex = FixedStepIndex;
+  OutControl.Input.ServerTimeSeconds =
+    static_cast<float>(
+      FixedStepIndex * MixedFixedStepSeconds);
+  OutControl.Input.FixedStepSeconds =
+    static_cast<float>(MixedFixedStepSeconds);
+  FCrowdProjectileProfile& ProjectileProfile =
+    OutControl.Input.Profiles.AddDefaulted_GetRef();
+  ProjectileProfile.ProfileId =
+    CrowdDemoProjectileSchemas::ProjectileProfileId;
+  ProjectileProfile.RadiusCm = 12.0f;
+  ProjectileProfile.LifetimeFixedSteps = 60;
+  ProjectileProfile.MaxActiveProjectiles =
+    ProjectileExpectedCount;
+  ProjectileProfile.PositionQuantumCm = 1.0f;
+  ProjectileProfile.VelocityQuantumCmps = 1.0f;
+  ProjectileProfile.GridCellSizeCm = 256.0f;
+  ProjectileProfile.RecalculateStableHash();
+  if (OutControl.bReplaceState
+    && !ProjectileStore.Gather(
+      EntitySubsystem->GetEntityManager(),
+      OutControl.Input.CurrentStates))
+    return false;
+
+  FCrowdDemoRangedCombatSettings DamageSettings;
+  DamageSettings.bEnabled = 1;
+  DamageSettings.Damage = 20.0f;
+  OutControl.EffectProfiles.Add(
+    FCrowdDemoProjectileAdapters::BuildEffectProfile(
+      DamageSettings));
+  if (!FCrowdDemoWorkerMixedCombatHostInputCodec::Encode(
+      HostInput, OutControl.HostCombatInput))
+    return false;
+  return OutControl.IsValid();
+}
+
 bool ACrowdDemoMixedSandboxCoordinator::PrepareMixedCombatAttackPlan(
   TArray<FSlotState>& InOutSlots,
   TArray<FCrowdDemoAttackIntent>& OutIntents,
@@ -1366,6 +1488,18 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
     return;
   }
   TArray<FSlotState> StagedSlots = Slots;
+  FCrowdWorkerProjectileControlResource
+    WorkerMixedCombatControl;
+  if (bMixedCombatIntegration
+    && !BuildWorkerMixedCombatControl(
+      StagedSlots, WorkerMixedCombatControl))
+  {
+    ++StaleRejectCount;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoMixedCombat role=server stage=worker_control fixed_step=%lld"),
+      FixedStepIndex);
+    return;
+  }
   FCrowdDemoBusinessCommitLedger StagedBusinessLedger =
     BusinessLedger;
   int32 StagedBehaviorTransitionCount =
@@ -1669,6 +1803,69 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
   const int32 StagedRangedAttackIntentCount =
     RangedAttackIntentCount
     + PreparedAttack.RangedIntentCount;
+  FCrowdWorkerPayload ExpectedWorkerCombatHostResult;
+  uint64 ExpectedWorkerProjectileStableHash = 0;
+  const TSharedRef<FWorkerMixedCombatApplyState,
+    ESPMode::ThreadSafe> WorkerCombatApply =
+      MakeShared<FWorkerMixedCombatApplyState,
+        ESPMode::ThreadSafe>();
+  const TSharedRef<FWorkerBehaviorApplyState,
+    ESPMode::ThreadSafe> WorkerBehaviorApply =
+      MakeShared<FWorkerBehaviorApplyState,
+        ESPMode::ThreadSafe>();
+  if (UWorld* World = GetWorld())
+  {
+    if (UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+      World->GetSubsystem<UMassCrowdRuntimeSubsystem>())
+    {
+      WorkerBehaviorApply->bApplyProduction =
+        RuntimeSubsystem->GetWorkerBehaviorAuthority().GetMode()
+          == ECrowdWorkerBehaviorAuthorityMode::Production;
+    }
+  }
+  if (bMixedCombatIntegration)
+  {
+    FCrowdDemoWorkerMixedCombatHostResult ExpectedResult;
+    ExpectedResult.FixedStepIndex = FixedStepIndex;
+    ExpectedResult.AttackPlanSummary = AttackPlanSummary;
+    ExpectedResult.MeleeIntentCount =
+      PreparedAttack.MeleeIntentCount;
+    ExpectedResult.MidRangeIntentCount =
+      PreparedAttack.MidRangeIntentCount;
+    ExpectedResult.RangedIntentCount =
+      PreparedAttack.RangedIntentCount;
+    ExpectedResult.MissCount = PreparedAttack.MissCount;
+    ExpectedResult.EnvironmentImpactCount =
+      PreparedAttack.EnvironmentImpactCount;
+    ExpectedResult.AppliedDamageCount =
+      PreparedAttackHealth.AppliedDamageCount;
+    ExpectedResult.DuplicateHitCount =
+      PreparedAttackHealth.DuplicateHitCount;
+    ExpectedResult.FriendlyFireCount =
+      PreparedAttackHealth.FriendlyFireCount;
+    ExpectedResult.DeathCount =
+      PreparedAttackHealth.DeathCount;
+    ExpectedResult.TargetSwitchCount =
+      StagedAttackTargetSwitches;
+    EWorkerMixedCombatAuthorityMode WorkerMode;
+    if (!FCrowdDemoWorkerMixedCombatHostResultCodec::Encode(
+          ExpectedResult, ExpectedWorkerCombatHostResult)
+      || !ResolveWorkerMixedCombatAuthorityMode(WorkerMode))
+    {
+      BehaviorSourceRuntime->RollbackPendingCommandsTo(
+        OriginalPendingSourceCommandCount);
+      ++StaleRejectCount;
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoMixedCombat role=server stage=worker_expectation fixed_step=%lld"),
+        FixedStepIndex);
+      return;
+    }
+    ExpectedWorkerProjectileStableHash =
+      PreparedProjectile.StableHash;
+    WorkerCombatApply->bApplyProduction =
+      WorkerMode !=
+        EWorkerMixedCombatAuthorityMode::Shadow;
+  }
   const TSharedRef<TArray<FSlotState>, ESPMode::ThreadSafe>
     StagedSlotsState =
       MakeShared<TArray<FSlotState>, ESPMode::ThreadSafe>(
@@ -1704,7 +1901,9 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       StagedAttackTargetSwitches,
       StagedMeleeAttackIntentCount,
       StagedMidRangeAttackIntentCount,
-      StagedRangedAttackIntentCount](
+      StagedRangedAttackIntentCount,
+      WorkerCombatApply,
+      WorkerBehaviorApply](
         const bool bMovementSucceeded,
         const int32 StagedSafetyHolds,
         const uint64 StagedBoundaryCommitHash) mutable
@@ -1722,17 +1921,42 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
       ? GetWorld()->GetSubsystem<UMassEntitySubsystem>()
       : nullptr;
   check(ProjectileEntitySubsystem);
-  if (!PreparedProjectile.States.IsEmpty()
+  const TArray<FCrowdProjectileState>&
+    EffectiveProjectileStates =
+      WorkerCombatApply->bReady
+        && WorkerCombatApply->bApplyProduction
+      ? WorkerCombatApply->ProjectileState.Prepared.States
+      : PreparedProjectile.States;
+  if (!EffectiveProjectileStates.IsEmpty()
     || !PreparedProjectile.Events.IsEmpty())
   {
     ProjectileStore.ApplyValidated(
       ProjectileEntitySubsystem->GetMutableEntityManager(),
-      PreparedProjectile.States);
+      EffectiveProjectileStates);
   }
   LifecycleWorld.ApplyValidatedAgentFactsCorrectionsAtBoundary(
     FixedStepIndex, PreparedFacts);
-  checkf(BehaviorSourceRuntime->CommitPrepared(PreparedBehavior),
+  const bool bBehaviorCommitted =
+    WorkerBehaviorApply->bApplyProduction
+      ? WorkerBehaviorApply->bReady
+        && BehaviorSourceRuntime->CommitWorkerPrepared(
+          PreparedBehavior, WorkerBehaviorApply->Entities,
+          WorkerBehaviorApply->Events)
+      : BehaviorSourceRuntime->CommitPrepared(PreparedBehavior);
+  checkf(bBehaviorCommitted,
     TEXT("Validated behavior source transaction changed before final apply"));
+  if (WorkerBehaviorApply->bApplyProduction)
+  {
+    UMassCrowdRuntimeSubsystem* RuntimeSubsystem = GetWorld()
+      ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+      : nullptr;
+    checkf(RuntimeSubsystem
+        && WorkerBehaviorApply->InputSequence != 0
+        && RuntimeSubsystem->GetWorkerBehaviorAuthority().
+          AcknowledgeMatchedEvents(
+            WorkerBehaviorApply->InputSequence),
+      TEXT("Validated Worker behavior event transaction changed before ACK"));
+  }
   Slots = MoveTemp(StagedSlots);
   BusinessLedger = MoveTemp(StagedBusinessLedger);
   BehaviorTransitionCount = StagedBehaviorTransitionCount;
@@ -1848,6 +2072,11 @@ void ACrowdDemoMixedSandboxCoordinator::AdvanceServerFixedStep()
 
   if (!BeginProductMovementBoundary(
       PreparedBehavior, StagedSlotsState,
+      MoveTemp(WorkerMixedCombatControl),
+      MoveTemp(ExpectedWorkerCombatHostResult),
+      ExpectedWorkerProjectileStableHash,
+      WorkerCombatApply,
+      WorkerBehaviorApply,
       MoveTemp(FinalizeBoundary)))
   {
     BehaviorSourceRuntime->RollbackPendingCommandsTo(
@@ -2045,6 +2274,13 @@ bool ACrowdDemoMixedSandboxCoordinator::BeginProductMovementBoundary(
   const FCrowdBehaviorPreparedBoundary& PreparedBehavior,
   const TSharedRef<TArray<FSlotState>, ESPMode::ThreadSafe>&
     InOutSlotsState,
+  FCrowdWorkerProjectileControlResource&& WorkerCombatControl,
+  FCrowdWorkerPayload&& ExpectedWorkerCombatHostResult,
+  const uint64 ExpectedWorkerProjectileStableHash,
+  const TSharedRef<FWorkerMixedCombatApplyState,
+    ESPMode::ThreadSafe>& WorkerCombatApply,
+  const TSharedRef<FWorkerBehaviorApplyState,
+    ESPMode::ThreadSafe>& WorkerBehaviorApply,
   TUniqueFunction<void(bool, int32, uint64)>&& Finalize)
 {
   if (PendingMixedMovement.IsValid() || !Finalize)
@@ -2220,14 +2456,58 @@ bool ACrowdDemoMixedSandboxCoordinator::BeginProductMovementBoundary(
     Snapshot);
   if (!Snapshot.bValid)
     return RejectBoundary(TEXT("snapshot"));
-  if (!World || !FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
+  TArray<FCrowdWorkerVersionedResourceInput>
+    AdditionalWorkerResources;
+  const bool bRequireWorkerCombat =
+    WorkerCombatControl.IsValid();
+  if (bMixedCombatIntegration && !bRequireWorkerCombat)
+    return RejectBoundary(TEXT("worker_combat_control"));
+  if (bRequireWorkerCombat)
+  {
+    FCrowdWorkerVersionedResourceInput& Resource =
+      AdditionalWorkerResources.AddDefaulted_GetRef();
+    Resource.ResourceId =
+      CrowdWorkerResourceIds::ProjectileControl;
+    Resource.Revision = WorkerCombatControl.Revision;
+    if (!FCrowdWorkerProjectileControlResourceCodec::Encode(
+        WorkerCombatControl, Resource.Payload))
+      return RejectBoundary(TEXT("worker_combat_encode"));
+  }
+  const bool bWorkerSubmitted =
+    World && FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
       *World, Snapshot, MixedFixedStepSeconds,
       static_cast<double>(FixedStepIndex + 1)
-        * MixedFixedStepSeconds))
+        * MixedFixedStepSeconds,
+      AdditionalWorkerResources,
+      &PreparedBehavior);
+  if (!bWorkerSubmitted)
   {
     UE_LOG(LogTemp, Error,
       TEXT("VIOLATION CrowdDemoMixedWorkerShadowInputSync step=%lld"),
       FixedStepIndex);
+    if (bRequireWorkerCombat)
+      return RejectBoundary(TEXT("worker_combat_submit"));
+  }
+  if (bWorkerSubmitted)
+  {
+    WorkerBehaviorApply->bApplyProduction =
+      Runtime->GetWorkerBehaviorAuthority().GetMode()
+        == ECrowdWorkerBehaviorAuthorityMode::Production;
+  }
+  const uint64 WorkerBehaviorInputSequence =
+    bWorkerSubmitted
+      ? Runtime->GetWorkerShadowSync().GetMetrics()
+        .LastSubmittedInputSequence
+      : 0;
+  if (WorkerBehaviorApply->bApplyProduction
+    && WorkerBehaviorInputSequence == 0)
+    return RejectBoundary(TEXT("worker_behavior_sequence"));
+  else if (bRequireWorkerCombat)
+  {
+    bWorkerMixedCombatBootstrapped = true;
+    ++NextWorkerMixedCombatControlRevision;
+    if (NextWorkerMixedCombatControlRevision == 0)
+      return RejectBoundary(TEXT("worker_combat_revision"));
   }
 
   FCrowdMassBoundaryWorkGraphInput PipelineInput;
@@ -2509,6 +2789,20 @@ bool ACrowdDemoMixedSandboxCoordinator::BeginProductMovementBoundary(
     MoveTemp(ResolvedInteractionLayers);
   Pending->ResolvedAttachedNodeIds =
     MoveTemp(ResolvedAttachedNodeIds);
+  Pending->WorkerCombatAnchor =
+    WorkerCombatControl.AnchorEntity;
+  Pending->ExpectedWorkerCombatHostResult =
+    MoveTemp(ExpectedWorkerCombatHostResult);
+  Pending->ExpectedWorkerCombatControlRevision =
+    WorkerCombatControl.Revision;
+  Pending->ExpectedWorkerProjectileStableHash =
+    ExpectedWorkerProjectileStableHash;
+  Pending->WorkerBehaviorInputSequence =
+    WorkerBehaviorInputSequence;
+  Pending->bRequireWorkerCombat =
+    bRequireWorkerCombat;
+  Pending->WorkerCombatApply = WorkerCombatApply;
+  Pending->WorkerBehaviorApply = WorkerBehaviorApply;
   Pending->Finalize = MoveTemp(Finalize);
   Pending->ProductStartSeconds = ProductStartSeconds;
   Pending->GatherEndSeconds = GatherEndSeconds;
@@ -2560,6 +2854,207 @@ bool ACrowdDemoMixedSandboxCoordinator::PollProductMovementBoundary()
     return RejectBoundary(TEXT("runner_work"));
 
   UWorld* World = GetWorld();
+  UMassCrowdRuntimeSubsystem* WorkerRuntimeSubsystem =
+    World
+      ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+      : nullptr;
+  if (Pending.WorkerBehaviorApply.IsValid()
+    && Pending.WorkerBehaviorApply->bApplyProduction)
+  {
+    if (!WorkerRuntimeSubsystem
+      || Pending.WorkerBehaviorInputSequence == 0)
+      return RejectBoundary(TEXT("worker_behavior_context"));
+    const FCrowdWorkerBehaviorAuthorityMetrics& AuthorityMetrics =
+      WorkerRuntimeSubsystem->GetWorkerBehaviorAuthority()
+        .GetMetrics();
+    if (AuthorityMetrics.bViolation)
+      return RejectBoundary(TEXT("worker_behavior_authority"));
+    if (AuthorityMetrics.LastMatchedInputSequence
+        < Pending.WorkerBehaviorInputSequence)
+      return true;
+    if (AuthorityMetrics.LastMatchedInputSequence
+        != Pending.WorkerBehaviorInputSequence)
+      return RejectBoundary(TEXT("worker_behavior_sequence"));
+
+    const FCrowdWorkerResultApplyProxy& Proxy =
+      WorkerRuntimeSubsystem->GetWorkerResultApplyProxy();
+    TArray<FCrowdBehaviorWorkerCommitEntity> WorkerEntities;
+    WorkerEntities.Reserve(Pending.PreparedBehavior.Entities.Num());
+    for (const FCrowdBehaviorPreparedEntity& Expected :
+      Pending.PreparedBehavior.Entities)
+    {
+      const FCrowdWorkerDomainProxyState* BehaviorProxy =
+        Proxy.FindDomain(
+          Expected.EntityRef, ECrowdWorkerField::Behavior);
+      FCrowdWorkerBehaviorState WorkerState;
+      if (!BehaviorProxy
+        || BehaviorProxy->SourceInputSequence
+          != Pending.WorkerBehaviorInputSequence
+        || !FCrowdWorkerBehaviorStateCodec::Decode(
+          BehaviorProxy->State.Payload, WorkerState)
+        || WorkerState.LastFixedStep
+          != Pending.PreparedBehavior.FixedStepIndex
+        || WorkerState.EvaluationContext.FixedStepIndex
+          != Pending.PreparedBehavior.FixedStepIndex
+        || WorkerState.SourceSet.EntityRef != Expected.EntityRef
+        || WorkerState.ResolvedChannels.StableHash
+          != Expected.ResolvedChannels.StableHash
+        || WorkerState.EvaluationContext.StableHash
+          != Expected.EvaluationContextHash)
+        return RejectBoundary(TEXT("worker_behavior_state"));
+      FCrowdBehaviorWorkerCommitEntity& Entity =
+        WorkerEntities.AddDefaulted_GetRef();
+      Entity.EntityRef = Expected.EntityRef;
+      Entity.SourceSet = MoveTemp(WorkerState.SourceSet);
+      Entity.ResolvedChannels =
+        MoveTemp(WorkerState.ResolvedChannels);
+      Entity.EvaluationContextHash =
+        WorkerState.EvaluationContext.StableHash;
+    }
+    Pending.WorkerBehaviorApply->Entities =
+      MoveTemp(WorkerEntities);
+    if (!WorkerRuntimeSubsystem->GetWorkerBehaviorAuthority().
+      PeekMatchedEvents(
+        Pending.WorkerBehaviorInputSequence,
+        Pending.WorkerBehaviorApply->Events,
+        Pending.WorkerBehaviorApply->BusinessCommits))
+      return RejectBoundary(TEXT("worker_behavior_events"));
+    Pending.WorkerBehaviorApply->InputSequence =
+      Pending.WorkerBehaviorInputSequence;
+    TArray<FCrowdBusinessContribution> ExpectedBusinessCommits;
+    for (const FCrowdBehaviorPreparedEntity& Entity
+      : Pending.PreparedBehavior.Entities)
+      ExpectedBusinessCommits.Append(
+        Entity.ResolvedChannels.Business);
+    if (ExpectedBusinessCommits.Num()
+        != Pending.WorkerBehaviorApply->BusinessCommits.Num())
+      return RejectBoundary(TEXT("worker_business_commit_count"));
+    for (int32 Index = 0;
+      Index < ExpectedBusinessCommits.Num(); ++Index)
+    {
+      FCrowdWorkerPayload ExpectedPayload;
+      FCrowdWorkerPayload WorkerPayload;
+      if (!FCrowdWorkerBusinessCommitEventCodec::Encode(
+          ExpectedBusinessCommits[Index], ExpectedPayload)
+        || !FCrowdWorkerBusinessCommitEventCodec::Encode(
+          Pending.WorkerBehaviorApply->BusinessCommits[Index],
+          WorkerPayload)
+        || ExpectedPayload != WorkerPayload)
+        return RejectBoundary(TEXT("worker_business_commit"));
+    }
+    Pending.WorkerBehaviorApply->bReady = true;
+  }
+  if (Pending.bRequireWorkerCombat)
+  {
+    UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+      WorkerRuntimeSubsystem;
+    if (!RuntimeSubsystem
+      || !Pending.WorkerCombatApply.IsValid()
+      || !Pending.WorkerCombatAnchor.IsValid()
+      || Pending.ExpectedWorkerCombatControlRevision == 0)
+      return RejectBoundary(TEXT("worker_combat_context"));
+    const FCrowdWorkerResultApplyProxy& Proxy =
+      RuntimeSubsystem->GetWorkerResultApplyProxy();
+    const FCrowdWorkerDomainProxyState* ProjectileProxy =
+      Proxy.FindDomain(
+        Pending.WorkerCombatAnchor,
+        ECrowdWorkerField::Projectile);
+    if (!ProjectileProxy
+      || ProjectileProxy->State.StateRevision
+        < Pending.ExpectedWorkerCombatControlRevision)
+      return true;
+    if (ProjectileProxy->State.StateRevision
+        != Pending.ExpectedWorkerCombatControlRevision)
+      return RejectBoundary(TEXT("worker_projectile_revision"));
+
+    FCrowdWorkerProjectileState WorkerProjectileState;
+    if (!FCrowdWorkerProjectileStateCodec::Decode(
+          ProjectileProxy->State.Payload,
+          WorkerProjectileState)
+      || WorkerProjectileState.ControlRevision
+        != Pending.ExpectedWorkerCombatControlRevision
+      || WorkerProjectileState.Prepared.FixedStepIndex
+        != FixedStepIndex
+      || WorkerProjectileState.Prepared.StableHash
+        != Pending.ExpectedWorkerProjectileStableHash
+      || WorkerProjectileState.HostCombatResult
+        != Pending.ExpectedWorkerCombatHostResult)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoMixedWorkerCombatMismatch stage=projectile step=%lld revision=%llu expected_hash=%llu actual_hash=%llu"),
+        FixedStepIndex,
+        Pending.ExpectedWorkerCombatControlRevision,
+        Pending.ExpectedWorkerProjectileStableHash,
+        WorkerProjectileState.Prepared.StableHash);
+      return RejectBoundary(TEXT("worker_projectile_parity"));
+    }
+
+    TArray<FSlotState>& WorkerValidatedSlots =
+      *Pending.StagedSlots;
+    for (int32 SlotIndex = 1;
+      SlotIndex < WorkerValidatedSlots.Num(); ++SlotIndex)
+    {
+      FSlotState& Slot = WorkerValidatedSlots[SlotIndex];
+      if (!Slot.bActive)
+        continue;
+      const FCrowdWorkerDomainProxyState* CombatProxy =
+        Proxy.FindDomain(
+          Slot.Facts.StableEntityRef,
+          ECrowdWorkerField::Combat);
+      if (!CombatProxy
+        || CombatProxy->State.StateRevision
+          < Pending.ExpectedWorkerCombatControlRevision)
+        return true;
+      if (CombatProxy->State.StateRevision
+          != Pending.ExpectedWorkerCombatControlRevision)
+        return RejectBoundary(TEXT("worker_combat_revision"));
+      FCrowdWorkerCombatState CombatState;
+      FCrowdDemoWorkerMixedCombatState HostState;
+      FCrowdWorkerPayload ExpectedHostState;
+      FCrowdDemoWorkerMixedCombatState ExpectedState;
+      ExpectedState.Health = Slot.Health;
+      ExpectedState.bAlive = Slot.Health > 0;
+      ExpectedState.AttackState = Slot.AttackState;
+      if (!FCrowdWorkerCombatStateCodec::Decode(
+            CombatProxy->State.Payload, CombatState)
+        || !FCrowdDemoWorkerMixedCombatStateCodec::Decode(
+            CombatState.HostState, HostState)
+        || !FCrowdDemoWorkerMixedCombatStateCodec::Encode(
+            ExpectedState, ExpectedHostState)
+        || CombatState.SourceFixedStep != FixedStepIndex
+        || CombatState.bAlive != ExpectedState.bAlive
+        || CombatState.HostState != ExpectedHostState)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoMixedWorkerCombatMismatch stage=agent step=%lld stable_id=%llu lifecycle=%u expected_health=%d actual_health=%d"),
+          FixedStepIndex,
+          Slot.Facts.StableEntityRef.StableEntityId,
+          Slot.Facts.StableEntityRef.LifecycleSerial,
+          ExpectedState.Health,
+          HostState.Health);
+        return RejectBoundary(TEXT("worker_combat_parity"));
+      }
+      if (Pending.WorkerCombatApply->bApplyProduction)
+      {
+        Slot.Health = HostState.Health;
+        Slot.AttackState = HostState.AttackState;
+      }
+    }
+    Pending.WorkerCombatApply->ProjectileState =
+      MoveTemp(WorkerProjectileState);
+    Pending.WorkerCombatApply->bReady = true;
+    if (FixedStepIndex <= 5 || FixedStepIndex % 150 == 0)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoMixedWorkerCombatCheckpoint step=%lld revision=%llu mode=%s projectile_hash=%llu"),
+        FixedStepIndex,
+        Pending.ExpectedWorkerCombatControlRevision,
+        Pending.WorkerCombatApply->bApplyProduction
+          ? TEXT("WorkerOwner")
+          : TEXT("Shadow"),
+        Pending.ExpectedWorkerProjectileStableHash);
+    }
+  }
   UMassEntitySubsystem* EntitySubsystem =
     World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
   if (!EntitySubsystem)
@@ -3228,8 +3723,9 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
     }
   }
   if (!Channel || !Channel->IsReady()) return;
-  if (Channel->GetCompletedBaselineRevision()
-    != LastConsumedBaselineRevision)
+  if (LastConsumedReplicationChannel.Get() != Channel
+    || Channel->GetCompletedBaselineRevision()
+      != LastConsumedBaselineRevision)
   {
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoMixedSandboxBaselineApply stage=begin revision=%u entities=%d"),
@@ -3444,6 +3940,7 @@ void ACrowdDemoMixedSandboxCoordinator::ConsumeProductReplication()
         Slots[SlotIndex].Location);
     }
     LastConsumedBaselineRevision = Channel->GetCompletedBaselineRevision();
+    LastConsumedReplicationChannel = Channel;
     LastReceivedFixedStep = BaselineStep;
     NextLifecycleSequence = LifecycleResume;
     RelevantSetRevision = BaselineRelevantRevision;
@@ -3892,7 +4389,7 @@ void ACrowdDemoMixedSandboxCoordinator::TryLogPass()
         && MinimumSeparationCm
           >= MinimumSafeSeparationCm - 0.5f
         && Percentile95(ServerStepMilliseconds)
-          <= MixedFixedStepSeconds * 1000.0
+          <= MixedMaximumFixedStepP95Ms
         && StaleRejectCount == 0;
       if (bPassed)
       {
@@ -4008,7 +4505,7 @@ void ACrowdDemoMixedSandboxCoordinator::TryLogPass()
       && ProjectileDuplicateCount == 0
       && ProjectileTraceHash != 14695981039346656037ull
       && Percentile95(ServerStepMilliseconds)
-        <= MixedFixedStepSeconds * 1000.0
+        <= MixedMaximumFixedStepP95Ms
       && StaleRejectCount == 0;
     if (bPassed)
     {

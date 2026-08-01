@@ -35,6 +35,7 @@ enum class ECrowdWorkerMovementAcceptResult : uint8
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerMovementState
 {
+  FVector StartPosition = FVector::ZeroVector;
   FVector Position = FVector::ZeroVector;
   FVector Velocity = FVector::ZeroVector;
   float YawDegrees = 0.0f;
@@ -48,9 +49,9 @@ class MASSCROWDRUNTIME_API FCrowdWorkerMovementStateCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43574D56u;
-  static constexpr uint16 SchemaVersion = 1;
+  static constexpr uint16 SchemaVersion = 2;
   static constexpr int32 EncodedByteCount =
-    sizeof(double) * 7 + sizeof(float) + sizeof(uint64);
+    sizeof(double) * 10 + sizeof(float) + sizeof(uint64);
 
   static bool Encode(
     const FCrowdWorkerMovementState& State,

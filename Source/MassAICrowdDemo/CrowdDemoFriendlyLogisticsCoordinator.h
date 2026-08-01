@@ -37,6 +37,11 @@ private:
   struct FProductMovementWork
   {
     FCrowdMassCommitPlan Plan;
+    FVector FailurePosition = FVector::ZeroVector;
+    uint64 FailureNodeId = 0;
+    uint64 FailureGoalNodeId = 0;
+    uint32 FailureLayer = 0;
+    uint8 FailureStage = 0;
     bool bCompleted = false;
   };
 
@@ -50,9 +55,11 @@ private:
     FCrowdLogisticsTaskFact Task;
     FCrowdStableEntityRef Carrier;
     uint64 PlannerDecisionHash = 0;
+    uint64 WorkerBehaviorInputSequence = 0;
     int32 PendingCommandCheckpoint = 0;
     bool bMoveToSource = false;
     bool bMoveToSink = false;
+    bool bWorkerBehaviorProduction = false;
   };
 
   FCrowdLogisticsTransactionStore Store;

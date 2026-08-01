@@ -6,6 +6,24 @@
 
 [COMPUTED][HIGH] pre-T9提交`5b947389`固定DP0–DP6证据；T9现已由8517双端真实门关闭，不能再沿用“尚未执行”的历史断言。
 
+## WA全面Worker权威验证矩阵
+
+| 门 | 目标条件 | 当前状态 |
+|---|---|---|
+| Ownership结构 | [INFERRED][HIGH] 每字段唯一Production Writer；最终只注册Input Sync/Result Apply两个模拟Processor | [COMPUTED][HIGH] WA0矩阵已冻结；当前四节点仍是Legacy Adapter，WA8前不满足最终结构 |
+| Runtime v2内核 | [INFERRED][HIGH] Epoch去重、Current/Next传播、Time Wheel排序/取消、Dependency闭合、Resource原子交换、Dirty latest-wins、Event不可覆盖 | [COMPUTED][HIGH] WA1 PASS：RuntimeV2 11/11与MassCrowd 96/96通过；覆盖非阻塞Shard Host、固定Domain屏障、Dependency漏标、Correction/Generation失效、in-flight Invalidate/teardown、Work/Event背压和传播上限延期 |
+| WA2 Movement切换 | [INFERRED][HIGH] 版本化环境、Worker Local Predictive、Time Wheel自主调度、封闭Canary后全实体Production | [COMPUTED][HIGH] PASS：RuntimeV2 19/19；Obstacle Canary日志`WA2_CanaryObstacleFull3.log`、Obstacle Production日志`WA2_ProductionObstacle.log`、SoftPressure Production日志`WA2_ProductionSoftPressure.log`均为20实体且硬失败0 |
+| WA3 Particle切换 | [INFERRED][HIGH] 闭合集合、唯一Pair、双向约束、NeedsRecompute/OutputDirty分离、最终状态反馈及封闭Canary后全实体Production | [COMPUTED][HIGH] PASS：RuntimeV2 19/19；`WA3_ParticleCanaryFinalBaseline.log`和`WA3_ParticleProductionDependency.log`均为20实体SoftPressure且硬失败0，Production checkpoint为`particle_mode=2 particle_domain_tail=1` |
+| WA4 Target切换 | [INFERRED][HIGH] Membership/Demand/Plan/Quota/Revision与资源订阅进入Worker，缓存未变Topology/Plan，封闭Canary后关闭GT Target/Guidance Writer | [COMPUTED][HIGH] PASS：RuntimeV2 20/20；9424 Shadow、9425 Canary、9431 Production通过。9431到step 300为`mode=2 verified=20`，无Violation；Production停止Legacy Target资源发布并由Worker proxy构建Target Guidance |
+| WA5 Combat/Projectile切换 | [INFERRED][HIGH] Attack/Cooldown、Projectile/Impact、Damage/Death/Hit React在同一Worker stage推进，Combat结果在Movement前可见，Commit不借用Legacy摘要 | [COMPUTED][HIGH] PASS：T8 9451/9452/9453完成Shadow/闭合Canary/Production到step 300；T9 9467/9468/9469完成三模式到step 600且业务计数和entity/membership/commit hash一致。Demo Combat + active Projectile checkpoint + ordered-event baseline下一步逐字重放、Codec专项及RuntimeV2 21/21通过 |
+| WA6 Lifecycle/Behavior切换 | [INFERRED][HIGH] Spawn完整初始化、Despawn先失效旧Lifecycle、Capability/Source/Command/Business Ledger由Worker持有，Production Commit只消费Worker prepared records | [COMPUTED][HIGH] PASS：RuntimeV2 24/24覆盖同批Lifecycle复用、Behavior Domain与Command ownership；Behavior prepared commit专项通过；T6M 9531、Friendly 9532、Mixed 9533 Production正式门通过，旧Lifecycle/重复Business Event均未进入提交 |
+| 确定性 | [INFERRED][HIGH] 正序、逆序、随机Shard完成顺序的Entity/Resource/Event/Checkpoint Hash一致 | [COMPUTED][HIGH] 基础Planner/Merge已验证正序、逆序和乱序完成Hash一致，异步Host已验证跨Domain屏障；各真实Domain的数据Hash仍待WA2–WA7逐层补证 |
+| Domain切换 | [INFERRED][HIGH] Particle、Target、Combat、Lifecycle、Behavior分别通过Shadow→封闭Canary→Production并关闭旧Writer | [COMPUTED][HIGH] Movement、Particle/Interaction、Target/Cohort、Combat/Projectile及Lifecycle/Behavior均已完成Production Owner切换；剩余网络权威来源与Legacy事务外壳分别由WA7/WA8收口 |
+| 网络与Correction | [INFERRED][HIGH] Checkpoint→Resource Revision→Event Baseline→Delta；Correction barrier取消旧Revision结果 | [INFERRED][HIGH] 待WA7 |
+| 最终结构删除 | [INFERRED][HIGH] 四节点类、Frame Transaction、完整Mass Gather、Boundary Commit、`CallExecute()`、阻塞Wait和双Writer均为0 | [INFERRED][HIGH] 待WA8 |
+| 完整规模/性能 | [INFERRED][HIGH] 20/100/500与1k/2k/5k/10k；simulation lag p95≤66.667ms、GT apply不回退、propagation/event loss=0 | [INFERRED][HIGH] 待WA9；9321/9322仅Legacy功能基线 |
+| 视觉与生命周期 | [INFERRED][HIGH] 双PIE、Correction、Late Join、地图切换、teardown、T7录像/FFmpeg无冻结/重影 | [INFERRED][HIGH] 待WA9新证据 |
+
 ## PW持久Worker目标验证矩阵
 
 [COMPUTED][HIGH] PW0–PW8已完成。Production Movement由`PersistentRuntimeAuthority`单独拥有；Particle、Target、Combat因fail-closed证据不足继续留在强一致Boundary。最终自动化为MassCrowd 83/83、CrowdDemo 135/135，Development/DebugGame Editor `-DisableUnity`均通过。
@@ -30,9 +48,9 @@
 | 事务原子性 | [INFERRED][HIGH] Round/Generation/Plan/Step/Sequence/Snapshot任一不匹配均整批拒绝且零写入 | [COMPUTED][HIGH] UNIT PASS：显式事务身份、snapshot mismatch和完整集合拒绝已覆盖；Correction跨帧专项仍待运行 |
 | Worker所有权 | [INFERRED][HIGH] Worker只访问不可变POD/SoA；不访问Mass/World/UObject；GT是唯一持久writer | [COMPUTED][HIGH] CODE PASS：跨帧闭包只持有Snapshot、WorkState和Nav只读资源；GT continuation执行最终提交 |
 | 调度确定性 | [INFERRED][HIGH] Task完成顺序、输入反序和1/7 Cohort产生相同Stage/Commit Hash | [INFERRED][HIGH] 待补异步完成顺序专项 |
-| T5/T6功能 | [INFERRED][HIGH] T5S/T5M/T6A/T6S/T6M保持现有安全、inside/coverage、稳定和双端Hash合同 | [COMPUTED][HIGH] INDEPENDENT PASS：8822/8824/8825/8826/8823全部通过；T5S为inside20、coverage16/16，T5M为inside20、coverage12/16，T6A/T6S/T6M均为inside20、feasible coverage20且T6专项valid=1 |
+| T5/T6功能 | [INFERRED][HIGH] T5S/T5M/T6A/T6S/T6M保持现有安全、inside/coverage、稳定和双端Hash合同 | [COMPUTED][HIGH] 四节点切换后 T5S 9316 与 T6M 9318 通过。capability切换后的Base+Target T5S 9321/9322进一步通过20实例、inside/coverage=`20/16`、Correction零误差和双端hash；但backlog p95=`170.807/136.398ms`未过性能门，T5M/T6A/T6S亦待新版本重跑 |
 | 独立双端性能 | [INFERRED][HIGH] `ordinary_block_wait_count=0`、稳态catch-up budget hit=0、backlog p95≤66.667ms、client frame p95≤33.333ms | [COMPUTED][HIGH] PASS：五图fixed-step p95为17.980/17.947/17.825/17.857/18.338ms，backlog p95为31.284/31.809/31.668/31.788/32.391ms，realtime均约0.999，阻塞/stale/catch-up均为0 |
-| 单进程双PIE性能 | [INFERRED][HIGH] 与独立双端使用相同门槛，且不能由独立进程结果替代 | [INFERRED][HIGH] 待运行 |
+| 单进程双PIE性能 | [INFERRED][HIGH] 与独立双端使用相同门槛，且不能由独立进程结果替代 | [COMPUTED][HIGH] `CrowdDemo.PersistentWorker.SingleProcessDualPIE` 在四节点切换后定向 1/1 通过；完整性能窗口与 AB6 组合门仍待运行 |
 | 生命周期 | [INFERRED][HIGH] Correction/新Plan/PIE停止/地图切换均无stale commit、悬空Event或Worker回调已销毁World | [COMPUTED][HIGH] 单元合同已实现；真实Correction/PIE停止/地图切换专项待运行 |
 | 视觉连续性 | [INFERRED][HIGH] Pending帧继续插值；FFmpeg无长冻结、非Correction跳变或错误状态切换 | [INFERRED][HIGH] 待异步生产路径录制 |
 

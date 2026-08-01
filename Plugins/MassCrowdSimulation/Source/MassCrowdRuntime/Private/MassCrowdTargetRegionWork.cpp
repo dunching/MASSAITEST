@@ -101,3 +101,18 @@ FCrowdMassTargetRegionWork::BuildGuidance(
   Output.bValid = Output.Summary.bValid;
   return Output;
 }
+
+FCrowdMassTargetRegionGuidanceOutput
+FCrowdMassTargetRegionWork::BuildGuidanceSharded(
+  const FCrowdMassTargetRegionGuidanceInput& Input,
+  const int32 ShardEntityCount)
+{
+  FCrowdMassTargetRegionGuidanceOutput Output;
+  Output.Execution = Input.Execution;
+  FCrowdTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    Input.Agents, Input.Settings, Input.Topology, Input.Demand,
+    Input.Plan, Output.Execution, Output.Results, Output.Summary,
+    FMath::Max(1, ShardEntityCount));
+  Output.bValid = Output.Summary.bValid;
+  return Output;
+}

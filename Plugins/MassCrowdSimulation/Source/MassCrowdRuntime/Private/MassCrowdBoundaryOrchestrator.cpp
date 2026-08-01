@@ -460,6 +460,16 @@ FCrowdMassBoundaryOrchestrator::PollAndDrain()
       || (Node->bRequireOffGameThread
         && !Node->Result->bRanOffGameThread))
     {
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdBoundaryTaskRejected stage=%u task_type=%u scope=%llu succeeded=%d require_off_gt=%d ran_off_gt=%d start=%.6f finish=%.6f"),
+        Node->Key.StageId.Value,
+        Node->Key.TaskTypeId.Value,
+        Node->Key.ScopeKey,
+        Node->Result->bSucceeded ? 1 : 0,
+        Node->bRequireOffGameThread ? 1 : 0,
+        Node->Result->bRanOffGameThread ? 1 : 0,
+        Node->Telemetry->StartSeconds,
+        Node->Telemetry->FinishSeconds);
       Fail();
       return ECrowdBoundaryPollResult::Failed;
     }

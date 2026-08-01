@@ -9,9 +9,25 @@ bool FCrowdWorkerResultApplyProxy::ResetQuiescent(
   Limits = InLimits;
   CurrentEntities.Reset();
   ProxyStates.Reset();
+  DomainStates.Reset();
   Metrics = {};
   Metrics.Generation = Generation;
   bInitialized = true;
+  return true;
+}
+
+bool FCrowdWorkerResultApplyProxy::ResetFromCheckpoint(
+  const uint64 Generation,
+  const FCrowdWorkerContractLimits& InLimits,
+  const TConstArrayView<FCrowdStableEntityRef> EntityRefs,
+  const uint64 LastAppliedInputSequence,
+  const uint64 LastAppliedEventSequence)
+{
+  if (!ResetQuiescent(Generation, InLimits)
+    || !UpdateCurrentEntities(Generation, EntityRefs))
+    return false;
+  Metrics.LastAppliedInputSequence = LastAppliedInputSequence;
+  Metrics.LastAppliedEventSequence = LastAppliedEventSequence;
   return true;
 }
 
@@ -37,8 +53,12 @@ bool FCrowdWorkerResultApplyProxy::UpdateCurrentEntities(
   for (auto It = ProxyStates.CreateIterator(); It; ++It)
     if (!CurrentEntities.Contains(It.Key()))
       It.RemoveCurrent();
+  for (auto It = DomainStates.CreateIterator(); It; ++It)
+    if (!CurrentEntities.Contains(It.Key().EntityRef))
+      It.RemoveCurrent();
   Metrics.CurrentEntityCount = CurrentEntities.Num();
   Metrics.ProxyStateCount = ProxyStates.Num();
+  Metrics.DomainStateCount = DomainStates.Num();
   return true;
 }
 
@@ -65,9 +85,23 @@ FCrowdWorkerResultApplyProxy::Apply(
   }
   for (const FCrowdWorkerStatePatch& Patch : Batch.StatePatches)
   {
-    if (Patch.DirtyMask == 0
-      || (Patch.DirtyMask
-        & ~CrowdWorkerResultFields::AllowedPw5Mask) != 0)
+    if (Patch.StateFieldId == 0)
+    {
+      if (Patch.DirtyMask == 0
+        || (Patch.DirtyMask
+          & ~CrowdWorkerResultFields::AllowedPw5Mask) != 0)
+      {
+        LatchViolation();
+        return ECrowdWorkerResultApplyResult::RejectedOwnerMask;
+      }
+      continue;
+    }
+    const uint16 FieldValue = Patch.StateFieldId - 1;
+    if (FieldValue
+        >= static_cast<uint16>(ECrowdWorkerField::Count)
+      || Patch.DirtyMask
+        != CrowdWorkerRuntimeV2FieldMask(
+          static_cast<ECrowdWorkerField>(FieldValue)))
     {
       LatchViolation();
       return ECrowdWorkerResultApplyResult::RejectedOwnerMask;
@@ -91,6 +125,23 @@ FCrowdWorkerResultApplyProxy::Apply(
       ++Metrics.StaleLifecyclePatchCount;
       continue;
     }
+    if (Patch.StateFieldId != 0)
+    {
+      const ECrowdWorkerField Field =
+        static_cast<ECrowdWorkerField>(
+          Patch.StateFieldId - 1);
+      FCrowdWorkerDomainProxyState& State =
+        DomainStates.FindOrAdd({Patch.EntityRef, Field});
+      State.EntityRef = Patch.EntityRef;
+      State.Field = Field;
+      State.State = Patch.State;
+      State.WorkerEpoch = Patch.WorkerEpoch;
+      State.SourceInputSequence = Patch.SourceInputSequence;
+      State.PublishSequence = Batch.PublishSequence;
+      ++Metrics.AppliedPatchCount;
+      ++Metrics.AppliedDomainPatchCount;
+      continue;
+    }
     FCrowdWorkerPresentationDiagnosticProxyState& State =
       ProxyStates.FindOrAdd(Patch.EntityRef);
     State.EntityRef = Patch.EntityRef;
@@ -110,6 +161,7 @@ FCrowdWorkerResultApplyProxy::Apply(
     Metrics.LastAppliedEventSequence =
       Batch.OrderedEvents.Last().EventSequence;
   Metrics.ProxyStateCount = ProxyStates.Num();
+  Metrics.DomainStateCount = DomainStates.Num();
   if (Batch.StatePatches.IsEmpty()
     && Batch.OrderedEvents.IsEmpty())
   {
@@ -124,4 +176,12 @@ FCrowdWorkerResultApplyProxy::Find(
   const FCrowdStableEntityRef& EntityRef) const
 {
   return ProxyStates.Find(EntityRef);
+}
+
+const FCrowdWorkerDomainProxyState*
+FCrowdWorkerResultApplyProxy::FindDomain(
+  const FCrowdStableEntityRef& EntityRef,
+  const ECrowdWorkerField Field) const
+{
+  return DomainStates.Find({EntityRef, Field});
 }

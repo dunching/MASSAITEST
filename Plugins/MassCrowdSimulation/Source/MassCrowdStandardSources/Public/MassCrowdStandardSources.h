@@ -124,6 +124,7 @@ enum class ECrowdMaintainDistanceMode : uint8
 struct FCrowdMaintainDistanceState
 {
   ECrowdMaintainDistanceMode Mode = ECrowdMaintainDistanceMode::Hold;
+  uint8 Reserved[7] = {};
   uint64 LastTargetRevision = 0;
 };
 
@@ -157,8 +158,10 @@ struct FCrowdWanderSteeringPayload
 struct FCrowdWanderSteeringState
 {
   uint32 RandomState = 0;
+  uint32 Reserved0 = 0;
   int64 NextReselectFixedStep = INDEX_NONE;
   uint8 DirectionIndex = 0;
+  uint8 Reserved1[7] = {};
 };
 
 struct FCrowdFormationOffsetPayload

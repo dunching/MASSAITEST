@@ -5,6 +5,7 @@
 #include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdNavRuntime.h"
 #include "MassCrowdWorkerResultApply.h"
+#include "MassCrowdWorkerLifecycleBehaviorDomain.h"
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerShadowSync.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -139,7 +140,35 @@ public:
     return *WorkerMovementAuthority;
   }
 
+  FCrowdWorkerBehaviorAuthority& GetWorkerBehaviorAuthority()
+  {
+    check(WorkerBehaviorAuthority);
+    return *WorkerBehaviorAuthority;
+  }
+
+  const FCrowdWorkerBehaviorAuthority&
+    GetWorkerBehaviorAuthority() const
+  {
+    check(WorkerBehaviorAuthority);
+    return *WorkerBehaviorAuthority;
+  }
+
+  // Adapts an upstream resource revision that may describe only part of a
+  // composite payload (for example topology but not dynamic integration) to
+  // a monotonic revision for the complete Worker resource payload.
+  bool ResolveWorkerResourceRevision(
+    uint64 ResourceId,
+    uint64 UpstreamRevision,
+    uint64 ContentHash,
+    uint64& OutRevision);
+
 private:
+  struct FWorkerResourcePublication
+  {
+    uint64 Revision = 0;
+    uint64 ContentHash = 0;
+  };
+
   TUniquePtr<ICrowdNavDataProvider> NavDataProvider;
   FCrowdNavGraphResource NavGraphResource;
   FCrowdNavSurfaceGraphBuildConfig GraphBuildConfig;
@@ -149,4 +178,7 @@ private:
   TUniquePtr<FCrowdWorkerBoundaryShadowSync> WorkerShadowSync;
   TUniquePtr<FCrowdWorkerResultApplyProxy> WorkerResultApplyProxy;
   TUniquePtr<FCrowdWorkerMovementAuthority> WorkerMovementAuthority;
+  TUniquePtr<FCrowdWorkerBehaviorAuthority> WorkerBehaviorAuthority;
+  TMap<uint64, FWorkerResourcePublication>
+    WorkerResourcePublications;
 };

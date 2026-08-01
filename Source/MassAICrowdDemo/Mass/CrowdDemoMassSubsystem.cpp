@@ -34,6 +34,43 @@ namespace
     return FMassEntityTemplateIDFactory::Make(FGuid(0x6d617373, 0x61696372, 0x6f776464, 0x656d6f31));
   }
 
+  FMassEntityTemplateID GetCrowdDemoAuthorityTemplateID(
+    const ECrowdDemoMassCapability Capabilities)
+  {
+    return FMassEntityTemplateIDFactory::Make(FGuid(
+      0x6d617373, 0x61696372, 0x61757468,
+      0x00010000u | static_cast<uint8>(Capabilities)));
+  }
+
+  ECrowdDemoMassCapability ResolveAuthorityCapabilityProfile(
+    const ECrowdDemoScenario Scenario,
+    const ECrowdDemoSoftPressureTestCase TestCase)
+  {
+    ECrowdDemoMassCapability Capabilities =
+      ECrowdDemoMassCapability::Base;
+    const bool bUsesCombat =
+      Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && (TestCase
+          == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse
+        || TestCase
+          == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat);
+    if (bUsesCombat)
+      Capabilities |= ECrowdDemoMassCapability::Combat;
+    const bool bUsesTargetRegion =
+      Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && (TestCase
+          == ECrowdDemoSoftPressureTestCase::PursuitAndSettle
+        || TestCase
+          == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving
+        || TestCase
+          == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetStatic
+        || TestCase
+          == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving);
+    if (bUsesTargetRegion)
+      Capabilities |= ECrowdDemoMassCapability::Target;
+    return Capabilities;
+  }
+
   void AddCrowdDemoTemplateFragments(FMassEntityTemplateData& TemplateData, const FMassEntityTemplateID TemplateID)
   {
     TemplateData.SetTemplateName(TEXT("CrowdDemoMassReplicatedAgent"));
@@ -73,6 +110,64 @@ namespace
     TemplateIDFragment.ID = TemplateID;
   }
 
+  void AddCrowdDemoAuthorityTemplateFragments(
+    FMassEntityTemplateData& TemplateData,
+    const FMassEntityTemplateID TemplateID,
+    const ECrowdDemoMassCapability Capabilities)
+  {
+    check(EnumHasAnyFlags(
+      Capabilities, ECrowdDemoMassCapability::Base));
+    TemplateData.SetTemplateName(FString::Printf(
+      TEXT("CrowdDemoAuthorityAgent_%u"),
+      static_cast<uint8>(Capabilities)));
+    TemplateData.AddTag<FCrowdDemoMassAgentTag>();
+    TemplateData.AddTag<FCrowdMassAgentTag>();
+    if (EnumHasAnyFlags(
+        Capabilities, ECrowdDemoMassCapability::Target))
+    {
+      TemplateData.AddTag<FCrowdDemoTargetCapabilityTag>();
+    }
+    if (EnumHasAnyFlags(
+        Capabilities, ECrowdDemoMassCapability::Combat))
+    {
+      TemplateData.AddTag<FCrowdDemoCombatCapabilityTag>();
+      TemplateData.AddFragment<FCrowdDemoMassStatsFragment>();
+      TemplateData.AddFragment<FCrowdDemoBusinessStateFragment>();
+      TemplateData.AddFragment<FCrowdDemoRangedAttackFragment>();
+      TemplateData.AddFragment<FCrowdDemoReactiveMotionFragment>();
+      TemplateData.AddFragment<FCrowdDemoHitFlashFragment>();
+    }
+    TemplateData.AddFragment<FCrowdMassAgentFragment>();
+    TemplateData.AddFragment<FCrowdMassBehaviorFragment>();
+    TemplateData.AddFragment<FCrowdMassSimulationStateFragment>();
+    TemplateData.AddFragment<FCrowdMassPropertiesFragment>();
+    TemplateData.AddFragment<FCrowdMassFacingFragment>();
+    TemplateData.AddFragment<FCrowdMassMovementOutputFragment>();
+    TemplateData.AddFragment<FCrowdDemoMassIdentityFragment>();
+    TemplateData.AddFragment<FCrowdDemoMassMovementFragment>();
+    TemplateData.AddFragment<FCrowdDemoRoundSimStateFragment>();
+    TemplateData.AddFragment<FCrowdDemoRoundFormationFragment>();
+    TemplateData.AddFragment<FCrowdDemoRoundFlowSampleFragment>();
+    TemplateData.AddFragment<FCrowdDemoParticlePropertiesFragment>();
+    TemplateData.AddFragment<FCrowdDemoMassVisualFragment>();
+    TemplateData.AddFragment<FCrowdDemoClientAuthorityFragment>();
+    TemplateData.AddFragment<FCrowdDemoClientVisualOffsetFragment>();
+    TemplateData.AddFragment<FTransformFragment>();
+    TemplateData.AddFragment<FMassVelocityFragment>();
+    TemplateData.AddFragment<FMassDesiredMovementFragment>();
+    TemplateData.AddFragment<FReplicationTemplateIDFragment>();
+    TemplateData.AddFragment<FMassNetworkIDFragment>();
+    TemplateData.AddFragment<FMassReplicatedAgentFragment>();
+    TemplateData.AddFragment<FMassReplicationViewerInfoFragment>();
+    TemplateData.AddFragment<FMassReplicationLODFragment>();
+    TemplateData.AddFragment<FMassReplicationGridCellLocationFragment>();
+
+    FReplicationTemplateIDFragment& TemplateIDFragment =
+      TemplateData.AddFragment_GetRef<
+        FReplicationTemplateIDFragment>();
+    TemplateIDFragment.ID = TemplateID;
+  }
+
   bool EnsureCrowdDemoReplicationTemplate(UWorld& World, FMassEntityManager& EntityManager)
   {
     UMassSpawnerSubsystem* SpawnerSubsystem = World.GetSubsystem<UMassSpawnerSubsystem>();
@@ -83,10 +178,6 @@ namespace
     }
 
     const FMassEntityTemplateID TemplateID = GetCrowdDemoReplicationTemplateID();
-    if (SpawnerSubsystem->GetMassEntityTemplate(TemplateID))
-    {
-      return true;
-    }
 
     TAlignedBytes<sizeof(FMassReplicationParameters), alignof(FMassReplicationParameters)> ReplicationParamsStorage;
     FMemory::Memzero(&ReplicationParamsStorage, sizeof(ReplicationParamsStorage));
@@ -113,9 +204,6 @@ namespace
 
     ReplicationSubsystem->RegisterBubbleInfoClass(ACrowdDemoMassClientBubbleInfo::StaticClass());
 
-    FMassEntityTemplateData TemplateData;
-    AddCrowdDemoTemplateFragments(TemplateData, TemplateID);
-    TemplateData.AddConstSharedFragment(EntityManager.GetOrCreateConstSharedFragment(ReplicationParams));
     FMassReplicationSharedFragment ReplicationSharedFragment;
     ReplicationSharedFragment.LODCalculator.Initialize(
       ReplicationParams.LODDistance,
@@ -123,12 +211,67 @@ namespace
       ReplicationParams.LODMaxCountPerViewer);
     ReplicationSharedFragment.BubbleInfoClassHandle = ReplicationSubsystem->GetBubbleInfoClassHandle(ReplicationParams.BubbleInfoClass);
     ReplicationSharedFragment.CachedReplicator = ReplicationParams.ReplicatorClass.GetDefaultObject();
-    TemplateData.AddSharedFragment(EntityManager.GetOrCreateSharedFragment(ReplicationSharedFragment));
+    const auto RegisterSharedFragments =
+      [&](FMassEntityTemplateData& TemplateData)
+    {
+      TemplateData.AddConstSharedFragment(
+        EntityManager.GetOrCreateConstSharedFragment(
+          ReplicationParams));
+      TemplateData.AddSharedFragment(
+        EntityManager.GetOrCreateSharedFragment(
+          ReplicationSharedFragment));
+    };
 
-    SpawnerSubsystem->GetMutableTemplateRegistryInstance().FindOrAddTemplate(TemplateID, MoveTemp(TemplateData));
-    UE_LOG(LogTemp, Display, TEXT("CrowdDemoMass: replication_template_registered source=MassClientBubble"));
+    if (!SpawnerSubsystem->GetMassEntityTemplate(TemplateID))
+    {
+      FMassEntityTemplateData TemplateData;
+      AddCrowdDemoTemplateFragments(TemplateData, TemplateID);
+      RegisterSharedFragments(TemplateData);
+      SpawnerSubsystem->GetMutableTemplateRegistryInstance().
+        FindOrAddTemplate(TemplateID, MoveTemp(TemplateData));
+    }
+
+    const ECrowdDemoMassCapability AuthorityCapabilities[] = {
+      ECrowdDemoMassCapability::Base,
+      ECrowdDemoMassCapability::Base
+        | ECrowdDemoMassCapability::Target,
+      ECrowdDemoMassCapability::Base
+        | ECrowdDemoMassCapability::Combat,
+      ECrowdDemoMassCapability::Base
+        | ECrowdDemoMassCapability::Target
+        | ECrowdDemoMassCapability::Combat
+    };
+    for (const ECrowdDemoMassCapability Capabilities
+      : AuthorityCapabilities)
+    {
+      const FMassEntityTemplateID AuthorityTemplateID =
+        GetCrowdDemoAuthorityTemplateID(Capabilities);
+      if (SpawnerSubsystem->GetMassEntityTemplate(
+          AuthorityTemplateID))
+      {
+        continue;
+      }
+      FMassEntityTemplateData TemplateData;
+      BuildCrowdDemoAuthorityTemplateData(
+        TemplateData, AuthorityTemplateID, Capabilities);
+      RegisterSharedFragments(TemplateData);
+      SpawnerSubsystem->GetMutableTemplateRegistryInstance().
+        FindOrAddTemplate(
+          AuthorityTemplateID, MoveTemp(TemplateData));
+    }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoMass: replication_template_registered authority_capability_templates=4 source=MassClientBubble"));
     return true;
   }
+}
+
+void BuildCrowdDemoAuthorityTemplateData(
+  FMassEntityTemplateData& TemplateData,
+  const FMassEntityTemplateID& TemplateID,
+  const ECrowdDemoMassCapability Capabilities)
+{
+  AddCrowdDemoAuthorityTemplateFragments(
+    TemplateData, TemplateID, Capabilities);
 }
 
 void UCrowdDemoMassSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -186,15 +329,25 @@ void UCrowdDemoMassSubsystem::RegisterRoundSimProcessors()
   UWorld* World = GetWorld();
   UMassEntitySubsystem* EntitySubsystem = World ? World->GetSubsystem<UMassEntitySubsystem>() : nullptr;
   UMassSimulationSubsystem* SimulationSubsystem = World ? World->GetSubsystem<UMassSimulationSubsystem>() : nullptr;
-  if (!EntitySubsystem || !SimulationSubsystem || RoundSimPipelineProcessor || ClientVisualProcessor)
+  if (!EntitySubsystem || !SimulationSubsystem
+    || WorkerInputSyncProcessor || WorkerResultApplyProcessor
+    || ClientVisualProcessor)
   {
     return;
   }
 
   const TSharedRef<FMassEntityManager> EntityManager = EntitySubsystem->GetMutableEntityManager().AsShared();
-  RoundSimPipelineProcessor = NewObject<UCrowdDemoRoundSimFixedStepPipelineProcessor>(this);
-  RoundSimPipelineProcessor->CallInitialize(this, EntityManager);
-  SimulationSubsystem->RegisterDynamicProcessor(*RoundSimPipelineProcessor);
+  WorkerInputSyncProcessor =
+    NewObject<UCrowdDemoWorkerInputSyncProcessor>(this);
+  WorkerInputSyncProcessor->CallInitialize(this, EntityManager);
+  SimulationSubsystem->RegisterDynamicProcessor(
+    *WorkerInputSyncProcessor);
+
+  WorkerResultApplyProcessor =
+    NewObject<UCrowdDemoWorkerResultApplyProcessor>(this);
+  WorkerResultApplyProcessor->CallInitialize(this, EntityManager);
+  SimulationSubsystem->RegisterDynamicProcessor(
+    *WorkerResultApplyProcessor);
 
   const bool bPublicPresentationOwnsClient =
     FParse::Param(FCommandLine::Get(),
@@ -216,7 +369,7 @@ void UCrowdDemoMassSubsystem::RegisterRoundSimProcessors()
   UE_LOG(
     LogTemp,
     Display,
-    TEXT("CrowdDemoMass: round_processors_registered pipeline=1 client_visual=%d public_presentation=%d net_mode=%d source=MassSubsystem"),
+    TEXT("CrowdDemoMass: worker_processors_registered input_sync=1 result_apply=1 legacy_round_processors=0 client_visual=%d public_presentation=%d net_mode=%d source=MassSubsystem"),
     ClientVisualProcessor ? 1 : 0,
     bPublicPresentationOwnsClient ? 1 : 0,
     static_cast<int32>(World->GetNetMode()));
@@ -232,13 +385,20 @@ void UCrowdDemoMassSubsystem::UnregisterRoundSimProcessors()
     {
       SimulationSubsystem->UnregisterDynamicProcessor(*ClientVisualProcessor);
     }
-    if (RoundSimPipelineProcessor)
+    if (WorkerResultApplyProcessor)
     {
-      SimulationSubsystem->UnregisterDynamicProcessor(*RoundSimPipelineProcessor);
+      SimulationSubsystem->UnregisterDynamicProcessor(
+        *WorkerResultApplyProcessor);
+    }
+    if (WorkerInputSyncProcessor)
+    {
+      SimulationSubsystem->UnregisterDynamicProcessor(
+        *WorkerInputSyncProcessor);
     }
   }
   ClientVisualProcessor = nullptr;
-  RoundSimPipelineProcessor = nullptr;
+  WorkerResultApplyProcessor = nullptr;
+  WorkerInputSyncProcessor = nullptr;
 }
 
 void UCrowdDemoMassSubsystem::SetTargetActor(AActor* InTargetActor)
@@ -304,7 +464,12 @@ FCrowdDemoMassSpawnResult UCrowdDemoMassSubsystem::SpawnAgents(const int32 Agent
     return Result;
   }
 
-  const FMassEntityTemplate* Template = SpawnerSubsystem->GetMassEntityTemplate(GetCrowdDemoReplicationTemplateID());
+  const ECrowdDemoMassCapability Capabilities =
+    ResolveAuthorityCapabilityProfile(
+      CurrentScenario, SoftPressureTestCase);
+  const FMassEntityTemplate* Template =
+    SpawnerSubsystem->GetMassEntityTemplate(
+      GetCrowdDemoAuthorityTemplateID(Capabilities));
   if (!Template)
   {
     UE_LOG(LogTemp, Warning, TEXT("CrowdDemoMass: spawn_skipped template_lookup_failed"));
@@ -368,7 +533,7 @@ int32 UCrowdDemoMassSubsystem::GetAliveAgentCount() const
     }
 
     const FCrowdDemoMassStatsFragment* Stats = EntityManager.GetFragmentDataPtr<FCrowdDemoMassStatsFragment>(Entity);
-    if (Stats && Stats->bAlive && Stats->Health > 0.0f)
+    if (!Stats || (Stats->bAlive && Stats->Health > 0.0f))
     {
       ++AliveCount;
     }
@@ -448,8 +613,7 @@ int32 UCrowdDemoMassSubsystem::BuildRoundAgentStates(TArray<FCrowdDemoRoundAgent
     const auto* Reactive = EntityManager.GetFragmentDataPtr<FCrowdDemoReactiveMotionFragment>(Entity);
     const auto* HitFlash = EntityManager.GetFragmentDataPtr<FCrowdDemoHitFlashFragment>(Entity);
     const auto* Visual = EntityManager.GetFragmentDataPtr<FCrowdDemoMassVisualFragment>(Entity);
-    if (!Identity || !Movement || !Transform || !Velocity || !Stats || !Business
-      || !Attack || !Reactive || !HitFlash || !Visual)
+    if (!Identity || !Movement || !Transform || !Velocity || !Visual)
     {
       continue;
     }
@@ -461,38 +625,43 @@ int32 UCrowdDemoMassSubsystem::BuildRoundAgentStates(TArray<FCrowdDemoRoundAgent
     State.Velocity = FVector_NetQuantize10(Velocity->Value);
     State.YawDegrees = Movement->YawDegrees;
     State.RadiusCm = Movement->ContactRadiusCm;
-    State.Combat.Health = Stats->Health;
-    State.Combat.MaxHealth = Stats->MaxHealth;
-    State.Combat.LifecycleState = Stats->LifecycleState;
-    State.Combat.bAlive = Stats->bAlive ? 1 : 0;
-    State.Combat.BusinessState = Business->State;
-    State.Combat.BusinessStateRevision = Business->StateRevision;
-    State.Combat.BusinessStateEnterFixedStep = Business->StateEnterFixedStep;
-    State.Combat.TargetAgentId = Business->TargetAgentId;
-    State.Combat.TargetLifecycleSerial = Business->TargetLifecycleSerial;
-    State.Combat.LastConsumedHitEventId = Business->LastConsumedHitEventId;
-    State.Combat.AttackPhase = Attack->Phase;
-    State.Combat.AttackPhaseEnterFixedStep = Attack->PhaseEnterFixedStep;
-    State.Combat.CooldownEndFixedStep = Attack->CooldownEndFixedStep;
-    State.Combat.LockedTargetAgentId = Attack->LockedTargetAgentId;
-    State.Combat.LockedTargetLifecycleSerial = Attack->LockedTargetLifecycleSerial;
-    State.Combat.LockedTargetLocation = FVector_NetQuantize10(Attack->LockedTargetLocation);
-    State.Combat.FireSequence = Attack->FireSequence;
-    State.Combat.bFireRequestIssued = Attack->bFireRequestIssued ? 1 : 0;
-    State.Combat.ReactiveMode = Reactive->Mode;
-    State.Combat.HorizontalReactiveVelocity = FVector_NetQuantize10(Reactive->HorizontalVelocity);
-    State.Combat.VerticalReactiveVelocityCmps = Reactive->VerticalVelocityCmps;
-    State.Combat.ReactiveStartFixedStep = Reactive->StartFixedStep;
-    State.Combat.ReactiveEndFixedStep = Reactive->EndFixedStep;
-    State.Combat.ReactiveRevision = Reactive->ReactiveRevision;
-    State.Combat.RestoreBusinessState = Reactive->RestoreBusinessState;
-    State.Combat.ApexCount = Reactive->ApexCount;
-    State.Combat.LandingCount = Reactive->LandingCount;
-    State.Combat.HitFlashRevision = HitFlash->FlashRevision;
-    State.Combat.HitFlashStartServerTimeSeconds = HitFlash->StartServerTimeSeconds;
-    State.Combat.HitFlashDurationSeconds = HitFlash->DurationSeconds;
-    State.Combat.HitFlashProfileKey = HitFlash->ProfileKey;
-    State.Combat.HitFlashPeakIntensity = HitFlash->PeakIntensity;
+    const bool bHasCombatBundle = Stats && Business && Attack
+      && Reactive && HitFlash;
+    if (bHasCombatBundle)
+    {
+      State.Combat.Health = Stats->Health;
+      State.Combat.MaxHealth = Stats->MaxHealth;
+      State.Combat.LifecycleState = Stats->LifecycleState;
+      State.Combat.bAlive = Stats->bAlive ? 1 : 0;
+      State.Combat.BusinessState = Business->State;
+      State.Combat.BusinessStateRevision = Business->StateRevision;
+      State.Combat.BusinessStateEnterFixedStep = Business->StateEnterFixedStep;
+      State.Combat.TargetAgentId = Business->TargetAgentId;
+      State.Combat.TargetLifecycleSerial = Business->TargetLifecycleSerial;
+      State.Combat.LastConsumedHitEventId = Business->LastConsumedHitEventId;
+      State.Combat.AttackPhase = Attack->Phase;
+      State.Combat.AttackPhaseEnterFixedStep = Attack->PhaseEnterFixedStep;
+      State.Combat.CooldownEndFixedStep = Attack->CooldownEndFixedStep;
+      State.Combat.LockedTargetAgentId = Attack->LockedTargetAgentId;
+      State.Combat.LockedTargetLifecycleSerial = Attack->LockedTargetLifecycleSerial;
+      State.Combat.LockedTargetLocation = FVector_NetQuantize10(Attack->LockedTargetLocation);
+      State.Combat.FireSequence = Attack->FireSequence;
+      State.Combat.bFireRequestIssued = Attack->bFireRequestIssued ? 1 : 0;
+      State.Combat.ReactiveMode = Reactive->Mode;
+      State.Combat.HorizontalReactiveVelocity = FVector_NetQuantize10(Reactive->HorizontalVelocity);
+      State.Combat.VerticalReactiveVelocityCmps = Reactive->VerticalVelocityCmps;
+      State.Combat.ReactiveStartFixedStep = Reactive->StartFixedStep;
+      State.Combat.ReactiveEndFixedStep = Reactive->EndFixedStep;
+      State.Combat.ReactiveRevision = Reactive->ReactiveRevision;
+      State.Combat.RestoreBusinessState = Reactive->RestoreBusinessState;
+      State.Combat.ApexCount = Reactive->ApexCount;
+      State.Combat.LandingCount = Reactive->LandingCount;
+      State.Combat.HitFlashRevision = HitFlash->FlashRevision;
+      State.Combat.HitFlashStartServerTimeSeconds = HitFlash->StartServerTimeSeconds;
+      State.Combat.HitFlashDurationSeconds = HitFlash->DurationSeconds;
+      State.Combat.HitFlashProfileKey = HitFlash->ProfileKey;
+      State.Combat.HitFlashPeakIntensity = HitFlash->PeakIntensity;
+    }
     State.Combat.VisualState = Visual->VisualState;
     State.Combat.VisualRevision = Visual->VisualRevision;
     State.Combat.VisualStateStartServerTimeSeconds = Visual->StateStartServerTimeSeconds;
@@ -686,9 +855,12 @@ bool UCrowdDemoMassSubsystem::RecycleTrackedAgent(
       break;
     }
   }
+  const ECrowdDemoMassCapability Capabilities =
+    ResolveAuthorityCapabilityProfile(
+      CurrentScenario, SoftPressureTestCase);
   const FMassEntityTemplate* Template =
     SpawnerSubsystem->GetMassEntityTemplate(
-      GetCrowdDemoReplicationTemplateID());
+      GetCrowdDemoAuthorityTemplateID(Capabilities));
   if (TrackedIndex == INDEX_NONE || !Template)
     return false;
 
@@ -818,24 +990,19 @@ void UCrowdDemoMassSubsystem::InitializeAgentFragments(
     static_cast<uint64>(Identity.Id) + 1,
     static_cast<uint32>(Identity.LifecycleSerial)});
 
-  FCrowdDemoMassStatsFragment& Stats = EntityManager.GetFragmentDataChecked<FCrowdDemoMassStatsFragment>(Entity);
-  Stats.Health = 100.0f;
-  Stats.MaxHealth = 100.0f;
-  Stats.LifecycleState = ECrowdDemoLifecycleState::Alive;
-  Stats.bAlive = true;
-
-  FCrowdDemoBusinessStateFragment& Business =
-    EntityManager.GetFragmentDataChecked<FCrowdDemoBusinessStateFragment>(Entity);
-  Business = FCrowdDemoBusinessStateFragment();
-  FCrowdDemoRangedAttackFragment& Attack =
-    EntityManager.GetFragmentDataChecked<FCrowdDemoRangedAttackFragment>(Entity);
-  Attack = FCrowdDemoRangedAttackFragment();
-  FCrowdDemoReactiveMotionFragment& Reactive =
-    EntityManager.GetFragmentDataChecked<FCrowdDemoReactiveMotionFragment>(Entity);
-  Reactive = FCrowdDemoReactiveMotionFragment();
-  FCrowdDemoHitFlashFragment& HitFlash =
-    EntityManager.GetFragmentDataChecked<FCrowdDemoHitFlashFragment>(Entity);
-  HitFlash = FCrowdDemoHitFlashFragment();
+  if (FCrowdDemoMassStatsFragment* Stats =
+      EntityManager.GetFragmentDataPtr<FCrowdDemoMassStatsFragment>(Entity))
+  {
+    *Stats = FCrowdDemoMassStatsFragment();
+    *EntityManager.GetFragmentDataPtr<FCrowdDemoBusinessStateFragment>(Entity) =
+      FCrowdDemoBusinessStateFragment();
+    *EntityManager.GetFragmentDataPtr<FCrowdDemoRangedAttackFragment>(Entity) =
+      FCrowdDemoRangedAttackFragment();
+    *EntityManager.GetFragmentDataPtr<FCrowdDemoReactiveMotionFragment>(Entity) =
+      FCrowdDemoReactiveMotionFragment();
+    *EntityManager.GetFragmentDataPtr<FCrowdDemoHitFlashFragment>(Entity) =
+      FCrowdDemoHitFlashFragment();
+  }
 
   FCrowdDemoMassMovementFragment& Movement = EntityManager.GetFragmentDataChecked<FCrowdDemoMassMovementFragment>(Entity);
   Movement.ContactRadiusCm = 42.0f;

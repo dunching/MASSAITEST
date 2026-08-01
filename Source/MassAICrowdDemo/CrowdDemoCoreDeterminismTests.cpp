@@ -144,6 +144,10 @@ bool FCrowdDemoPipelineBoundaryAndFormationCacheTest::RunTest(const FString& Par
   Plan.Rules.FixedStepSeconds = 1.0f / 30.0f;
   Pipeline->ActivatePlan(Plan, 3, false);
   TestTrue(TEXT("fixed step begins"), Pipeline->TryBeginFixedStep(1.0f));
+  TestTrue(TEXT("simulated canonical gather is recorded"),
+    Pipeline->TryRecordCanonicalGatherRead());
+  TestTrue(TEXT("simulated atomic commit is recorded"),
+    Pipeline->TryBeginAtomicCommitWrite());
   Pipeline->FinishFixedStep();
   TestTrue(TEXT("next boundary claim succeeds"), Pipeline->TryClaimPlanApplyBoundary());
   TestFalse(TEXT("next boundary is also single-claim"), Pipeline->TryClaimPlanApplyBoundary());

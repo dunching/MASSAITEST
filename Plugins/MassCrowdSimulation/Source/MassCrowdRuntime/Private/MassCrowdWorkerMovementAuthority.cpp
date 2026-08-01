@@ -40,7 +40,8 @@ using namespace CrowdWorkerMovementAuthorityPrivate;
 
 bool FCrowdWorkerMovementState::IsValid() const
 {
-  return IsFiniteVector(Position)
+  return IsFiniteVector(StartPosition)
+    && IsFiniteVector(Position)
     && IsFiniteVector(Velocity)
     && FMath::IsFinite(YawDegrees)
     && FMath::IsFinite(SimulationTimeSeconds)
@@ -56,6 +57,9 @@ bool FCrowdWorkerMovementStateCodec::Encode(
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
   OutPayload.Bytes.Reserve(EncodedByteCount);
+  AppendPod(OutPayload.Bytes, State.StartPosition.X);
+  AppendPod(OutPayload.Bytes, State.StartPosition.Y);
+  AppendPod(OutPayload.Bytes, State.StartPosition.Z);
   AppendPod(OutPayload.Bytes, State.Position.X);
   AppendPod(OutPayload.Bytes, State.Position.Y);
   AppendPod(OutPayload.Bytes, State.Position.Z);
@@ -81,7 +85,10 @@ bool FCrowdWorkerMovementStateCodec::Decode(
     || Payload.CalculateStableHash() != Payload.StableHash)
     return false;
   int32 Offset = 0;
-  if (!ReadPod(Payload.Bytes, Offset, OutState.Position.X)
+  if (!ReadPod(Payload.Bytes, Offset, OutState.StartPosition.X)
+    || !ReadPod(Payload.Bytes, Offset, OutState.StartPosition.Y)
+    || !ReadPod(Payload.Bytes, Offset, OutState.StartPosition.Z)
+    || !ReadPod(Payload.Bytes, Offset, OutState.Position.X)
     || !ReadPod(Payload.Bytes, Offset, OutState.Position.Y)
     || !ReadPod(Payload.Bytes, Offset, OutState.Position.Z)
     || !ReadPod(Payload.Bytes, Offset, OutState.Velocity.X)

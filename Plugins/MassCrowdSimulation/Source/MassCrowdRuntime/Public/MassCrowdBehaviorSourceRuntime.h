@@ -161,7 +161,7 @@ MASSCROWDRUNTIME_API bool RegisterCrowdBehaviorSourceProvider(
 MASSCROWDRUNTIME_API bool UnregisterCrowdBehaviorSourceProvider(
   FCrowdBehaviorProviderId ProviderId);
 
-struct FCrowdBehaviorCapabilityBindingUpdate
+struct MASSCROWDRUNTIME_API FCrowdBehaviorCapabilityBindingUpdate
 {
   int64 EffectiveFixedStep = INDEX_NONE;
   FCrowdStableEntityRef EntityRef;
@@ -169,6 +169,7 @@ struct FCrowdBehaviorCapabilityBindingUpdate
   uint64 StableHash = 0;
 
   bool IsValid() const;
+  void RecalculateStableHash();
 };
 
 struct FCrowdBehaviorPreparedEntity
@@ -193,6 +194,16 @@ struct FCrowdBehaviorPreparedBoundary
   uint64 ResolvedChannelHash = 0;
   uint64 StableHash = 0;
   bool bValid = false;
+};
+
+// Frozen, UObject-free result produced by the Worker Behavior domain and
+// validated by the GT result adapter before the project-side mirror advances.
+struct MASSCROWDRUNTIME_API FCrowdBehaviorWorkerCommitEntity
+{
+  FCrowdStableEntityRef EntityRef;
+  FCrowdBehaviorSourceSet SourceSet;
+  FCrowdResolvedBehaviorChannels ResolvedChannels;
+  uint64 EvaluationContextHash = 0;
 };
 
 class MASSCROWDRUNTIME_API FCrowdBehaviorSourceRuntime
@@ -220,6 +231,10 @@ public:
     const FCrowdBehaviorPreparedBoundary& Prepared) const;
   bool CommitPrepared(
     const FCrowdBehaviorPreparedBoundary& Prepared);
+  bool CommitWorkerPrepared(
+    const FCrowdBehaviorPreparedBoundary& Prepared,
+    TConstArrayView<FCrowdBehaviorWorkerCommitEntity> WorkerEntities,
+    TConstArrayView<FCrowdBehaviorSourceEvent> WorkerEvents);
 
   int32 GetPendingCommandCount() const
   {
@@ -230,12 +245,29 @@ public:
   {
     return PendingCommands;
   }
+  TConstArrayView<FCrowdBehaviorCapabilityBindingUpdate>
+  GetPendingBindingUpdates() const
+  {
+    return PendingBindingUpdates;
+  }
   TConstArrayView<FCrowdBehaviorSourceCommand>
   GetWorkerInputCommandJournal() const
   {
     return WorkerInputCommandJournal;
   }
+  TConstArrayView<FCrowdBehaviorEntityEvaluationContext>
+  GetWorkerInputContextJournal() const
+  {
+    return WorkerInputContextJournal;
+  }
+  TConstArrayView<FCrowdBehaviorCapabilityBindingUpdate>
+  GetWorkerInputBindingJournal() const
+  {
+    return WorkerInputBindingJournal;
+  }
   bool AcknowledgeWorkerInputCommands(int32 Count);
+  bool AcknowledgeWorkerInputContexts(int32 Count);
+  bool AcknowledgeWorkerInputBindings(int32 Count);
   bool HasWorkerInputCommandJournalOverflowed() const
   {
     return bWorkerInputCommandJournalOverflowed;
@@ -244,6 +276,12 @@ public:
 
   const FCrowdBehaviorSourceSet* FindSourceSet(
     FCrowdStableEntityRef EntityRef) const;
+  const FCrowdBehaviorEntityEvaluationContext*
+  FindEvaluationContext(
+    FCrowdStableEntityRef EntityRef) const
+  {
+    return EvaluationContexts.Find(EntityRef);
+  }
   bool ApplyReplicatedSourceSet(
     const FCrowdBehaviorSourceSet& ReplicatedSet);
   const FCrowdResolvedBehaviorChannels* FindResolvedChannels(
@@ -278,6 +316,10 @@ private:
     LastResolvedChannels;
   TArray<FCrowdBehaviorSourceCommand> PendingCommands;
   TArray<FCrowdBehaviorSourceCommand> WorkerInputCommandJournal;
+  TArray<FCrowdBehaviorEntityEvaluationContext>
+    WorkerInputContextJournal;
+  TArray<FCrowdBehaviorCapabilityBindingUpdate>
+    WorkerInputBindingJournal;
   TArray<FCrowdBehaviorCapabilityBindingUpdate> PendingBindingUpdates;
   TArray<FCrowdBehaviorSourceEvent> LastCommittedEvents;
   uint64 RegistryHash = 0;

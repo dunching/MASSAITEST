@@ -1,5 +1,13 @@
 # MassAI Crowd Demo 当前架构
 
+## 0.0.4 2026-07-30 WA全面Worker权威迁移
+
+[INFERRED][HIGH] 全面Worker权威已经取代“四个GT Boundary Processor”作为AB5终态；目标合同见`FullWorkerAuthorityArchitecture.md`，字段级当前/终态Writer见`FullWorkerAuthorityOwnershipMatrix.md`。
+
+[COMPUTED][HIGH] 当前代码仍是迁移态而非终态：四个Round Boundary Processor继续作为WA8前的`Legacy Domain Adapter`承载尚未删除的Boundary事务外壳与网络发布。WA2–WA6已把Movement、Particle/Interaction、Target/Cohort、Combat/Projectile、Lifecycle与Behavior状态切到Runtime v2 Production Writer；GT只提交外部Spawn/Despawn、Command和版本化资源，并应用Worker prepared records。Production Commit的Behavior、Business、Combat、Reactive、Projectile/Hit状态取自同一Worker输入序列/epoch，Legacy计算只保留显式诊断对照。
+
+[COMPUTED][HIGH] WA1调度内核、WA2 Movement、WA3 Particle/Interaction、WA4 Target/Cohort、WA5 Combat/Projectile与WA6 Lifecycle/Behavior均已关闭。Lifecycle同批Despawn→Spawn复用、旧Lifecycle失效、Capability Binding、Source/Command有序处理、Business Commit幂等和Worker prepared commit均有专项覆盖；RuntimeV2 24/24通过。T6M 9531、Friendly 9532与Mixed 9533 Production正式门通过。当前进入WA7 Checkpoint/Delta/Late Join/Client Prediction/Correction；WA8才物理删除四节点、Frame Transaction、完整Mass Gather与Mailbox。
+
 ## 0.0.3 2026-07-30 持久Worker Simulation目标架构
 
 [COMPUTED][HIGH] PW1–PW8已进入混合生产架构：每World唯一`FCrowdAsyncSimulationRuntime`持有SoA Mirror、Simulation Clock、Input Queue和Published Exchange；Round/Mixed/Friendly只提交冻结输入，GT每帧一次消费Published Batch。Movement Production由`PersistentRuntimeAuthority`单独拥有，Particle、Target、Combat因PW7 fail-closed判定继续使用下方0.0.2的强一致Boundary。
@@ -24,13 +32,15 @@
 
 ## 0.0.2 2026-07-30 异步Fixed-Step Boundary覆盖说明
 
-[COMPUTED][HIGH] 2026-07-30当前Round生产代码由单一GT `UCrowdDemoRoundSimFixedStepPipelineProcessor`驱动深度1 Runner Mailbox：帧首`PollBoundaryWork()`，Pending立即返回，Ready完整提交；帧尾最多Gather/Dispatch一个新事务。Runtime已删除`WaitAndDrain/FEvent.Wait`，Mixed与Friendly也使用持久Runner跨帧消费。全部`ROUND_DYNAMIC_FLAGS`阶段Adapter仍要求GT并由总控手工`CallExecute()`，这是AB5尚未关闭的剩余重构。
+[COMPUTED][HIGH] 2026-07-30当前 Round 生产代码由 AuthorityInput、ResultCommit、PostCommit、RequestSubmit 四个显式注册的 GT/Mass Boundary Processor 驱动深度1 Runner Mailbox；每帧各阶段最多执行一次，Pending 立即返回。旧 `UCrowdDemoRoundSimFixedStepPipelineProcessor`、`ROUND_DYNAMIC_FLAGS`、UObject Stage Adapter 与手工 `CallExecute()` 已物理删除。
+
+[COMPUTED][HIGH] 通用 Frame Transaction、阶段幂等/顺序门及普通 fixed-step 的 Mass 访问 1/0/1 合同位于插件 `MassCrowdRuntime`；项目 `UCrowdDemoRoundSimPipelineSubsystem` 只持有每 World 实例和 Round 性能附加状态。四个项目 Processor、具体 Query、Target/Combat capability tag 及业务 Stage 仍留在 `MassAICrowdDemo`，插件不引用 CrowdDemo 类型。
 
 [COMPUTED][HIGH] 当前实现遵循每World深度1 Mailbox合同：GT非阻塞消费完整Result、原子Commit并生产下一不可变Request；UE::Tasks Worker消费Request并发布Result；Pending时GT立即返回且客户端继续视觉插值。
 
 [COMPUTED][HIGH] Plan、Correction与权威RoundResult在每帧Mailbox Poll之前应用；Correction会重开PlanApply boundary，并使在途Generation失效。失效只断开GT mailbox，旧Worker闭包仍只持有不可变Snapshot/线程安全WorkState并可自然释放。8827 T5S普通Correction流、双端hash与性能门通过。
 
-[COMPUTED][HIGH] AB1–AB4已完成：T5S/T5M/T6A/T6S/T6M独立双端功能与性能门、MassCrowd 65/65、CrowdDemo 134/134及Development/DebugGame × ForceUnity/DisableUnity四构建通过。AB5仍有内部`CallExecute()`适配器，AB6仍缺单进程双PIE、Correction/teardown、全场景与FFmpeg门；因此只能汇报“异步核心与首批场景通过”，不得汇报“生产验收全部完成”。
+[COMPUTED][HIGH] capability切换后的最新 Development/DebugGame × ForceUnity/DisableUnity 四构建、MassCrowd 85/85、CrowdDemo 139/139及项目架构3/3通过；Base+Target T5S 9321/9322功能、复制、Correction与双端hash通过，但backlog p95=`170.807/136.398ms`超出`66.667ms`。AB5仍缺该性能回退修复和完整真实场景矩阵；AB6仍缺强制Pending Correction、teardown/地图切换、完成顺序、全场景与FFmpeg门，因此不得汇报“生产验收全部完成”。
 
 ## 0.0.1 2026-07-29 T9覆盖说明
 

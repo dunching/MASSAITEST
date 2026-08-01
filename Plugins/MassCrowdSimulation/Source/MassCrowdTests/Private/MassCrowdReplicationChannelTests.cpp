@@ -1,6 +1,9 @@
-#include "Misc/AutomationTest.h"
+﻿#include "Misc/AutomationTest.h"
 
 #include "MassCrowdReplicationChannel.h"
+#include "MassCrowdWorkerPacketTransport.h"
+#include "MassCrowdWorkerReplicationAdapter.h"
+#include "MassCrowdWorkerReplicationCodec.h"
 
 namespace
 {
@@ -31,6 +34,18 @@ namespace
     Record.StableHash =
       FCrowdReplicationTransport::CalculateReliableRecordHash(Record);
     return Record;
+  }
+
+  FCrowdWorkerPayload MakeWorkerPayload(const uint32 Value)
+  {
+    FCrowdWorkerPayload Payload;
+    Payload.SchemaId = 0x57413701u;
+    Payload.SchemaVersion = 1;
+    Payload.Bytes.SetNumUninitialized(sizeof(Value));
+    FMemory::Memcpy(
+      Payload.Bytes.GetData(), &Value, sizeof(Value));
+    Payload.RecalculateStableHash();
+    return Payload;
   }
 }
 
@@ -387,5 +402,457 @@ bool FMassCrowdReplicationCodecTest::RunTest(
   TestFalse(TEXT("v1 codec version fails closed"),
     FCrowdReplicationCodec::DecodePresentation(
       Bytes, DecodedPresentation));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdWorkerPacketTransportTest,
+  "MassCrowd.Networking.Replication.WorkerPacketTransport",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdWorkerPacketTransportTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  FCrowdWorkerPacketTransportConfig Config;
+  Config.MaxChunkBytes = 3;
+  Config.MaxPacketBytes = 12;
+  Config.MaxChunkCount = 4;
+  Config.AssemblyTimeoutSeconds = 2.0;
+  const TArray<uint8> Payload{1, 2, 3, 4, 5, 6, 7, 8};
+  FCrowdWorkerPacketHeader Header;
+  TArray<FCrowdWorkerPacketChunk> Chunks;
+  FCrowdWorkerPacketEnd End;
+  TestTrue(TEXT("worker packet builds"),
+    FCrowdWorkerPacketTransport::Build(
+      ECrowdWorkerPacketKind::Checkpoint,
+      9, 4, 0x12345678ull, Payload, Config,
+      Header, Chunks, End));
+  TestEqual(TEXT("worker packet chunk count"), Chunks.Num(), 3);
+
+  FCrowdWorkerPacketAssembler Assembler;
+  TestTrue(TEXT("worker assembler initializes"),
+    Assembler.Initialize(Config));
+  TestEqual(TEXT("worker packet header accepted"),
+    Assembler.AcceptHeader(Header, 10.0),
+    ECrowdWorkerPacketAcceptResult::Accepted);
+  TestEqual(TEXT("worker packet header duplicate idempotent"),
+    Assembler.AcceptHeader(Header, 10.1),
+    ECrowdWorkerPacketAcceptResult::Duplicate);
+  TestEqual(TEXT("worker packet first chunk accepted"),
+    Assembler.AcceptChunk(Chunks[0], 10.2),
+    ECrowdWorkerPacketAcceptResult::Accepted);
+  TestEqual(TEXT("worker packet chunk duplicate idempotent"),
+    Assembler.AcceptChunk(Chunks[0], 10.3),
+    ECrowdWorkerPacketAcceptResult::Duplicate);
+  TestEqual(TEXT("worker packet out of order fails closed"),
+    Assembler.AcceptChunk(Chunks[2], 10.4),
+    ECrowdWorkerPacketAcceptResult::RequiresResync);
+
+  TestTrue(TEXT("worker assembler resets after order failure"),
+    Assembler.Initialize(Config));
+  TestEqual(TEXT("worker packet header reaccepted"),
+    Assembler.AcceptHeader(Header, 20.0),
+    ECrowdWorkerPacketAcceptResult::Accepted);
+  FCrowdWorkerPacketChunk Tampered = Chunks[0];
+  Tampered.Bytes[0] ^= 0xff;
+  TestEqual(TEXT("worker packet chunk hash fails closed"),
+    Assembler.AcceptChunk(Tampered, 20.1),
+    ECrowdWorkerPacketAcceptResult::Rejected);
+  for (int32 Index = 0; Index < Chunks.Num(); ++Index)
+    TestEqual(TEXT("worker packet ordered chunk accepted"),
+      Assembler.AcceptChunk(Chunks[Index], 20.2 + Index * 0.1),
+      ECrowdWorkerPacketAcceptResult::Accepted);
+  TestEqual(TEXT("worker packet completes"),
+    Assembler.AcceptEnd(End, 20.6),
+    ECrowdWorkerPacketAcceptResult::Complete);
+  FCrowdWorkerAssembledPacket Assembled;
+  TestTrue(TEXT("worker packet consumes"),
+    Assembler.ConsumeCompleted(Assembled));
+  TestTrue(TEXT("worker packet bytes remain exact"),
+    Assembled.Bytes == Payload);
+  TestEqual(TEXT("worker packet identity remains exact"),
+    Assembled.Header.ObjectStableHash, Header.ObjectStableHash);
+  TestFalse(TEXT("worker packet consumes once"),
+    Assembler.ConsumeCompleted(Assembled));
+
+  TestTrue(TEXT("worker timeout assembler initializes"),
+    Assembler.Initialize(Config));
+  TestEqual(TEXT("worker timeout header accepted"),
+    Assembler.AcceptHeader(Header, 30.0),
+    ECrowdWorkerPacketAcceptResult::Accepted);
+  TestEqual(TEXT("worker assembly timeout requires resync"),
+    Assembler.AcceptChunk(Chunks[0], 32.1),
+    ECrowdWorkerPacketAcceptResult::RequiresResync);
+
+  FCrowdWorkerPacketTransportConfig TightConfig = Config;
+  TightConfig.MaxPacketBytes = Payload.Num() - 1;
+  TestFalse(TEXT("worker packet capacity fails closed"),
+    FCrowdWorkerPacketTransport::Build(
+      ECrowdWorkerPacketKind::Checkpoint,
+      9, 4, 0x12345678ull, Payload, TightConfig,
+      Header, Chunks, End));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdWorkerReplicationCodecTest,
+  "MassCrowd.Networking.Replication.WorkerCodec",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdWorkerReplicationCodecTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 83;
+  const FCrowdStableEntityRef EntityRef{4, 900, 3};
+  FCrowdWorkerNetworkStateConfig Config;
+  Config.MaxStateRecordsPerCheckpoint = 8;
+  Config.MaxResourceRecordsPerCheckpoint = 8;
+  Config.MaxWorkItemsPerCheckpoint = 8;
+  Config.MaxWakeupsPerCheckpoint = 8;
+  Config.MaxDependencyEdgesPerCheckpoint = 8;
+  Config.MaxCommandsPerCheckpoint = 8;
+  Config.MaxLifecycleWatermarksPerCheckpoint = 8;
+  Config.MaxPayloadBytes = 1024;
+  Config.MaxEncodedCheckpointBytes = 64 * 1024;
+
+  FCrowdWorkerEntityStateStore States;
+  TestTrue(TEXT("codec state store resets"), States.Reset(8, 1024));
+  TestEqual(TEXT("codec entity spawns"),
+    States.Spawn(EntityRef, Generation, 1, MakeWorkerPayload(41)),
+    ECrowdWorkerQueueResult::Added);
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("codec resource store resets"), Resources.Reset(1024));
+  TestEqual(TEXT("codec resource stages"),
+    Resources.StageBuilding({77, 5, MakeWorkerPayload(42)}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  TestTrue(TEXT("codec resource commits"),
+    Resources.CommitBuildingAtEpoch(1, ResourceEvents));
+  TArray<FCrowdWorkerDirtyStateRecord> CompleteStates;
+  TArray<FCrowdWorkerResourceRecord> CompleteResources;
+  States.GetStateRecords(CompleteStates);
+  Resources.GetCurrentRecords(CompleteResources);
+
+  auto MakeHeader = [&States, &Resources](
+    const uint64 Epoch,
+    const uint64 InputSequence,
+    const uint64 LastOrderedEventSequence)
+  {
+    FCrowdWorkerCheckpoint Header;
+    Header.Generation = Generation;
+    Header.WorkerEpoch = Epoch;
+    Header.AbsoluteSimulationTick = Epoch;
+    Header.LastAppliedInputSequence = InputSequence;
+    Header.LastOrderedEventSequence = LastOrderedEventSequence;
+    Header.EntityStateHash = States.CalculateStableHash();
+    Header.ResourceRevisionHash =
+      Resources.CalculateCurrentStableHash();
+    Header.RecalculateStableHash();
+    return Header;
+  };
+  FCrowdWorkerNetworkContinuationState Continuation;
+  Continuation.WorkRing.Epoch = 2;
+  Continuation.LifecycleWatermarks.Add({
+    EntityRef.ProviderId,
+    EntityRef.StableEntityId,
+    EntityRef.LifecycleSerial});
+  FCrowdWorkerNetworkStatePublisher Publisher;
+  TestTrue(TEXT("codec publisher resets"),
+    Publisher.Reset(Config, Generation));
+  TestTrue(TEXT("codec baseline commits"),
+    Publisher.CommitEpoch(
+      MakeHeader(1, 1, 0),
+      CompleteStates,
+      CompleteResources,
+      Continuation));
+  FCrowdWorkerNetworkCheckpoint Checkpoint;
+  TestEqual(TEXT("codec checkpoint reads"),
+    Publisher.ReadCheckpoint(Generation, Checkpoint),
+    ECrowdWorkerNetworkReadResult::Ready);
+
+  TArray<uint8> CheckpointBytes;
+  TestTrue(TEXT("checkpoint encodes"),
+    FCrowdWorkerReplicationCodec::EncodeCheckpoint(
+      Checkpoint, Config, CheckpointBytes));
+  FCrowdWorkerNetworkCheckpoint DecodedCheckpoint;
+  TestTrue(TEXT("checkpoint decodes"),
+    FCrowdWorkerReplicationCodec::DecodeCheckpoint(
+      CheckpointBytes, Config, DecodedCheckpoint));
+  TestEqual(TEXT("checkpoint stable hash round trips"),
+    DecodedCheckpoint.StableHash, Checkpoint.StableHash);
+  TArray<uint8> ReencodedCheckpoint;
+  TestTrue(TEXT("decoded checkpoint re-encodes"),
+    FCrowdWorkerReplicationCodec::EncodeCheckpoint(
+      DecodedCheckpoint, Config, ReencodedCheckpoint));
+  TestTrue(TEXT("checkpoint wire form is deterministic"),
+    ReencodedCheckpoint == CheckpointBytes);
+
+  TArray<uint8> InvalidBytes = CheckpointBytes;
+  InvalidBytes[0] ^= 0xff;
+  TestFalse(TEXT("bad checkpoint magic fails closed"),
+    FCrowdWorkerReplicationCodec::DecodeCheckpoint(
+      InvalidBytes, Config, DecodedCheckpoint));
+  InvalidBytes = CheckpointBytes;
+  InvalidBytes.Last() ^= 0x01;
+  TestFalse(TEXT("checkpoint hash tamper fails closed"),
+    FCrowdWorkerReplicationCodec::DecodeCheckpoint(
+      InvalidBytes, Config, DecodedCheckpoint));
+
+  FCrowdWorkerNetworkStateConfig TightConfig = Config;
+  TightConfig.MaxEncodedCheckpointBytes = CheckpointBytes.Num() - 1;
+  TestFalse(TEXT("checkpoint byte capacity fails closed"),
+    FCrowdWorkerReplicationCodec::DecodeCheckpoint(
+      CheckpointBytes, TightConfig, DecodedCheckpoint));
+  FCrowdWorkerIntentBatch Intent;
+  Intent.Generation = Generation;
+  Intent.FirstInputSequence = 10;
+  Intent.LastInputSequence = 11;
+  Intent.TargetSimulationTimeSeconds = 10.0 / 30.0;
+  FCrowdWorkerExternalGameplayInput External;
+  External.InputSequence = 10;
+  External.EntityRef = EntityRef;
+  External.InputTypeId = static_cast<uint16>(
+    ECrowdWorkerExternalGameplayInputType::GameplayFact);
+  External.DirtyMask = 1;
+  External.FullState = MakeWorkerPayload(91);
+  Intent.ExternalGameplayInputs.Add(External);
+  Intent.Clock.InputSequence = 11;
+  Intent.Clock.SimulationTick = 10;
+  Intent.RecalculateStableHash();
+  TArray<uint8> IntentBytes;
+  TestTrue(TEXT("intent encodes without entity authority state"),
+    FCrowdWorkerReplicationCodec::EncodeIntent(
+      Intent, Config, IntentBytes));
+  FCrowdWorkerIntentBatch DecodedIntent;
+  TestTrue(TEXT("intent decodes"),
+    FCrowdWorkerReplicationCodec::DecodeIntent(
+      IntentBytes, Config, DecodedIntent));
+  TestEqual(TEXT("intent stable hash round trips"),
+    DecodedIntent.StableHash, Intent.StableHash);
+  TestEqual(TEXT("clock tick round trips"),
+    DecodedIntent.Clock.SimulationTick, uint64{10});
+  TArray<uint8> InvalidIntent = IntentBytes;
+  InvalidIntent.Last() ^= 1;
+  TestFalse(TEXT("intent hash tamper fails closed"),
+    FCrowdWorkerReplicationCodec::DecodeIntent(
+      InvalidIntent, Config, DecodedIntent));
+  FCrowdWorkerIntentBatch UnsupportedIntent = Intent;
+  ++UnsupportedIntent.Version;
+  UnsupportedIntent.RecalculateStableHash();
+  TestFalse(TEXT("unsupported intent version is rejected"),
+    FCrowdWorkerReplicationCodec::EncodeIntent(
+      UnsupportedIntent, Config, InvalidIntent));
+
+  FCrowdWorkerIntentBatch ClockOnly;
+  ClockOnly.Generation = Generation;
+  ClockOnly.FirstInputSequence = 12;
+  ClockOnly.LastInputSequence = 12;
+  ClockOnly.TargetSimulationTimeSeconds = 11.0 / 30.0;
+  ClockOnly.Clock.InputSequence = 12;
+  ClockOnly.Clock.SimulationTick = 11;
+  ClockOnly.RecalculateStableHash();
+  TArray<uint8> OneThousandEntityIntentBytes;
+  TArray<uint8> TenThousandEntityIntentBytes;
+  TestTrue(TEXT("1k unchanged world clock intent encodes"),
+    FCrowdWorkerReplicationCodec::EncodeIntent(
+      ClockOnly, Config, OneThousandEntityIntentBytes));
+  TestTrue(TEXT("10k unchanged world clock intent encodes"),
+    FCrowdWorkerReplicationCodec::EncodeIntent(
+      ClockOnly, Config, TenThousandEntityIntentBytes));
+  TestTrue(TEXT("unchanged intent cost is entity-count invariant"),
+    TenThousandEntityIntentBytes.Num()
+      <= 1.10 * OneThousandEntityIntentBytes.Num() + 1024.0);
+
+  FCrowdWorkerAuthorityDigestBatch Digest;
+  Digest.Generation = Generation;
+  Digest.DigestSequence = 1;
+  Digest.SimulationTick = 30;
+  Digest.ThroughInputSequence = 11;
+  Digest.Entries.Add({
+    {ECrowdWorkerField::InputSnapshot,
+      ECrowdWorkerAuthorityScopeKind::Global, 0},
+    30, 11, 1, 0x1234ull});
+  Digest.RecalculateStableHash();
+  TestTrue(TEXT("authority digest contract validates"),
+    Digest.IsValid(Config));
+
+  FCrowdWorkerAuthorityCorrectionBatch Correction;
+  Correction.Generation = Generation;
+  Correction.CorrectionSequence = 1;
+  Correction.ApplySimulationTick = 30;
+  Correction.ThroughInputSequence = 11;
+  Correction.Scopes.Add(Digest.Entries[0].Scope);
+  Correction.AuthoritativeMembers.Add(EntityRef);
+  FCrowdWorkerDirtyStateRecord Corrected = CompleteStates[0];
+  Corrected.WorkerEpoch = 30;
+  Corrected.StateRevision = 30;
+  Corrected.CorrectionRevision = 1;
+  Corrected.SourceInputSequence = 11;
+  Corrected.Payload = MakeWorkerPayload(92);
+  Correction.Records.Add(Corrected);
+  Correction.Tombstones.Add({
+    FCrowdStableEntityRef{4, 901, 1},
+    ECrowdWorkerField::Presentation});
+  Correction.RecalculateStableHash();
+  TArray<uint8> CorrectionBytes;
+  TestTrue(TEXT("sparse correction encodes"),
+    FCrowdWorkerReplicationCodec::EncodeCorrection(
+      Correction, Config, CorrectionBytes));
+  FCrowdWorkerAuthorityCorrectionBatch DecodedCorrection;
+  TestTrue(TEXT("sparse correction decodes"),
+    FCrowdWorkerReplicationCodec::DecodeCorrection(
+      CorrectionBytes, Config, DecodedCorrection));
+  TestEqual(TEXT("correction has no continuation payload"),
+    DecodedCorrection.Records.Num(), 1);
+  TestEqual(TEXT("correction tombstone round trips"),
+    DecodedCorrection.Tombstones.Num(), 1);
+  TestEqual(TEXT("correction stable hash round trips"),
+    DecodedCorrection.StableHash, Correction.StableHash);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdWorkerReplicationOrderTest,
+  "MassCrowd.Networking.Replication.WorkerCheckpointOrder",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdWorkerReplicationOrderTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 71;
+  const FCrowdStableEntityRef EntityRef{3, 10, 1};
+  FCrowdWorkerNetworkStateConfig Config;
+  Config.MaxStateRecordsPerCheckpoint = 16;
+  Config.MaxResourceRecordsPerCheckpoint = 4;
+
+  FCrowdWorkerEntityStateStore States;
+  TestTrue(TEXT("late join state store resets"),
+    States.Reset(8, 1024));
+  TestEqual(TEXT("late join entity spawns"),
+    States.Spawn(EntityRef, Generation, 1, MakeWorkerPayload(1)),
+    ECrowdWorkerQueueResult::Added);
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("late join resource store resets"),
+    Resources.Reset(1024));
+  TestEqual(TEXT("late join resource stages"),
+    Resources.StageBuilding({90, 1, MakeWorkerPayload(2)}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  TestTrue(TEXT("late join resource commits"),
+    Resources.CommitBuildingAtEpoch(1, ResourceEvents));
+
+  TArray<FCrowdWorkerDirtyStateRecord> CompleteStates;
+  TArray<FCrowdWorkerResourceRecord> CompleteResources;
+  States.GetStateRecords(CompleteStates);
+  Resources.GetCurrentRecords(CompleteResources);
+  FCrowdWorkerCheckpoint Header;
+  Header.Generation = Generation;
+  Header.WorkerEpoch = 1;
+  Header.AbsoluteSimulationTick = 1;
+  Header.LastAppliedInputSequence = 1;
+  Header.EntityStateHash = States.CalculateStableHash();
+  Header.ResourceRevisionHash =
+    Resources.CalculateCurrentStableHash();
+  Header.RecalculateStableHash();
+  FCrowdWorkerNetworkContinuationState Continuation;
+  Continuation.WorkRing.Epoch = 2;
+  Continuation.LifecycleWatermarks.Add({
+    EntityRef.ProviderId,
+    EntityRef.StableEntityId,
+    EntityRef.LifecycleSerial});
+
+  FCrowdWorkerNetworkStatePublisher Publisher;
+  TestTrue(TEXT("late join publisher resets"),
+    Publisher.Reset(Config, Generation));
+  TestTrue(TEXT("late join checkpoint commits"),
+    Publisher.CommitEpoch(
+      Header, CompleteStates, CompleteResources, Continuation));
+  FCrowdWorkerNetworkCheckpoint Baseline;
+  TestEqual(TEXT("late join checkpoint reads"),
+    Publisher.ReadCheckpoint(Generation, Baseline),
+    ECrowdWorkerNetworkReadResult::Ready);
+  TestEqual(TEXT("checkpoint input waterline is explicit"),
+    Baseline.InputBaselineSequence,
+    Header.LastAppliedInputSequence);
+
+  FCrowdWorkerReplicationClientGate Client;
+  TestTrue(TEXT("late join gate initializes"),
+    Client.Initialize(Config));
+  TestEqual(TEXT("resources before checkpoint are rejected"),
+    Client.AcceptResourceRevisions(
+      Baseline.StableHash, Baseline.ResourceRecords),
+    ECrowdWorkerReplicationAcceptResult::RejectedOrder);
+  TestEqual(TEXT("checkpoint accepted"),
+    Client.AcceptCheckpoint(Baseline),
+    ECrowdWorkerReplicationAcceptResult::Accepted);
+  TestEqual(TEXT("event baseline before resources is rejected"),
+    Client.AcceptEventBaseline(
+      Baseline.StableHash, Baseline.EventBaselineSequence),
+    ECrowdWorkerReplicationAcceptResult::RejectedOrder);
+  TestEqual(TEXT("resource baseline accepted"),
+    Client.AcceptResourceRevisions(
+      Baseline.StableHash, Baseline.ResourceRecords),
+    ECrowdWorkerReplicationAcceptResult::Accepted);
+  TestEqual(TEXT("event baseline makes client live"),
+    Client.AcceptEventBaseline(
+      Baseline.StableHash, Baseline.EventBaselineSequence),
+    ECrowdWorkerReplicationAcceptResult::BaselineReady);
+  FCrowdWorkerNetworkCheckpoint Consumed;
+  TestTrue(TEXT("completed checkpoint consumes once"),
+    Client.ConsumeReadyCheckpoint(Consumed));
+  TestFalse(TEXT("checkpoint cannot consume twice"),
+    Client.ConsumeReadyCheckpoint(Consumed));
+
+  FCrowdWorkerIntentBatch Intent;
+  Intent.Generation = Generation;
+  Intent.FirstInputSequence = 2;
+  Intent.LastInputSequence = 3;
+  Intent.TargetSimulationTimeSeconds = 2.0 / 30.0;
+  FCrowdWorkerExternalGameplayInput External;
+  External.InputSequence = 2;
+  External.EntityRef = EntityRef;
+  External.InputTypeId = static_cast<uint16>(
+    ECrowdWorkerExternalGameplayInputType::GameplayFact);
+  External.DirtyMask = 1;
+  External.FullState = MakeWorkerPayload(3);
+  Intent.ExternalGameplayInputs.Add(External);
+  Intent.Clock.InputSequence = 3;
+  Intent.Clock.SimulationTick = 2;
+  Intent.RecalculateStableHash();
+
+  FCrowdWorkerInputSequenceGate SequenceGate;
+  TestTrue(TEXT("post-checkpoint intent gate resets"),
+    SequenceGate.ResetForResnapshot(Generation, 2));
+  FCrowdWorkerContractLimits Limits;
+  Limits.MaxPayloadBytes = 1024;
+  Limits.MaxInputRecordsPerBatch = 16;
+  Limits.MaxStatePatchesPerSlot = 16;
+  Limits.MaxPendingOrderedEvents = 16;
+  TestEqual(TEXT("first live intent accepted"),
+    SequenceGate.Accept(Intent, Limits),
+    ECrowdWorkerInputAcceptResult::Accepted);
+  TestEqual(TEXT("duplicate live intent is idempotent"),
+    SequenceGate.Accept(Intent, Limits),
+    ECrowdWorkerInputAcceptResult::AcceptedDuplicate);
+
+  FCrowdWorkerIntentBatch Gap = Intent;
+  Gap.FirstInputSequence = 5;
+  Gap.LastInputSequence = 6;
+  Gap.ExternalGameplayInputs[0].InputSequence = 5;
+  Gap.Clock.InputSequence = 6;
+  Gap.Clock.SimulationTick = 3;
+  Gap.TargetSimulationTimeSeconds = 3.0 / 30.0;
+  Gap.RecalculateStableHash();
+  TestEqual(TEXT("intent gap requires checkpoint"),
+    SequenceGate.Accept(Gap, Limits),
+    ECrowdWorkerInputAcceptResult::RequiresResnapshot);
+  TestTrue(TEXT("intent gap latches resnapshot"),
+    SequenceGate.RequiresResnapshot());
   return true;
 }

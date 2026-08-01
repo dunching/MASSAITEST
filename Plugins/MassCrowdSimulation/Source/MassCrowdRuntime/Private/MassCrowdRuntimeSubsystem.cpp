@@ -59,6 +59,9 @@ void UMassCrowdRuntimeSubsystem::Initialize(
     MakeUnique<FCrowdWorkerResultApplyProxy>();
   WorkerMovementAuthority =
     MakeUnique<FCrowdWorkerMovementAuthority>();
+  WorkerBehaviorAuthority =
+    MakeUnique<FCrowdWorkerBehaviorAuthority>();
+  WorkerResourcePublications.Reset();
 }
 
 void UMassCrowdRuntimeSubsystem::Deinitialize()
@@ -68,6 +71,7 @@ void UMassCrowdRuntimeSubsystem::Deinitialize()
     WorkerShadowSync->ResetQuiescent();
     WorkerShadowSync.Reset();
   }
+  WorkerBehaviorAuthority.Reset();
   WorkerMovementAuthority.Reset();
   WorkerResultApplyProxy.Reset();
   if (AsyncSimulationRuntime)
@@ -77,9 +81,44 @@ void UMassCrowdRuntimeSubsystem::Deinitialize()
   }
   FlowCache.Reset();
   BehaviorSourceRuntime.Reset();
+  WorkerResourcePublications.Reset();
   NavGraphResource = {};
   NavDataProvider.Reset();
   Super::Deinitialize();
+}
+
+bool UMassCrowdRuntimeSubsystem::ResolveWorkerResourceRevision(
+  const uint64 ResourceId,
+  const uint64 UpstreamRevision,
+  const uint64 ContentHash,
+  uint64& OutRevision)
+{
+  check(IsInGameThread());
+  OutRevision = 0;
+  if (ResourceId == 0 || UpstreamRevision == 0
+    || ContentHash == 0)
+    return false;
+  FWorkerResourcePublication* Previous =
+    WorkerResourcePublications.Find(ResourceId);
+  if (!Previous)
+  {
+    WorkerResourcePublications.Add(
+      ResourceId, {UpstreamRevision, ContentHash});
+    OutRevision = UpstreamRevision;
+    return true;
+  }
+  if (Previous->ContentHash == ContentHash)
+  {
+    OutRevision = Previous->Revision;
+    return true;
+  }
+  if (Previous->Revision == MAX_uint64)
+    return false;
+  Previous->Revision = FMath::Max(
+    UpstreamRevision, Previous->Revision + 1);
+  Previous->ContentHash = ContentHash;
+  OutRevision = Previous->Revision;
+  return true;
 }
 
 void UMassCrowdRuntimeSubsystem::SetNavDataProvider(

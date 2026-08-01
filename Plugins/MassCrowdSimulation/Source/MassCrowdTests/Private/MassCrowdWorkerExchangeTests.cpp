@@ -1,4 +1,4 @@
-#include "Misc/AutomationTest.h"
+﻿#include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -70,23 +70,20 @@ namespace CrowdWorkerExchangeTests
     return Delta;
   }
 
-  FCrowdWorkerInputBatch MakeInputBatch(
+  FCrowdWorkerIntentBatch MakeInputBatch(
     const uint64 Generation,
     const uint64 FirstSequence,
     const int32 Count)
   {
-    FCrowdWorkerInputBatch Batch;
+    FCrowdWorkerIntentBatch Batch;
     Batch.Generation = Generation;
     Batch.TargetSimulationTimeSeconds =
       static_cast<double>(FirstSequence + Count) / 30.0;
-    if (Count == 0)
-    {
-      Batch.RecalculateStableHash();
+    if (Count <= 0)
       return Batch;
-    }
     Batch.FirstInputSequence = FirstSequence;
     Batch.LastInputSequence = FirstSequence + Count - 1;
-    for (int32 Index = 0; Index < Count; ++Index)
+    for (int32 Index = 0; Index < Count - 1; ++Index)
     {
       const uint64 Sequence = FirstSequence + Index;
       if ((Index & 1) == 0)
@@ -94,6 +91,8 @@ namespace CrowdWorkerExchangeTests
       else
         Batch.Commands.Add(MakeCommand(Sequence, 100 + Sequence));
     }
+    Batch.Clock.InputSequence = Batch.LastInputSequence;
+    Batch.Clock.SimulationTick = FirstSequence + Count;
     Batch.RecalculateStableHash();
     return Batch;
   }
@@ -279,12 +278,12 @@ namespace CrowdWorkerExchangeTests
     return false;
   }
 
-  FCrowdWorkerInputBatch MakeResnapshotBatch(
+  FCrowdWorkerIntentBatch MakeResnapshotBatch(
     const uint64 Generation,
     const TConstArrayView<FCrowdStableEntityRef> EntityRefs,
     const double TargetSimulationTimeSeconds)
   {
-    FCrowdWorkerInputBatch Batch;
+    FCrowdWorkerIntentBatch Batch;
     Batch.Generation = Generation;
     Batch.TargetSimulationTimeSeconds =
       TargetSimulationTimeSeconds;
@@ -298,11 +297,13 @@ namespace CrowdWorkerExchangeTests
         static_cast<uint32>(EntityRef.StableEntityId), 6001);
       Batch.Spawns.Add(MoveTemp(Spawn));
     }
-    if (!Batch.Spawns.IsEmpty())
-    {
-      Batch.FirstInputSequence = 1;
-      Batch.LastInputSequence = Batch.Spawns.Num();
-    }
+    Batch.Clock.InputSequence = Sequence++;
+    Batch.Clock.SimulationTick = FMath::Max<uint64>(
+      1,
+      static_cast<uint64>(FMath::RoundToInt64(
+        TargetSimulationTimeSeconds * 30.0)));
+    Batch.FirstInputSequence = 1;
+    Batch.LastInputSequence = Sequence - 1;
     Batch.RecalculateStableHash();
     return Batch;
   }
@@ -330,6 +331,22 @@ namespace CrowdWorkerExchangeTests
     }
     return false;
   }
+
+  bool WaitForOwnerPumpCount(
+    const FCrowdAsyncSimulationRuntime& Runtime,
+    const uint64 ExpectedCount,
+    const double TimeoutSeconds = 5.0)
+  {
+    const double Deadline =
+      FPlatformTime::Seconds() + TimeoutSeconds;
+    while (FPlatformTime::Seconds() < Deadline)
+    {
+      if (Runtime.GetMetrics().OwnerPumpCount >= ExpectedCount)
+        return true;
+      FPlatformProcess::SleepNoStats(0.0f);
+    }
+    return false;
+  }
 }
 
 using namespace CrowdWorkerExchangeTests;
@@ -350,14 +367,14 @@ bool FMassCrowdWorkerContractsPayloadAndHashTest::RunTest(
   TestFalse(TEXT("payload mutation invalidates hash"),
     Payload.IsValid(Limits.MaxPayloadBytes));
 
-  FCrowdWorkerInputBatch Empty = MakeInputBatch(7, 1, 0);
-  TestTrue(TEXT("empty input heartbeat is valid"),
-    Empty.IsValid(Limits));
+  FCrowdWorkerIntentBatch ClockOnly = MakeInputBatch(7, 1, 1);
+  TestTrue(TEXT("clock-only input heartbeat is valid"),
+    ClockOnly.IsValid(Limits));
 
-  FCrowdWorkerInputBatch Forward = MakeInputBatch(7, 1, 4);
+  FCrowdWorkerIntentBatch Forward = MakeInputBatch(7, 1, 4);
   TestTrue(TEXT("mixed input batch is valid"),
     Forward.IsValid(Limits));
-  FCrowdWorkerInputBatch Reordered = Forward;
+  FCrowdWorkerIntentBatch Reordered = Forward;
   Algo::Reverse(Reordered.Spawns);
   Algo::Reverse(Reordered.Commands);
   Reordered.RecalculateStableHash();
@@ -386,7 +403,7 @@ bool FMassCrowdWorkerContractsSequenceGateTest::RunTest(
   FCrowdWorkerInputSequenceGate Gate;
   TestTrue(TEXT("gate initializes"), Gate.ResetForResnapshot(7));
 
-  const FCrowdWorkerInputBatch First = MakeInputBatch(7, 1, 3);
+  const FCrowdWorkerIntentBatch First = MakeInputBatch(7, 1, 3);
   TestEqual(TEXT("first contiguous batch accepted"),
     Gate.Accept(First, Limits),
     ECrowdWorkerInputAcceptResult::Accepted);
@@ -396,27 +413,36 @@ bool FMassCrowdWorkerContractsSequenceGateTest::RunTest(
     Gate.Accept(First, Limits),
     ECrowdWorkerInputAcceptResult::AcceptedDuplicate);
 
-  FCrowdWorkerInputBatch WrongGeneration = MakeInputBatch(8, 4, 1);
+  FCrowdWorkerIntentBatch WrongGeneration = MakeInputBatch(8, 4, 1);
   TestEqual(TEXT("wrong generation rejected without poisoning"),
     Gate.Accept(WrongGeneration, Limits),
     ECrowdWorkerInputAcceptResult::RejectedGeneration);
+  TestEqual(TEXT("wrong generation reason is explicit"),
+    Gate.GetLastFailure(),
+    ECrowdWorkerInputFailure::GenerationMismatch);
   TestFalse(TEXT("wrong generation does not require resnapshot"),
     Gate.RequiresResnapshot());
 
-  const FCrowdWorkerInputBatch Second = MakeInputBatch(7, 4, 1);
+  const FCrowdWorkerIntentBatch Second = MakeInputBatch(7, 4, 1);
   TestEqual(TEXT("next contiguous batch accepted"),
     Gate.Accept(Second, Limits),
     ECrowdWorkerInputAcceptResult::Accepted);
   TestEqual(TEXT("older complete batch is stale"),
     Gate.Accept(First, Limits),
     ECrowdWorkerInputAcceptResult::RejectedStale);
+  TestEqual(TEXT("stale reason is explicit"),
+    Gate.GetLastFailure(),
+    ECrowdWorkerInputFailure::StaleSequence);
 
-  const FCrowdWorkerInputBatch Gap = MakeInputBatch(7, 6, 1);
+  const FCrowdWorkerIntentBatch Gap = MakeInputBatch(7, 6, 1);
   TestEqual(TEXT("gap requires resnapshot"),
     Gate.Accept(Gap, Limits),
     ECrowdWorkerInputAcceptResult::RequiresResnapshot);
   TestTrue(TEXT("gap latches resnapshot"),
     Gate.RequiresResnapshot());
+  TestEqual(TEXT("gap reason is explicit"),
+    Gate.GetLastFailure(),
+    ECrowdWorkerInputFailure::SequenceGap);
   TestEqual(TEXT("latched gate rejects later valid batch"),
     Gate.Accept(MakeInputBatch(7, 5, 1), Limits),
     ECrowdWorkerInputAcceptResult::RequiresResnapshot);
@@ -433,12 +459,15 @@ bool FMassCrowdWorkerContractsSequenceGateTest::RunTest(
   TestEqual(TEXT("conflict fixture accepted"),
     ConflictGate.Accept(First, Limits),
     ECrowdWorkerInputAcceptResult::Accepted);
-  FCrowdWorkerInputBatch Conflict = First;
+  FCrowdWorkerIntentBatch Conflict = First;
   Conflict.TargetSimulationTimeSeconds += 1.0;
   Conflict.RecalculateStableHash();
   TestEqual(TEXT("same range with different hash requires resnapshot"),
     ConflictGate.Accept(Conflict, Limits),
     ECrowdWorkerInputAcceptResult::RequiresResnapshot);
+  TestEqual(TEXT("conflicting duplicate reason is explicit"),
+    ConflictGate.GetLastFailure(),
+    ECrowdWorkerInputFailure::ConflictingDuplicate);
 
   FCrowdWorkerInputSequenceGate OverlapGate;
   TestTrue(TEXT("overlap gate initializes"),
@@ -826,6 +855,18 @@ bool FMassCrowdWorkerResultApplyProxyTest::RunTest(
         CrowdWorkerResultFields::PresentationDiagnosticProxy,
         202)),
     ECrowdWorkerAppendResult::Appended);
+  FCrowdWorkerStatePatch DomainPatch =
+    MakePatch(
+      10, 1, 1,
+      CrowdWorkerRuntimeV2FieldMask(
+        ECrowdWorkerField::Movement),
+      303);
+  DomainPatch.StateFieldId =
+    1 + static_cast<uint16>(ECrowdWorkerField::Movement);
+  DomainPatch.RecalculateStableHash();
+  TestEqual(TEXT("v2 movement proxy patch appended"),
+    Exchange.AppendStatePatch(DomainPatch),
+    ECrowdWorkerAppendResult::Appended);
   TestEqual(TEXT("ordered event appended"),
     Exchange.AppendOrderedEvent(MakeEvent(1, 1, 1)),
     ECrowdWorkerAppendResult::Appended);
@@ -843,12 +884,47 @@ bool FMassCrowdWorkerResultApplyProxyTest::RunTest(
     ECrowdWorkerResultApplyResult::Applied);
   TestNotNull(TEXT("current lifecycle proxy state applied"),
     Proxy.Find({1, 10, 1}));
+  TestNotNull(TEXT("v2 movement domain state applied read-only"),
+    Proxy.FindDomain(
+      {1, 10, 1}, ECrowdWorkerField::Movement));
   TestNull(TEXT("stale lifecycle proxy state rejected"),
     Proxy.Find({1, 20, 1}));
   TestEqual(TEXT("stale lifecycle counted"),
     Proxy.GetMetrics().StaleLifecyclePatchCount, uint64{1});
   TestEqual(TEXT("ordered event counted"),
     Proxy.GetMetrics().LastAppliedEventSequence, uint64{1});
+  TestEqual(TEXT("domain patch counted"),
+    Proxy.GetMetrics().AppliedDomainPatchCount, uint64{1});
+
+  FCrowdWorkerPublishedExchange RestoredExchange;
+  TestTrue(TEXT("checkpoint event baseline restores"),
+    RestoredExchange.ResetQuiescent(7, Limits, 0, 10, 0));
+  TestEqual(TEXT("first post-checkpoint event is contiguous"),
+    RestoredExchange.AppendOrderedEvent(MakeEvent(11, 2, 101)),
+    ECrowdWorkerAppendResult::Appended);
+  TestEqual(TEXT("post-checkpoint batch publishes from local sequence one"),
+    RestoredExchange.TryPublishBuildingBatch(
+      MakeMetadata(1, 2, 101)),
+    ECrowdWorkerPublishResult::Published);
+  const FCrowdWorkerPublishedBatch* RestoredBatch = nullptr;
+  TestEqual(TEXT("post-checkpoint batch exchanges"),
+    RestoredExchange.TryExchangePublishedBatch(
+      7, 1, RestoredBatch),
+    ECrowdWorkerExchangeResult::Exchanged);
+  FCrowdWorkerResultApplyProxy RestoredProxy;
+  TestTrue(TEXT("result proxy restores checkpoint baselines"),
+    RestoredProxy.ResetFromCheckpoint(
+      7, Limits, CurrentRefs, 100, 10));
+  TestNotNull(TEXT("post-checkpoint batch exists"), RestoredBatch);
+  if (RestoredBatch)
+  {
+    TestEqual(TEXT("result proxy accepts post-checkpoint event"),
+      RestoredProxy.Apply(*RestoredBatch),
+      ECrowdWorkerResultApplyResult::Applied);
+    TestEqual(TEXT("result proxy advances event baseline"),
+      RestoredProxy.GetMetrics().LastAppliedEventSequence,
+      uint64{11});
+  }
 
   FCrowdWorkerResultApplyProxy OwnerViolation;
   TestTrue(TEXT("owner violation proxy initializes"),
@@ -897,11 +973,12 @@ bool FMassCrowdAsyncSimulationPublishedResultsTest::RunTest(
     TestEqual(TEXT("resnapshot publishes both proxies"),
       Batch->StatePatches.Num(), 2);
 
-  FCrowdWorkerInputBatch Empty = MakeInputBatch(7, 1, 0);
+  FCrowdWorkerIntentBatch Empty = MakeInputBatch(7, 4, 1);
   Empty.TargetSimulationTimeSeconds = 2.0 / 30.0;
+  Empty.Clock.SimulationTick = 2;
   Empty.RecalculateStableHash();
   TestEqual(TEXT("empty progress batch queues"),
-    Runtime.SubmitInput(Empty),
+    Runtime.SubmitIntentBatch(Empty),
     ECrowdAsyncSimulationSubmitResult::Accepted);
   TestTrue(TEXT("empty progress batch settles"),
     PollRuntimeUntilIdle(Runtime));
@@ -938,13 +1015,13 @@ bool FMassCrowdAsyncSimulationRuntimeLifecycleTest::RunTest(
   TestTrue(TEXT("starting runtime requires resnapshot"),
     Runtime.RequiresResnapshot());
   TestEqual(TEXT("incremental input rejected before snapshot"),
-    Runtime.SubmitInput(MakeInputBatch(7, 1, 1)),
+    Runtime.SubmitIntentBatch(MakeInputBatch(7, 1, 1)),
     ECrowdAsyncSimulationSubmitResult::RejectedState);
 
   const FCrowdStableEntityRef InitialRefs[] = {
     {1, 20, 1},
     {1, 10, 1}};
-  FCrowdWorkerInputBatch Resnapshot =
+  FCrowdWorkerIntentBatch Resnapshot =
     MakeResnapshotBatch(7, InitialRefs, 4.0 / 30.0);
   TestEqual(TEXT("initial resnapshot queues"),
     Runtime.SubmitResnapshot(Resnapshot),
@@ -964,51 +1041,46 @@ bool FMassCrowdAsyncSimulationRuntimeLifecycleTest::RunTest(
     Snapshot.EntityRefs.Num(), 2);
   TestEqual(TEXT("mirror sorts stable refs"),
     Snapshot.EntityRefs[0].StableEntityId, uint64{10});
-  TestEqual(TEXT("clock advances by fixed quantum"),
-    Snapshot.WorkerEpoch, uint64{4});
+  TestEqual(TEXT("bootstrap executes one worker epoch at absolute tick four"),
+    Snapshot.WorkerEpoch, uint64{1});
   TestTrue(TEXT("clock reaches target time"),
     FMath::IsNearlyEqual(
       Snapshot.SimulationTimeSeconds, 4.0 / 30.0));
 
-  FCrowdWorkerInputBatch Incremental;
+  FCrowdWorkerIntentBatch Incremental;
   Incremental.Generation = 7;
-  Incremental.FirstInputSequence = 3;
-  Incremental.LastInputSequence = 7;
+  Incremental.FirstInputSequence = 4;
+  Incremental.LastInputSequence = 8;
   Incremental.TargetSimulationTimeSeconds = 7.0 / 30.0;
-  FCrowdWorkerStateDelta& State =
-    Incremental.StateDeltas.AddDefaulted_GetRef();
-  State.InputSequence = 3;
+  FCrowdWorkerExternalGameplayInput& State =
+    Incremental.ExternalGameplayInputs.AddDefaulted_GetRef();
+  State.InputSequence = 4;
   State.EntityRef = {1, 10, 1};
   State.DirtyMask = 1;
   State.FullState = MakePayload(30, 6001);
   FCrowdWorkerDespawnDelta& Despawn =
     Incremental.Despawns.AddDefaulted_GetRef();
-  Despawn.InputSequence = 4;
+  Despawn.InputSequence = 5;
   Despawn.EntityRef = {1, 20, 1};
   Despawn.ReasonId = 1;
   FCrowdWorkerSpawnDelta& Spawn =
     Incremental.Spawns.AddDefaulted_GetRef();
-  Spawn.InputSequence = 5;
+  Spawn.InputSequence = 6;
   Spawn.EntityRef = {1, 30, 1};
   Spawn.InitialState = MakePayload(30, 6001);
   FCrowdWorkerResourceDelta& Resource =
     Incremental.ResourceDeltas.AddDefaulted_GetRef();
-  Resource.InputSequence = 6;
+  Resource.InputSequence = 7;
   Resource.ResourceId = 9001;
   Resource.Revision = 1;
   Resource.Payload = MakePayload(77, 6002);
-  FCrowdWorkerCorrectionDelta& Correction =
-    Incremental.Corrections.AddDefaulted_GetRef();
-  Correction.InputSequence = 7;
-  Correction.EntityRef = {1, 10, 1};
-  Correction.CorrectionRevision = 1;
-  Correction.DirtyMask = 1;
-  Correction.FullState = MakePayload(99, 6001);
+  Incremental.Clock.InputSequence = 8;
+  Incremental.Clock.SimulationTick = 7;
   Incremental.RecalculateStableHash();
   TestTrue(TEXT("incremental fixture valid"),
     Incremental.IsValid(Config.ContractLimits));
   TestEqual(TEXT("incremental input queues"),
-    Runtime.SubmitInput(Incremental),
+    Runtime.SubmitIntentBatch(Incremental),
     ECrowdAsyncSimulationSubmitResult::Accepted);
   TestTrue(TEXT("incremental input settles"),
     PollRuntimeUntilIdle(Runtime));
@@ -1019,35 +1091,30 @@ bool FMassCrowdAsyncSimulationRuntimeLifecycleTest::RunTest(
   TestEqual(TEXT("new entity present"),
     Snapshot.EntityRefs[1], FCrowdStableEntityRef({1, 30, 1}));
   TestEqual(TEXT("last input sequence advances"),
-    Snapshot.LastAppliedInputSequence, uint64{7});
-  TestEqual(TEXT("correction revision recorded"),
-    Snapshot.CorrectionRevisions[0], uint64{1});
-  uint32 CorrectedValue = 0;
-  TestTrue(TEXT("corrected state payload readable"),
-    ReadPayloadValue(Snapshot.States[0].Payload, CorrectedValue));
-  TestEqual(TEXT("correction replaces worker state"),
-    CorrectedValue, 99u);
+    Snapshot.LastAppliedInputSequence, uint64{8});
   TestNotEqual(TEXT("resource contributes to mirror hash"),
     Snapshot.ResourceHash, uint64{0});
 
-  FCrowdWorkerInputBatch Reuse;
+  FCrowdWorkerIntentBatch Reuse;
   Reuse.Generation = 7;
-  Reuse.FirstInputSequence = 8;
-  Reuse.LastInputSequence = 9;
+  Reuse.FirstInputSequence = 9;
+  Reuse.LastInputSequence = 11;
   Reuse.TargetSimulationTimeSeconds = 9.0 / 30.0;
   FCrowdWorkerDespawnDelta& ReuseDespawn =
     Reuse.Despawns.AddDefaulted_GetRef();
-  ReuseDespawn.InputSequence = 8;
+  ReuseDespawn.InputSequence = 9;
   ReuseDespawn.EntityRef = {1, 30, 1};
   ReuseDespawn.ReasonId = 2;
   FCrowdWorkerSpawnDelta& ReuseSpawn =
     Reuse.Spawns.AddDefaulted_GetRef();
-  ReuseSpawn.InputSequence = 9;
+  ReuseSpawn.InputSequence = 10;
   ReuseSpawn.EntityRef = {1, 30, 2};
   ReuseSpawn.InitialState = MakePayload(31, 6001);
+  Reuse.Clock.InputSequence = 11;
+  Reuse.Clock.SimulationTick = 9;
   Reuse.RecalculateStableHash();
   TestEqual(TEXT("higher lifecycle reuse queues"),
-    Runtime.SubmitInput(Reuse),
+    Runtime.SubmitIntentBatch(Reuse),
     ECrowdAsyncSimulationSubmitResult::Accepted);
   TestTrue(TEXT("higher lifecycle reuse settles"),
     PollRuntimeUntilIdle(Runtime));
@@ -1060,6 +1127,166 @@ bool FMassCrowdAsyncSimulationRuntimeLifecycleTest::RunTest(
   TestEqual(TEXT("runtime reaches stopped state"),
     Runtime.GetState(),
     ECrowdAsyncSimulationRuntimeState::Stopped);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdAsyncSimulationAdmissionSequenceTest,
+  "MassCrowd.Runtime.WorkerRuntime.AdmissionApplySequenceAndCapacity",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdAsyncSimulationAdmissionSequenceTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdAsyncSimulationRuntimeConfig Config =
+    MakeRuntimeConfig();
+  Config.MaxQueuedInputBatches = 2;
+  Config.MaxInputBatchesPerPump = 1;
+
+  FCrowdAsyncSimulationRuntime Runtime;
+  TestTrue(TEXT("admission runtime starts"),
+    Runtime.Start(Config, 31));
+  const FCrowdStableEntityRef InitialRef[] = {{3, 1, 1}};
+  TestEqual(TEXT("admission resnapshot queues"),
+    Runtime.SubmitResnapshot(
+      MakeResnapshotBatch(31, InitialRef, 1.0 / 30.0)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("admission resnapshot settles"),
+    PollRuntimeUntilIdle(Runtime));
+
+  const FCrowdWorkerIntentBatch SequenceTwo =
+    MakeInputBatch(31, 3, 1);
+  const FCrowdWorkerIntentBatch SequenceThree =
+    MakeInputBatch(31, 4, 1);
+  const FCrowdWorkerIntentBatch SequenceFour =
+    MakeInputBatch(31, 5, 1);
+  TestEqual(TEXT("first batch reserves sequence two"),
+    Runtime.SubmitIntentBatch(SequenceTwo),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestEqual(TEXT("second batch reserves sequence three before poll"),
+    Runtime.SubmitIntentBatch(SequenceThree),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+
+  FCrowdAsyncSimulationRuntimeMetrics Metrics =
+    Runtime.GetMetrics();
+  TestEqual(TEXT("accepted sequence advances before apply"),
+    Metrics.LastAcceptedInputSequence, uint64{4});
+  TestEqual(TEXT("applied sequence remains at snapshot"),
+    Metrics.LastAppliedInputSequence, uint64{2});
+  TestEqual(TEXT("queued watermark records reservation"),
+    Metrics.QueuedInputSequenceWatermark, uint64{4});
+  TestEqual(TEXT("both accepted batches are queued"),
+    Metrics.InputQueueDepth, 2);
+
+  TestEqual(TEXT("capacity rejection does not reserve sequence four"),
+    Runtime.SubmitIntentBatch(SequenceFour),
+    ECrowdAsyncSimulationSubmitResult::RejectedCapacity);
+  Metrics = Runtime.GetMetrics();
+  TestEqual(TEXT("capacity preserves last accepted sequence"),
+    Metrics.LastAcceptedInputSequence, uint64{4});
+  TestEqual(TEXT("capacity failure reason is explicit"),
+    Metrics.LastInputFailure,
+    ECrowdAsyncSimulationInputFailure::Capacity);
+
+  const uint64 PumpBefore = Metrics.OwnerPumpCount;
+  TestEqual(TEXT("one-batch owner pump launches"),
+    Runtime.Poll(), ECrowdAsyncSimulationPollResult::Working);
+  TestTrue(TEXT("one-batch owner pump completes"),
+    WaitForOwnerPumpCount(Runtime, PumpBefore + 1));
+  Metrics = Runtime.GetMetrics();
+  TestEqual(TEXT("first pump applies only sequence two"),
+    Metrics.LastAppliedInputSequence, uint64{3});
+  TestEqual(TEXT("one accepted batch remains queued"),
+    Metrics.InputQueueDepth, 1);
+
+  TestEqual(TEXT("capacity retry reserves sequence four"),
+    Runtime.SubmitIntentBatch(SequenceFour),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  Metrics = Runtime.GetMetrics();
+  TestEqual(TEXT("retry advances accepted sequence"),
+    Metrics.LastAcceptedInputSequence, uint64{5});
+  TestEqual(TEXT("retry does not fabricate applied progress"),
+    Metrics.LastAppliedInputSequence, uint64{3});
+  TestTrue(TEXT("all admitted batches settle without false gap"),
+    PollRuntimeUntilIdle(Runtime));
+  Metrics = Runtime.GetMetrics();
+  TestEqual(TEXT("apply gate catches up to admission gate"),
+    Metrics.LastAppliedInputSequence, uint64{5});
+  TestFalse(TEXT("accepted-not-applied never requests resnapshot"),
+    Runtime.RequiresResnapshot());
+
+  TestEqual(TEXT("exact duplicate is idempotently accepted"),
+    Runtime.SubmitIntentBatch(SequenceFour),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  Metrics = Runtime.GetMetrics();
+  TestEqual(TEXT("duplicate is not enqueued twice"),
+    Metrics.InputQueueDepth, 0);
+  TestEqual(TEXT("duplicate preserves applied sequence"),
+    Metrics.LastAppliedInputSequence, uint64{5});
+
+  FCrowdWorkerIntentBatch Conflict = SequenceFour;
+  Conflict.TargetSimulationTimeSeconds += 1.0;
+  Conflict.RecalculateStableHash();
+  TestEqual(TEXT("conflicting duplicate requires resnapshot"),
+    Runtime.SubmitIntentBatch(Conflict),
+    ECrowdAsyncSimulationSubmitResult::RequiresResnapshot);
+  Metrics = Runtime.GetMetrics();
+  TestEqual(TEXT("conflicting duplicate reason is explicit"),
+    Metrics.LastInputFailure,
+    ECrowdAsyncSimulationInputFailure::ConflictingDuplicate);
+  TestTrue(TEXT("conflicting duplicate latches resnapshot"),
+    Runtime.RequiresResnapshot());
+
+  TestTrue(TEXT("admission runtime invalidates"),
+    Runtime.Invalidate(32));
+  const double InvalidateDeadline =
+    FPlatformTime::Seconds() + 5.0;
+  while (Runtime.GetState()
+      == ECrowdAsyncSimulationRuntimeState::Invalidating
+    && FPlatformTime::Seconds() < InvalidateDeadline)
+  {
+    Runtime.Poll();
+    FPlatformProcess::SleepNoStats(0.0f);
+  }
+  Metrics = Runtime.GetMetrics();
+  TestEqual(TEXT("invalidation resets accepted sequence"),
+    Metrics.LastAcceptedInputSequence, uint64{0});
+  TestEqual(TEXT("invalidation resets applied sequence"),
+    Metrics.LastAppliedInputSequence, uint64{0});
+  TestEqual(TEXT("invalidation resets queued watermark"),
+    Metrics.QueuedInputSequenceWatermark, uint64{0});
+  TestEqual(TEXT("invalidation clears failure reason"),
+    Metrics.LastInputFailure,
+    ECrowdAsyncSimulationInputFailure::None);
+  TestTrue(TEXT("admission runtime stops"),
+    Runtime.StopAndDrain(5.0));
+
+  FCrowdAsyncSimulationRuntimeConfig CommandConfig =
+    MakeRuntimeConfig();
+  CommandConfig.MaxPendingCommands = 1;
+  FCrowdAsyncSimulationRuntime CommandRuntime;
+  TestTrue(TEXT("command runtime starts"),
+    CommandRuntime.Start(CommandConfig, 33));
+  TestEqual(TEXT("command runtime snapshot queues"),
+    CommandRuntime.SubmitResnapshot(
+      MakeResnapshotBatch(33, InitialRef, 1.0 / 30.0)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("command runtime snapshot settles"),
+    PollRuntimeUntilIdle(CommandRuntime));
+  TestEqual(TEXT("first bounded command batch queues"),
+    CommandRuntime.SubmitIntentBatch(MakeInputBatch(33, 3, 2)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("first bounded command batch settles"),
+    PollRuntimeUntilIdle(CommandRuntime));
+  TestEqual(TEXT("consumed command releases bounded capacity"),
+    CommandRuntime.SubmitIntentBatch(MakeInputBatch(33, 5, 2)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("second bounded command batch settles"),
+    PollRuntimeUntilIdle(CommandRuntime));
+  TestFalse(TEXT("command consumption avoids false resnapshot"),
+    CommandRuntime.RequiresResnapshot());
+  TestTrue(TEXT("command runtime stops"),
+    CommandRuntime.StopAndDrain(5.0));
   return true;
 }
 
@@ -1084,16 +1311,17 @@ bool FMassCrowdAsyncSimulationRuntimeResnapshotTest::RunTest(
   TestTrue(TEXT("resnapshot fixture settles"),
     PollRuntimeUntilIdle(Runtime));
 
-  FCrowdWorkerInputBatch Gap = MakeInputBatch(11, 3, 1);
-  TestEqual(TEXT("gap batch queues for owner validation"),
-    Runtime.SubmitInput(Gap),
-    ECrowdAsyncSimulationSubmitResult::Accepted);
-  TestTrue(TEXT("gap owner task becomes idle"),
-    PollRuntimeUntilIdle(Runtime));
+  FCrowdWorkerIntentBatch Gap = MakeInputBatch(11, 4, 1);
+  TestEqual(TEXT("admission gate rejects real gap"),
+    Runtime.SubmitIntentBatch(Gap),
+    ECrowdAsyncSimulationSubmitResult::RequiresResnapshot);
   TestTrue(TEXT("gap requests resnapshot"),
     Runtime.RequiresResnapshot());
+  TestEqual(TEXT("runtime reports sequence gap reason"),
+    Runtime.GetMetrics().LastInputFailure,
+    ECrowdAsyncSimulationInputFailure::SequenceGap);
   TestEqual(TEXT("further input rejected while resnapshot required"),
-    Runtime.SubmitInput(MakeInputBatch(11, 2, 1)),
+    Runtime.SubmitIntentBatch(MakeInputBatch(11, 2, 1)),
     ECrowdAsyncSimulationSubmitResult::RequiresResnapshot);
 
   TestTrue(TEXT("generation invalidation begins"),
@@ -1432,6 +1660,11 @@ bool FMassCrowdWorkerShadowLifecycleTest::RunTest(
     Shadow.SubmitSnapshot(
       Runtime, Incremental, 2.0 / 30.0, BehaviorCommands),
     ECrowdWorkerShadowSubmitResult::Accepted);
+  TestEqual(
+    TEXT("pending snapshot resolves its exact input sequence"),
+    Shadow.ResolveInputSequenceForSnapshotHash(
+      Incremental.StableHash),
+    Shadow.GetMetrics().LastSubmittedInputSequence);
   TestTrue(TEXT("dirty mirror comparison completes"),
     DriveShadowUntilCompared(Shadow, Runtime, 2));
 
@@ -1442,12 +1675,17 @@ bool FMassCrowdWorkerShadowLifecycleTest::RunTest(
   TestEqual(TEXT("two source snapshots compared"),
     Metrics.ComparedSnapshotCount, uint64{2});
   TestEqual(TEXT("initial plus dirty records only"),
-    Metrics.SubmittedInputRecordCount, uint64{8});
+    Metrics.SubmittedInputRecordCount, uint64{10});
   TestEqual(TEXT("command journal enters worker input"),
     Metrics.SubmittedCommandRecordCount, uint64{1});
   TestEqual(TEXT("latest Mass snapshot hash acknowledged"),
     Metrics.LastComparedSourceSnapshotHash,
     Incremental.StableHash);
+  TestEqual(
+    TEXT("compared snapshot keeps exact input sequence mapping"),
+    Shadow.ResolveInputSequenceForSnapshotHash(
+      Incremental.StableHash),
+    Metrics.LastComparedInputSequence);
   TestEqual(TEXT("entity set hash matches"),
     Metrics.LastExpectedEntitySetHash,
     Metrics.LastObservedEntitySetHash);
@@ -1467,6 +1705,161 @@ bool FMassCrowdWorkerShadowLifecycleTest::RunTest(
     Mirror.ResourceIds.Num(), 1);
   TestTrue(TEXT("shadow runtime stops"),
     Runtime.StopAndDrain(5.0));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdWorkerShadowAutonomousFrameTest,
+  "MassCrowd.Runtime.WorkerShadow.AutonomousFrameNoStateEcho",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdWorkerShadowAutonomousFrameTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdAsyncSimulationRuntime Runtime;
+  FCrowdWorkerBoundaryShadowSync Shadow;
+  const FCrowdWorkerShadowSyncConfig Config = MakeShadowConfig();
+  TestTrue(TEXT("autonomous runtime starts"),
+    Shadow.Start(Runtime, Config, 32));
+  TArray<FCrowdMassBoundaryAgentRecord> Records;
+  Records.Add(MakeBoundaryAgent(
+    10, 100, 1, FVector(100.0, 0.0, 0.0)));
+  Records.Add(MakeBoundaryAgent(
+    20, 200, 1, FVector(200.0, 0.0, 0.0)));
+  const FCrowdMassBoundarySnapshot Initial =
+    MakeBoundarySnapshot(0, Records);
+  TestEqual(TEXT("autonomous bootstrap queues"),
+    Shadow.SubmitSnapshot(Runtime, Initial, 1.0 / 30.0),
+    ECrowdWorkerShadowSubmitResult::Accepted);
+  TestTrue(TEXT("autonomous bootstrap compares"),
+    DriveShadowUntilCompared(Shadow, Runtime, 1));
+  const uint64 BootstrapRecordCount =
+    Shadow.GetMetrics().SubmittedInputRecordCount;
+  const uint64 BootstrapStateHash =
+    Shadow.GetMetrics().LastObservedStateHash;
+
+  TestEqual(TEXT("autonomous frame queues"),
+    Shadow.SubmitAutonomousFrame(
+      Runtime, 1, 1, 2.0 / 30.0),
+    ECrowdWorkerShadowSubmitResult::Accepted);
+  TestTrue(TEXT("autonomous frame compares"),
+    DriveShadowUntilCompared(Shadow, Runtime, 2));
+  const FCrowdWorkerShadowSyncMetrics& Metrics =
+    Shadow.GetMetrics();
+  TestEqual(TEXT("autonomous frame submits only clock intent"),
+    Metrics.SubmittedInputRecordCount,
+    BootstrapRecordCount + 1);
+  TestEqual(TEXT("autonomous frame does not serialize full state"),
+    Metrics.FullStateSerializationCount, uint64{2});
+  TestEqual(TEXT("autonomous frame does not serialize snapshot resource"),
+    Metrics.SnapshotResourceSerializationCount, uint64{1});
+  TestEqual(TEXT("autonomous frame preserves input-state hash"),
+    Metrics.LastObservedStateHash, BootstrapStateHash);
+  TestFalse(TEXT("autonomous frame has no violation"),
+    Metrics.bViolation);
+  TestTrue(TEXT("autonomous runtime stops"),
+    Runtime.StopAndDrain(5.0));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdWorkerShadowNetworkCheckpointStartTest,
+  "MassCrowd.Runtime.WorkerShadow.NetworkCheckpointStart",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdWorkerShadowNetworkCheckpointStartTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  const FCrowdWorkerShadowSyncConfig Config = MakeShadowConfig();
+  TArray<FCrowdMassBoundaryAgentRecord> Records;
+  Records.Add(MakeBoundaryAgent(
+    10, 100, 1, FVector(100.0, 0.0, 0.0)));
+  Records.Add(MakeBoundaryAgent(
+    20, 200, 1, FVector(200.0, 0.0, 0.0)));
+  const FCrowdMassBoundarySnapshot Initial =
+    MakeBoundarySnapshot(0, Records);
+
+  FCrowdWorkerEntityStateStore States;
+  TestTrue(TEXT("checkpoint state store resets"),
+    States.Reset(8, 256));
+  uint64 InputSequence = 1;
+  for (const FCrowdMassBoundaryAgentRecord& Record : Initial.Agents)
+  {
+    FCrowdWorkerPayload Payload;
+    TestTrue(TEXT("checkpoint state encodes"),
+      FCrowdWorkerBoundaryStateCodec::EncodeState(Record, Payload));
+    TestEqual(TEXT("checkpoint entity spawns"),
+      States.Spawn(
+        Record.AgentFacts.StableEntityRef,
+        41,
+        InputSequence++,
+        Payload),
+      ECrowdWorkerQueueResult::Added);
+  }
+  FCrowdWorkerPayload SnapshotPayload;
+  TestTrue(TEXT("checkpoint snapshot resource encodes"),
+    FCrowdWorkerBoundaryStateCodec::EncodeSnapshotResource(
+      Initial, SnapshotPayload));
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("checkpoint resource store resets"),
+    Resources.Reset(256));
+  TestEqual(TEXT("checkpoint snapshot resource stages"),
+    Resources.StageBuilding({
+      FCrowdWorkerBoundaryStateCodec::SnapshotResourceId,
+      1,
+      SnapshotPayload}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  TestTrue(TEXT("checkpoint snapshot resource commits"),
+    Resources.CommitBuildingAtEpoch(1, ResourceEvents));
+  TArray<FCrowdWorkerDirtyStateRecord> CompleteStates;
+  TArray<FCrowdWorkerResourceRecord> CompleteResources;
+  States.GetStateRecords(CompleteStates);
+  Resources.GetCurrentRecords(CompleteResources);
+  FCrowdWorkerCheckpoint Header;
+  Header.Generation = 41;
+  Header.WorkerEpoch = 1;
+  Header.AbsoluteSimulationTick = 1;
+  Header.LastAppliedInputSequence = InputSequence;
+  Header.EntityStateHash = States.CalculateStableHash();
+  Header.ResourceRevisionHash = Resources.CalculateCurrentStableHash();
+  Header.RecalculateStableHash();
+  FCrowdWorkerNetworkContinuationState Continuation;
+  Continuation.WorkRing.Epoch = 2;
+  States.GetLifecycleWatermarks(Continuation.LifecycleWatermarks);
+  FCrowdWorkerNetworkStatePublisher Publisher;
+  TestTrue(TEXT("checkpoint publisher resets"),
+    Publisher.Reset(Config.RuntimeConfig.NetworkState, 41));
+  TestTrue(TEXT("checkpoint epoch commits"),
+    Publisher.CommitEpoch(
+      Header,
+      CompleteStates,
+      CompleteResources,
+      Continuation));
+  FCrowdWorkerNetworkCheckpoint Checkpoint;
+  TestEqual(TEXT("authority checkpoint reads"),
+    Publisher.ReadCheckpoint(41, Checkpoint),
+    ECrowdWorkerNetworkReadResult::Ready);
+
+  FCrowdAsyncSimulationRuntime ClientRuntime;
+  FCrowdWorkerBoundaryShadowSync ClientShadow;
+  TestTrue(TEXT("client starts from network checkpoint"),
+    ClientShadow.StartFromNetworkCheckpoint(
+      ClientRuntime, Config, Checkpoint));
+  TestEqual(TEXT("client adopts checkpoint generation"),
+    ClientShadow.GetGeneration(), uint64{41});
+  TestEqual(TEXT("unchanged client snapshot submits as intent"),
+    ClientShadow.SubmitSnapshot(
+      ClientRuntime, Initial, 2.0 / 30.0),
+    ECrowdWorkerShadowSubmitResult::Accepted);
+  TestTrue(TEXT("checkpoint-based intent completes"),
+    DriveShadowUntilCompared(ClientShadow, ClientRuntime, 1));
+  TestEqual(TEXT("checkpoint baseline prevents duplicate spawns"),
+    ClientShadow.GetMetrics().SubmittedInputRecordCount,
+    uint64{2});
+  TestTrue(TEXT("client runtime stops"),
+    ClientRuntime.StopAndDrain(5.0));
   return true;
 }
 

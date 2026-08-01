@@ -43,6 +43,23 @@ enum class ECrowdWorkerExchangeResult : uint8
   Violation
 };
 
+struct FCrowdWorkerStatePatchKey
+{
+  FCrowdStableEntityRef EntityRef;
+  uint16 StateFieldId = 0;
+
+  bool operator==(const FCrowdWorkerStatePatchKey& Other)
+    const = default;
+
+  friend uint32 GetTypeHash(
+    const FCrowdWorkerStatePatchKey& Key)
+  {
+    return HashCombineFast(
+      GetTypeHash(Key.EntityRef),
+      GetTypeHash(Key.StateFieldId));
+  }
+};
+
 class MASSCROWDRUNTIME_API FCrowdWorkerPublishedExchange
 {
 public:
@@ -57,7 +74,10 @@ public:
   // reset. Existing consuming pointers become invalid.
   bool ResetQuiescent(
     uint64 InGeneration,
-    const FCrowdWorkerContractLimits& InLimits);
+    const FCrowdWorkerContractLimits& InLimits,
+    uint64 InLastPublishedSequence = 0,
+    uint64 InLastAcceptedEventSequence = 0,
+    uint64 InLastConsumerFrameSequence = 0);
 
   ECrowdWorkerAppendResult AppendStatePatch(
     const FCrowdWorkerStatePatch& Patch);
@@ -87,7 +107,7 @@ private:
   void LatchViolation();
 
   FCrowdWorkerPublishedBatch Buffers[3];
-  TMap<FCrowdStableEntityRef, int32> BuildingPatchIndices;
+  TMap<FCrowdWorkerStatePatchKey, int32> BuildingPatchIndices;
   FCrowdWorkerContractLimits Limits;
   mutable FCriticalSection ExchangeMutex;
   TAtomic<bool> bViolation{false};

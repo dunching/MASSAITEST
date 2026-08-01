@@ -1,20 +1,22 @@
-#include "MassCrowdWorkerContracts.h"
+﻿#include "MassCrowdWorkerContracts.h"
 
 #include <type_traits>
 
 namespace CrowdWorkerContractsPrivate
 {
-  constexpr uint64 FnvOffset64 = 14695981039346656037ull;
-  constexpr uint64 FnvPrime64 = 1099511628211ull;
+  constexpr uint64 ContractsFnvOffset64 =
+    14695981039346656037ull;
+  constexpr uint64 ContractsFnvPrime64 = 1099511628211ull;
 
   enum class EInputRecordKind : uint8
   {
     Spawn = 1,
     Despawn,
     Command,
-    State,
+    Objective,
+    ExternalGameplay,
     Resource,
-    Correction
+    Clock
   };
 
   uint64 FoldBytes(
@@ -25,7 +27,7 @@ namespace CrowdWorkerContractsPrivate
     for (int32 Index = 0; Index < ByteCount; ++Index)
     {
       Hash ^= Bytes[Index];
-      Hash *= FnvPrime64;
+      Hash *= ContractsFnvPrime64;
     }
     return Hash;
   }
@@ -41,7 +43,7 @@ namespace CrowdWorkerContractsPrivate
     {
       Hash ^= static_cast<uint8>(
         (Bits >> (Byte * 8)) & TUnsigned{0xff});
-      Hash *= FnvPrime64;
+      Hash *= ContractsFnvPrime64;
     }
     return Hash;
   }
@@ -54,7 +56,9 @@ namespace CrowdWorkerContractsPrivate
     return FoldPod(Hash, Bits);
   }
 
-  uint64 FoldRef(uint64 Hash, const FCrowdStableEntityRef& Ref)
+  uint64 ContractsFoldRef(
+    uint64 Hash,
+    const FCrowdStableEntityRef& Ref)
   {
     Hash = FoldPod(Hash, Ref.ProviderId);
     Hash = FoldPod(Hash, Ref.StableEntityId);
@@ -71,7 +75,7 @@ namespace CrowdWorkerContractsPrivate
     return FoldBytes(Hash, Payload.Bytes.GetData(), Payload.Bytes.Num());
   }
 
-  bool IsFiniteNonNegative(const double Value)
+  bool ContractsIsFiniteNonNegative(const double Value)
   {
     return FMath::IsFinite(Value) && Value >= 0.0;
   }
@@ -94,7 +98,7 @@ namespace CrowdWorkerContractsPrivate
   }
 
   void GatherInputRecords(
-    const FCrowdWorkerInputBatch& Batch,
+    const FCrowdWorkerIntentBatch& Batch,
     TArray<FInputRecordRef>& OutRecords)
   {
     OutRecords.Reset();
@@ -114,27 +118,32 @@ namespace CrowdWorkerContractsPrivate
         Batch.Commands[Index].InputSequence,
         EInputRecordKind::Command,
         Index});
-    for (int32 Index = 0; Index < Batch.StateDeltas.Num(); ++Index)
+    for (int32 Index = 0;
+      Index < Batch.ObjectiveRevisions.Num(); ++Index)
       OutRecords.Add({
-        Batch.StateDeltas[Index].InputSequence,
-        EInputRecordKind::State,
+        Batch.ObjectiveRevisions[Index].InputSequence,
+        EInputRecordKind::Objective,
+        Index});
+    for (int32 Index = 0; Index < Batch.ExternalGameplayInputs.Num(); ++Index)
+      OutRecords.Add({
+        Batch.ExternalGameplayInputs[Index].InputSequence,
+        EInputRecordKind::ExternalGameplay,
         Index});
     for (int32 Index = 0; Index < Batch.ResourceDeltas.Num(); ++Index)
       OutRecords.Add({
         Batch.ResourceDeltas[Index].InputSequence,
         EInputRecordKind::Resource,
         Index});
-    for (int32 Index = 0; Index < Batch.Corrections.Num(); ++Index)
-      OutRecords.Add({
-        Batch.Corrections[Index].InputSequence,
-        EInputRecordKind::Correction,
-        Index});
+    OutRecords.Add({
+      Batch.Clock.InputSequence,
+      EInputRecordKind::Clock,
+      0});
     OutRecords.Sort(InputRecordLess);
   }
 
   uint64 FoldInputRecord(
     uint64 Hash,
-    const FCrowdWorkerInputBatch& Batch,
+    const FCrowdWorkerIntentBatch& Batch,
     const FInputRecordRef& Record)
   {
     Hash = FoldPod(Hash, static_cast<uint8>(Record.Kind));
@@ -145,30 +154,39 @@ namespace CrowdWorkerContractsPrivate
       {
         const FCrowdWorkerSpawnDelta& Delta =
           Batch.Spawns[Record.Index];
-        Hash = FoldRef(Hash, Delta.EntityRef);
+        Hash = ContractsFoldRef(Hash, Delta.EntityRef);
         return FoldPod(Hash, Delta.InitialState.StableHash);
       }
       case EInputRecordKind::Despawn:
       {
         const FCrowdWorkerDespawnDelta& Delta =
           Batch.Despawns[Record.Index];
-        Hash = FoldRef(Hash, Delta.EntityRef);
+        Hash = ContractsFoldRef(Hash, Delta.EntityRef);
         return FoldPod(Hash, Delta.ReasonId);
       }
       case EInputRecordKind::Command:
       {
         const FCrowdWorkerCommandDelta& Delta =
           Batch.Commands[Record.Index];
-        Hash = FoldRef(Hash, Delta.EntityRef);
+        Hash = ContractsFoldRef(Hash, Delta.EntityRef);
         Hash = FoldPod(Hash, Delta.CommandId);
         Hash = FoldDouble(Hash, Delta.EffectiveSimulationTimeSeconds);
         return FoldPod(Hash, Delta.Payload.StableHash);
       }
-      case EInputRecordKind::State:
+      case EInputRecordKind::Objective:
       {
-        const FCrowdWorkerStateDelta& Delta =
-          Batch.StateDeltas[Record.Index];
-        Hash = FoldRef(Hash, Delta.EntityRef);
+        const FCrowdWorkerObjectiveRevisionDelta& Delta =
+          Batch.ObjectiveRevisions[Record.Index];
+        Hash = FoldPod(Hash, Delta.ObjectiveId);
+        Hash = FoldPod(Hash, Delta.Revision);
+        return FoldPod(Hash, Delta.Payload.StableHash);
+      }
+      case EInputRecordKind::ExternalGameplay:
+      {
+        const FCrowdWorkerExternalGameplayInput& Delta =
+          Batch.ExternalGameplayInputs[Record.Index];
+        Hash = ContractsFoldRef(Hash, Delta.EntityRef);
+        Hash = FoldPod(Hash, Delta.InputTypeId);
         Hash = FoldPod(Hash, Delta.DirtyMask);
         return FoldPod(Hash, Delta.FullState.StableHash);
       }
@@ -180,15 +198,8 @@ namespace CrowdWorkerContractsPrivate
         Hash = FoldPod(Hash, Delta.Revision);
         return FoldPod(Hash, Delta.Payload.StableHash);
       }
-      case EInputRecordKind::Correction:
-      {
-        const FCrowdWorkerCorrectionDelta& Delta =
-          Batch.Corrections[Record.Index];
-        Hash = FoldRef(Hash, Delta.EntityRef);
-        Hash = FoldPod(Hash, Delta.CorrectionRevision);
-        Hash = FoldPod(Hash, Delta.DirtyMask);
-        return FoldPod(Hash, Delta.FullState.StableHash);
-      }
+      case EInputRecordKind::Clock:
+        return FoldPod(Hash, Batch.Clock.SimulationTick);
     }
     return Hash;
   }
@@ -198,7 +209,7 @@ using namespace CrowdWorkerContractsPrivate;
 
 uint64 FCrowdWorkerPayload::CalculateStableHash() const
 {
-  uint64 Hash = FoldPod(FnvOffset64, uint32{1});
+  uint64 Hash = FoldPod(ContractsFnvOffset64, uint32{1});
   return FoldPayload(Hash, *this);
 }
 
@@ -238,17 +249,28 @@ bool FCrowdWorkerCommandDelta::IsValid(
   return InputSequence != 0
     && (EntityRef.IsUnset() || EntityRef.IsValid())
     && CommandId != 0
-    && IsFiniteNonNegative(EffectiveSimulationTimeSeconds)
+    && ContractsIsFiniteNonNegative(
+      EffectiveSimulationTimeSeconds)
     && Payload.IsValid(MaxPayloadBytes);
 }
 
-bool FCrowdWorkerStateDelta::IsValid(
+bool FCrowdWorkerExternalGameplayInput::IsValid(
   const int32 MaxPayloadBytes) const
 {
   return InputSequence != 0
-    && EntityRef.IsValid()
+    && (EntityRef.IsUnset() || EntityRef.IsValid())
+    && InputTypeId != 0
     && DirtyMask != 0
     && FullState.IsValid(MaxPayloadBytes);
+}
+
+bool FCrowdWorkerObjectiveRevisionDelta::IsValid(
+  const int32 MaxPayloadBytes) const
+{
+  return InputSequence != 0
+    && ObjectiveId != 0
+    && Revision != 0
+    && Payload.IsValid(MaxPayloadBytes);
 }
 
 bool FCrowdWorkerResourceDelta::IsValid(
@@ -270,19 +292,20 @@ bool FCrowdWorkerCorrectionDelta::IsValid(
     && FullState.IsValid(MaxPayloadBytes);
 }
 
-int32 FCrowdWorkerInputBatch::GetRecordCount() const
+int32 FCrowdWorkerIntentBatch::GetRecordCount() const
 {
   return Spawns.Num()
     + Despawns.Num()
     + Commands.Num()
-    + StateDeltas.Num()
+    + ObjectiveRevisions.Num()
+    + ExternalGameplayInputs.Num()
     + ResourceDeltas.Num()
-    + Corrections.Num();
+    + 1;
 }
 
-uint64 FCrowdWorkerInputBatch::CalculateStableHash() const
+uint64 FCrowdWorkerIntentBatch::CalculateStableHash() const
 {
-  uint64 Hash = FoldPod(FnvOffset64, Version);
+  uint64 Hash = FoldPod(ContractsFnvOffset64, Version);
   Hash = FoldPod(Hash, Generation);
   Hash = FoldPod(Hash, FirstInputSequence);
   Hash = FoldPod(Hash, LastInputSequence);
@@ -295,30 +318,25 @@ uint64 FCrowdWorkerInputBatch::CalculateStableHash() const
   return Hash;
 }
 
-void FCrowdWorkerInputBatch::RecalculateStableHash()
+void FCrowdWorkerIntentBatch::RecalculateStableHash()
 {
   StableHash = CalculateStableHash();
 }
 
-bool FCrowdWorkerInputBatch::IsValid(
+bool FCrowdWorkerIntentBatch::IsValid(
   const FCrowdWorkerContractLimits& Limits) const
 {
   if (!Limits.IsValid()
     || Version != CurrentVersion
     || Generation == 0
-    || !IsFiniteNonNegative(TargetSimulationTimeSeconds))
+    || !Clock.IsValid()
+    || !ContractsIsFiniteNonNegative(
+      TargetSimulationTimeSeconds))
     return false;
 
   const int32 RecordCount = GetRecordCount();
   if (RecordCount > Limits.MaxInputRecordsPerBatch)
     return false;
-  if (RecordCount == 0)
-  {
-    return FirstInputSequence == 0
-      && LastInputSequence == 0
-      && StableHash != 0
-      && StableHash == CalculateStableHash();
-  }
   if (FirstInputSequence == 0
     || LastInputSequence < FirstInputSequence
     || static_cast<uint64>(RecordCount)
@@ -331,11 +349,11 @@ bool FCrowdWorkerInputBatch::IsValid(
     if (!Delta.IsValid()) return false;
   for (const FCrowdWorkerCommandDelta& Delta : Commands)
     if (!Delta.IsValid(Limits.MaxPayloadBytes)) return false;
-  for (const FCrowdWorkerStateDelta& Delta : StateDeltas)
+  for (const FCrowdWorkerObjectiveRevisionDelta& Delta : ObjectiveRevisions)
+    if (!Delta.IsValid(Limits.MaxPayloadBytes)) return false;
+  for (const FCrowdWorkerExternalGameplayInput& Delta : ExternalGameplayInputs)
     if (!Delta.IsValid(Limits.MaxPayloadBytes)) return false;
   for (const FCrowdWorkerResourceDelta& Delta : ResourceDeltas)
-    if (!Delta.IsValid(Limits.MaxPayloadBytes)) return false;
-  for (const FCrowdWorkerCorrectionDelta& Delta : Corrections)
     if (!Delta.IsValid(Limits.MaxPayloadBytes)) return false;
 
   TArray<FInputRecordRef> Records;
@@ -357,45 +375,42 @@ bool FCrowdWorkerInputSequenceGate::ResetForResnapshot(
   LastAcceptedFirstSequence = 0;
   LastAcceptedLastSequence = 0;
   LastAcceptedHash = 0;
+  LastTargetSimulationTick = 0;
   LastTargetSimulationTimeSeconds = 0.0;
+  LastFailure = ECrowdWorkerInputFailure::None;
   bHasAcceptedBatch = false;
   bRequiresResnapshot = false;
   return true;
 }
 
 ECrowdWorkerInputAcceptResult FCrowdWorkerInputSequenceGate::Accept(
-  const FCrowdWorkerInputBatch& Batch,
+  const FCrowdWorkerIntentBatch& Batch,
   const FCrowdWorkerContractLimits& Limits)
 {
   if (Batch.Generation != Generation)
-    return ECrowdWorkerInputAcceptResult::RejectedGeneration;
-  if (bRequiresResnapshot)
-    return ECrowdWorkerInputAcceptResult::RequiresResnapshot;
-  if (!Batch.IsValid(Limits))
   {
-    bRequiresResnapshot = true;
+    LastFailure = ECrowdWorkerInputFailure::GenerationMismatch;
+    return ECrowdWorkerInputAcceptResult::RejectedGeneration;
+  }
+  if (bRequiresResnapshot)
+  {
+    LastFailure = ECrowdWorkerInputFailure::ResnapshotRequired;
     return ECrowdWorkerInputAcceptResult::RequiresResnapshot;
   }
-  if (Batch.GetRecordCount() == 0)
+  if (!Batch.IsValid(Limits))
   {
-    if (bHasAcceptedBatch
-      && Batch.TargetSimulationTimeSeconds
-        < LastTargetSimulationTimeSeconds)
-    {
-      bRequiresResnapshot = true;
-      return ECrowdWorkerInputAcceptResult::RequiresResnapshot;
-    }
-    LastTargetSimulationTimeSeconds =
-      Batch.TargetSimulationTimeSeconds;
-    bHasAcceptedBatch = true;
-    return ECrowdWorkerInputAcceptResult::AcceptedEmpty;
+    LastFailure = ECrowdWorkerInputFailure::InvalidPayload;
+    bRequiresResnapshot = true;
+    return ECrowdWorkerInputAcceptResult::RequiresResnapshot;
   }
   if (Batch.FirstInputSequence == NextExpectedSequence)
   {
     if (bHasAcceptedBatch
-      && Batch.TargetSimulationTimeSeconds
-        < LastTargetSimulationTimeSeconds)
+      && (Batch.Clock.SimulationTick < LastTargetSimulationTick
+        || Batch.TargetSimulationTimeSeconds
+          < LastTargetSimulationTimeSeconds))
     {
+      LastFailure = ECrowdWorkerInputFailure::TimeRegression;
       bRequiresResnapshot = true;
       return ECrowdWorkerInputAcceptResult::RequiresResnapshot;
     }
@@ -403,29 +418,38 @@ ECrowdWorkerInputAcceptResult FCrowdWorkerInputSequenceGate::Accept(
     LastAcceptedFirstSequence = Batch.FirstInputSequence;
     LastAcceptedLastSequence = Batch.LastInputSequence;
     LastAcceptedHash = Batch.StableHash;
-    LastTargetSimulationTimeSeconds =
-      Batch.TargetSimulationTimeSeconds;
+    LastTargetSimulationTick = Batch.Clock.SimulationTick;
+    LastTargetSimulationTimeSeconds = Batch.TargetSimulationTimeSeconds;
     bHasAcceptedBatch = true;
+    LastFailure = ECrowdWorkerInputFailure::None;
     return ECrowdWorkerInputAcceptResult::Accepted;
   }
   if (Batch.FirstInputSequence == LastAcceptedFirstSequence
     && Batch.LastInputSequence == LastAcceptedLastSequence)
   {
     if (Batch.StableHash == LastAcceptedHash)
+    {
+      LastFailure = ECrowdWorkerInputFailure::None;
       return ECrowdWorkerInputAcceptResult::AcceptedDuplicate;
+    }
+    LastFailure = ECrowdWorkerInputFailure::ConflictingDuplicate;
     bRequiresResnapshot = true;
     return ECrowdWorkerInputAcceptResult::RequiresResnapshot;
   }
   if (Batch.LastInputSequence < LastAcceptedFirstSequence)
+  {
+    LastFailure = ECrowdWorkerInputFailure::StaleSequence;
     return ECrowdWorkerInputAcceptResult::RejectedStale;
+  }
 
+  LastFailure = ECrowdWorkerInputFailure::SequenceGap;
   bRequiresResnapshot = true;
   return ECrowdWorkerInputAcceptResult::RequiresResnapshot;
 }
 
 uint64 FCrowdWorkerPublishedState::CalculateStableHash() const
 {
-  uint64 Hash = FoldPod(FnvOffset64, uint32{1});
+  uint64 Hash = FoldPod(ContractsFnvOffset64, uint32{1});
   Hash = FoldPod(Hash, StateRevision);
   return FoldPod(Hash, Payload.StableHash);
 }
@@ -439,8 +463,9 @@ bool FCrowdWorkerPublishedState::IsValid(
 
 uint64 FCrowdWorkerStatePatch::CalculateStableHash() const
 {
-  uint64 Hash = FoldPod(FnvOffset64, uint32{1});
-  Hash = FoldRef(Hash, EntityRef);
+  uint64 Hash = FoldPod(ContractsFnvOffset64, uint32{1});
+  Hash = ContractsFoldRef(Hash, EntityRef);
+  Hash = FoldPod(Hash, StateFieldId);
   Hash = FoldPod(Hash, Generation);
   Hash = FoldPod(Hash, WorkerEpoch);
   Hash = FoldPod(Hash, SourceInputSequence);
@@ -468,8 +493,8 @@ bool FCrowdWorkerStatePatch::IsValid(
 
 uint64 FCrowdWorkerGameplayEvent::CalculateStableHash() const
 {
-  uint64 Hash = FoldPod(FnvOffset64, uint32{1});
-  Hash = FoldRef(Hash, EntityRef);
+  uint64 Hash = FoldPod(ContractsFnvOffset64, uint32{1});
+  Hash = ContractsFoldRef(Hash, EntityRef);
   Hash = FoldPod(Hash, Generation);
   Hash = FoldPod(Hash, WorkerEpoch);
   Hash = FoldPod(Hash, SourceInputSequence);
@@ -499,7 +524,7 @@ bool FCrowdWorkerGameplayEvent::IsValid(
 
 uint64 FCrowdWorkerPublishedBatch::CalculateStableHash() const
 {
-  uint64 Hash = FoldPod(FnvOffset64, Version);
+  uint64 Hash = FoldPod(ContractsFnvOffset64, Version);
   Hash = FoldPod(Hash, Generation);
   Hash = FoldPod(Hash, PublishSequence);
   Hash = FoldPod(Hash, MinWorkerEpoch);
@@ -532,7 +557,8 @@ FCrowdWorkerPublishedBatchValidator::Validate(
     || Batch.PublishSequence == 0
     || Batch.MinWorkerEpoch == 0
     || Batch.MaxWorkerEpoch < Batch.MinWorkerEpoch
-    || !IsFiniteNonNegative(Batch.PublishedSimulationTimeSeconds)
+    || !ContractsIsFiniteNonNegative(
+      Batch.PublishedSimulationTimeSeconds)
     || Batch.StatePatches.Num() > Limits.MaxStatePatchesPerSlot
     || Batch.OrderedEvents.Num() > Limits.MaxPendingOrderedEvents)
     return ECrowdWorkerPublishedValidationResult::RejectedStructure;
@@ -542,6 +568,8 @@ FCrowdWorkerPublishedBatchValidator::Validate(
     return ECrowdWorkerPublishedValidationResult::RejectedPublishSequence;
 
   FCrowdStableEntityRef PreviousRef;
+  uint16 PreviousFieldId = 0;
+  bool bHasPreviousPatch = false;
   for (const FCrowdWorkerStatePatch& Patch : Batch.StatePatches)
   {
     if (!Patch.IsValid(
@@ -549,10 +577,14 @@ FCrowdWorkerPublishedBatchValidator::Validate(
       || Patch.WorkerEpoch < Batch.MinWorkerEpoch
       || Patch.WorkerEpoch > Batch.MaxWorkerEpoch
       || Patch.SourceInputSequence > Batch.LastAppliedInputSequence
-      || (!PreviousRef.IsUnset()
-        && !(PreviousRef < Patch.EntityRef)))
+      || (bHasPreviousPatch
+        && (Patch.EntityRef < PreviousRef
+          || (Patch.EntityRef == PreviousRef
+            && Patch.StateFieldId <= PreviousFieldId))))
       return ECrowdWorkerPublishedValidationResult::RejectedStructure;
     PreviousRef = Patch.EntityRef;
+    PreviousFieldId = Patch.StateFieldId;
+    bHasPreviousPatch = true;
   }
 
   uint64 PreviousEventSequence = 0;

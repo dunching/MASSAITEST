@@ -2,9 +2,9 @@
 
 ## 0. 文档状态
 
-[INFERRED][HIGH] 本文冻结下一代大规模 Crowd 模拟的目标架构与实施合同：每个 World 拥有持久 Worker Simulation Runtime，GT/Mass Processor 只负责向 Runtime 提交外部输入和把已发布结果批量应用到 Mass/场景代理。
+[INFERRED][HIGH] 本文保存PW0–PW8的设计与历史证据；其“混合Consistency Domain长期保留Boundary”结论已被WA0全面Worker权威方案取代。现行目标事实源为`FullWorkerAuthorityArchitecture.md`，字段切换状态以`FullWorkerAuthorityOwnershipMatrix.md`为准。
 
-[COMPUTED][HIGH] PW1–PW8现已完成：持久Worker Runtime、权威SoA镜像、增量Input、短Task Scheduler、可变Published Batch及Movement Production Owner均已进入生产。Particle、Target和Combat因PW7 fail-closed证据不足继续保留深度1 Fixed-Step Boundary；现行混合生产事实以`CurrentArchitecture.md`为准。
+[COMPUTED][HIGH] PW1–PW8现已完成：持久Worker Runtime、权威SoA镜像、增量Input、短Task Scheduler、可变Published Batch及Movement Production Owner均已进入生产。Particle、Target和Combat当前仍留在深度1 Fixed-Step Boundary，但这只是WA迁移起点，不再是终态。
 
 [INFERRED][HIGH] 本文不废除现有 Boundary Kernel、StableEntityRef、Generation、Prepared Patch、Stable Hash和非阻塞消费成果；迁移必须复用这些合同，并通过 Shadow Compare 证明新旧结果边界。
 

@@ -2,11 +2,19 @@
 
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "MassCrowdRuntimeSubsystem.h"
+#include "MassCrowdWorkerReplicationCodec.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(MassCrowdReplicationActor)
 
 namespace
 {
+  TAutoConsoleVariable<int32> CVarCrowdWorkerAuthorityCorrectionEnabled(
+    TEXT("crowd.Worker.AuthorityCorrectionEnabled"),
+    1,
+    TEXT("Enable sparse Worker authority correction requests. Intent, digest, simulation and presentation remain active when disabled."),
+    ECVF_Default);
+
   uint64 CalculateBaselineBeginHash(
     const uint32 Revision, const uint64 ResumeSequence)
   {
@@ -29,6 +37,8 @@ AMassCrowdReplicationActor::AMassCrowdReplicationActor()
   bReplicates = true;
   bAlwaysRelevant = false;
   bOnlyRelevantToOwner = true;
+  PrimaryActorTick.bCanEverTick = true;
+  PrimaryActorTick.bStartWithTickEnabled = true;
   SetReplicateMovement(false);
   SetNetUpdateFrequency(30.0f);
   Limits.MaxReliableRecordsPerBatch = 256;
@@ -43,6 +53,18 @@ AMassCrowdReplicationActor::AMassCrowdReplicationActor()
   Limits.SnapshotLimits.AssemblyTimeoutSeconds = 10.0;
   ServerState.Initialize(Limits);
   ClientState.Initialize(Limits);
+  WorkerPacketConfig.MaxChunkBytes = 48 * 1024;
+  WorkerPacketConfig.MaxPacketBytes = FMath::Max(
+    WorkerNetworkConfig.MaxEncodedCheckpointBytes,
+    FMath::Max(
+      WorkerNetworkConfig.MaxEncodedCorrectionBytes,
+      WorkerNetworkConfig.MaxEncodedIntentBytes));
+  WorkerPacketConfig.MaxChunkCount = FMath::DivideAndRoundUp(
+    WorkerPacketConfig.MaxPacketBytes,
+    WorkerPacketConfig.MaxChunkBytes);
+  WorkerPacketConfig.AssemblyTimeoutSeconds = 10.0;
+  WorkerPacketAssembler.Initialize(WorkerPacketConfig);
+  WorkerClientGate.Initialize(WorkerNetworkConfig);
 }
 
 void AMassCrowdReplicationActor::BeginPlay()
@@ -52,6 +74,147 @@ void AMassCrowdReplicationActor::BeginPlay()
     TEXT("MassCrowdReplicationChannel role=%s stage=begin owner=%s"),
     HasAuthority() ? TEXT("server") : TEXT("client"),
     *GetNameSafe(GetOwner()));
+}
+
+void AMassCrowdReplicationActor::Tick(const float DeltaSeconds)
+{
+  Super::Tick(DeltaSeconds);
+  UWorld* World = GetWorld();
+  if (!World || World->GetNetMode() == NM_Standalone) return;
+  UpdateWorkerTrafficRates(NowSeconds());
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    World->GetSubsystem<UMassCrowdRuntimeSubsystem>();
+  if (!RuntimeSubsystem) return;
+  FCrowdAsyncSimulationRuntime& Runtime =
+    RuntimeSubsystem->GetAsyncSimulationRuntime();
+
+  if (HasAuthority())
+  {
+    PumpOutgoingWorkerPackets();
+    if (!OutgoingWorkerPackets.IsEmpty()) return;
+    if (!PendingOutgoingAuthorityCorrections.IsEmpty())
+    {
+      const FCrowdWorkerAuthorityCorrectionBatch& Correction =
+        PendingOutgoingAuthorityCorrections[0];
+      TArray<uint8> Bytes;
+      if (!FCrowdWorkerReplicationCodec::EncodeCorrection(
+          Correction, WorkerNetworkConfig, Bytes)
+        || !SendWorkerPacket(
+          ECrowdWorkerPacketKind::Correction,
+          Correction.Generation,
+          Correction.CorrectionSequence,
+          Correction.StableHash,
+          Bytes))
+        return;
+      WorkerTrafficMetrics.CorrectionBytes += Bytes.Num();
+      WorkerTrafficWindowCorrectionBytes += Bytes.Num();
+      WorkerTrafficMetrics.LastCorrectionEntityCount =
+        Correction.AuthoritativeMembers.Num();
+      WorkerTrafficMetrics.LastCorrectionScopeCount =
+        Correction.Scopes.Num();
+      PendingOutgoingAuthorityCorrections.RemoveAt(
+        0, 1, EAllowShrinking::No);
+      return;
+    }
+    const uint64 Generation = Runtime.GetGeneration();
+    if (Generation == 0) return;
+    if (LastWorkerSentGeneration != Generation)
+    {
+      FCrowdWorkerNetworkCheckpoint Checkpoint;
+      if (FCrowdWorkerReplicationServerAdapter::CaptureCheckpoint(
+          Runtime, Generation, Checkpoint)
+        != ECrowdWorkerNetworkReadResult::Ready)
+        return;
+      if (!PublishWorkerCheckpoint(Checkpoint)) return;
+      LastWorkerSentGeneration = Generation;
+      LastWorkerSentInputSequence =
+        Checkpoint.Header.LastAppliedInputSequence;
+      LastWorkerSentDigestSequence = 0;
+      NextWorkerCorrectionSequence = 1;
+      PendingOutgoingAuthorityCorrections.Reset();
+      return;
+    }
+
+    PumpAuthorityDigest(Runtime, Generation);
+
+    TArray<FCrowdWorkerIntentBatch> Intents;
+    const ECrowdWorkerNetworkReadResult ReadResult =
+      Runtime.ReadNetworkIntents(
+        Generation,
+        LastWorkerSentInputSequence,
+        Intents);
+    if (ReadResult == ECrowdWorkerNetworkReadResult::RequiresCheckpoint)
+    {
+      LastWorkerSentGeneration = 0;
+      return;
+    }
+    if (ReadResult != ECrowdWorkerNetworkReadResult::Ready
+      || Intents.IsEmpty())
+      return;
+    if (PublishWorkerIntents(MakeArrayView(&Intents[0], 1)))
+      LastWorkerSentInputSequence = Intents[0].LastInputSequence;
+    return;
+  }
+
+  if (bWorkerCheckpointReady
+    || Runtime.GetState()
+      != ECrowdAsyncSimulationRuntimeState::Running)
+    return;
+  if (!PendingAuthorityCorrections.IsEmpty())
+  {
+    for (const FCrowdWorkerAuthorityCorrectionBatch& Correction :
+      PendingAuthorityCorrections)
+    {
+      const ECrowdAsyncSimulationCorrectionResult Result =
+        Runtime.SubmitAuthorityCorrection(Correction);
+      if (Result != ECrowdAsyncSimulationCorrectionResult::Accepted
+        && Result != ECrowdAsyncSimulationCorrectionResult::Duplicate)
+      {
+        HandleClientFailure(TEXT("worker_authority_correction_submit"));
+        return;
+      }
+    }
+    PendingAuthorityCorrections.Reset();
+    bWorkerCorrectionPending = false;
+  }
+  ProcessPendingAuthorityDigest(Runtime);
+  if (bWorkerCorrectionPending)
+    return;
+  TArray<FCrowdWorkerIntentBatch> Intents;
+  const uint64 MaximumInputSequence = PendingAuthorityDigest.IsSet()
+    ? PendingAuthorityDigest->ThroughInputSequence
+    : MAX_uint64;
+  int32 DrainCount = 0;
+  while (DrainCount < PendingWorkerIntents.Num()
+    && PendingWorkerIntents[DrainCount].LastInputSequence
+      <= MaximumInputSequence)
+    ++DrainCount;
+  if (DrainCount == 0) return;
+  Intents.Append(PendingWorkerIntents.GetData(), DrainCount);
+  PendingWorkerIntents.RemoveAt(
+    0, DrainCount, EAllowShrinking::No);
+  for (int32 Index = 0; Index < Intents.Num(); ++Index)
+  {
+    const ECrowdAsyncSimulationSubmitResult Result =
+      Runtime.SubmitIntentBatch(Intents[Index]);
+    if (Result != ECrowdAsyncSimulationSubmitResult::Accepted)
+    {
+      const FCrowdAsyncSimulationRuntimeMetrics Metrics =
+        Runtime.GetMetrics();
+      UE_LOG(LogTemp, Error,
+        TEXT("MassCrowdWorkerNetwork role=client stage=runtime_intent_rejected result=%u generation=%llu first_sequence=%llu last_sequence=%llu runtime_generation=%llu runtime_state=%u requires_resnapshot=%d"),
+        static_cast<uint32>(Result),
+        Intents[Index].Generation,
+        Intents[Index].FirstInputSequence,
+        Intents[Index].LastInputSequence,
+        Runtime.GetGeneration(),
+        static_cast<uint32>(Runtime.GetState()),
+        Metrics.bRequiresResnapshot ? 1 : 0);
+      HandleClientFailure(TEXT("worker_runtime_intent_submit"));
+      return;
+    }
+  }
+  ProcessPendingAuthorityDigest(Runtime);
 }
 
 AMassCrowdReplicationActor* AMassCrowdReplicationActor::SpawnForController(
@@ -209,12 +372,94 @@ bool AMassCrowdReplicationActor::PublishMovementCorrections(
   return true;
 }
 
+bool AMassCrowdReplicationActor::PublishWorkerCheckpoint(
+  const FCrowdWorkerNetworkCheckpoint& Checkpoint)
+{
+  TArray<uint8> Bytes;
+  const bool bPublished = HasAuthority()
+    && FCrowdWorkerReplicationCodec::EncodeCheckpoint(
+      Checkpoint, WorkerNetworkConfig, Bytes)
+    && SendWorkerPacket(
+      ECrowdWorkerPacketKind::Checkpoint,
+      Checkpoint.Header.Generation,
+      Checkpoint.Header.WorkerEpoch,
+      Checkpoint.StableHash,
+      Bytes);
+  if (bPublished)
+  {
+    WorkerTrafficMetrics.CheckpointBytes += Bytes.Num();
+    WorkerTrafficMetrics.LastCheckpointBytes = Bytes.Num();
+    ++WorkerTrafficMetrics.CheckpointCount;
+    UE_LOG(LogTemp, Display,
+      TEXT("MassCrowdWorkerNetwork role=server stage=checkpoint_queued generation=%llu sequence=%llu bytes=%d hash=%llu"),
+      Checkpoint.Header.Generation,
+      Checkpoint.Header.WorkerEpoch,
+      Bytes.Num(),
+      Checkpoint.StableHash);
+  }
+  return bPublished;
+}
+
+bool AMassCrowdReplicationActor::PublishWorkerIntents(
+  const TConstArrayView<FCrowdWorkerIntentBatch> Batches)
+{
+  if (!HasAuthority() || Batches.Num() != 1) return false;
+  const FCrowdWorkerIntentBatch& Batch = Batches[0];
+  TArray<uint8> Bytes;
+  if (!FCrowdWorkerReplicationCodec::EncodeIntent(
+      Batch, WorkerNetworkConfig, Bytes)
+    || !SendWorkerPacket(
+      ECrowdWorkerPacketKind::Intent,
+      Batch.Generation,
+      Batch.LastInputSequence,
+      Batch.StableHash,
+      Bytes))
+    return false;
+  WorkerTrafficMetrics.IntentBytes += Bytes.Num();
+  WorkerTrafficWindowIntentBytes += Bytes.Num();
+  UE_LOG(LogTemp, VeryVerbose,
+    TEXT("MassCrowdWorkerNetwork role=server stage=intent_queued generation=%llu first_sequence=%llu last_sequence=%llu tick=%llu records=%d bytes=%d hash=%llu"),
+    Batch.Generation,
+    Batch.FirstInputSequence,
+    Batch.LastInputSequence,
+    Batch.Clock.SimulationTick,
+    Batch.GetRecordCount(),
+    Bytes.Num(),
+    Batch.StableHash);
+  return true;
+}
+
+bool AMassCrowdReplicationActor::ConsumeWorkerCheckpoint(
+  FCrowdWorkerNetworkCheckpoint& OutCheckpoint)
+{
+  OutCheckpoint = {};
+  if (!bWorkerCheckpointReady) return false;
+  OutCheckpoint = MoveTemp(ReadyWorkerCheckpoint);
+  bWorkerCheckpointReady = false;
+  return true;
+}
+
+bool AMassCrowdReplicationActor::DrainWorkerIntents(
+  TArray<FCrowdWorkerIntentBatch>& OutBatches)
+{
+  OutBatches = MoveTemp(PendingWorkerIntents);
+  PendingWorkerIntents.Reset();
+  return !OutBatches.IsEmpty();
+}
+
 void AMassCrowdReplicationActor::ClientBaselineBegin_Implementation(
   const uint32 Revision,
   const uint64 ResumeSequence,
   const uint64 StableHash)
 {
   bClientReady = false;
+  bWorkerClientReady = false;
+  bWorkerCheckpointReady = false;
+  LastWorkerReceivedInputSequence = 0;
+  PendingWorkerIntents.Reset();
+  PendingAuthorityDigest.Reset();
+  PendingAuthorityCorrections.Reset();
+  bWorkerCorrectionPending = false;
   if (ClientState.AcceptBaselineBegin(
     {Revision, ResumeSequence, StableHash}, NowSeconds())
     == ECrowdReplicationAcceptResult::Rejected)
@@ -456,16 +701,301 @@ void AMassCrowdReplicationActor::ServerRequestResync_Implementation()
   Destroy();
 }
 
+void AMassCrowdReplicationActor::PumpAuthorityDigest(
+  FCrowdAsyncSimulationRuntime& Runtime,
+  const uint64 Generation)
+{
+  FCrowdWorkerAuthorityDigestBatch Digest;
+  if (Runtime.ReadAuthorityDigest(Generation, Digest)
+      != ECrowdWorkerNetworkReadResult::Ready
+    || Digest.DigestSequence <= LastWorkerSentDigestSequence)
+    return;
+  TArray<uint8> Fields;
+  TArray<uint8> Kinds;
+  TArray<int64> ScopeIds;
+  TArray<uint32> EntityCounts;
+  TArray<uint64> Hashes;
+  Fields.Reserve(Digest.Entries.Num());
+  Kinds.Reserve(Digest.Entries.Num());
+  ScopeIds.Reserve(Digest.Entries.Num());
+  EntityCounts.Reserve(Digest.Entries.Num());
+  Hashes.Reserve(Digest.Entries.Num());
+  for (const FCrowdWorkerAuthorityDigestEntry& Entry : Digest.Entries)
+  {
+    Fields.Add(static_cast<uint8>(Entry.Scope.Field));
+    Kinds.Add(static_cast<uint8>(Entry.Scope.Kind));
+    ScopeIds.Add(Entry.Scope.ScopeId);
+    EntityCounts.Add(Entry.EntityCount);
+    Hashes.Add(Entry.StableHash);
+  }
+  ClientWorkerDigest(
+    Digest.Generation,
+    Digest.DigestSequence,
+    Digest.SimulationTick,
+    Digest.ThroughInputSequence,
+    Fields,
+    Kinds,
+    ScopeIds,
+    EntityCounts,
+    Hashes,
+    Digest.StableHash);
+  LastWorkerSentDigestSequence = Digest.DigestSequence;
+}
+
+void AMassCrowdReplicationActor::ClientWorkerDigest_Implementation(
+  const uint64 Generation,
+  const uint64 DigestSequence,
+  const uint64 SimulationTick,
+  const uint64 ThroughInputSequence,
+  const TArray<uint8>& Fields,
+  const TArray<uint8>& ScopeKinds,
+  const TArray<int64>& ScopeIds,
+  const TArray<uint32>& EntityCounts,
+  const TArray<uint64>& ScopeStableHashes,
+  const uint64 StableHash)
+{
+  const int32 Count = Fields.Num();
+  if (!bWorkerClientReady
+    || Generation != WorkerClientGate.GetGeneration()
+    || Count > WorkerNetworkConfig.MaxDigestScopes
+    || ScopeKinds.Num() != Count
+    || ScopeIds.Num() != Count
+    || EntityCounts.Num() != Count
+    || ScopeStableHashes.Num() != Count)
+  {
+    HandleClientFailure(TEXT("worker_digest_shape"));
+    return;
+  }
+  FCrowdWorkerAuthorityDigestBatch Digest;
+  Digest.Generation = Generation;
+  Digest.DigestSequence = DigestSequence;
+  Digest.SimulationTick = SimulationTick;
+  Digest.ThroughInputSequence = ThroughInputSequence;
+  Digest.StableHash = StableHash;
+  Digest.Entries.Reserve(Count);
+  for (int32 Index = 0; Index < Count; ++Index)
+  {
+    FCrowdWorkerAuthorityDigestEntry& Entry =
+      Digest.Entries.AddDefaulted_GetRef();
+    Entry.Scope.Field = static_cast<ECrowdWorkerField>(Fields[Index]);
+    Entry.Scope.Kind = static_cast<ECrowdWorkerAuthorityScopeKind>(
+      ScopeKinds[Index]);
+    Entry.Scope.ScopeId = ScopeIds[Index];
+    Entry.SimulationTick = SimulationTick;
+    Entry.ThroughInputSequence = ThroughInputSequence;
+    Entry.EntityCount = EntityCounts[Index];
+    Entry.StableHash = ScopeStableHashes[Index];
+  }
+  if (!Digest.IsValid(WorkerNetworkConfig))
+  {
+    HandleClientFailure(TEXT("worker_digest_contract"));
+    return;
+  }
+  if (PendingAuthorityDigest.IsSet()
+    && PendingAuthorityDigest->DigestSequence >= DigestSequence)
+    return;
+  PendingAuthorityDigest = MoveTemp(Digest);
+}
+
+void AMassCrowdReplicationActor::ProcessPendingAuthorityDigest(
+  FCrowdAsyncSimulationRuntime& Runtime)
+{
+  if (!PendingAuthorityDigest.IsSet() || bWorkerCorrectionPending)
+    return;
+  TArray<FCrowdWorkerAuthorityScopeKey> Mismatches;
+  const ECrowdWorkerNetworkReadResult Result =
+    Runtime.CompareAuthorityDigest(
+      PendingAuthorityDigest.GetValue(), Mismatches);
+  if (Result == ECrowdWorkerNetworkReadResult::NoData) return;
+  if (Result != ECrowdWorkerNetworkReadResult::Ready)
+  {
+    HandleClientFailure(TEXT("worker_digest_compare"));
+    return;
+  }
+  const uint64 Generation = PendingAuthorityDigest->Generation;
+  const uint64 DigestSequence =
+    PendingAuthorityDigest->DigestSequence;
+  PendingAuthorityDigest.Reset();
+  if (Mismatches.IsEmpty()) return;
+  ++WorkerTrafficMetrics.DigestMismatchCount;
+  if (CVarCrowdWorkerAuthorityCorrectionEnabled.GetValueOnGameThread() == 0)
+    return;
+  TArray<uint8> Fields;
+  TArray<uint8> Kinds;
+  TArray<int64> ScopeIds;
+  for (const FCrowdWorkerAuthorityScopeKey& Scope : Mismatches)
+  {
+    Fields.Add(static_cast<uint8>(Scope.Field));
+    Kinds.Add(static_cast<uint8>(Scope.Kind));
+    ScopeIds.Add(Scope.ScopeId);
+  }
+  bWorkerCorrectionPending = true;
+  ServerRequestWorkerCorrection(
+    Generation, DigestSequence, Fields, Kinds, ScopeIds);
+}
+
+void AMassCrowdReplicationActor::ServerRequestWorkerCorrection_Implementation(
+  const uint64 Generation,
+  const uint64 DigestSequence,
+  const TArray<uint8>& Fields,
+  const TArray<uint8>& ScopeKinds,
+  const TArray<int64>& ScopeIds)
+{
+  if (!HasAuthority() || Fields.IsEmpty()
+    || Fields.Num() > WorkerNetworkConfig.MaxCorrectionScopes
+    || ScopeKinds.Num() != Fields.Num()
+    || ScopeIds.Num() != Fields.Num())
+  {
+    Destroy();
+    return;
+  }
+  UWorld* World = GetWorld();
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem = World
+    ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+    : nullptr;
+  if (!RuntimeSubsystem) return;
+  FCrowdAsyncSimulationRuntime& Runtime =
+    RuntimeSubsystem->GetAsyncSimulationRuntime();
+  TArray<FCrowdWorkerAuthorityScopeKey> Scopes;
+  Scopes.Reserve(Fields.Num());
+  for (int32 Index = 0; Index < Fields.Num(); ++Index)
+  {
+    FCrowdWorkerAuthorityScopeKey Scope;
+    Scope.Field = static_cast<ECrowdWorkerField>(Fields[Index]);
+    Scope.Kind = static_cast<ECrowdWorkerAuthorityScopeKind>(
+      ScopeKinds[Index]);
+    Scope.ScopeId = ScopeIds[Index];
+    if (!Scope.IsValid())
+    {
+      Destroy();
+      return;
+    }
+    Scopes.Add(Scope);
+  }
+  Scopes.Sort();
+  for (int32 Index = 1; Index < Scopes.Num(); ++Index)
+  {
+    if (!(Scopes[Index - 1] < Scopes[Index]))
+    {
+      Destroy();
+      return;
+    }
+  }
+  FCrowdWorkerAuthorityCorrectionBatch Correction;
+  if (Runtime.BuildAuthorityCorrection(
+      Generation,
+      DigestSequence,
+      NextWorkerCorrectionSequence,
+      Scopes,
+      Correction) != ECrowdWorkerNetworkReadResult::Ready)
+  {
+    Destroy();
+    return;
+  }
+  ++NextWorkerCorrectionSequence;
+  PendingOutgoingAuthorityCorrections.Add(MoveTemp(Correction));
+}
+
+void AMassCrowdReplicationActor::ClientWorkerPacketBegin_Implementation(
+  const uint8 Kind,
+  const uint64 Generation,
+  const uint64 Sequence,
+  const uint64 ObjectStableHash,
+  const int32 TotalBytes,
+  const int32 ChunkCount,
+  const uint64 HeaderStableHash)
+{
+  FCrowdWorkerPacketHeader Header;
+  Header.Kind = static_cast<ECrowdWorkerPacketKind>(Kind);
+  Header.Generation = Generation;
+  Header.Sequence = Sequence;
+  Header.ObjectStableHash = ObjectStableHash;
+  Header.TotalBytes = TotalBytes;
+  Header.ChunkCount = ChunkCount;
+  Header.StableHash = HeaderStableHash;
+  const ECrowdWorkerPacketAcceptResult Result =
+    WorkerPacketAssembler.AcceptHeader(Header, NowSeconds());
+  if (Header.Kind == ECrowdWorkerPacketKind::Checkpoint
+    && Result == ECrowdWorkerPacketAcceptResult::Accepted)
+    bWorkerClientReady = false;
+  if (Result != ECrowdWorkerPacketAcceptResult::Accepted
+    && Result != ECrowdWorkerPacketAcceptResult::Duplicate)
+    HandleClientFailure(TEXT("worker_packet_begin"));
+}
+
+void AMassCrowdReplicationActor::ClientWorkerPacketChunk_Implementation(
+  const uint64 Sequence,
+  const int32 ChunkIndex,
+  const TArray<uint8>& Bytes,
+  const uint64 ChunkStableHash)
+{
+  FCrowdWorkerPacketChunk Chunk;
+  Chunk.Sequence = Sequence;
+  Chunk.ChunkIndex = ChunkIndex;
+  Chunk.Bytes = Bytes;
+  Chunk.StableHash = ChunkStableHash;
+  const ECrowdWorkerPacketAcceptResult Result =
+    WorkerPacketAssembler.AcceptChunk(Chunk, NowSeconds());
+  if (Result != ECrowdWorkerPacketAcceptResult::Accepted
+    && Result != ECrowdWorkerPacketAcceptResult::Duplicate)
+    HandleClientFailure(TEXT("worker_packet_chunk"));
+}
+
+void AMassCrowdReplicationActor::ClientWorkerPacketEnd_Implementation(
+  const uint64 Sequence,
+  const uint64 ObjectStableHash,
+  const uint64 EndStableHash)
+{
+  FCrowdWorkerPacketEnd End;
+  End.Sequence = Sequence;
+  End.ObjectStableHash = ObjectStableHash;
+  End.StableHash = EndStableHash;
+  if (WorkerPacketAssembler.AcceptEnd(End, NowSeconds())
+    != ECrowdWorkerPacketAcceptResult::Complete)
+  {
+    HandleClientFailure(TEXT("worker_packet_end"));
+    return;
+  }
+  HandleCompletedWorkerPacket();
+}
+
 double AMassCrowdReplicationActor::NowSeconds() const
 {
   const UWorld* World = GetWorld();
   return World ? World->GetTimeSeconds() : 0.0;
 }
 
+void AMassCrowdReplicationActor::UpdateWorkerTrafficRates(
+  const double Now)
+{
+  if (WorkerTrafficWindowStartSeconds <= 0.0)
+  {
+    WorkerTrafficWindowStartSeconds = Now;
+    return;
+  }
+  const double Elapsed = Now - WorkerTrafficWindowStartSeconds;
+  if (Elapsed < 1.0) return;
+  WorkerTrafficMetrics.IntentBytesPerSecond =
+    static_cast<double>(WorkerTrafficWindowIntentBytes) / Elapsed;
+  WorkerTrafficMetrics.CorrectionBytesPerSecond =
+    static_cast<double>(WorkerTrafficWindowCorrectionBytes) / Elapsed;
+  WorkerTrafficWindowIntentBytes = 0;
+  WorkerTrafficWindowCorrectionBytes = 0;
+  WorkerTrafficWindowStartSeconds = Now;
+}
+
 void AMassCrowdReplicationActor::HandleClientFailure(
   const TCHAR* Stage)
 {
+  ++WorkerTrafficMetrics.ResyncCount;
   bClientReady = false;
+  bWorkerClientReady = false;
+  bWorkerCheckpointReady = false;
+  LastWorkerReceivedInputSequence = 0;
+  PendingWorkerIntents.Reset();
+  PendingAuthorityDigest.Reset();
+  PendingAuthorityCorrections.Reset();
+  bWorkerCorrectionPending = false;
   UE_LOG(LogTemp, Error,
     TEXT("MassCrowdReplicationChannel role=client stage=resync_required source=%s"),
     Stage);
@@ -523,4 +1053,175 @@ void AMassCrowdReplicationActor::SendReliableBatch(
     Sequences, Kinds, ProviderIds, StableEntityIds,
     LifecycleSerials, Revisions, PayloadOffsets,
     PayloadBytes, StableHashes);
+}
+
+bool AMassCrowdReplicationActor::SendWorkerPacket(
+  const ECrowdWorkerPacketKind Kind,
+  const uint64 Generation,
+  const uint64 Sequence,
+  const uint64 ObjectStableHash,
+  const TConstArrayView<uint8> Bytes)
+{
+  if (!OutgoingWorkerPackets.IsEmpty()
+    || OutgoingWorkerPacketBytes != 0
+    || Bytes.Num() > WorkerPacketConfig.MaxPacketBytes)
+    return false;
+  FOutgoingWorkerPacket Packet;
+  if (!FCrowdWorkerPacketTransport::Build(
+    Kind, Generation, Sequence, ObjectStableHash, Bytes,
+    WorkerPacketConfig,
+    Packet.Header,
+    Packet.Chunks,
+    Packet.End))
+    return false;
+  OutgoingWorkerPacketBytes = Packet.Header.TotalBytes;
+  OutgoingWorkerPackets.Add(MoveTemp(Packet));
+  return true;
+}
+
+void AMassCrowdReplicationActor::PumpOutgoingWorkerPackets()
+{
+  if (OutgoingWorkerPackets.IsEmpty()) return;
+  FOutgoingWorkerPacket& Packet = OutgoingWorkerPackets[0];
+  if (!Packet.bBeginSent)
+  {
+    ClientWorkerPacketBegin(
+      static_cast<uint8>(Packet.Header.Kind),
+      Packet.Header.Generation,
+      Packet.Header.Sequence,
+      Packet.Header.ObjectStableHash,
+      Packet.Header.TotalBytes,
+      Packet.Header.ChunkCount,
+      Packet.Header.StableHash);
+    Packet.bBeginSent = true;
+  }
+  constexpr int32 MaxChunksPerTick = 8;
+  const int32 EndChunk = FMath::Min(
+    Packet.NextChunkIndex + MaxChunksPerTick,
+    Packet.Chunks.Num());
+  while (Packet.NextChunkIndex < EndChunk)
+  {
+    const FCrowdWorkerPacketChunk& Chunk =
+      Packet.Chunks[Packet.NextChunkIndex++];
+    ClientWorkerPacketChunk(
+      Chunk.Sequence,
+      Chunk.ChunkIndex,
+      Chunk.Bytes,
+      Chunk.StableHash);
+  }
+  if (Packet.NextChunkIndex != Packet.Chunks.Num()) return;
+  ClientWorkerPacketEnd(
+    Packet.End.Sequence,
+    Packet.End.ObjectStableHash,
+    Packet.End.StableHash);
+  OutgoingWorkerPacketBytes -= Packet.Header.TotalBytes;
+  OutgoingWorkerPackets.RemoveAt(0, 1, EAllowShrinking::No);
+}
+
+void AMassCrowdReplicationActor::HandleCompletedWorkerPacket()
+{
+  FCrowdWorkerAssembledPacket Packet;
+  if (!WorkerPacketAssembler.ConsumeCompleted(Packet))
+  {
+    HandleClientFailure(TEXT("worker_packet_consume"));
+    return;
+  }
+  if (Packet.Header.Kind == ECrowdWorkerPacketKind::Checkpoint)
+  {
+    FCrowdWorkerNetworkCheckpoint Checkpoint;
+    if (!FCrowdWorkerReplicationCodec::DecodeCheckpoint(
+        Packet.Bytes, WorkerNetworkConfig, Checkpoint)
+      || Checkpoint.Header.Generation != Packet.Header.Generation
+      || Checkpoint.Header.WorkerEpoch != Packet.Header.Sequence
+      || Checkpoint.StableHash != Packet.Header.ObjectStableHash
+      || WorkerClientGate.AcceptCheckpoint(Checkpoint)
+        != ECrowdWorkerReplicationAcceptResult::Accepted
+      || WorkerClientGate.AcceptResourceRevisions(
+        Checkpoint.StableHash, Checkpoint.ResourceRecords)
+        != ECrowdWorkerReplicationAcceptResult::Accepted
+      || WorkerClientGate.AcceptEventBaseline(
+        Checkpoint.StableHash, Checkpoint.EventBaselineSequence)
+        != ECrowdWorkerReplicationAcceptResult::BaselineReady
+      || !WorkerClientGate.ConsumeReadyCheckpoint(
+        ReadyWorkerCheckpoint))
+    {
+      HandleClientFailure(TEXT("worker_checkpoint_decode"));
+      return;
+    }
+    bWorkerCheckpointReady = true;
+    bWorkerClientReady = true;
+    LastWorkerReceivedInputSequence =
+      ReadyWorkerCheckpoint.Header.LastAppliedInputSequence;
+    PendingWorkerIntents.Reset();
+    PendingAuthorityDigest.Reset();
+    PendingAuthorityCorrections.Reset();
+    bWorkerCorrectionPending = false;
+    UE_LOG(LogTemp, Display,
+      TEXT("MassCrowdWorkerNetwork role=client stage=checkpoint_ready generation=%llu sequence=%llu states=%d resources=%d work_current=%d work_next=%d wakeups=%d hash=%llu"),
+      ReadyWorkerCheckpoint.Header.Generation,
+      ReadyWorkerCheckpoint.InputBaselineSequence,
+      ReadyWorkerCheckpoint.StateRecords.Num(),
+      ReadyWorkerCheckpoint.ResourceRecords.Num(),
+      ReadyWorkerCheckpoint.Continuation.WorkRing.CurrentItems.Num(),
+      ReadyWorkerCheckpoint.Continuation.WorkRing.NextItems.Num(),
+      ReadyWorkerCheckpoint.Continuation.Wakeups.Num(),
+      ReadyWorkerCheckpoint.StableHash);
+    return;
+  }
+  if (Packet.Header.Kind == ECrowdWorkerPacketKind::Intent)
+  {
+    FCrowdWorkerIntentBatch Batch;
+    const bool bDecoded = FCrowdWorkerReplicationCodec::DecodeIntent(
+      Packet.Bytes, WorkerNetworkConfig, Batch);
+    const bool bValid = bWorkerClientReady && bDecoded
+      && Batch.Generation == Packet.Header.Generation
+      && Batch.LastInputSequence == Packet.Header.Sequence
+      && Batch.StableHash == Packet.Header.ObjectStableHash
+      && Batch.FirstInputSequence
+        == LastWorkerReceivedInputSequence + 1
+      && PendingWorkerIntents.Num()
+        < WorkerNetworkConfig.MaxRetainedIntentBatches;
+    if (!bValid)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("MassCrowdWorkerNetwork role=client stage=intent_order_detail ready=%d decoded=%d packet_generation=%llu batch_generation=%llu packet_sequence=%llu batch_first=%llu batch_last=%llu expected_first=%llu pending=%d capacity=%d packet_hash=%llu batch_hash=%llu"),
+        bWorkerClientReady ? 1 : 0,
+        bDecoded ? 1 : 0,
+        Packet.Header.Generation,
+        Batch.Generation,
+        Packet.Header.Sequence,
+        Batch.FirstInputSequence,
+        Batch.LastInputSequence,
+        LastWorkerReceivedInputSequence + 1,
+        PendingWorkerIntents.Num(),
+        WorkerNetworkConfig.MaxRetainedIntentBatches,
+        Packet.Header.ObjectStableHash,
+        Batch.StableHash);
+      HandleClientFailure(TEXT("worker_intent_decode_or_order"));
+      return;
+    }
+    LastWorkerReceivedInputSequence = Batch.LastInputSequence;
+    PendingWorkerIntents.Add(MoveTemp(Batch));
+    return;
+  }
+  if (Packet.Header.Kind == ECrowdWorkerPacketKind::Correction)
+  {
+    FCrowdWorkerAuthorityCorrectionBatch Correction;
+    if (!bWorkerClientReady
+      || !bWorkerCorrectionPending
+      || !FCrowdWorkerReplicationCodec::DecodeCorrection(
+        Packet.Bytes, WorkerNetworkConfig, Correction)
+      || Correction.Generation != Packet.Header.Generation
+      || Correction.CorrectionSequence != Packet.Header.Sequence
+      || Correction.StableHash != Packet.Header.ObjectStableHash
+      || PendingAuthorityCorrections.Num()
+        >= WorkerNetworkConfig.MaxCorrectionScopes)
+    {
+      HandleClientFailure(TEXT("worker_correction_decode"));
+      return;
+    }
+    PendingAuthorityCorrections.Add(MoveTemp(Correction));
+    return;
+  }
+  HandleClientFailure(TEXT("worker_packet_kind"));
 }
