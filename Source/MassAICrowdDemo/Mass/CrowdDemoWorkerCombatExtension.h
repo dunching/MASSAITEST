@@ -156,5 +156,9 @@ public:
     FCrowdDemoWorkerMixedCombatHostResult& OutResult);
 };
 
+bool CalculateCrowdDemoWorkerProjectileControlSemanticHash(
+  const FCrowdWorkerProjectileControlResource& Control,
+  uint64& OutSemanticHash);
+
 TUniquePtr<ICrowdWorkerCombatExtension>
   MakeCrowdDemoWorkerCombatExtension();

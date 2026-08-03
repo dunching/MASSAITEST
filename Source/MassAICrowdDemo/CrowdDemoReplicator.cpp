@@ -821,10 +821,10 @@ FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
       Metrics.ClientSimObstaclePenetrationCount = CompareMetrics.ClientSimObstaclePenetrationCount;
       Metrics.SharedFlowMetrics = CompareMetrics.SharedFlowMetrics;
       Metrics.CorridorDeadlockAgentCount = CompareMetrics.CorridorDeadlockAgentCount;
-      const FCrowdDemoCorrectionFrameMetrics& CorrectionMetrics = It->GetLastCorrectionFrameMetrics();
+      const FCrowdDemoRoundCheckpointFrameMetrics& CorrectionMetrics = It->GetLastCorrectionFrameMetrics();
       Metrics.CorrectionFrameRevision = CorrectionMetrics.CorrectionFrameRevision;
       Metrics.CorrectionFrameAppliedCount = CorrectionMetrics.CorrectionFrameAppliedCount;
-      Metrics.CorrectionFrameHeaderReceivedCount = CorrectionMetrics.CorrectionFrameHeaderReceivedCount;
+      Metrics.CorrectionFrameHeaderReceivedCount = CorrectionMetrics.RoundCheckpointHeaderReceivedCount;
       Metrics.CorrectionFrameChunkReceivedCount = CorrectionMetrics.CorrectionFrameChunkReceivedCount;
       Metrics.LatestChunkRevisionSeen = CorrectionMetrics.LatestChunkRevisionSeen;
       Metrics.CorrectionChunkReceivedCount = CorrectionMetrics.CorrectionChunkReceivedCount;

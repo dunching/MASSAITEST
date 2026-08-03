@@ -146,4 +146,45 @@ bool FMassCrowdLocalPredictiveInteractionLayerTest::RunTest(
   return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdLocalPredictiveInheritedOverlapRecoveryTest,
+  "MassCrowd.Core.LocalPredictive.InheritedOverlapRecovery",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdLocalPredictiveInheritedOverlapRecoveryTest::RunTest(
+  const FString& Parameters)
+{
+  TArray<FCrowdLocalPredictiveAgent> Agents = {
+    MakeAgent(1, FVector2f(-40.0f, 0.0f), FVector2f::ZeroVector),
+    MakeAgent(2, FVector2f(40.0f, 0.0f), FVector2f::ZeroVector)};
+  FCrowdLocalPredictivePair Pair;
+  Pair.MinAgentId = 1;
+  Pair.MaxAgentId = 2;
+  Pair.MinAgentIndex = 0;
+  Pair.MaxAgentIndex = 1;
+  Pair.RequiredSeparationCm = 94.0f;
+  FCrowdLocalPredictiveResult ResultA;
+  ResultA.AgentId = 1;
+  ResultA.Velocity = FVector2f(-10.0f, 0.0f);
+  ResultA.bValid = true;
+  FCrowdLocalPredictiveResult ResultB;
+  ResultB.AgentId = 2;
+  ResultB.Velocity = FVector2f(10.0f, 0.0f);
+  ResultB.bValid = true;
+  const FCrowdSharedFlowFieldConfig Flow =
+    FCrowdSharedFlowFieldKernel::MakeSf1Config(1);
+  FCrowdLocalPredictiveSettings Settings;
+  const TArray<FCrowdLocalPredictivePair> Pairs = {Pair};
+  TArray<FCrowdLocalPredictiveResult> Results = {ResultA, ResultB};
+  TestTrue(TEXT("inherited overlap permits monotonic separation"),
+    FCrowdLocalPredictiveInteractionKernel::ValidateJointResult(
+      Agents, Flow, Settings, Pairs, Results));
+  Results[0].Velocity = FVector2f(10.0f, 0.0f);
+  Results[1].Velocity = FVector2f(-10.0f, 0.0f);
+  TestFalse(TEXT("inherited overlap rejects deeper penetration"),
+    FCrowdLocalPredictiveInteractionKernel::ValidateJointResult(
+      Agents, Flow, Settings, Pairs, Results));
+  return true;
+}
+
 #endif

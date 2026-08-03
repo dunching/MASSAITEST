@@ -1,5 +1,7 @@
 #include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdTestBehaviorProvider.h"
+#include "MassCrowdWorkerLifecycleBehaviorDomain.h"
+#include "MassCrowdWorkerResultApply.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -318,6 +320,317 @@ bool FCrowdBehaviorSourceWorkerCommitTest::RunTest(
   TestFalse(TEXT("exact transaction cannot commit twice"),
     Runtime.CommitWorkerPrepared(
       Prepared, MakeArrayView(&Worker, 1), {}));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdBehaviorSourceWorkerAuthoritativeSparseTest,
+  "MassCrowd.BehaviorSource.WorkerAuthoritativeSparse",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdBehaviorSourceWorkerAuthoritativeSparseTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdBehaviorSourceRuntime Runtime;
+  TestTrue(TEXT("runtime initializes"),
+    Runtime.InitializeFromRegisteredProviders());
+  TArray<FCrowdStableEntityRef> EntityRefs{
+    {1, 500, 1}, {1, 501, 1}};
+  for (const FCrowdStableEntityRef& EntityRef : EntityRefs)
+    TestTrue(TEXT("entity registers"),
+      Runtime.RegisterEntity(EntityRef, MakeLegacyBinding()));
+
+  TArray<FCrowdBehaviorEntityEvaluationContext> Contexts;
+  for (int32 Index = 0; Index < EntityRefs.Num(); ++Index)
+  {
+    FCrowdBehaviorEntityEvaluationContext& Context =
+      Contexts.AddDefaulted_GetRef();
+    Context.EntityRef = EntityRefs[Index];
+    Context.FixedStepIndex = 10;
+    Context.Position = FVector(Index * 100.0, 0.0, 0.0);
+    Context.Facing = FVector::ForwardVector;
+    Context.RecalculateStableHash();
+    TestTrue(TEXT("context stages"),
+      Runtime.SetEvaluationContext(Context));
+  }
+  const FCrowdBehaviorSourceCommand Command = MakeBuiltinCommand(
+    EntityRefs[0], 1, 1, CrowdBuiltinSourceTypeIds::MoveToSink,
+    FVector(300.0, 20.0, 0.0));
+  TestTrue(TEXT("command stages"), Runtime.QueueCommand(Command));
+  FCrowdBehaviorPreparedBoundary Prepared;
+  TestTrue(TEXT("boundary prepares"),
+    Runtime.PrepareBoundary(10, Prepared));
+
+  FCrowdWorkerBehaviorAuthority Authority;
+  TestTrue(TEXT("authority initializes"),
+    Authority.ResetQuiescent(
+      1, ECrowdWorkerBehaviorAuthorityMode::Production));
+  TestTrue(TEXT("authority receives membership"),
+    Authority.UpdateCurrentEntities(1, EntityRefs));
+  TestTrue(TEXT("one sparse context queues one content expectation"),
+    Authority.QueuePreparedExpectation(
+      1, 1, Prepared, MakeArrayView(&Contexts[0], 1), false));
+
+  FCrowdWorkerBehaviorState Behavior;
+  Behavior.LastFixedStep = 10;
+  Behavior.LastAbsoluteSimulationTick = 11;
+  Behavior.BusinessCommitLedgerHash = 14695981039346656037ull;
+  Behavior.EvaluationContext = Contexts[0];
+  Behavior.EvaluationContext.Position.X += 37.0;
+  Behavior.EvaluationContext.RecalculateStableHash();
+  Behavior.SourceSet = Prepared.Entities[0].StagedSourceSet;
+  Behavior.ResolvedChannels = Prepared.Entities[0].ResolvedChannels;
+  FCrowdWorkerStatePatch Patch;
+  Patch.EntityRef = EntityRefs[0];
+  Patch.StateFieldId = static_cast<uint16>(
+    ECrowdWorkerField::Behavior) + 1;
+  Patch.Generation = 1;
+  Patch.WorkerEpoch = 1;
+  Patch.SourceInputSequence = 1;
+  Patch.DirtyMask = CrowdWorkerRuntimeV2FieldMask(
+    ECrowdWorkerField::Behavior);
+  Patch.State.StateRevision = 1;
+  TestTrue(TEXT("behavior encodes"),
+    FCrowdWorkerBehaviorStateCodec::Encode(
+      Behavior, Patch.State.Payload));
+  Patch.RecalculateStableHash();
+  FCrowdWorkerPublishedBatch Batch;
+  Batch.Generation = 1;
+  Batch.PublishSequence = 1;
+  Batch.MinWorkerEpoch = 1;
+  Batch.MaxWorkerEpoch = 1;
+  Batch.LastAppliedInputSequence = 1;
+  Batch.StatePatches.Add(Patch);
+  Batch.RecalculateStableHash();
+  FCrowdWorkerResultApplyProxy Proxy;
+  FCrowdWorkerContractLimits Limits;
+  Limits.MaxPayloadBytes = 1024 * 1024;
+  Limits.MaxInputRecordsPerBatch = 16;
+  Limits.MaxStatePatchesPerSlot = 16;
+  Limits.MaxPendingOrderedEvents = 16;
+  TestTrue(TEXT("proxy initializes"),
+    Proxy.ResetFromCheckpoint(1, Limits, EntityRefs, 0, 0));
+  TestEqual(TEXT("single sparse behavior patch applies"),
+    Proxy.Apply(Batch), ECrowdWorkerResultApplyResult::Applied);
+  TestEqual(TEXT("missing unchanged entity does not block sparse match"),
+    Authority.ValidateAvailable(Proxy),
+    ECrowdWorkerBehaviorValidationResult::Matched);
+
+  TArray<FCrowdBehaviorWorkerCommitEntity> WorkerEntities;
+  for (const FCrowdBehaviorPreparedEntity& Entity : Prepared.Entities)
+  {
+    FCrowdBehaviorWorkerCommitEntity& Worker =
+      WorkerEntities.AddDefaulted_GetRef();
+    Worker.EntityRef = Entity.EntityRef;
+    Worker.SourceSet = Entity.StagedSourceSet;
+    Worker.ResolvedChannels = Entity.ResolvedChannels;
+    Worker.EvaluationContextHash = Entity.EvaluationContextHash + 1;
+  }
+  TestTrue(TEXT("authoritative commit accepts Worker kinematic hashes"),
+    Runtime.CommitWorkerAuthoritative(
+      Prepared, WorkerEntities, {}));
+  TestEqual(TEXT("authoritative commit consumes staged command"),
+    Runtime.GetPendingCommandCount(), 0);
+  TestFalse(TEXT("authoritative transaction cannot commit twice"),
+    Runtime.CommitWorkerAuthoritative(
+      Prepared, WorkerEntities, {}));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdBehaviorAuthorityCommittedPredictedKinematicsTest,
+  "MassCrowd.BehaviorSource.CommittedPredictedKinematics",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdBehaviorAuthorityCommittedPredictedKinematicsTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdBehaviorSourceRuntime Runtime;
+  TestTrue(TEXT("runtime initializes"),
+    Runtime.InitializeFromRegisteredProviders());
+  const FCrowdStableEntityRef EntityRef{1, 650, 1};
+  TestTrue(TEXT("entity registers"),
+    Runtime.RegisterEntity(EntityRef, MakeLegacyBinding()));
+
+  FCrowdBehaviorEntityEvaluationContext CommittedContext;
+  CommittedContext.EntityRef = EntityRef;
+  CommittedContext.FixedStepIndex = 10;
+  CommittedContext.Position = FVector(100.0, 20.0, 0.0);
+  CommittedContext.Velocity = FVector(30.0, 0.0, 0.0);
+  CommittedContext.Facing = FVector::ForwardVector;
+  CommittedContext.RecalculateStableHash();
+  TestTrue(TEXT("context stages"),
+    Runtime.SetEvaluationContext(CommittedContext));
+  const FCrowdBehaviorSourceCommand Command = MakeBuiltinCommand(
+    EntityRef, 1, 1, CrowdBuiltinSourceTypeIds::MoveToSink,
+    FVector(300.0, 20.0, 0.0));
+  TestTrue(TEXT("source command stages"),
+    Runtime.QueueCommand(Command));
+  FCrowdBehaviorPreparedBoundary Prepared;
+  TestTrue(TEXT("boundary prepares"),
+    Runtime.PrepareBoundary(10, Prepared));
+  TestTrue(TEXT("boundary commits"),
+    Runtime.CommitPrepared(Prepared));
+
+  FCrowdWorkerBehaviorAuthority Authority;
+  TestTrue(TEXT("authority initializes"),
+    Authority.ResetQuiescent(
+      1, ECrowdWorkerBehaviorAuthorityMode::Shadow));
+  const TArray<FCrowdStableEntityRef> EntityRefs{EntityRef};
+  TestTrue(TEXT("authority receives membership"),
+    Authority.UpdateCurrentEntities(1, EntityRefs));
+  TestTrue(TEXT("ordinary prediction expectation queues"),
+    Authority.QueueCommittedExpectation(
+      1, 1, Runtime,
+      MakeArrayView(&CommittedContext, 1), false, false));
+
+  const FCrowdBehaviorSourceSet* SourceSet =
+    Runtime.FindSourceSet(EntityRef);
+  const FCrowdResolvedBehaviorChannels* Resolved =
+    Runtime.FindResolvedChannels(EntityRef);
+  TestNotNull(TEXT("committed source set exists"), SourceSet);
+  TestNotNull(TEXT("committed resolved channels exist"), Resolved);
+  if (!SourceSet || !Resolved) return false;
+
+  FCrowdWorkerBehaviorState Behavior;
+  Behavior.LastFixedStep = 10;
+  Behavior.LastAbsoluteSimulationTick = 11;
+  Behavior.BusinessCommitLedgerHash = 14695981039346656037ull;
+  Behavior.EvaluationContext = CommittedContext;
+  Behavior.EvaluationContext.Position.X += 37.0;
+  Behavior.EvaluationContext.Velocity.Y += 12.0;
+  Behavior.EvaluationContext.RecalculateStableHash();
+  Behavior.SourceSet = *SourceSet;
+  TestTrue(TEXT("committed source has an instance"),
+    !Behavior.SourceSet.Instances.IsEmpty());
+  if (Behavior.SourceSet.Instances.IsEmpty()) return false;
+  const uint64 PredictedEvaluatorState = 1;
+  TestTrue(TEXT("predicted evaluator state stages"),
+    Behavior.SourceSet.Instances[0].State.Set(
+      0x50524544u, PredictedEvaluatorState));
+  Behavior.SourceSet.RecalculateStableHash();
+  Behavior.ResolvedChannels = *Resolved;
+
+  FCrowdWorkerStatePatch Patch;
+  Patch.EntityRef = EntityRef;
+  Patch.StateFieldId = static_cast<uint16>(
+    ECrowdWorkerField::Behavior) + 1;
+  Patch.Generation = 1;
+  Patch.WorkerEpoch = 1;
+  Patch.SourceInputSequence = 1;
+  Patch.DirtyMask = CrowdWorkerRuntimeV2FieldMask(
+    ECrowdWorkerField::Behavior);
+  Patch.State.StateRevision = 1;
+  TestTrue(TEXT("predicted behavior encodes"),
+    FCrowdWorkerBehaviorStateCodec::Encode(
+      Behavior, Patch.State.Payload));
+  Patch.RecalculateStableHash();
+
+  FCrowdWorkerPublishedBatch Batch;
+  Batch.Generation = 1;
+  Batch.PublishSequence = 1;
+  Batch.MinWorkerEpoch = 1;
+  Batch.MaxWorkerEpoch = 1;
+  Batch.LastAppliedInputSequence = 1;
+  Batch.StatePatches.Add(Patch);
+  Batch.RecalculateStableHash();
+  FCrowdWorkerResultApplyProxy Proxy;
+  FCrowdWorkerContractLimits Limits;
+  Limits.MaxPayloadBytes = 1024 * 1024;
+  Limits.MaxInputRecordsPerBatch = 16;
+  Limits.MaxStatePatchesPerSlot = 16;
+  Limits.MaxPendingOrderedEvents = 16;
+  TestTrue(TEXT("proxy initializes"),
+    Proxy.ResetFromCheckpoint(1, Limits, EntityRefs, 0, 0));
+  TestEqual(TEXT("predicted behavior patch applies"),
+    Proxy.Apply(Batch), ECrowdWorkerResultApplyResult::Applied);
+  TestEqual(TEXT("control parity ignores predicted state hashes"),
+    Authority.ValidateAvailable(Proxy),
+    ECrowdWorkerBehaviorValidationResult::Matched);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdBehaviorAuthorityAutonomousNoEventCaptureTest,
+  "MassCrowd.BehaviorSource.AutonomousNoEventCapture",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdBehaviorAuthorityAutonomousNoEventCaptureTest::RunTest(
+  const FString& Parameters)
+{
+  const FCrowdStableEntityRef EntityRef{1, 700, 1};
+  const TArray<FCrowdStableEntityRef> EntityRefs{EntityRef};
+  FCrowdWorkerBehaviorAuthority Authority;
+  TestTrue(TEXT("authority initializes with a two-batch event capacity"),
+    Authority.ResetQuiescent(
+      1, ECrowdWorkerBehaviorAuthorityMode::Production, {}, 2));
+  TestTrue(TEXT("authority receives membership"),
+    Authority.UpdateCurrentEntities(1, EntityRefs));
+
+  FCrowdWorkerContractLimits Limits;
+  Limits.MaxPayloadBytes = 1024 * 1024;
+  Limits.MaxInputRecordsPerBatch = 16;
+  Limits.MaxStatePatchesPerSlot = 16;
+  Limits.MaxPendingOrderedEvents = 16;
+  FCrowdWorkerResultApplyProxy Proxy;
+  TestTrue(TEXT("proxy initializes"),
+    Proxy.ResetFromCheckpoint(1, Limits, EntityRefs, 0, 0));
+
+  FCrowdWorkerBehaviorState Behavior;
+  Behavior.LastFixedStep = 1;
+  Behavior.LastAbsoluteSimulationTick = 1;
+  Behavior.BusinessCommitLedgerHash = 14695981039346656037ull;
+  Behavior.EvaluationContext.EntityRef = EntityRef;
+  Behavior.EvaluationContext.FixedStepIndex = 1;
+  Behavior.EvaluationContext.Facing = FVector::ForwardVector;
+  Behavior.EvaluationContext.RecalculateStableHash();
+  Behavior.SourceSet.EntityRef = EntityRef;
+  Behavior.SourceSet.CapabilityBinding = MakeLegacyBinding();
+  Behavior.SourceSet.Revision = 1;
+  Behavior.SourceSet.RecalculateStableHash();
+  Behavior.ResolvedChannels.bValid = true;
+  Behavior.ResolvedChannels.StableHash = 1;
+
+  for (uint64 InputSequence = 1; InputSequence <= 4; ++InputSequence)
+  {
+    TestTrue(TEXT("non-consuming owner queues autonomous expectation"),
+      Authority.QueueAutonomousExpectation(
+        1, InputSequence, EntityRefs, false));
+    FCrowdWorkerStatePatch Patch;
+    Patch.EntityRef = EntityRef;
+    Patch.StateFieldId = static_cast<uint16>(
+      ECrowdWorkerField::Behavior) + 1;
+    Patch.Generation = 1;
+    Patch.WorkerEpoch = InputSequence;
+    Patch.SourceInputSequence = InputSequence;
+    Patch.DirtyMask = CrowdWorkerRuntimeV2FieldMask(
+      ECrowdWorkerField::Behavior);
+    Patch.State.StateRevision = InputSequence;
+    TestTrue(TEXT("behavior encodes"),
+      FCrowdWorkerBehaviorStateCodec::Encode(
+        Behavior, Patch.State.Payload));
+    Patch.RecalculateStableHash();
+    FCrowdWorkerPublishedBatch Batch;
+    Batch.Generation = 1;
+    Batch.PublishSequence = InputSequence;
+    Batch.MinWorkerEpoch = InputSequence;
+    Batch.MaxWorkerEpoch = InputSequence;
+    Batch.LastAppliedInputSequence = InputSequence;
+    Batch.StatePatches.Add(MoveTemp(Patch));
+    Batch.RecalculateStableHash();
+    TestEqual(TEXT("batch applies"), Proxy.Apply(Batch),
+      ECrowdWorkerResultApplyResult::Applied);
+    TestEqual(TEXT("autonomous expectation matches"),
+      Authority.ValidateAvailable(Proxy),
+      ECrowdWorkerBehaviorValidationResult::Matched);
+  }
+  TArray<FCrowdBehaviorSourceEvent> MatchedEvents;
+  TArray<FCrowdBusinessContribution> MatchedBusinessCommits;
+  TestFalse(TEXT("non-consuming owner does not retain event batches"),
+    Authority.PeekMatchedEvents(
+      1, MatchedEvents, MatchedBusinessCommits));
+  TestFalse(TEXT("event capacity does not latch a violation"),
+    Authority.GetMetrics().bViolation);
   return true;
 }
 

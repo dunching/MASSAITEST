@@ -10,6 +10,7 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerCombatState
   int64 SourceFixedStep = INDEX_NONE;
   bool bAlive = true;
   bool bReactiveActive = false;
+  bool bMovementLocked = false;
   FVector HorizontalReactiveVelocity = FVector::ZeroVector;
   float ProposedZ = 0.0f;
   float VerticalVelocityCmps = 0.0f;
@@ -23,7 +24,7 @@ class MASSCROWDRUNTIME_API FCrowdWorkerCombatStateCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43574353u;
-  static constexpr uint16 SchemaVersion = 1;
+  static constexpr uint16 SchemaVersion = 2;
   static constexpr int32 MaxEncodedBytes = 64 * 1024;
 
   static bool Encode(

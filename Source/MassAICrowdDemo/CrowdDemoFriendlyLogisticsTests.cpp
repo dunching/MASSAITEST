@@ -16,6 +16,7 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
   FString Coordinator;
   FString GameMode;
   FString MassSubsystem;
+  FString WorkerInputSync;
   FString RunScript;
   TestTrue(TEXT("friendly coordinator source is readable"),
     FFileHelper::LoadFileToString(Coordinator,
@@ -29,6 +30,10 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
     FFileHelper::LoadFileToString(MassSubsystem,
       *FPaths::Combine(FPaths::ProjectDir(),
         TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoMassSubsystem.cpp"))));
+  TestTrue(TEXT("Worker input sync source is readable"),
+    FFileHelper::LoadFileToString(WorkerInputSync,
+      *FPaths::Combine(FPaths::ProjectDir(),
+        TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoWorkerInputSync.cpp"))));
   TestTrue(TEXT("runner source is readable"),
     FFileHelper::LoadFileToString(RunScript,
       *FPaths::Combine(FPaths::ProjectDir(),
@@ -46,13 +51,32 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
     Coordinator.Contains(TEXT("PublishBaseline"))
       && Coordinator.Contains(TEXT("ECrowdReliableStateKind::Task"))
       && Coordinator.Contains(TEXT("DrainClientApplyFrames")));
-  TestTrue(TEXT("scene movement uses product boundary and Nav flow"),
-    Coordinator.Contains(
-      TEXT("MakeUnique<FCrowdMassBoundaryRunner>()"))
-      && Coordinator.Contains(TEXT("PollAndCommitProductBoundary"))
+  TestTrue(TEXT("full Production applies the Worker tail directly"),
+    Coordinator.Contains(TEXT(
+      "const bool bDirectWorkerProductionApply"))
+      && Coordinator.Contains(TEXT(
+        "Pending->bDirectWorkerProductionApply ="))
+      && Coordinator.Contains(TEXT(
+        "FCrowdMassMovementFinalizeWork::BuildCommitPlan"))
+      && Coordinator.Contains(TEXT(
+        "Proxy.FindDomain("))
+      && Coordinator.Contains(TEXT(
+        "ECrowdWorkerField::Facing"))
+      && Coordinator.Contains(TEXT(
+        "bLastProductAppliedDirectWorker"))
+      && Coordinator.Contains(TEXT(
+        "ApplyProductBoundaryCommit")));
+  TestTrue(TEXT("Shadow and Canary retain the Legacy Nav parity plan"),
+    Coordinator.Contains(TEXT(
+      "if (!bDirectWorkerProductionApply)"))
       && Coordinator.Contains(TEXT("BuildOrRefreshNavGraph"))
       && Coordinator.Contains(TEXT("AcquireFlow"))
-      && Coordinator.Contains(TEXT("ApplyProductBoundaryCommit")));
+      && Coordinator.Contains(TEXT("bLegacyPlanBuilt")));
+  TestFalse(TEXT("Friendly no longer references the transaction Runner"),
+    Coordinator.Contains(TEXT("FCrowdMassBoundaryRunner"))
+      || Coordinator.Contains(TEXT("BuildAndSealCommit("))
+      || Coordinator.Contains(TEXT("MarkValidated("))
+      || Coordinator.Contains(TEXT("MarkCommitted(")));
   TestTrue(TEXT("scene movement goal comes from resolved sources"),
     Coordinator.Contains(TEXT(
       "ResolvedChannels.MovementGoal.Location"))
@@ -90,6 +114,37 @@ bool FCrowdDemoFriendlyLogisticsArchitectureTest::RunTest(
     Coordinator.Contains(TEXT("RecycleTrackedAgent("))
       && MassSubsystem.Contains(TEXT("EntityManager.DestroyEntity"))
       && MassSubsystem.Contains(TEXT("LifecycleSerial + 1")));
+  TestTrue(TEXT("Friendly submits a full Worker snapshot only at bootstrap"),
+    Coordinator.Contains(TEXT("!WorkerShadow.IsStarted()"))
+      && Coordinator.Contains(TEXT(
+        "FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot("))
+      && Coordinator.Contains(TEXT(
+        "FCrowdDemoWorkerInputSync::SubmitIntentBatch(")));
+  TestTrue(TEXT("Friendly freezes movement control at bootstrap"),
+    Coordinator.Contains(TEXT(
+      "FCrowdWorkerMovementControlResource Control"))
+      && Coordinator.Contains(TEXT(
+        "BootstrapMovementProfiles"))
+      && Coordinator.Contains(TEXT(
+        "MovementProfileRevision"))
+      && Coordinator.Contains(TEXT(
+        "Control.bRunLocalPredictive = false")));
+  TestTrue(TEXT("real Mass recycle emits and drains ordered Worker intent"),
+    MassSubsystem.Contains(TEXT("PendingWorkerDespawns.Add"))
+      && MassSubsystem.Contains(TEXT("PendingWorkerSpawns.Add"))
+      && MassSubsystem.Contains(TEXT(
+        "PendingWorkerProfileRevisions.Add"))
+      && WorkerInputSync.Contains(TEXT(
+        "CopyPendingWorkerLifecycleProfileJournal("))
+      && WorkerInputSync.Contains(TEXT(
+        "AcknowledgeWorkerLifecycleProfileJournal(")));
+  TestTrue(TEXT("recycle publishes public lifecycle before business state"),
+    Coordinator.Contains(TEXT(
+      "PendingReliableLifecycleSpawns.Add(Replacement)"))
+      && Coordinator.Contains(TEXT(
+        "SpawnRecord.Kind = ECrowdReliableStateKind::Spawn"))
+      && Coordinator.Contains(TEXT(
+        "Record.Kind == ECrowdReliableStateKind::Spawn")));
   TestTrue(TEXT("dedicated path has one presentation owner"),
     MassSubsystem.Contains(
       TEXT("bPublicPresentationOwnsClient"))

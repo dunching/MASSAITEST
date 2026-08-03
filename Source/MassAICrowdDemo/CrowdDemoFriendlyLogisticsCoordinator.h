@@ -2,10 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "MassCrowdBoundaryRunner.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdLogistics.h"
 #include "MassCrowdNavRuntime.h"
+#include "MassCrowdRuntimeBridge.h"
 #include "CrowdDemoFriendlyLogisticsCoordinator.generated.h"
 
 class APlayerController;
@@ -42,12 +42,11 @@ private:
     uint64 FailureGoalNodeId = 0;
     uint32 FailureLayer = 0;
     uint8 FailureStage = 0;
-    bool bCompleted = false;
+    TAtomic<bool> bCompleted{false};
   };
 
   struct FPendingProductBoundary
   {
-    TUniquePtr<FCrowdMassBoundaryRunner> Runner;
     TSharedPtr<FProductMovementWork, ESPMode::ThreadSafe> Work;
     FCrowdMassBoundarySnapshot Snapshot;
     TArray<FCrowdMassCommitTarget> Targets;
@@ -60,6 +59,7 @@ private:
     bool bMoveToSource = false;
     bool bMoveToSink = false;
     bool bWorkerBehaviorProduction = false;
+    bool bDirectWorkerProductionApply = false;
   };
 
   FCrowdLogisticsTransactionStore Store;
@@ -67,6 +67,7 @@ private:
   TMap<uint64, FCrowdStableEntityRef> BehaviorEntityRefsBySlot;
   TMap<FCrowdStableEntityRef, uint32>
     LastPublishedSourceSetRevisions;
+  TArray<FCrowdStableEntityRef> PendingReliableLifecycleSpawns;
   FCrowdLogisticsTransactionStore CancellationStore;
   TMap<TWeakObjectPtr<APlayerController>,
     TWeakObjectPtr<AMassCrowdReplicationActor>> ReplicationChannels;
@@ -121,6 +122,7 @@ private:
   bool bPendingVisualEvidenceViewActivated = false;
   bool bInitialized = false;
   bool bBehaviorEntitiesRegistered = false;
+  bool bLastProductAppliedDirectWorker = false;
   bool bDeathInjected = false;
   bool bFallbackApplied = false;
   bool bServerPassLogged = false;

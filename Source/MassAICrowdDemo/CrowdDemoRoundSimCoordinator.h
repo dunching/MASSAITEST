@@ -36,7 +36,7 @@ public:
 
   bool IsRoundSimActive() const;
   const FCrowdDemoRoundCompareMetrics& GetLastCompareMetrics() const;
-  const FCrowdDemoCorrectionFrameMetrics& GetLastCorrectionFrameMetrics() const;
+  const FCrowdDemoRoundCheckpointFrameMetrics& GetLastCorrectionFrameMetrics() const;
   void NotifyValidationClientReady(int32 AgentCount, int32 VisibleInstances);
 
 protected:
@@ -56,29 +56,29 @@ private:
   FCrowdDemoRoundResultHeader RoundResultHeader;
 
   UPROPERTY(Transient)
-  FCrowdDemoCorrectionFrameHeader CorrectionFrameHeader;
+  FCrowdDemoRoundCheckpointHeader RoundCheckpointHeader;
 
   FCrowdDemoRoundCompareMetrics LastCompareMetrics;
-  FCrowdDemoCorrectionFrameMetrics LastCorrectionFrameMetrics;
+  FCrowdDemoRoundCheckpointFrameMetrics LastCorrectionFrameMetrics;
   FCrowdDemoRoundResultPacket RoundResultPacket;
   FCrowdDemoRoundResultPacket PendingClientResultPacket;
   TMap<int32, FCrowdDemoRoundResultHeader> PendingClientResultHeaders;
   TMap<int32, double> PendingClientResultHeaderReceiveTimes;
   FCrowdDemoRoundPlanPacket PendingServerRoundPlan;
   TMap<int32, FCrowdDemoRoundPlanPacket> PendingClientRoundPlans;
-  TMap<int32, FCrowdDemoPendingCorrectionAssembly> PendingCorrectionAssemblies;
-  TSet<int32> DroppedCorrectionRevisions;
-  TSet<int32> CompletedCorrectionRevisions;
-  TSet<int32> FuturePendingCorrectionRevisions;
+  TMap<int32, FCrowdDemoPendingRoundCheckpointAssembly> PendingRoundCheckpointAssemblies;
+  TSet<int32> DroppedRoundCheckpointRevisions;
+  TSet<int32> CompletedRoundCheckpointRevisions;
+  TSet<int32> FuturePendingRoundCheckpointRevisions;
   TArray<FCrowdRelevantSnapshotChunk> CurrentProductBootstrapChunks;
   TMap<TWeakObjectPtr<APlayerController>,
     TWeakObjectPtr<AMassCrowdReplicationActor>> ProductReplicationChannels;
   TMap<TWeakObjectPtr<AMassCrowdReplicationActor>, uint64>
     NextProductReliableSequence;
-  TMap<int32, FCrowdDemoCorrectionFrameHeader>
-    ProductCorrectionHeaders;
+  TMap<int32, FCrowdDemoRoundCheckpointHeader>
+    ProductRoundCheckpointHeaders;
   TMap<int32, TArray<FCrowdDemoRoundAgentState>>
-    ProductCorrectionAgents;
+    ProductRoundCheckpointAgents;
   TArray<float> CorrectionFrameIntervalMsSamples;
   TArray<float> CorrectionFrameAssemblyMsSamples;
   TArray<float> CorrectionFrameAgeMsSamples;
@@ -91,16 +91,14 @@ private:
   int32 NextRoundId = 1;
   int32 Revision = 0;
   int32 LastCheckpointRevision = 0;
-  int32 NextCorrectionRevision = 1;
-  int32 LastReceivedCorrectionRevision = 0;
-  int32 LastAppliedCorrectionRevision = 0;
+  int32 LastReceivedRoundCheckpointStateFrameRevision = 0;
+  int32 LastAppliedRoundCheckpointStateFrameRevision = 0;
   int32 CompletedRoundCount = 0;
   int32 CorrectionAppliedCount = 0;
   int32 CorrectionFramePublishedCount = 0;
   int32 CorrectionFrameReceivedCount = 0;
-  int32 CorrectionFrameHeaderReceivedCount = 0;
+  int32 RoundCheckpointHeaderReceivedCount = 0;
   int32 CorrectionFrameChunkReceivedCount = 0;
-  int32 LatestProductCorrectionCount = 0;
   int32 LatestChunkRevisionSeen = 0;
   int32 CorrectionChunkReceivedCount = 0;
   int32 CorrectionUniqueChunkCount = 0;
@@ -170,7 +168,6 @@ private:
   void TryActivateClientRoundPlans(float ClientServerTimeSeconds);
   void ActivateClientRoundPlan(const FCrowdDemoRoundPlanPacket& Plan, float ClientServerTimeSeconds, bool bLateJoinBaseline);
   void PublishServerResult(UCrowdDemoMassSubsystem& MassSubsystem, float EndServerTimeSeconds);
-  void PublishServerCorrectionFrame();
   void RefreshProductReplicationChannels();
   bool PublishProductBaseline(AMassCrowdReplicationActor& Channel);
   bool PublishProductReliable(
@@ -179,8 +176,8 @@ private:
     const FCrowdStableEntityRef& EntityRef,
     uint32 Revision,
     TConstArrayView<uint8> Payload);
-  void PublishProductCorrectionFrame(
-    const FCrowdDemoCorrectionFrame& Frame);
+  void PublishProductRoundCheckpoint(
+    const FCrowdDemoRoundResultPacket& Result);
   void PublishProductRoundResultHeader(
     const FCrowdDemoRoundResultHeader& Header);
   void PublishProductProjectileEvents(
@@ -191,15 +188,15 @@ private:
     const FCrowdReliableStateRecord& Record);
   void ConsumeProductRoundResultHeader(
     const FCrowdDemoRoundResultHeader& Header);
-  void TryFinalizeProductCorrection(int32 CorrectionRevision);
+  void TryFinalizeProductRoundCheckpoint(int32 StateFrameRevision);
   FCrowdDemoRoundRules BuildRoundRules(const UCrowdDemoMassSubsystem& MassSubsystem, int32 RoundId, float StartServerTimeSeconds, const FVector& StartLocation, int32 AgentCount) const;
   void TryProcessClientResult();
-  bool TryBuildClientRoundResult(const FCrowdDemoPendingCorrectionAssembly& Assembly, FCrowdDemoRoundResultPacket& OutResult);
-  void CacheClientCorrectionHeader(const FCrowdDemoCorrectionFrameHeader& Header);
-  void CacheClientCorrectionChunk(const FCrowdDemoCorrectionFrameChunk& Chunk);
-  void TryProcessClientCorrectionAssemblies();
-  bool TryApplyClientCorrectionAssembly(FCrowdDemoPendingCorrectionAssembly& Assembly);
-  void DropExpiredCorrectionAssemblies();
+  bool TryBuildClientRoundResult(const FCrowdDemoPendingRoundCheckpointAssembly& Assembly, FCrowdDemoRoundResultPacket& OutResult);
+  void CacheClientRoundCheckpointHeader(const FCrowdDemoRoundCheckpointHeader& Header);
+  void CacheClientRoundCheckpointChunk(const FCrowdDemoRoundCheckpointChunk& Chunk);
+  void TryProcessClientRoundCheckpoints();
+  bool TryApplyClientRoundCheckpoint(FCrowdDemoPendingRoundCheckpointAssembly& Assembly);
+  void DropExpiredRoundCheckpoints();
   void RefreshLastCompareCounters();
   void RefreshLastCorrectionCounters();
   void RecordRoundBoundaryMetrics(TConstArrayView<FCrowdDemoRoundAgentState> PreviousAgents, TConstArrayView<FCrowdDemoRoundAgentState> NextAgents);

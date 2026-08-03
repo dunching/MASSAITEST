@@ -196,13 +196,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCrowdDemoRoundCheckpointTransportTest::RunTest(const FString& Parameters)
 {
-  FCrowdDemoCorrectionFrame Frame;
+  FCrowdDemoRoundCheckpointFrame Frame;
   Frame.bValid = 1;
-  Frame.FrameKind = ECrowdDemoRoundFrameKind::RoundResultCheckpoint;
-  Frame.CorrectionRevision = 77;
+  Frame.StateFrameRevision = 77;
   Frame.RoundId = 3;
   Frame.RoundRevision = 3;
-  Frame.SourceCheckpointRevision = 3;
+  Frame.CheckpointRevision = 3;
   for (int32 Index = 0; Index < 500; ++Index)
   {
     FCrowdDemoRoundAgentState& State = Frame.AgentStates.AddDefaulted_GetRef();
@@ -211,14 +210,13 @@ bool FCrowdDemoRoundCheckpointTransportTest::RunTest(const FString& Parameters)
   }
   Frame.AgentCount = Frame.AgentStates.Num();
 
-  FCrowdDemoCorrectionFrameHeader Header;
-  TArray<FCrowdDemoCorrectionFrameChunk> Chunks;
-  FCrowdDemoRoundCheckpointTransport::BuildChunks(Frame, 100, Header, Chunks);
+  FCrowdDemoRoundCheckpointHeader Header;
+  TArray<FCrowdDemoRoundCheckpointChunk> Chunks;
+  TestTrue(TEXT("valid checkpoint frame chunks"),
+    FCrowdDemoRoundCheckpointTransport::BuildChunks(Frame, 100, Header, Chunks));
   TestEqual(TEXT("500 states produce five chunks"), Chunks.Num(), 5);
-  TestEqual(TEXT("header preserves checkpoint kind"),
-    Header.FrameKind, ECrowdDemoRoundFrameKind::RoundResultCheckpoint);
   Algo::Reverse(Chunks);
-  const FCrowdDemoCorrectionFrameChunk DuplicateChunk = Chunks[0];
+  const FCrowdDemoRoundCheckpointChunk DuplicateChunk = Chunks[0];
   Chunks.Add(DuplicateChunk);
   TArray<FCrowdDemoRoundAgentState> Assembled;
   TestTrue(TEXT("reordered chunks with duplicate assemble"),
@@ -228,15 +226,58 @@ bool FCrowdDemoRoundCheckpointTransportTest::RunTest(const FString& Parameters)
   {
     TestEqual(TEXT("stable assembled id"), Assembled[Index].AgentId, 1000 + Index);
   }
-  TArray<FCrowdDemoCorrectionFrameChunk> Missing = Chunks;
-  Missing.RemoveAll([](const FCrowdDemoCorrectionFrameChunk& Chunk)
+  TArray<FCrowdDemoRoundCheckpointChunk> Missing = Chunks;
+  Missing.RemoveAll([](const FCrowdDemoRoundCheckpointChunk& Chunk)
     { return Chunk.ChunkIndex == 2; });
   TestFalse(TEXT("missing chunk rejected"),
     FCrowdDemoRoundCheckpointTransport::TryAssemble(Header, Missing, Assembled));
-  TArray<FCrowdDemoCorrectionFrameChunk> Mismatched = Chunks;
+  TArray<FCrowdDemoRoundCheckpointChunk> Mismatched = Chunks;
   Mismatched[0].RoundRevision = 4;
   TestFalse(TEXT("revision mismatch rejected"),
     FCrowdDemoRoundCheckpointTransport::TryAssemble(Header, Mismatched, Assembled));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoRoundCheckpointTerminalToleranceTest,
+  "CrowdDemo.SF.Transport.RoundCheckpointTerminalTolerance",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoRoundCheckpointTerminalToleranceTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  auto* Pipeline = NewObject<UCrowdDemoRoundSimPipelineSubsystem>();
+  FCrowdDemoRoundPlanPacket Plan;
+  Plan.bValid = 1;
+  Plan.RoundId = 1;
+  Plan.Revision = 1;
+  Plan.StartServerTimeSeconds = 10.0f;
+  Plan.DurationSeconds = 30.0f;
+  Plan.Rules.FixedStepSeconds = 1.0f / 30.0f;
+  Plan.Rules.Scenario = ECrowdDemoScenario::SimRoundSoftPressure;
+  Pipeline->ActivatePlan(Plan, 1, false);
+  Pipeline->SetSimulatedServerTimeForCheckpoint(10.0f);
+
+  FCrowdDemoRoundResultPacket Result;
+  Result.bValid = 1;
+  Result.RoundId = 1;
+  Result.Revision = 1;
+  Result.CheckpointRevision = 1;
+  Result.StateFrameRevision = 1;
+  Result.EndServerTimeSeconds =
+    40.0f + Plan.Rules.FixedStepSeconds * 2.0f;
+  Pipeline->QueueRoundResult(Result);
+  TestTrue(TEXT("completed authority checkpoint is due despite retired legacy clock"),
+    Pipeline->HasDueAuthorityInput(10.0f));
+  FCrowdDemoRoundResultPacket Applied;
+  TestTrue(TEXT("completed authority checkpoint applies at the next owner boundary"),
+    Pipeline->PopRoundResultForBoundary(Applied));
+  TestFalse(TEXT("completed authority checkpoint is consumed once"),
+    Pipeline->HasDueAuthorityInput(10.0f));
+  Pipeline->RecordRoundResultComparisonAndApplied({}, Applied);
+  TestEqual(TEXT("checkpoint apply is recorded without legacy intermediate diagnostics"),
+    Pipeline->GetLastCompareMetrics().CorrectionAppliedCount, 1);
   return true;
 }
 

@@ -144,20 +144,32 @@ void FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
   {
     return A.AgentFacts.StableEntityRef < B.AgentFacts.StableEntityRef;
   });
+  if (!RefreshBoundarySnapshot(OutSnapshot))
+    OutSnapshot = {};
+}
+
+bool FCrowdMassRuntimeBridge::RefreshBoundarySnapshot(
+  FCrowdMassBoundarySnapshot& Snapshot)
+{
+  Snapshot.bValid = false;
+  Snapshot.StableHash = 14695981039346656037ull;
+  if (Snapshot.FixedStepIndex < 0 || Snapshot.PlanRevision < 0
+    || Snapshot.Agents.IsEmpty())
+    return false;
   uint64 Hash = Fold64(FnvOffset64, 2u);
-  Hash = FoldInt64(Hash, FixedStepIndex);
-  Hash = FoldInt64(Hash, PlanRevision);
+  Hash = FoldInt64(Hash, Snapshot.FixedStepIndex);
+  Hash = FoldInt64(Hash, Snapshot.PlanRevision);
   FCrowdStableEntityRef PreviousRef;
   TSet<int32> SeenAgentIds;
-  for (const FCrowdMassBoundaryAgentRecord& Record : OutSnapshot.Agents)
+  SeenAgentIds.Reserve(Snapshot.Agents.Num());
+  for (const FCrowdMassBoundaryAgentRecord& Record : Snapshot.Agents)
   {
     if (!IsValidBoundaryRecord(Record)
       || (!PreviousRef.IsUnset()
         && !(PreviousRef < Record.AgentFacts.StableEntityRef))
       || SeenAgentIds.Contains(Record.Identity.AgentId))
     {
-      OutSnapshot = {};
-      return;
+      return false;
     }
     PreviousRef = Record.AgentFacts.StableEntityRef;
     SeenAgentIds.Add(Record.Identity.AgentId);
@@ -178,8 +190,33 @@ void FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
     Hash = FoldFloat64(Hash, Record.Properties.MaximumSpeedCmps);
     Hash = Fold64(Hash, Record.Properties.CapabilityProfileKey);
   }
-  OutSnapshot.StableHash = Hash;
-  OutSnapshot.bValid = true;
+  Snapshot.StableHash = Hash;
+  Snapshot.bValid = true;
+  return true;
+}
+
+bool FCrowdMassRuntimeBridge::AdvanceBoundarySnapshotEpochToken(
+  FCrowdMassBoundarySnapshot& Snapshot,
+  const uint64 BaselineHash,
+  const int32 FixedStepIndex,
+  const int32 PlanRevision,
+  const uint64 ThroughInputSequence)
+{
+  if (!Snapshot.bValid || Snapshot.Agents.IsEmpty()
+    || BaselineHash == 0 || FixedStepIndex < 0 || PlanRevision < 0
+    || ThroughInputSequence == 0)
+    return false;
+  uint64 Hash = Fold64(FnvOffset64, 3u);
+  Hash = Fold64(Hash, BaselineHash);
+  Hash = FoldInt64(Hash, FixedStepIndex);
+  Hash = FoldInt64(Hash, PlanRevision);
+  Hash = Fold64(Hash, ThroughInputSequence);
+  if (Hash == 0)
+    return false;
+  Snapshot.FixedStepIndex = FixedStepIndex;
+  Snapshot.PlanRevision = PlanRevision;
+  Snapshot.StableHash = Hash;
+  return true;
 }
 
 bool FCrowdMassRuntimeBridge::BuildGuidanceRecords(

@@ -179,7 +179,9 @@ public:
     TConstArrayView<FCrowdWorkerVersionedResourceInput>
       VersionedResources = {},
     TConstArrayView<FCrowdBehaviorCapabilityBindingUpdate>
-      PendingBehaviorBindingUpdates = {});
+      PendingBehaviorBindingUpdates = {},
+    TConstArrayView<FCrowdWorkerExternalGameplayInput>
+      ExternalGameplayInputs = {});
 
   // Advances an already bootstrapped Worker without re-reading or echoing
   // entity simulation state. The cached bootstrap facts remain immutable;
@@ -196,7 +198,13 @@ public:
     TConstArrayView<FCrowdWorkerVersionedResourceInput>
       VersionedResources = {},
     TConstArrayView<FCrowdBehaviorCapabilityBindingUpdate>
-      PendingBehaviorBindingUpdates = {});
+      PendingBehaviorBindingUpdates = {},
+    TConstArrayView<FCrowdWorkerSpawnDelta> Spawns = {},
+    TConstArrayView<FCrowdWorkerDespawnDelta> Despawns = {},
+    TConstArrayView<FCrowdWorkerExternalGameplayInput>
+      ExternalGameplayInputs = {},
+    TConstArrayView<FCrowdWorkerObjectiveRevisionDelta>
+      ObjectiveRevisions = {});
 
   ECrowdWorkerShadowCompareResult PollAndCompare(
     FCrowdAsyncSimulationRuntime& Runtime);

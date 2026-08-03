@@ -48,7 +48,7 @@ DP5. [x] [COMPUTED][HIGH] 已收口共享 Planning Host 与 Source 状态发布�
 
 DP6. [x] [COMPUTED][HIGH] MassCrowd 64/64、CrowdDemo 131/131、四构建、Continuous/Friendly/NavFlow/T1–T8及Mixed 20/100/500真实门通过，事实源已更新。
 
-[COMPUTED][HIGH] T8现行功能结果为spawn/impact/damage=50/50/50、duplicate=0且双端一致。统一攻击状态机后的版本化attack/projectile/event Hash为41852579/488896174/4204062592；旧身份与状态布局Hash保留为历史证据。
+[COMPUTED][HIGH] T8现行功能结果为spawn/impact/damage=50/50/50、duplicate=0。canonical SimulationTick Combat时钟后的版本化attack/projectile/event Hash为439379904/1411313634/6141440；旧41852579/488896174/4204062592与更早身份布局Hash保留为历史证据。
 
 [COMPUTED][HIGH] 删除`AttackTarget` Source后，生产Behavior Registry/Context Schema黄金值分别为11335697795273479593/7449648488286461483；`CrowdDemo.BehaviorAdapters.RegistryGolden`执行精确断言，T8脚本通过`-RangedProjectileGolden`执行功能计数、双端一致及三个Hash的精确断言。
 

@@ -115,6 +115,7 @@ bool FCrowdDemoWorkerCombatCodecRoundTripTest::RunTest(
   ZeroImpulseReactive.SourceFixedStep = Input.FixedStepIndex;
   ZeroImpulseReactive.bAlive = true;
   ZeroImpulseReactive.bReactiveActive = true;
+  ZeroImpulseReactive.bMovementLocked = true;
   ZeroImpulseReactive.HostState = ResultPayload;
   TestTrue(TEXT("zero-impulse timed HitReact is valid"),
     ZeroImpulseReactive.IsValid());
@@ -128,6 +129,8 @@ bool FCrowdDemoWorkerCombatCodecRoundTripTest::RunTest(
       CombatPayload, DecodedCombat));
   TestTrue(TEXT("reactive flag survives generic codec"),
     DecodedCombat.bReactiveActive);
+  TestTrue(TEXT("movement-lock flag survives generic codec"),
+    DecodedCombat.bMovementLocked);
   return true;
 }
 
@@ -197,9 +200,11 @@ bool FCrowdDemoWorkerMixedCombatDomainTest::RunTest(
   TArray<FCrowdWorkerWorkItem> WorkItems{Work};
   TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
   uint64 NextEventSequence = 1;
+  uint64 FrozenControlSemanticHash = 0;
   int32 TotalMeleeIntents = 0;
   int32 TotalDamage = 0;
   int32 PublishedCombatStates = 0;
+  bool bObservedMovementLock = false;
   FCrowdWorkerProjectileState LatestProjectileState;
   for (int32 Step = 0; Step < 20; ++Step)
   {
@@ -230,17 +235,29 @@ bool FCrowdDemoWorkerMixedCombatDomainTest::RunTest(
     TestTrue(TEXT("mixed host input encodes"),
       FCrowdDemoWorkerMixedCombatHostInputCodec::Encode(
         HostInput, Control.HostCombatInput));
-    FCrowdWorkerPayload ControlPayload;
-    TestTrue(TEXT("mixed control encodes"),
-      FCrowdWorkerProjectileControlResourceCodec::Encode(
-        Control, ControlPayload));
-    TestEqual(TEXT("mixed control stages"),
-      Resources.StageBuilding({
-        CrowdWorkerResourceIds::ProjectileControl,
-        Control.Revision, MoveTemp(ControlPayload)}),
-      ECrowdWorkerQueueResult::Added);
-    TestTrue(TEXT("mixed control commits"),
-      Resources.CommitBuildingAtEpoch(Step + 1, ResourceEvents));
+    uint64 SemanticHash = 0;
+    TestTrue(TEXT("mixed control semantic hash builds"),
+      CalculateCrowdDemoWorkerProjectileControlSemanticHash(
+        Control, SemanticHash));
+    if (Step == 0)
+      FrozenControlSemanticHash = SemanticHash;
+    else
+      TestEqual(TEXT("dynamic combat state does not revise control"),
+        SemanticHash, FrozenControlSemanticHash);
+    if (Step == 0)
+    {
+      FCrowdWorkerPayload ControlPayload;
+      TestTrue(TEXT("mixed control encodes"),
+        FCrowdWorkerProjectileControlResourceCodec::Encode(
+          Control, ControlPayload));
+      TestEqual(TEXT("mixed control stages"),
+        Resources.StageBuilding({
+          CrowdWorkerResourceIds::ProjectileControl,
+          Control.Revision, MoveTemp(ControlPayload)}),
+        ECrowdWorkerQueueResult::Added);
+      TestTrue(TEXT("mixed control commits"),
+        Resources.CommitBuildingAtEpoch(1, ResourceEvents));
+    }
     Context.WorkerEpoch = Step + 1;
     Context.AbsoluteSimulationTick = Step + 1;
     Context.LastAppliedInputSequence = Step + 1;
@@ -248,8 +265,13 @@ bool FCrowdDemoWorkerMixedCombatDomainTest::RunTest(
     Context.SimulationTimeSeconds =
       (Step + 1) * HostInput.FixedStepSeconds;
     FCrowdWorkerDomainOutput Output;
+    FCrowdWorkerWorkItem StepWork = Work;
+    if (Step > 0)
+      StepWork.ReasonMask = CrowdWorkerReasonMasks::CombatClock;
     TestTrue(TEXT("mixed combat step executes"),
-      Executor.Execute(Context, WorkItems, Output));
+      Executor.Execute(
+        Context,
+        TArray<FCrowdWorkerWorkItem>{StepWork}, Output));
     if (Output.DirtyStates.IsEmpty()) return false;
     const FCrowdWorkerDirtyStateRecord* Projectile =
       Output.DirtyStates.FindByPredicate([](const auto& Dirty)
@@ -280,6 +302,13 @@ bool FCrowdDemoWorkerMixedCombatDomainTest::RunTest(
       TestTrue(TEXT("mixed host combat decodes"),
         FCrowdDemoWorkerMixedCombatStateCodec::Decode(
           Combat.HostState, Mixed));
+      const bool bExpectedMovementLock =
+        Mixed.bAlive
+        && Mixed.AttackState.Phase
+          == ECrowdDemoAttackPlannerPhase::Commit;
+      TestEqual(TEXT("generic combat projects attack movement lock"),
+        Combat.bMovementLocked, bExpectedMovementLock);
+      bObservedMovementLock |= Combat.bMovementLocked;
       FCrowdDemoWorkerMixedCombatAgent* CheckpointAgent =
         HostInput.Agents.FindByPredicate(
           [&Dirty](const auto& Agent)
@@ -309,6 +338,8 @@ bool FCrowdDemoWorkerMixedCombatDomainTest::RunTest(
     TotalMeleeIntents > 0);
   TestTrue(TEXT("mixed Worker applies damage"),
     TotalDamage > 0);
+  TestTrue(TEXT("mixed Worker publishes an attack movement lock"),
+    bObservedMovementLock);
   TestEqual(TEXT("mixed Worker publishes every combat state"),
     PublishedCombatStates, 40);
 
@@ -926,9 +957,11 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ExecuteStart, CommitQueryStart - ExecuteStart);
   TestFalse(TEXT("post-finalize execute does not traverse a Mass query"),
     PostFinalizeBlock.Contains(TEXT("EntityQuery.")));
-  TestTrue(TEXT("post-finalize consumes prepared final-state records"),
+  TestTrue(TEXT("post-finalize consumes the retained worker commit output"),
     PostFinalizeBlock.Contains(
-      TEXT("GetPreparedPostFinalizeAgentRecords()")));
+      TEXT("GetPreparedMovementBoundaryCommit()")));
+  TestFalse(TEXT("post-finalize duplicate full-state array is deleted"),
+    ProcessorSource.Contains(TEXT("PreparedPostFinalizeAgentRecords")));
   TestFalse(TEXT("authority commit has no Mass query configuration"),
     ProcessorSource.Contains(TEXT(
       "void FCrowdDemoRoundAuthorityCommitStage::ConfigureQueries")));
@@ -963,7 +996,15 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       WorkerResultStageStart - CheckpointExecuteStart);
     TestFalse(TEXT("checkpoint publisher does not traverse a Mass query"),
       CheckpointBlock.Contains(TEXT("EntityQuery.")));
-    TestTrue(TEXT("checkpoint publisher consumes prepared checkpoint states"),
+    TestTrue(TEXT("checkpoint publisher serializes from the retained commit"),
+      CheckpointBlock.Contains(TEXT("CommitRecords"))
+        && CheckpointBlock.Contains(TEXT("States.Reserve(")));
+    TestTrue(TEXT("checkpoint serialization stays behind the publish gate"),
+      CheckpointBlock.Find(TEXT("ShouldBuildRoundResult()"))
+          < CheckpointBlock.Find(TEXT("States.Reserve(")));
+    TestFalse(TEXT("checkpoint publisher has no ordinary full correction gate"),
+      CheckpointBlock.Contains(TEXT("ShouldBuildCorrectionFrame()")));
+    TestFalse(TEXT("ordinary tick checkpoint cache is deleted"),
       CheckpointBlock.Contains(TEXT("GetPreparedCheckpointAgentStates()")));
   }
   TestFalse(TEXT("legacy visual-state resolve processor is removed"),
@@ -995,6 +1036,21 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     }
     TestEqual(TEXT("prepared apply performs exactly one atomic write traversal"),
       ApplyTraversalCount, 1);
+    TestTrue(TEXT("prepared apply traverses only validated dirty collections"),
+      FacingApplyBlock.Contains(TEXT(
+        "EntityQuery->ForEachEntityChunkInCollections("))
+        && FacingApplyBlock.Contains(TEXT(
+          "Pipeline.GetCurrentStepMassDirtyEntityRefs()"))
+        && FacingApplyBlock.Contains(TEXT(
+          "UE::Mass::Utils::CreateEntityCollections(")));
+    TestTrue(TEXT("dirty handles are resolved before atomic write begins"),
+      FacingApplyBlock.Find(TEXT("ResolveTrackedAgentHandle("))
+          < FacingApplyBlock.Find(TEXT("TryBeginAtomicCommitWrite("))
+        && FacingApplyBlock.Find(TEXT("GetNumMatchingEntities("))
+          < FacingApplyBlock.Find(TEXT("TryBeginAtomicCommitWrite(")));
+    TestFalse(TEXT("prepared apply has no unbounded Mass query traversal"),
+      FacingApplyBlock.Contains(TEXT(
+        "EntityQuery->ForEachEntityChunk(\n")));
     TestTrue(TEXT("prepared apply validates against canonical snapshot"),
       FacingApplyBlock.Contains(TEXT(
         "Pipeline.GetBoundarySnapshot().Agents")));
@@ -1004,11 +1060,12 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     TestTrue(TEXT("prepared apply writes engine velocity"),
       FacingApplyBlock.Contains(TEXT(
         "Velocities[It].Value = Movement.Velocity")));
-    TestTrue(TEXT("prepared apply resolves final visual state"),
-      FacingApplyBlock.Contains(TEXT("ResolveVisualStateBoundary(")));
-    TestTrue(TEXT("prepared apply publishes checkpoint states"),
-      FacingApplyBlock.Contains(TEXT(
-        "SetPreparedCheckpointAgentStates(")));
+    TestTrue(TEXT("prepared apply builds final business only for dirty entities"),
+      FacingApplyBlock.Contains(TEXT("BuildFinalBusinessFact("))
+        && FacingApplyBlock.Contains(TEXT(
+          "FinalBusinessByAgentId.Reserve(DirtyEntityRefs.Num())")));
+    TestFalse(TEXT("prepared apply does not build checkpoint arrays"),
+      FacingApplyBlock.Contains(TEXT("CheckpointAgentStates")));
   }
   if (FacingExecuteStart != INDEX_NONE && ExecuteStart > FacingExecuteStart)
   {
@@ -1053,11 +1110,270 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"));
   TestTrue(TEXT("pipeline source is readable"),
     FFileHelper::LoadFileToString(PipelineSource, *PipelinePath));
+  TestFalse(TEXT("retired client Round intermediate diagnostics are physically deleted"),
+    PipelineSource.Contains(TEXT("bLegacyRoundDiagnosticsProduced"))
+      || PipelineSource.Contains(TEXT("CrowdDemoLegacyRoundDiagnostics"))
+      || PipelineSource.Contains(TEXT(
+        "CrowdDemoDynamicFlowCheckpoint role=client"))
+      || PipelineSource.Contains(TEXT(
+        "CrowdDemoParticleStateHash role=client"))
+      || PipelineSource.Contains(TEXT(
+        "CrowdDemoProjectileCheckpoint role=client")));
+  TestTrue(TEXT("checkpoint comparison remains the client full-state diagnostic boundary"),
+    PipelineSource.Contains(TEXT("RecordCheckpointComparison("))
+      && PipelineSource.Contains(TEXT("CrowdDemoRoundCheckpoint role=client")));
+  FString TypesSource;
+  const FString TypesPath = FPaths::Combine(
+    FPaths::ProjectDir(), TEXT("Source/MassAICrowdDemo/CrowdDemoTypes.h"));
+  TestTrue(TEXT("CrowdDemo types are readable"),
+    FFileHelper::LoadFileToString(TypesSource, *TypesPath));
+  const int32 RoundCompareMetricsStart = TypesSource.Find(TEXT(
+    "struct FCrowdDemoRoundCompareMetrics"));
+  const int32 SummaryMetricsStart = TypesSource.Find(TEXT(
+    "struct FCrowdDemoSummaryMetrics"), ESearchCase::CaseSensitive,
+    ESearchDir::FromStart, RoundCompareMetricsStart);
+  const FString RoundCompareMetricsBlock =
+    RoundCompareMetricsStart != INDEX_NONE
+      && SummaryMetricsStart > RoundCompareMetricsStart
+    ? TypesSource.Mid(
+      RoundCompareMetricsStart,
+      SummaryMetricsStart - RoundCompareMetricsStart)
+    : FString();
+  TestFalse(TEXT("retired client Round compare payload fields are physically deleted"),
+    RoundCompareMetricsBlock.Contains(TEXT("ServerClientParticleHashMatch"))
+      || RoundCompareMetricsBlock.Contains(TEXT(
+        "FCrowdDemoParticleMetrics ParticleMetrics")));
+  FString StableIndexSubsystemSource;
+  const FString StableIndexSubsystemPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoMassSubsystem.cpp"));
+  TestTrue(TEXT("Mass subsystem source is readable"),
+    FFileHelper::LoadFileToString(
+      StableIndexSubsystemSource, *StableIndexSubsystemPath));
+  TestTrue(TEXT("stable handle index is maintained by lifecycle owner"),
+    StableIndexSubsystemSource.Contains(TEXT("StableEntityHandles.Add("))
+      && StableIndexSubsystemSource.Contains(TEXT("StableEntityHandles.Remove("))
+      && StableIndexSubsystemSource.Contains(TEXT("StableEntityHandles.Reset("))
+      && StableIndexSubsystemSource.Contains(TEXT(
+        "ResolveTrackedAgentHandle(")));
+  FString WorkerInputSource;
+  const FString WorkerInputPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoWorkerInputSync.cpp"));
+  TestTrue(TEXT("worker input source is readable"),
+    FFileHelper::LoadFileToString(
+      WorkerInputSource, *WorkerInputPath));
+  const int32 IntentSubmitStart = WorkerInputSource.Find(TEXT(
+    "bool FCrowdDemoWorkerInputSync::SubmitIntentBatch("));
+  const int32 ClientCheckpointStart = WorkerInputSource.Find(TEXT(
+    "bool FCrowdDemoWorkerInputSync::StartClientFromNetworkCheckpoint("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    IntentSubmitStart);
+  TestTrue(TEXT("ordinary intent submit implementation is isolated"),
+    IntentSubmitStart != INDEX_NONE
+      && ClientCheckpointStart > IntentSubmitStart);
+  if (IntentSubmitStart != INDEX_NONE
+    && ClientCheckpointStart > IntentSubmitStart)
+  {
+    const FString IntentSubmitBlock = WorkerInputSource.Mid(
+      IntentSubmitStart,
+      ClientCheckpointStart - IntentSubmitStart);
+    TestFalse(TEXT("ordinary intent submit accepts no boundary snapshot"),
+      IntentSubmitBlock.Contains(TEXT(
+        "FCrowdMassBoundarySnapshot")));
+    TestTrue(TEXT("ordinary intent submit uses autonomous runtime entry"),
+      IntentSubmitBlock.Contains(TEXT(
+        "Shadow.SubmitAutonomousFrame(")));
+    TestTrue(TEXT("Production behavior validates autonomous membership"),
+      IntentSubmitBlock.Contains(TEXT(
+        "BehaviorAuthority.QueueAutonomousExpectation(")));
+    TestFalse(TEXT("Production behavior is not parity-gated by Legacy prepared content"),
+      IntentSubmitBlock.Contains(TEXT(
+        "BehaviorAuthority.QueuePreparedExpectation(")));
+    TestTrue(TEXT("ordinary intent submit reads persistent lifecycle view"),
+      IntentSubmitBlock.Contains(TEXT(
+        "ResultApplyProxy.GetStableEntityView()"))
+        && IntentSubmitBlock.Contains(TEXT("bLifecycleChanged")));
+    TestFalse(TEXT("ordinary intent submit does not copy full membership"),
+      IntentSubmitBlock.Contains(TEXT("CopyCurrentEntities")));
+  }
+  TestTrue(TEXT("Round uses intent-only input after bootstrap"),
+    PipelineSource.Contains(TEXT(
+      "FCrowdDemoWorkerInputSync::SubmitIntentBatch("))
+      && PipelineSource.Contains(TEXT(
+        "FullResnapshotCount > 0")));
+  const int32 BusinessStageCall = ProcessorSource.Find(TEXT(
+    "bStageValid = Pipeline->StageBoundaryBusinessWork()"));
+  const int32 EarlyClockCall = ProcessorSource.Find(TEXT(
+    "Pipeline->TrySubmitWorkerV2ClockIntentEarly()"),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    BusinessStageCall);
+  const int32 SharedFlowStageCall = ProcessorSource.Find(TEXT(
+    "SharedFlowFieldBuild.Execute("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    EarlyClockCall);
+  TestTrue(TEXT("ordinary Worker Clock intent starts before Legacy domain staging"),
+    BusinessStageCall != INDEX_NONE
+      && EarlyClockCall > BusinessStageCall
+      && SharedFlowStageCall > EarlyClockCall);
+  TestTrue(TEXT("early Clock intent is same-generation same-plan gated"),
+    PipelineSource.Contains(TEXT(
+      "TrySubmitWorkerV2ClockIntentEarly()"))
+      && PipelineSource.Contains(TEXT(
+        "LastWorkerV2MovementControlGeneration"))
+      && PipelineSource.Contains(TEXT(
+        "!= WorkerShadow.GetGeneration()"))
+      && PipelineSource.Contains(TEXT(
+        "LastWorkerV2MovementControlPlanRevision"))
+      && PipelineSource.Contains(TEXT(
+        "!= GetCurrentPlanRevision()")));
+  TestTrue(TEXT("early Clock intent is restricted to bootstrapped Production domains"),
+    PipelineSource.Contains(TEXT(
+      "ECrowdDemoSoftPressureTestCase::RangedProjectileCombat"))
+      && PipelineSource.Contains(TEXT(
+        "bWorkerV2TargetStateBootstrapped"))
+      && PipelineSource.Contains(TEXT(
+        "bWorkerV2ProjectileStateBootstrapped"))
+      && PipelineSource.Contains(TEXT(
+        "ECrowdWorkerBehaviorAuthorityMode::Production"))
+      && PipelineSource.Contains(TEXT(
+        "CrowdDemoWorkerEarlyClockCheckpoint")));
+  TestTrue(TEXT("Production Movement tail commits synchronously from Worker outputs"),
+    PipelineSource.Contains(TEXT("bDirectProductionTail"))
+      && PipelineSource.Contains(TEXT(
+        "FCrowdMassMovementFinalizeWork::BuildCommitPlan("))
+      && PipelineSource.Contains(TEXT(
+        "ECrowdWorkerMovementAuthorityMode::Production"))
+      && PipelineSource.Contains(TEXT(
+        "ECrowdDemoWorkerParticleAuthorityMode::Production")));
+  TestTrue(TEXT("Round rejects a clipped sub-quantum tail Tick"),
+    PipelineSource.Contains(TEXT(
+      "RemainingRoundSeconds\n      < CurrentFixedStepSeconds"))
+      && PipelineSource.Contains(TEXT(
+        "SimulatedServerTimeSeconds = RoundEnd;")));
+  TestFalse(TEXT("Round does not clamp an ordinary fixed step"),
+    PipelineSource.Contains(TEXT(
+      "FMath::Min(SimulatedServerTimeSeconds + CurrentFixedStepSeconds, RoundEnd)")));
+  TestTrue(TEXT("Round exposes the final full Tick to checkpoint publication"),
+    PipelineSource.Contains(TEXT(
+      "TerminalSnapToleranceSeconds"))
+      && PipelineSource.Contains(TEXT(
+        "StepEnd = RoundEnd;")));
+  const int32 WorkerSubmitStart = PipelineSource.Find(TEXT(
+    "SubmitWorkerV2BoundaryInput()"));
+  const int32 WorkerDrainStart = PipelineSource.Find(TEXT(
+    "DrainWorkerV2MovementShadowComparisons()"),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    WorkerSubmitStart);
+  TestTrue(TEXT("Worker input submit block found"),
+    WorkerSubmitStart != INDEX_NONE
+      && WorkerDrainStart > WorkerSubmitStart);
+  if (WorkerSubmitStart != INDEX_NONE
+    && WorkerDrainStart > WorkerSubmitStart)
+  {
+    const FString WorkerSubmitBlock = PipelineSource.Mid(
+      WorkerSubmitStart, WorkerDrainStart - WorkerSubmitStart);
+    const int32 ProfileBuildGate = WorkerSubmitBlock.Find(TEXT(
+      "if (bPublishMovementControl)"));
+    const int32 FullEntryBuild = WorkerSubmitBlock.Find(TEXT(
+      "Control.Entries.Reserve(Overlays.Num())"));
+    const int32 ResourceArrayBuild = WorkerSubmitBlock.Find(TEXT(
+      "TArray<FCrowdWorkerVersionedResourceInput> ResourceInputs"));
+    const int32 ProfileResourceGate = WorkerSubmitBlock.Find(TEXT(
+      "if (bPublishMovementControl)"),
+      ESearchCase::CaseSensitive, ESearchDir::FromStart,
+      ResourceArrayBuild);
+    TestTrue(TEXT("full Movement profile construction is revision gated"),
+      ProfileBuildGate != INDEX_NONE
+        && FullEntryBuild > ProfileBuildGate
+        && ResourceArrayBuild > FullEntryBuild);
+    TestTrue(TEXT("Movement profile serialization is revision gated"),
+      ResourceArrayBuild != INDEX_NONE
+        && ProfileResourceGate > ResourceArrayBuild
+        && WorkerSubmitBlock.Find(TEXT(
+          "FCrowdWorkerMovementControlResourceCodec::Encode("),
+          ESearchCase::CaseSensitive, ESearchDir::FromStart,
+          ProfileResourceGate) > ProfileResourceGate);
+    TestTrue(TEXT("Movement profile cache is generation and plan keyed"),
+      WorkerSubmitBlock.Contains(TEXT(
+        "LastWorkerV2MovementControlGeneration"))
+        && WorkerSubmitBlock.Contains(TEXT(
+          "LastWorkerV2MovementControlPlanRevision")));
+    TestTrue(TEXT("plan revision baseline is revision gated"),
+      WorkerSubmitBlock.Contains(TEXT(
+        "bSubmitIntentOnly && bPublishMovementControl")));
+    TestTrue(TEXT("plan revision uses input snapshot journal"),
+      WorkerSubmitBlock.Contains(TEXT(
+        "ECrowdWorkerExternalGameplayInputType::InputSnapshot"))
+        && WorkerSubmitBlock.Contains(TEXT(
+          "{}, {}, PlanRevisionInputs, nullptr, TargetObjectives")));
+    TestTrue(TEXT("Target control publishes only on semantic revision"),
+      WorkerSubmitBlock.Contains(TEXT(
+        "bPublishTargetControl ="))
+        && WorkerSubmitBlock.Contains(TEXT(
+          "LastWorkerV2TargetControlSemanticHash")));
+    TestTrue(TEXT("moving Target fact uses ordered O(1) objective revision"),
+      WorkerSubmitBlock.Contains(TEXT(
+        "BuildTargetObjectiveRevisionDelta("))
+        && WorkerSubmitBlock.Contains(TEXT(
+          "NextWorkerV2TargetObjectiveRevision"))
+        && PipelineSource.Contains(TEXT(
+          "TargetObjectives))")));
+    const int32 ProjectileResourceGate = WorkerSubmitBlock.Find(TEXT(
+      "if (bPublishProjectileControl)"),
+      ESearchCase::CaseSensitive, ESearchDir::FromStart,
+      ResourceArrayBuild);
+    TestTrue(TEXT("autonomous Projectile control serialization is semantic-revision gated"),
+      WorkerSubmitBlock.Contains(TEXT(
+        "CalculateCrowdDemoWorkerProjectileControlSemanticHash("))
+        && WorkerSubmitBlock.Contains(TEXT(
+          "!bMovementProduction"))
+        && ProjectileResourceGate > ResourceArrayBuild
+        && WorkerSubmitBlock.Find(TEXT(
+          "FCrowdWorkerProjectileControlResourceCodec::Encode("),
+          ESearchCase::CaseSensitive, ESearchDir::FromStart,
+          ProjectileResourceGate) > ProjectileResourceGate);
+  }
+  TestFalse(TEXT("snapshot entry cannot switch to autonomous semantics"),
+    WorkerInputSource.Contains(TEXT(
+      "bAutonomousAfterBootstrap"))
+      || WorkerInputSource.Contains(TEXT(
+        "bSubmitAutonomous")));
   const FString BoundaryFrameHeaderPath = FPaths::Combine(
     FPaths::ProjectDir(),
     TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Public/MassCrowdBoundaryFrameTransaction.h"));
   TestFalse(TEXT("legacy plugin frame transaction is physically deleted"),
     FPaths::FileExists(BoundaryFrameHeaderPath));
+  const FString BoundaryOrchestratorHeaderPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Public/MassCrowdBoundaryOrchestrator.h"));
+  const FString BoundaryOrchestratorSourcePath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Private/MassCrowdBoundaryOrchestrator.cpp"));
+  const FString BoundaryOrchestratorTestsPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdTests/Private/MassCrowdBoundaryOrchestratorTests.cpp"));
+  TestFalse(TEXT("legacy plugin boundary orchestrator header is physically deleted"),
+    FPaths::FileExists(BoundaryOrchestratorHeaderPath));
+  TestFalse(TEXT("legacy plugin boundary orchestrator implementation is physically deleted"),
+    FPaths::FileExists(BoundaryOrchestratorSourcePath));
+  TestFalse(TEXT("legacy plugin boundary orchestrator tests are physically deleted"),
+    FPaths::FileExists(BoundaryOrchestratorTestsPath));
+  const FString BoundaryWorkGraphHeaderPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Public/MassCrowdBoundaryWorkGraph.h"));
+  const FString BoundaryWorkGraphSourcePath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Private/MassCrowdBoundaryWorkGraph.cpp"));
+  const FString BoundaryWorkGraphTestsPath = FPaths::Combine(
+    FPaths::ProjectDir(),
+    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdTests/Private/MassCrowdBoundaryWorkGraphTests.cpp"));
+  TestFalse(TEXT("legacy plugin boundary work graph header is physically deleted"),
+    FPaths::FileExists(BoundaryWorkGraphHeaderPath));
+  TestFalse(TEXT("legacy plugin boundary work graph implementation is physically deleted"),
+    FPaths::FileExists(BoundaryWorkGraphSourcePath));
+  TestFalse(TEXT("legacy plugin boundary work graph tests are physically deleted"),
+    FPaths::FileExists(BoundaryWorkGraphTestsPath));
   FString PipelineHeader;
   const FString PipelineHeaderPath = FPaths::Combine(
     FPaths::ProjectDir(),
@@ -1065,6 +1381,25 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   TestTrue(TEXT("pipeline header is readable"),
     FFileHelper::LoadFileToString(
       PipelineHeader, *PipelineHeaderPath));
+  TestFalse(TEXT("Round production no longer consumes Runtime Boundary Runner"),
+    PipelineHeader.Contains(TEXT("MassCrowdBoundaryRunner.h"))
+      || PipelineHeader.Contains(TEXT("FCrowdMassBoundaryRunner"))
+      || PipelineSource.Contains(TEXT("FCrowdMassBoundaryRunner"))
+      || PipelineSource.Contains(TEXT("BuildAndSealCommit("))
+      || PipelineSource.Contains(TEXT("GetCommitEnvelope(")));
+  TestFalse(TEXT("Round production no longer includes Runtime Boundary Orchestrator"),
+    PipelineHeader.Contains(TEXT("MassCrowdBoundaryOrchestrator.h"))
+      || PipelineSource.Contains(TEXT("MassCrowdBoundaryOrchestrator.h")));
+  TestFalse(TEXT("Round production no longer consumes Runtime Boundary WorkGraph"),
+    PipelineHeader.Contains(TEXT("MassCrowdBoundaryWorkGraph.h"))
+      || PipelineSource.Contains(TEXT("MassCrowdBoundaryWorkGraph.h"))
+      || PipelineHeader.Contains(TEXT("FCrowdMassBoundaryWorkGraph"))
+      || PipelineSource.Contains(TEXT("FCrowdMassBoundaryWorkGraph")));
+  TestTrue(TEXT("Round apply plan is validated directly before atomic apply"),
+    PipelineSource.Contains(TEXT("ValidateRoundApplyPlan("))
+      && PipelineSource.Contains(TEXT(
+        "FCrowdMassRuntimeBridge::ValidateCommitTargets("))
+      && PipelineSource.Contains(TEXT("MarkApplyPlanValidated(")));
   TestFalse(TEXT("project pipeline owns no frame transaction"),
     PipelineHeader.Contains(TEXT("FrameTransaction"))
       || PipelineHeader.Contains(TEXT(
@@ -1104,24 +1439,87 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ProcessorSource.Contains(TEXT("MakeDynamicRoundProcessor")));
   TestFalse(TEXT("dynamic child-processor flags are physically deleted"),
     ProcessorSource.Contains(TEXT("ROUND_DYNAMIC_FLAGS")));
-  const int32 AuthorityStageStart = ProcessorSource.Find(TEXT(
-    "ExecuteAuthorityInputStage("));
-  const int32 ResultStageStart = ProcessorSource.Find(TEXT(
-    "ExecuteResultCommitStage("));
-  const int32 PlanApplyCall = ProcessorSource.Find(
-    TEXT("PlanApply.Execute(EntityManager, Context)"),
-    ESearchCase::CaseSensitive, ESearchDir::FromStart,
-    AuthorityStageStart);
-  const int32 BoundaryPollCall = ProcessorSource.Find(
-    TEXT("Pipeline->PollBoundaryWork()"),
-    ESearchCase::CaseSensitive, ESearchDir::FromStart,
-    ResultStageStart);
-  TestTrue(TEXT("authority input and result poll have separate ordered stages"),
-    AuthorityStageStart != INDEX_NONE
-      && ResultStageStart > AuthorityStageStart
-      && PlanApplyCall > AuthorityStageStart
-      && PlanApplyCall < ResultStageStart
-      && BoundaryPollCall > ResultStageStart);
+  const TCHAR* DeletedRoundStageSymbols[] = {
+    TEXT("ExecuteAuthorityInputStage("),
+    TEXT("ExecuteResultCommitStage("),
+    TEXT("ExecutePostCommitStage("),
+    TEXT("ExecuteRequestSubmitStage("),
+    TEXT("ECrowdDemoRoundFrameStageResult::Ready")
+  };
+  for (const TCHAR* DeletedSymbol : DeletedRoundStageSymbols)
+  {
+    TestFalse(FString::Printf(
+      TEXT("legacy Round stage symbol %s is physically deleted"),
+      DeletedSymbol), ProcessorSource.Contains(DeletedSymbol));
+  }
+  TestTrue(TEXT("Input Sync applies authority input directly"),
+    ProcessorSource.Contains(TEXT(
+      "void UCrowdDemoWorkerInputSyncProcessor::Execute("))
+      && ProcessorSource.Contains(TEXT(
+        "PlanApply.Execute(EntityManager, Context);")));
+  TestTrue(TEXT("Result Apply owns one consolidated Round advance"),
+    ProcessorSource.Contains(TEXT("void AdvanceRoundWorkerFrame("))
+      && ProcessorSource.Contains(TEXT(
+        "WorkerResultApply.Execute(EntityManager, Context);"))
+      && ProcessorSource.Contains(TEXT(
+        "AdvanceRoundWorkerFrame(")));
+  TestFalse(TEXT("legacy Round poll shell is physically deleted"),
+    ProcessorSource.Contains(TEXT("PollRoundWorkBatch("))
+      || PipelineHeader.Contains(TEXT("PollRoundWorkBatch("))
+      || PipelineSource.Contains(TEXT("PollRoundWorkBatch(")));
+  TestTrue(TEXT("Round apply readiness has an explicit preparation gate"),
+    ProcessorSource.Contains(TEXT("Pipeline->TryPrepareRoundApply()"))
+      && PipelineHeader.Contains(TEXT("TryPrepareRoundApply()"))
+      && PipelineSource.Contains(TEXT("TryPrepareRoundApply()")));
+  FString CoordinatorSource;
+  FString CoordinatorHeader;
+  FString TypesHeader;
+  FString CheckpointTransportSource;
+  TestTrue(TEXT("Round coordinator source is readable"),
+    FFileHelper::LoadFileToString(CoordinatorSource, *FPaths::Combine(
+      FPaths::ProjectDir(),
+      TEXT("Source/MassAICrowdDemo/CrowdDemoRoundSimCoordinator.cpp"))));
+  TestTrue(TEXT("Round coordinator header is readable"),
+    FFileHelper::LoadFileToString(CoordinatorHeader, *FPaths::Combine(
+      FPaths::ProjectDir(),
+      TEXT("Source/MassAICrowdDemo/CrowdDemoRoundSimCoordinator.h"))));
+  TestTrue(TEXT("Round type header is readable"),
+    FFileHelper::LoadFileToString(TypesHeader, *FPaths::Combine(
+      FPaths::ProjectDir(),
+      TEXT("Source/MassAICrowdDemo/CrowdDemoTypes.h"))));
+  TestTrue(TEXT("Round checkpoint transport source is readable"),
+    FFileHelper::LoadFileToString(CheckpointTransportSource, *FPaths::Combine(
+      FPaths::ProjectDir(),
+      TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoRoundCheckpointTransport.cpp"))));
+  const FString RoundProductionSymbols = PipelineSource + ProcessorSource
+    + CoordinatorSource + CoordinatorHeader + TypesHeader
+    + CheckpointTransportSource;
+  const TCHAR* DeletedFullCorrectionSymbols[] = {
+    TEXT("FCrowdDemoCorrectionFrame"),
+    TEXT("ShouldBuildCorrectionFrame"),
+    TEXT("CrowdDemoLegacyFullCorrectionDiagnostic"),
+    TEXT("QueueCorrectionFrame"),
+    TEXT("PopCorrectionForBoundary"),
+    TEXT("EnqueueOutgoingCorrectionFrame")
+  };
+  for (const TCHAR* DeletedSymbol : DeletedFullCorrectionSymbols)
+  {
+    TestFalse(FString::Printf(
+      TEXT("legacy ordinary full correction symbol %s is physically deleted"),
+      DeletedSymbol), RoundProductionSymbols.Contains(DeletedSymbol));
+  }
+  TestFalse(TEXT("Round product channel consumes no MovementCorrection frame"),
+    CoordinatorSource.Contains(TEXT(
+      "ECrowdReplicationApplyFrameKind::MovementCorrection"))
+      || CoordinatorSource.Contains(TEXT("PublishMovementCorrections(")));
+  TestTrue(TEXT("Round result is the only full checkpoint publish gate"),
+    PipelineSource.Contains(TEXT("ShouldBuildRoundResult() const"))
+      && ProcessorSource.Contains(TEXT("ShouldBuildRoundResult()")));
+  TestTrue(TEXT("dedicated Round checkpoint transport owns full state"),
+    TypesHeader.Contains(TEXT("FCrowdDemoRoundCheckpointFrame"))
+      && TypesHeader.Contains(TEXT("StateFrameRevision"))
+      && CheckpointTransportSource.Contains(TEXT(
+        "FCrowdDemoRoundCheckpointTransport::BuildChunks")));
   TestTrue(TEXT("applied authority frame invalidates the in-flight generation"),
     ProcessorSource.Contains(TEXT(
       "Pipeline->InvalidateInFlightBoundaryForAuthoritativeState()")));
@@ -1141,10 +1539,12 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   {
     const FString PublishBlock = PipelineSource.Mid(
       PublishStart, FindFormationStart - PublishStart);
-    TestTrue(TEXT("post-finalize records reset at every boundary"),
-      PublishBlock.Contains(TEXT("PreparedPostFinalizeAgentRecords.Reset()")));
-    TestTrue(TEXT("checkpoint states reset at every boundary"),
-      PublishBlock.Contains(TEXT("PreparedCheckpointAgentStates.Reset()")));
+    TestFalse(TEXT("boundary no longer owns duplicate post-finalize records"),
+      PipelineHeader.Contains(TEXT("PreparedPostFinalizeAgentRecords")));
+    TestFalse(TEXT("boundary no longer owns ordinary checkpoint state arrays"),
+      PipelineHeader.Contains(TEXT("PreparedCheckpointAgentStates")));
+    TestFalse(TEXT("movement commit plan has a single owner"),
+      PipelineHeader.Contains(TEXT("PreparedMovementCommitPlan")));
     TestTrue(TEXT("reactive motion steps reset at every boundary"),
       PublishBlock.Contains(TEXT("PreparedReactiveMotionSteps.Reset()")));
   }
@@ -1214,13 +1614,14 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       "ECrowdDemoMassCapability Capabilities =\n      ECrowdDemoMassCapability::Base;"))
       && MassSubsystemSource.Contains(TEXT(
         "Capabilities |= ECrowdDemoMassCapability::Combat;")));
-  TestTrue(TEXT("Round queries consume Combat as an optional capability"),
+  TestTrue(TEXT("bootstrap and dirty commit consume Combat as one optional capability"),
     ProcessorSource.Contains(TEXT(
       "BusinessFact.bHasCombatCapability = bHasCombatBundle;"))
       && ProcessorSource.Contains(TEXT(
-        "EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional"))
-      && ProcessorSource.Contains(TEXT(
         "EMassFragmentAccess::ReadWrite, EMassFragmentPresence::Optional")));
+  TestFalse(TEXT("deleted gather query owns no duplicate read-only Combat bundle"),
+    ProcessorSource.Contains(TEXT(
+      "EMassFragmentAccess::ReadOnly, EMassFragmentPresence::Optional")));
   FString ReplicationSource;
   const FString ReplicationPath = FPaths::Combine(
     FPaths::ProjectDir(),
@@ -1276,16 +1677,21 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ProcessorHeader.Contains(TEXT("Stage : public UObject"))
       || ProcessorHeader.Contains(TEXT(
         "UCrowdDemoRoundSimFixedStepPipelineProcessor")));
-  TestTrue(TEXT("two active nodes own their exact Mass queries"),
+  TestTrue(TEXT("two active nodes own only input and dirty-commit queries"),
     ProcessorHeader.Contains(TEXT(
       "FMassEntityQuery InputSyncQuery"))
       && ProcessorHeader.Contains(TEXT(
-        "FMassEntityQuery ResultCommitQuery"))
-      && ProcessorHeader.Contains(TEXT(
-        "FMassEntityQuery RequestSubmitQuery")));
+        "FMassEntityQuery ResultCommitQuery")));
+  TestFalse(TEXT("full request-submit query is physically deleted"),
+    ProcessorHeader.Contains(TEXT("RequestSubmitQuery"))
+      || ProcessorSource.Contains(TEXT("RequestSubmitQuery")));
+  TestFalse(TEXT("legacy boundary gather type is physically deleted"),
+    ProcessorHeader.Contains(TEXT("FCrowdDemoRoundBoundaryGatherStage"))
+      || ProcessorSource.Contains(TEXT(
+        "FCrowdDemoRoundBoundaryGatherStage")));
   TestTrue(TEXT("bootstrap and autonomous Mass access gates are explicit"),
     PipelineSource.Contains(TEXT(
-      "TryRecordCanonicalGatherRead()"))
+      "TryRecordBootstrapMassRead()"))
       && PipelineSource.Contains(TEXT(
         "TryBeginAtomicCommitWrite()"))
       && PipelineSource.Contains(TEXT(
@@ -1293,11 +1699,95 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       && PipelineSource.Contains(TEXT(
         "bCurrentStepUsedWorkerProxySnapshot"))
       && ProcessorSource.Contains(TEXT(
-        "Pipeline->TryRecordCanonicalGatherRead()"))
+        "Pipeline->TryRecordBootstrapMassRead()"))
       && ProcessorSource.Contains(TEXT(
         "TryPublishWorkerProxyBoundarySnapshot()"))
       && ProcessorSource.Contains(TEXT(
         "Pipeline.TryBeginAtomicCommitWrite()")));
+  const int32 BootstrapSnapshotStart = ProcessorSource.Find(TEXT(
+    "bool PublishBootstrapBoundarySnapshotFromMass("));
+  const int32 BootstrapSnapshotEnd = ProcessorSource.Find(TEXT(
+    "void FCrowdDemoRoundOpenSpawnRelaxationPhasePrepareStage::Execute("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    BootstrapSnapshotStart);
+  TestTrue(TEXT("bootstrap-only Mass snapshot block is readable"),
+    BootstrapSnapshotStart != INDEX_NONE
+      && BootstrapSnapshotEnd > BootstrapSnapshotStart);
+  if (BootstrapSnapshotStart != INDEX_NONE
+    && BootstrapSnapshotEnd > BootstrapSnapshotStart)
+  {
+    const FString BootstrapSnapshotBlock = ProcessorSource.Mid(
+      BootstrapSnapshotStart,
+      BootstrapSnapshotEnd - BootstrapSnapshotStart);
+    const int32 CanonicalReadGate = BootstrapSnapshotBlock.Find(TEXT(
+      "TryRecordBootstrapMassRead()"));
+    const int32 FullMassIteration = BootstrapSnapshotBlock.Find(TEXT(
+      "EntityQuery.ForEachEntityChunk("));
+    TestTrue(TEXT("full Mass read is gated to invalid bootstrap snapshot"),
+      BootstrapSnapshotBlock.Contains(TEXT(
+        "if (!Pipeline->NeedsBootstrapBoundarySnapshot()) return true;"))
+        && BootstrapSnapshotBlock.Contains(TEXT(
+          "if (Pipeline->IsStepInProgress()) return false;"))
+        && CanonicalReadGate != INDEX_NONE
+        && FullMassIteration > CanonicalReadGate);
+    TestFalse(TEXT("bootstrap Mass read is not a proxy fallback"),
+      BootstrapSnapshotBlock.Contains(TEXT(
+        "TryPublishWorkerProxyBoundarySnapshot()")));
+  }
+  TestFalse(TEXT("Round owns no duplicate full Worker input snapshot cache"),
+    PipelineHeader.Contains(TEXT("WorkerInputSnapshotCache"))
+      || PipelineSource.Contains(TEXT("WorkerInputSnapshotCache"))
+      || PipelineHeader.Contains(TEXT("WorkerInputFormationFactsCache"))
+      || PipelineHeader.Contains(TEXT("WorkerInputFacingFactsCache"))
+      || PipelineHeader.Contains(TEXT("WorkerInputBusinessFactsCache")));
+  const int32 ProxyRefreshStart = PipelineSource.Find(TEXT(
+    "TryPublishWorkerProxyBoundarySnapshot()"));
+  const int32 ProxyRefreshEnd = PipelineSource.Find(TEXT(
+    "bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    ProxyRefreshStart);
+  TestTrue(TEXT("Worker proxy refresh block is readable"),
+    ProxyRefreshStart != INDEX_NONE && ProxyRefreshEnd > ProxyRefreshStart);
+  if (ProxyRefreshStart != INDEX_NONE && ProxyRefreshEnd > ProxyRefreshStart)
+  {
+    const FString ProxyRefreshBlock = PipelineSource.Mid(
+      ProxyRefreshStart, ProxyRefreshEnd - ProxyRefreshStart);
+    TestTrue(TEXT("Worker proxy refresh uses checkpoint hash or O(1) epoch token"),
+      ProxyRefreshBlock.Contains(TEXT(
+        "FCrowdMassRuntimeBridge::RefreshBoundarySnapshot(BoundarySnapshot)"))
+        && ProxyRefreshBlock.Contains(TEXT(
+          "FCrowdMassRuntimeBridge::AdvanceBoundarySnapshotEpochToken("))
+        && ProxyRefreshBlock.Contains(TEXT(
+          "% BoundarySnapshotCheckpointCadenceTicks == 0"))
+        && ProxyRefreshBlock.Contains(TEXT(
+          "CrowdDemoFullBoundarySnapshotDiagnostic"))
+        && ProxyRefreshBlock.Contains(TEXT(
+          "ResetBoundaryDerivedStateAfterPublish()")));
+    TestFalse(TEXT("ordinary Worker proxy refresh performs no full snapshot rebuild or record copy"),
+      ProxyRefreshBlock.Contains(TEXT(
+        "FCrowdMassRuntimeBridge::BuildBoundarySnapshot("))
+        || ProxyRefreshBlock.Contains(TEXT(
+          "TArray<FCrowdMassBoundaryAgentRecord> Records"))
+        || ProxyRefreshBlock.Contains(TEXT(
+          "PublishBoundarySnapshot(")));
+    TestTrue(TEXT("ordinary Worker proxy refresh consumes only dirty records"),
+      ProxyRefreshBlock.Contains(TEXT("Proxy.PeekDirtyBatch()"))
+        && ProxyRefreshBlock.Contains(TEXT(
+          "DirtyBatch->Records"))
+        && ProxyRefreshBlock.Contains(TEXT(
+          "Proxy.AcknowledgeDirtyBatch(")));
+    TestFalse(TEXT("ordinary Worker proxy refresh has no full entity expansion"),
+      ProxyRefreshBlock.Contains(TEXT("CopyCurrentEntities"))
+        || ProxyRefreshBlock.Contains(TEXT("CurrentEntityRefs.Sort"))
+        || ProxyRefreshBlock.Contains(TEXT("RecordIndexByEntity"))
+        || ProxyRefreshBlock.Contains(TEXT(
+          "TArray<FCrowdWorkerMovementState> MovementStates")));
+  }
+  TestTrue(TEXT("Target parity validation requires actual topology work"),
+    PipelineSource.Contains(TEXT(
+      "&& !BoundaryFacingWorkState->TargetTopologySlots.IsEmpty()"))
+      && PipelineSource.Contains(TEXT(
+        "VIOLATION CrowdDemoWorkerTargetMissing")));
   for (const TCHAR* DeletedFragment : DeletedCompatibilityFragments)
   {
     TestFalse(FString::Printf(TEXT("Mass template excludes %s"), DeletedFragment),
@@ -1432,15 +1922,18 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
 
   const int32 FlowPreferredStart = ProcessorSource.Find(
     TEXT("void FCrowdDemoRoundFlowPreferredVelocityStage::Execute"));
-  const int32 BoundaryGatherStart = ProcessorSource.Find(
-    TEXT("FCrowdDemoRoundBoundaryGatherStage::"),
+  const int32 BootstrapSnapshotFunctionStart = ProcessorSource.Find(
+    TEXT("bool PublishBootstrapBoundarySnapshotFromMass("),
     ESearchCase::CaseSensitive, ESearchDir::FromStart, FlowPreferredStart);
   TestTrue(TEXT("flow preferred execute block found"),
-    FlowPreferredStart != INDEX_NONE && BoundaryGatherStart > FlowPreferredStart);
-  if (FlowPreferredStart != INDEX_NONE && BoundaryGatherStart > FlowPreferredStart)
+    FlowPreferredStart != INDEX_NONE
+      && BootstrapSnapshotFunctionStart > FlowPreferredStart);
+  if (FlowPreferredStart != INDEX_NONE
+    && BootstrapSnapshotFunctionStart > FlowPreferredStart)
   {
     const FString FlowPreferredBody = ProcessorSource.Mid(
-      FlowPreferredStart, BoundaryGatherStart - FlowPreferredStart);
+      FlowPreferredStart,
+      BootstrapSnapshotFunctionStart - FlowPreferredStart);
     int32 TraversalCount = 0;
     int32 SearchFrom = 0;
     const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
@@ -1485,20 +1978,20 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
 
   const FString CombatWorkMarker =
     TEXT("FCrowdDemoBoundaryBusinessWorkOutput RunBoundaryBusinessWork");
-  const FString CorrectionIntervalMarker =
-    TEXT("constexpr float CorrectionIntervalSeconds");
+  const FString CombatWorkEndMarker =
+    TEXT("constexpr float CorrectionMaxAgeMs");
   const int32 CombatWorkStart = PipelineSource.Find(CombatWorkMarker);
-  const int32 CorrectionIntervalStart = PipelineSource.Find(
-    CorrectionIntervalMarker, ESearchCase::CaseSensitive,
+  const int32 CombatWorkEnd = PipelineSource.Find(
+    CombatWorkEndMarker, ESearchCase::CaseSensitive,
     ESearchDir::FromStart, CombatWorkStart + CombatWorkMarker.Len());
   TestTrue(TEXT("combined combat boundary work block found"),
     CombatWorkStart != INDEX_NONE
-      && CorrectionIntervalStart > CombatWorkStart);
+      && CombatWorkEnd > CombatWorkStart);
   if (CombatWorkStart != INDEX_NONE
-    && CorrectionIntervalStart > CombatWorkStart)
+    && CombatWorkEnd > CombatWorkStart)
   {
     const FString CombatBlock = PipelineSource.Mid(
-      CombatWorkStart, CorrectionIntervalStart - CombatWorkStart);
+      CombatWorkStart, CombatWorkEnd - CombatWorkStart);
     int32 QueryTraversalCount = 0;
     int32 SearchFrom = 0;
     const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
@@ -1538,8 +2031,12 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ProcessorSource.Contains(TEXT("SetPendingProjectileHitFacts"))
       || ProcessorSource.Contains(TEXT("ConsumePendingProjectileHitFacts")));
   TestTrue(TEXT("final boundary writer applies prepared combat state"),
-    ProcessorSource.Contains(
-      TEXT("CombatAgent.Combat, Stats[It], Businesses[It]")));
+    ProcessorSource.Contains(TEXT(
+      "FinalBusinessByAgentId.FindChecked(AgentId)"))
+      && ProcessorSource.Contains(TEXT(
+        "Stats[It] = FinalBusiness.Stats"))
+      && ProcessorSource.Contains(TEXT(
+        "Visuals[It] = FinalBusiness.Visual")));
   TestTrue(TEXT("final boundary writer publishes Mass-authoritative projectile state"),
     ProcessorSource.Contains(TEXT(
       "Pipeline.ApplyProjectileFinalState(")));

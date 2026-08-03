@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Async/Future.h"
 #include "CoreMinimal.h"
 #include "CrowdLocalPredictiveInteractionKernel.h"
 #include "CrowdDemoContinuousLifecycleCoordinator.h"
@@ -9,15 +10,16 @@
 #include "CrowdDemoBusinessPlanner.h"
 #include "CrowdDemoAttackPlanner.h"
 #include "MassCrowdMassLifecycleWorld.h"
-#include "MassCrowdBoundaryRunner.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdCombatResolver.h"
 #include "MassCrowdNavRuntime.h"
 #include "MassCrowdProjectileBoundary.h"
 #include "MassCrowdProjectileMassStore.h"
+#include "MassCrowdRuntimeBridge.h"
 #include "MassCrowdWorkerProjectileDomain.h"
 #include "MassCrowdSpatialSafety.h"
 #include "Mass/CrowdDemoAttackHostAdapter.h"
+#include "Mass/CrowdDemoWorkerCombatExtension.h"
 #include "CrowdDemoMixedSandboxCoordinator.generated.h"
 
 class APlayerController;
@@ -137,8 +139,10 @@ private:
   struct FWorkerMixedCombatApplyState
   {
     FCrowdWorkerProjectileState ProjectileState;
+    FCrowdDemoWorkerMixedCombatHostResult HostResult;
     bool bReady = false;
     bool bApplyProduction = false;
+    bool bRequireLegacyParity = true;
   };
 
   struct FWorkerBehaviorApplyState
@@ -153,11 +157,10 @@ private:
 
   struct FPendingMixedMovement
   {
-    TUniquePtr<FCrowdMassBoundaryRunner> Runner;
+    TFuture<bool> LegacyWork;
     TSharedPtr<FMixedMovementWork, ESPMode::ThreadSafe> Work;
     TSharedPtr<TArray<FSlotState>, ESPMode::ThreadSafe> StagedSlots;
     FCrowdMassBoundarySnapshot Snapshot;
-    TArray<FCrowdMassCommitTarget> Targets;
     FCrowdBehaviorPreparedBoundary PreparedBehavior;
     TArray<uint32> ResolvedInteractionLayers;
     TArray<uint64> ResolvedAttachedNodeIds;
@@ -167,6 +170,7 @@ private:
     uint64 ExpectedWorkerProjectileStableHash = 0;
     uint64 WorkerBehaviorInputSequence = 0;
     bool bRequireWorkerCombat = false;
+    bool bDirectWorkerProductionApply = false;
     TSharedPtr<FWorkerMixedCombatApplyState, ESPMode::ThreadSafe>
       WorkerCombatApply;
     TSharedPtr<FWorkerBehaviorApplyState, ESPMode::ThreadSafe>
@@ -201,6 +205,10 @@ private:
     LastPublishedHostFactHashes;
   TArray<FCrowdLocalPredictiveGrantState>
     MixedLocalPredictiveGrantStates;
+  TArray<FCrowdWorkerSpawnDelta> PendingWorkerSpawns;
+  TArray<FCrowdWorkerDespawnDelta> PendingWorkerDespawns;
+  TArray<FCrowdWorkerExternalGameplayInput>
+    PendingWorkerMovementProfileRevisions;
   TArray<FSlotState> Slots;
   TArray<double> ServerStepMilliseconds;
   TArray<double> ClientFrameMilliseconds;
@@ -264,8 +272,12 @@ private:
   bool bClientApplyFailureLogged = false;
   bool bProjectileBatchSpawned = false;
   bool bMixedCombatIntegration = false;
+  bool bLastMovementAppliedDirectWorker = false;
   bool bWorkerMixedCombatBootstrapped = false;
   uint64 NextWorkerMixedCombatControlRevision = 1;
+  uint64 LastWorkerMixedCombatControlSemanticHash = 0;
+  uint64 WorkerMixedCombatControlPublishCount = 0;
+  uint64 WorkerMixedCombatControlReuseCount = 0;
   double CaptureAtWorldSeconds = 0.0;
 
   bool TryInitializeServer();
@@ -314,6 +326,12 @@ private:
   bool RebuildSpatialSafety();
   bool BuildLifecycleOperation(FCrowdDemoContinuousLifecycleOperation& OutOperation);
   bool ApplyLifecycleOperation(const FCrowdDemoContinuousLifecycleOperation& Operation);
+  bool QueueWorkerLifecycleIntent(
+    const FCrowdDemoContinuousLifecycleOperation& Operation);
+  bool BuildWorkerLifecyclePayloads(
+    const FSlotState& Slot,
+    FCrowdWorkerPayload& OutInitialState,
+    FCrowdWorkerPayload& OutMovementProfile) const;
   FCrowdLifecycleBatchHeader MakeBatchHeader(
     const FCrowdDemoContinuousLifecycleOperation& Operation) const;
   void PublishProductStateFrame();

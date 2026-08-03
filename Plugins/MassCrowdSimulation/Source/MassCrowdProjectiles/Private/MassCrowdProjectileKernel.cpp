@@ -12,6 +12,31 @@ namespace
     Hash *= ProjectileKernelFnvPrime;
   }
 
+  bool MakeOrderedImpactId(
+    const int64 FixedStepIndex,
+    const uint64 ProjectileId,
+    uint64& OutImpactId)
+  {
+    OutImpactId = 0;
+    if (FixedStepIndex < 0
+      || FixedStepIndex >= static_cast<int64>(MAX_uint32)
+      || ProjectileId == 0)
+      return false;
+
+    uint32 ProjectileHash = ProjectileKernelFnvOffset;
+    FoldProjectileKernelHash(
+      ProjectileHash, static_cast<uint32>(ProjectileId));
+    FoldProjectileKernelHash(
+      ProjectileHash, static_cast<uint32>(ProjectileId >> 32));
+    if (ProjectileHash == 0)
+      ProjectileHash = 1;
+
+    OutImpactId =
+      (static_cast<uint64>(FixedStepIndex + 1) << 32)
+      | static_cast<uint64>(ProjectileHash);
+    return true;
+  }
+
   int32 Q(const float Value, const float Quantum)
   {
     return FMath::RoundToInt(
@@ -348,7 +373,10 @@ bool FCrowdProjectileKernel::Advance(
       }
       FCrowdImpactFact& Impact =
         OutImpacts.AddDefaulted_GetRef();
-      Impact.ImpactId = Projectile.ProjectileId;
+      if (!MakeOrderedImpactId(
+          FixedStepIndex, Projectile.ProjectileId,
+          Impact.ImpactId))
+        return false;
       Impact.ImpactTypeId = CrowdImpactTypeIds::Projectile;
       Impact.FixedStepIndex = FixedStepIndex;
       Impact.Instigator = Projectile.Instigator;
@@ -402,6 +430,14 @@ bool FCrowdProjectileKernel::Advance(
       return A.Target < B.Target;
     return A.ImpactId < B.ImpactId;
   });
+  TSet<uint64> SeenImpactIds;
+  for (const FCrowdImpactFact& Impact : OutImpacts)
+  {
+    if (!Impact.IsValid()
+      || SeenImpactIds.Contains(Impact.ImpactId))
+      return false;
+    SeenImpactIds.Add(Impact.ImpactId);
+  }
   OutEvents.Sort(EventLess);
   InOutSummary.ActiveCount = 0;
   for (const FCrowdProjectileState& Projectile : InOutProjectiles)

@@ -88,6 +88,22 @@ public:
     TConstArrayView<FCrowdMassBoundaryAgentRecord> Records,
     FCrowdMassBoundarySnapshot& OutSnapshot);
 
+  // Revalidates and rehashes an already sorted snapshot in place. This is
+  // used at an owner barrier after Worker hot fields have been atomically
+  // refreshed; it performs no record-array copy or sort.
+  static bool RefreshBoundarySnapshot(
+    FCrowdMassBoundarySnapshot& Snapshot);
+
+  // Advances the identity of an already validated stable snapshot without
+  // scanning its records. Production owner barriers use this between full
+  // checkpoint hashes; the baseline must come from Build/Refresh.
+  static bool AdvanceBoundarySnapshotEpochToken(
+    FCrowdMassBoundarySnapshot& Snapshot,
+    uint64 BaselineHash,
+    int32 FixedStepIndex,
+    int32 PlanRevision,
+    uint64 ThroughInputSequence);
+
   static bool BuildGuidanceRecords(
     const FCrowdMassBoundarySnapshot& Snapshot,
     TConstArrayView<FCrowdGuidanceCandidate> SharedFlowCandidates,

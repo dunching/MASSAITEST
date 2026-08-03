@@ -7,9 +7,12 @@ bool FCrowdWorkerResultApplyProxy::ResetQuiescent(
   if (Generation == 0 || !InLimits.IsValid())
     return false;
   Limits = InLimits;
-  CurrentEntities.Reset();
+  StableEntities.Reset();
+  StableEntitySlots.Reset();
   ProxyStates.Reset();
   DomainStates.Reset();
+  PendingDirtyStates.Reset();
+  PendingDirtyBatch.Reset();
   Metrics = {};
   Metrics.Generation = Generation;
   bInitialized = true;
@@ -38,27 +41,51 @@ bool FCrowdWorkerResultApplyProxy::UpdateCurrentEntities(
   if (!bInitialized || Metrics.bViolation
     || Generation != Metrics.Generation)
     return false;
-  TSet<FCrowdStableEntityRef> Candidate;
+  TArray<FCrowdStableEntityRef> Candidate;
   Candidate.Reserve(EntityRefs.Num());
   for (const FCrowdStableEntityRef& Ref : EntityRefs)
   {
-    if (!Ref.IsValid() || Candidate.Contains(Ref))
+    if (!Ref.IsValid())
     {
       LatchViolation();
       return false;
     }
     Candidate.Add(Ref);
   }
-  CurrentEntities = MoveTemp(Candidate);
+  Candidate.Sort();
+  for (int32 Index = 1; Index < Candidate.Num(); ++Index)
+  {
+    if (Candidate[Index - 1] == Candidate[Index])
+    {
+      LatchViolation();
+      return false;
+    }
+  }
+  if (Candidate == StableEntities) return true;
+  StableEntities = MoveTemp(Candidate);
+  StableEntitySlots.Reset();
+  StableEntitySlots.Reserve(StableEntities.Num());
+  for (int32 Index = 0; Index < StableEntities.Num(); ++Index)
+    StableEntitySlots.Add(StableEntities[Index], Index);
   for (auto It = ProxyStates.CreateIterator(); It; ++It)
-    if (!CurrentEntities.Contains(It.Key()))
+    if (!StableEntitySlots.Contains(It.Key()))
       It.RemoveCurrent();
   for (auto It = DomainStates.CreateIterator(); It; ++It)
-    if (!CurrentEntities.Contains(It.Key().EntityRef))
+    if (!StableEntitySlots.Contains(It.Key().EntityRef))
       It.RemoveCurrent();
-  Metrics.CurrentEntityCount = CurrentEntities.Num();
+  for (auto It = PendingDirtyStates.CreateIterator(); It; ++It)
+  {
+    const int32* Slot = StableEntitySlots.Find(It.Key().EntityRef);
+    if (!Slot)
+      It.RemoveCurrent();
+    else
+      It.Value().StableSlot = *Slot;
+  }
+  RebuildPendingDirtyBatch();
+  Metrics.CurrentEntityCount = StableEntities.Num();
   Metrics.ProxyStateCount = ProxyStates.Num();
   Metrics.DomainStateCount = DomainStates.Num();
+  ++Metrics.StableEntityViewRevision;
   return true;
 }
 
@@ -120,7 +147,8 @@ FCrowdWorkerResultApplyProxy::Apply(
 
   for (const FCrowdWorkerStatePatch& Patch : Batch.StatePatches)
   {
-    if (!CurrentEntities.Contains(Patch.EntityRef))
+    const int32* StableSlot = StableEntitySlots.Find(Patch.EntityRef);
+    if (!StableSlot)
     {
       ++Metrics.StaleLifecyclePatchCount;
       continue;
@@ -138,6 +166,10 @@ FCrowdWorkerResultApplyProxy::Apply(
       State.WorkerEpoch = Patch.WorkerEpoch;
       State.SourceInputSequence = Patch.SourceInputSequence;
       State.PublishSequence = Batch.PublishSequence;
+      FCrowdWorkerResultApplyDirtyRecord& Dirty =
+        PendingDirtyStates.FindOrAdd({Patch.EntityRef, Field});
+      Dirty.StableSlot = *StableSlot;
+      Dirty.DomainState = State;
       ++Metrics.AppliedPatchCount;
       ++Metrics.AppliedDomainPatchCount;
       continue;
@@ -162,6 +194,12 @@ FCrowdWorkerResultApplyProxy::Apply(
       Batch.OrderedEvents.Last().EventSequence;
   Metrics.ProxyStateCount = ProxyStates.Num();
   Metrics.DomainStateCount = DomainStates.Num();
+  PendingDirtyBatch.Generation = Batch.Generation;
+  PendingDirtyBatch.PublishSequence = Batch.PublishSequence;
+  PendingDirtyBatch.LastAppliedInputSequence =
+    Batch.LastAppliedInputSequence;
+  RebuildPendingDirtyBatch();
+  ++Metrics.PublishedDirtyBatchCount;
   if (Batch.StatePatches.IsEmpty()
     && Batch.OrderedEvents.IsEmpty())
   {
@@ -184,4 +222,39 @@ FCrowdWorkerResultApplyProxy::FindDomain(
   const ECrowdWorkerField Field) const
 {
   return DomainStates.Find({EntityRef, Field});
+}
+
+int32 FCrowdWorkerResultApplyProxy::FindStableEntitySlot(
+  const FCrowdStableEntityRef& EntityRef) const
+{
+  const int32* Slot = StableEntitySlots.Find(EntityRef);
+  return Slot ? *Slot : INDEX_NONE;
+}
+
+void FCrowdWorkerResultApplyProxy::RebuildPendingDirtyBatch()
+{
+  PendingDirtyBatch.Records.Reset(PendingDirtyStates.Num());
+  for (const auto& Pair : PendingDirtyStates)
+    PendingDirtyBatch.Records.Add(Pair.Value);
+  PendingDirtyBatch.Records.Sort([](
+    const FCrowdWorkerResultApplyDirtyRecord& A,
+    const FCrowdWorkerResultApplyDirtyRecord& B)
+  {
+    if (A.StableSlot != B.StableSlot)
+      return A.StableSlot < B.StableSlot;
+    return A.DomainState.Field < B.DomainState.Field;
+  });
+}
+
+bool FCrowdWorkerResultApplyProxy::AcknowledgeDirtyBatch(
+  const uint64 PublishSequence)
+{
+  if (!PendingDirtyBatch.IsValid()
+    || PendingDirtyBatch.PublishSequence != PublishSequence)
+    return false;
+  PendingDirtyStates.Reset();
+  PendingDirtyBatch.Reset();
+  ++Metrics.ConsumedDirtyBatchCount;
+  Metrics.LastConsumedDirtyPublishSequence = PublishSequence;
+  return true;
 }

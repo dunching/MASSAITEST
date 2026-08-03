@@ -77,7 +77,8 @@ enum class ECrowdWorkerExternalGameplayInputType : uint16
 {
   InputSnapshot = 1,
   Objective = 2,
-  GameplayFact = 3
+  GameplayFact = 3,
+  MovementProfileRevision = 4
 };
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerExternalGameplayInput

@@ -910,6 +910,65 @@ bool FCrowdBehaviorSourceRuntime::CommitWorkerPrepared(
   return true;
 }
 
+bool FCrowdBehaviorSourceRuntime::CommitWorkerAuthoritative(
+  const FCrowdBehaviorPreparedBoundary& Prepared,
+  const TConstArrayView<FCrowdBehaviorWorkerCommitEntity> WorkerEntities,
+  const TConstArrayView<FCrowdBehaviorSourceEvent> WorkerEvents)
+{
+  if (!ValidatePrepared(Prepared)
+    || WorkerEntities.Num() != Prepared.Entities.Num())
+    return false;
+
+  FCrowdStableEntityRef PreviousRef;
+  for (int32 Index = 0; Index < Prepared.Entities.Num(); ++Index)
+  {
+    const FCrowdBehaviorPreparedEntity& Expected =
+      Prepared.Entities[Index];
+    const FCrowdBehaviorWorkerCommitEntity& Worker =
+      WorkerEntities[Index];
+    const FCrowdBehaviorSourceSet* Current =
+      SourceSets.Find(Worker.EntityRef);
+    if ((!PreviousRef.IsUnset() && !(PreviousRef < Worker.EntityRef))
+      || Worker.EntityRef != Expected.EntityRef
+      || Worker.SourceSet.EntityRef != Worker.EntityRef
+      || !Current
+      || !Worker.SourceSet.IsValid()
+      || Worker.SourceSet.Revision < Current->Revision
+      || !Worker.ResolvedChannels.bValid
+      || Worker.EvaluationContextHash == 0)
+      return false;
+    PreviousRef = Worker.EntityRef;
+  }
+  for (const FCrowdBehaviorSourceEvent& Event : WorkerEvents)
+  {
+    if (Event.Kind >= ECrowdBehaviorSourceEventKind::Count
+      || Event.FixedStepIndex < 0
+      || Event.FixedStepIndex > Prepared.FixedStepIndex
+      || !Event.Handle.IsValid()
+      || !Event.SourceTypeId.IsValid()
+      || !SourceSets.Contains(Event.Handle.EntityRef))
+      return false;
+  }
+
+  LastCommittedEvents.Reset(WorkerEvents.Num());
+  LastCommittedEvents.Append(WorkerEvents);
+  for (const FCrowdBehaviorWorkerCommitEntity& Worker : WorkerEntities)
+  {
+    SourceSets[Worker.EntityRef] = Worker.SourceSet;
+    LastResolvedChannels.Add(
+      Worker.EntityRef, Worker.ResolvedChannels);
+  }
+  PendingCommands.RemoveAll([&](const auto& Command)
+  {
+    return Command.EffectiveFixedStep <= Prepared.FixedStepIndex;
+  });
+  PendingBindingUpdates.RemoveAll([&](const auto& Update)
+  {
+    return Update.EffectiveFixedStep <= Prepared.FixedStepIndex;
+  });
+  return true;
+}
+
 bool FCrowdBehaviorSourceRuntime::ValidatePrepared(
   const FCrowdBehaviorPreparedBoundary& Prepared) const
 {

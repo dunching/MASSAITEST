@@ -1,5 +1,7 @@
 #include "MassCrowdWorkerMovementControlResource.h"
 
+#include "MassCrowdWorkerRuntimeV2.h"
+
 namespace CrowdWorkerMovementControlPrivate
 {
   template<typename T>
@@ -73,6 +75,186 @@ bool FCrowdWorkerMovementControlEntry::IsValid() const
     && FMath::IsFinite(VerticalVelocityCmps);
 }
 
+bool FCrowdWorkerMovementProfileCodec::Encode(
+  const FCrowdWorkerMovementControlEntry& Profile,
+  FCrowdWorkerPayload& OutPayload)
+{
+  OutPayload = {};
+  if (!Profile.IsValid()) return false;
+  OutPayload.SchemaId = SchemaId;
+  OutPayload.SchemaVersion = SchemaVersion;
+  AppendUnsigned(OutPayload.Bytes, Profile.EntityRef.ProviderId);
+  AppendUnsigned(
+    OutPayload.Bytes, Profile.EntityRef.StableEntityId);
+  AppendUnsigned(
+    OutPayload.Bytes, Profile.EntityRef.LifecycleSerial);
+  AppendUnsigned(
+    OutPayload.Bytes, static_cast<uint32>(Profile.AgentId));
+  AppendUnsigned(OutPayload.Bytes, Profile.InteractionLayer);
+  AppendUnsigned(
+    OutPayload.Bytes,
+    static_cast<uint32>(Profile.PreviousBlockedAgeSteps));
+  AppendFloat(OutPayload.Bytes, Profile.MaximumSpeedCmps);
+  AppendFloat(
+    OutPayload.Bytes,
+    Profile.ParticleEnvironmentHardClearanceCm);
+  AppendFloat(
+    OutPayload.Bytes, Profile.ParticlePhysicalRadiusCm);
+  AppendFloat(
+    OutPayload.Bytes, Profile.ParticleHardSafetyGapCm);
+  AppendFloat(OutPayload.Bytes, Profile.ParticleSoftMarginCm);
+  AppendFloat(OutPayload.Bytes, Profile.ParticleMobility);
+  AppendUnsigned(
+    OutPayload.Bytes,
+    static_cast<uint8>(
+      (Profile.bFreezeAtBoundaryLocation ? 1u : 0u)
+      | (Profile.bVerticalOverride ? 2u : 0u)
+      | (Profile.bParticleActive ? 4u : 0u)
+      | (Profile.bUseLocalVelocity ? 8u : 0u)
+      | (Profile.bLocalVelocityValid ? 16u : 0u)
+      | (Profile.bUseWorkerTargetGuidance ? 32u : 0u)
+      | (Profile.bUseAuthoritativePreferredVelocity ? 64u : 0u)));
+  const auto AppendVector = [&OutPayload](const FVector& Value)
+  {
+    AppendFloat(
+      OutPayload.Bytes, static_cast<float>(Value.X));
+    AppendFloat(
+      OutPayload.Bytes, static_cast<float>(Value.Y));
+    AppendFloat(
+      OutPayload.Bytes, static_cast<float>(Value.Z));
+  };
+  AppendVector(Profile.AutonomousPreferredVelocity);
+  AppendVector(Profile.LocalVelocity);
+  AppendVector(Profile.BoundaryLocation);
+  AppendFloat(OutPayload.Bytes, Profile.ProposedZ);
+  AppendFloat(OutPayload.Bytes, Profile.VerticalVelocityCmps);
+  OutPayload.RecalculateStableHash();
+  return true;
+}
+
+bool FCrowdWorkerMovementProfileCodec::Decode(
+  const FCrowdWorkerPayload& Payload,
+  FCrowdWorkerMovementControlEntry& OutProfile)
+{
+  OutProfile = {};
+  if (Payload.SchemaId != SchemaId
+    || Payload.SchemaVersion != SchemaVersion
+    || Payload.StableHash != Payload.CalculateStableHash())
+    return false;
+  int32 Offset = 0;
+  uint32 AgentId = 0;
+  uint32 PreviousBlockedAgeSteps = 0;
+  uint8 Flags = 0;
+  if (!ReadUnsigned(
+      Payload.Bytes, Offset, OutProfile.EntityRef.ProviderId)
+    || !ReadUnsigned(
+      Payload.Bytes, Offset,
+      OutProfile.EntityRef.StableEntityId)
+    || !ReadUnsigned(
+      Payload.Bytes, Offset,
+      OutProfile.EntityRef.LifecycleSerial)
+    || !ReadUnsigned(Payload.Bytes, Offset, AgentId)
+    || !ReadUnsigned(
+      Payload.Bytes, Offset, OutProfile.InteractionLayer)
+    || !ReadUnsigned(
+      Payload.Bytes, Offset, PreviousBlockedAgeSteps)
+    || PreviousBlockedAgeSteps
+      > static_cast<uint32>(MAX_int32)
+    || !ReadFloat(
+      Payload.Bytes, Offset, OutProfile.MaximumSpeedCmps)
+    || !ReadFloat(
+      Payload.Bytes, Offset,
+      OutProfile.ParticleEnvironmentHardClearanceCm)
+    || !ReadFloat(
+      Payload.Bytes, Offset,
+      OutProfile.ParticlePhysicalRadiusCm)
+    || !ReadFloat(
+      Payload.Bytes, Offset,
+      OutProfile.ParticleHardSafetyGapCm)
+    || !ReadFloat(
+      Payload.Bytes, Offset, OutProfile.ParticleSoftMarginCm)
+    || !ReadFloat(
+      Payload.Bytes, Offset, OutProfile.ParticleMobility)
+    || !ReadUnsigned(Payload.Bytes, Offset, Flags)
+    || (Flags & ~uint8{127}) != 0)
+    return false;
+  const auto ReadVector = [&Payload, &Offset](FVector& OutValue)
+  {
+    float X = 0.0f;
+    float Y = 0.0f;
+    float Z = 0.0f;
+    if (!ReadFloat(Payload.Bytes, Offset, X)
+      || !ReadFloat(Payload.Bytes, Offset, Y)
+      || !ReadFloat(Payload.Bytes, Offset, Z))
+      return false;
+    OutValue = FVector(X, Y, Z);
+    return true;
+  };
+  if (!ReadVector(OutProfile.AutonomousPreferredVelocity)
+    || !ReadVector(OutProfile.LocalVelocity)
+    || !ReadVector(OutProfile.BoundaryLocation)
+    || !ReadFloat(
+      Payload.Bytes, Offset, OutProfile.ProposedZ)
+    || !ReadFloat(
+      Payload.Bytes, Offset, OutProfile.VerticalVelocityCmps))
+    return false;
+  OutProfile.AgentId = static_cast<int32>(AgentId);
+  OutProfile.PreviousBlockedAgeSteps =
+    static_cast<int32>(PreviousBlockedAgeSteps);
+  OutProfile.bFreezeAtBoundaryLocation = (Flags & 1u) != 0;
+  OutProfile.bVerticalOverride = (Flags & 2u) != 0;
+  OutProfile.bParticleActive = (Flags & 4u) != 0;
+  OutProfile.bUseLocalVelocity = (Flags & 8u) != 0;
+  OutProfile.bLocalVelocityValid = (Flags & 16u) != 0;
+  OutProfile.bUseWorkerTargetGuidance = (Flags & 32u) != 0;
+  OutProfile.bUseAuthoritativePreferredVelocity =
+    (Flags & 64u) != 0;
+  return Offset == Payload.Bytes.Num() && OutProfile.IsValid();
+}
+
+bool CrowdWorkerResolveMovementProfiles(
+  const FCrowdWorkerEntityStateStore& EntityStates,
+  const uint64 LastAppliedInputSequence,
+  const FCrowdWorkerMovementControlResource& FrozenControl,
+  TArray<FCrowdWorkerMovementControlEntry>& OutProfiles)
+{
+  OutProfiles.Reset();
+  TArray<FCrowdStableEntityRef> Entities;
+  EntityStates.GetEntities(Entities);
+  OutProfiles.Reserve(Entities.Num());
+  for (const FCrowdStableEntityRef& EntityRef : Entities)
+  {
+    FCrowdWorkerMovementControlEntry Profile;
+    const FCrowdWorkerDirtyStateRecord* ProfileRecord =
+      EntityStates.Find(
+        EntityRef, ECrowdWorkerField::MovementProfile);
+    if (ProfileRecord)
+    {
+      if (ProfileRecord->SourceInputSequence
+          > LastAppliedInputSequence
+        || !FCrowdWorkerMovementProfileCodec::Decode(
+          ProfileRecord->Payload, Profile)
+        || Profile.EntityRef != EntityRef)
+        return false;
+    }
+    else
+    {
+      const FCrowdWorkerMovementControlEntry* FrozenProfile =
+        FrozenControl.Find(EntityRef);
+      if (!FrozenProfile) return false;
+      Profile = *FrozenProfile;
+    }
+    OutProfiles.Add(MoveTemp(Profile));
+  }
+  OutProfiles.Sort([](
+    const FCrowdWorkerMovementControlEntry& A,
+    const FCrowdWorkerMovementControlEntry& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
+  return true;
+}
+
 const FCrowdWorkerMovementControlEntry*
 FCrowdWorkerMovementControlResource::Find(
   const FCrowdStableEntityRef& EntityRef) const
@@ -92,7 +274,6 @@ bool FCrowdWorkerMovementControlResource::IsValid() const
     ParticleSettings;
   const FCrowdSharedFlowFieldConfig& Flow = Environment;
   if (Revision == 0 || FixedStepIndex < 0 || PlanRevision < 0
-    || Entries.IsEmpty()
     || Flow.Revision < 0
     || Flow.BoundsMin.ContainsNaN()
     || Flow.BoundsMax.ContainsNaN()
@@ -395,7 +576,8 @@ bool FCrowdWorkerMovementControlResourceCodec::Encode(
         | (Entry.bParticleActive ? 4u : 0u)
         | (Entry.bUseLocalVelocity ? 8u : 0u)
         | (Entry.bLocalVelocityValid ? 16u : 0u)
-        | (Entry.bUseWorkerTargetGuidance ? 32u : 0u)));
+        | (Entry.bUseWorkerTargetGuidance ? 32u : 0u)
+        | (Entry.bUseAuthoritativePreferredVelocity ? 64u : 0u)));
     AppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.AutonomousPreferredVelocity.X));
@@ -649,7 +831,7 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
     Agent.Mobility = Values[10];
   }
   if (!ReadUnsigned(Payload.Bytes, Offset, Count)
-    || Count == 0 || Count > 100000)
+    || Count > 100000)
     return false;
   OutResource.Entries.Reserve(Count);
   for (uint32 Index = 0; Index < Count; ++Index)
@@ -697,7 +879,7 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
         Payload.Bytes, Offset,
         Entry.ParticleMobility)
       || !ReadUnsigned(Payload.Bytes, Offset, Flags)
-      || (Flags & ~uint8{63}) != 0
+      || (Flags & ~uint8{127}) != 0
       || !ReadFloat(Payload.Bytes, Offset, PreferredX)
       || !ReadFloat(Payload.Bytes, Offset, PreferredY)
       || !ReadFloat(Payload.Bytes, Offset, PreferredZ)
@@ -720,6 +902,8 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
     Entry.bUseLocalVelocity = (Flags & 8u) != 0;
     Entry.bLocalVelocityValid = (Flags & 16u) != 0;
     Entry.bUseWorkerTargetGuidance = (Flags & 32u) != 0;
+    Entry.bUseAuthoritativePreferredVelocity =
+      (Flags & 64u) != 0;
     Entry.AutonomousPreferredVelocity =
       FVector(PreferredX, PreferredY, PreferredZ);
     Entry.LocalVelocity = FVector(LocalX, LocalY, LocalZ);

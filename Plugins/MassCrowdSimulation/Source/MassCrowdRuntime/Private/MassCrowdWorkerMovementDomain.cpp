@@ -15,7 +15,7 @@
 namespace CrowdWorkerMovementPlanPrivate
 {
   constexpr uint32 SchemaId = 0x43574D50u;
-  constexpr uint16 SchemaVersion = 3;
+  constexpr uint16 SchemaVersion = 4;
 
   struct FPlanState
   {
@@ -24,7 +24,32 @@ namespace CrowdWorkerMovementPlanPrivate
     bool bUseLocalVelocity = false;
     bool bLocalVelocityValid = false;
     bool bMovementLocked = false;
+    int32 NextBlockedAgeSteps = 0;
+    uint32 GrantComponentKey = 0;
+    int32 GrantEpoch = 0;
+    int32 GrantRemainingSteps = 0;
   };
+
+  void AppendUnsigned(TArray<uint8>& Bytes, const uint32 Value)
+  {
+    for (uint32 Byte = 0; Byte < sizeof(Value); ++Byte)
+      Bytes.Add(static_cast<uint8>(Value >> (Byte * 8)));
+  }
+
+  bool ReadUnsigned(
+    const TConstArrayView<uint8> Bytes,
+    int32& Offset,
+    uint32& OutValue)
+  {
+    if (Offset < 0 || Offset + 4 > Bytes.Num())
+      return false;
+    OutValue = 0;
+    for (uint32 Byte = 0; Byte < 4; ++Byte)
+      OutValue |= static_cast<uint32>(Bytes[Offset + Byte])
+        << (Byte * 8);
+    Offset += 4;
+    return true;
+  }
 
   void AppendFloat(TArray<uint8>& Bytes, const float Value)
   {
@@ -56,7 +81,10 @@ namespace CrowdWorkerMovementPlanPrivate
   {
     OutPayload = {};
     if (State.AutonomousPreferredVelocity.ContainsNaN()
-      || State.LocalVelocity.ContainsNaN())
+      || State.LocalVelocity.ContainsNaN()
+      || State.NextBlockedAgeSteps < 0
+      || State.GrantEpoch < 0
+      || State.GrantRemainingSteps < 0)
       return false;
     OutPayload.SchemaId = SchemaId;
     OutPayload.SchemaVersion = SchemaVersion;
@@ -82,6 +110,15 @@ namespace CrowdWorkerMovementPlanPrivate
     AppendFloat(
       OutPayload.Bytes,
       static_cast<float>(State.LocalVelocity.Z));
+    AppendUnsigned(
+      OutPayload.Bytes,
+      static_cast<uint32>(State.NextBlockedAgeSteps));
+    AppendUnsigned(OutPayload.Bytes, State.GrantComponentKey);
+    AppendUnsigned(
+      OutPayload.Bytes, static_cast<uint32>(State.GrantEpoch));
+    AppendUnsigned(
+      OutPayload.Bytes,
+      static_cast<uint32>(State.GrantRemainingSteps));
     OutPayload.RecalculateStableHash();
     return true;
   }
@@ -93,7 +130,7 @@ namespace CrowdWorkerMovementPlanPrivate
     OutState = {};
     if (Payload.SchemaId != SchemaId
       || Payload.SchemaVersion != SchemaVersion
-      || Payload.Bytes.Num() != 25
+      || Payload.Bytes.Num() != 41
       || Payload.StableHash != Payload.CalculateStableHash()
       || (Payload.Bytes[0] & ~uint8{7}) != 0)
       return false;
@@ -117,7 +154,26 @@ namespace CrowdWorkerMovementPlanPrivate
       (Payload.Bytes[0] & 2u) != 0;
     OutState.bMovementLocked =
       (Payload.Bytes[0] & 4u) != 0;
-    return true;
+    uint32 NextBlockedAgeSteps = 0;
+    uint32 GrantEpoch = 0;
+    uint32 GrantRemainingSteps = 0;
+    if (!ReadUnsigned(
+        Payload.Bytes, Offset, NextBlockedAgeSteps)
+      || !ReadUnsigned(
+        Payload.Bytes, Offset, OutState.GrantComponentKey)
+      || !ReadUnsigned(Payload.Bytes, Offset, GrantEpoch)
+      || !ReadUnsigned(
+        Payload.Bytes, Offset, GrantRemainingSteps)
+      || NextBlockedAgeSteps > static_cast<uint32>(MAX_int32)
+      || GrantEpoch > static_cast<uint32>(MAX_int32)
+      || GrantRemainingSteps > static_cast<uint32>(MAX_int32))
+      return false;
+    OutState.NextBlockedAgeSteps =
+      static_cast<int32>(NextBlockedAgeSteps);
+    OutState.GrantEpoch = static_cast<int32>(GrantEpoch);
+    OutState.GrantRemainingSteps =
+      static_cast<int32>(GrantRemainingSteps);
+    return Offset == Payload.Bytes.Num();
   }
 }
 
@@ -211,14 +267,49 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     return false;
   };
   if (!Context.EntityStates || !Context.Resources
-    || WorkItems.Num() != 1
-    || WorkItems[0].Key.Domain
-      != ECrowdWorkerDomainId::MovementPlanning
-    || WorkItems[0].Key.Kind
-      != ECrowdWorkerWorkKind::Resource
-    || WorkItems[0].Key.ScopeKey
-      != CrowdWorkerResourceIds::MovementControl)
+    || WorkItems.IsEmpty())
     return Reject(TEXT("context"));
+  const FCrowdWorkerWorkItem* ResourceWork = nullptr;
+  for (const FCrowdWorkerWorkItem& Work : WorkItems)
+  {
+    if (Work.Key.Domain
+        != ECrowdWorkerDomainId::MovementPlanning)
+      return Reject(TEXT("context"));
+    if (Work.Key.Kind == ECrowdWorkerWorkKind::Resource)
+    {
+      if (Work.Key.ScopeKey
+          != CrowdWorkerResourceIds::MovementControl)
+        return Reject(TEXT("context"));
+      if (!ResourceWork)
+        ResourceWork = &Work;
+    }
+    else if (Work.Key.Kind != ECrowdWorkerWorkKind::Entity)
+      return Reject(TEXT("context"));
+  }
+  if (!ResourceWork)
+  {
+    if (WorkItems.Num() != 1)
+      return Reject(TEXT("context"));
+    const FCrowdStableEntityRef EntityRef =
+      WorkItems[0].Key.PrimaryEntity;
+    const FCrowdWorkerDirtyStateRecord* ProfileRecord =
+      Context.EntityStates->Find(
+        EntityRef, ECrowdWorkerField::MovementProfile);
+    FCrowdWorkerMovementControlEntry Profile;
+    if (!ProfileRecord
+      || ProfileRecord->SourceInputSequence
+        > Context.LastAppliedInputSequence
+      || !FCrowdWorkerMovementProfileCodec::Decode(
+        ProfileRecord->Payload, Profile)
+      || Profile.EntityRef != EntityRef)
+      return Reject(TEXT("movement_profile"), EntityRef,
+        ProfileRecord ? ProfileRecord->SourceInputSequence : 0);
+    return true;
+  }
+  // A new complete MovementControl resource invalidates the whole closed
+  // planning set. Per-entity invalidations and an anchored TimeWheel resource
+  // continuation propagated in the same round are covered by this resource
+  // replan and must not execute a second plan for the same entity.
   const FCrowdWorkerResourceRecord* Record =
     Context.Resources->FindCurrent(
       CrowdWorkerResourceIds::MovementControl);
@@ -228,33 +319,62 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       Record->Payload, Control)
     || Control.Revision != Record->Revision)
     return Reject(TEXT("movement_control"));
+  TArray<FCrowdWorkerMovementControlEntry> Profiles;
+  if (!CrowdWorkerResolveMovementProfiles(
+      *Context.EntityStates,
+      Context.LastAppliedInputSequence,
+      Control,
+      Profiles))
+    return Reject(TEXT("movement_profiles"));
+  if (Context.AbsoluteSimulationTick
+      > static_cast<uint64>(MAX_int32))
+    return Reject(TEXT("simulation_tick"));
+  const int32 CurrentFixedStepIndex =
+    static_cast<int32>(Context.AbsoluteSimulationTick);
+
+  FCrowdWorkerFlowFieldResource FlowField;
+  bool bHasFlowField = false;
+  if (const FCrowdWorkerResourceRecord* Environment =
+    Context.Resources->FindCurrent(
+      CrowdWorkerResourceIds::Environment))
+  {
+    if (!FCrowdWorkerFlowFieldResourceCodec::Decode(
+        Environment->Payload, FlowField)
+      || FlowField.Revision != Environment->Revision)
+      return Reject(TEXT("flow_field"));
+    bHasFlowField = true;
+  }
 
   TMap<int32, const FCrowdLocalPredictiveResult*> ResultByAgentId;
+  TMap<int32, const FCrowdLocalPredictiveGrantState*>
+    GrantByAgentId;
   FCrowdMassLocalPredictiveWorkOutput LocalOutput;
   TMap<FCrowdStableEntityRef, FVector> TargetVelocityByEntity;
+  TMap<FCrowdStableEntityRef, FVector> FlowVelocityByEntity;
   TMap<FCrowdStableEntityRef, FCrowdWorkerBehaviorState>
     BehaviorByEntity;
   TMap<FCrowdStableEntityRef, FCrowdWorkerCombatState>
     CombatByEntity;
+  TMap<FCrowdStableEntityRef, FPlanState> PreviousPlanByEntity;
   for (const FCrowdWorkerMovementControlEntry& Entry :
-    Control.Entries)
+    Profiles)
   {
     if (!Entry.bUseWorkerTargetGuidance)
       continue;
     const FCrowdWorkerDirtyStateRecord* TargetRecord =
       Context.EntityStates->Find(
         Entry.EntityRef, ECrowdWorkerField::Target);
+    if (!TargetRecord) continue;
     FCrowdWorkerTargetState TargetState;
-    if (!TargetRecord
-      || !FCrowdWorkerTargetStateCodec::Decode(
+    if (!FCrowdWorkerTargetStateCodec::Decode(
         TargetRecord->Payload, TargetState))
       return Reject(TEXT("target_state"), Entry.EntityRef,
-        TargetRecord ? TargetRecord->SourceInputSequence : 0);
+        TargetRecord->SourceInputSequence);
     TargetVelocityByEntity.Add(
       Entry.EntityRef, TargetState.DesiredVelocity);
   }
   for (const FCrowdWorkerMovementControlEntry& Entry :
-    Control.Entries)
+    Profiles)
   {
     const FCrowdWorkerDirtyStateRecord* BehaviorRecord =
       Context.EntityStates->Find(
@@ -266,14 +386,14 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       || !FCrowdWorkerBehaviorStateCodec::Decode(
         BehaviorRecord->Payload, Behavior)
       || Behavior.SourceSet.EntityRef != Entry.EntityRef
-      || Behavior.LastFixedStep > Control.FixedStepIndex)
+      || Behavior.LastFixedStep > CurrentFixedStepIndex)
       return Reject(TEXT("behavior_state"), Entry.EntityRef,
         BehaviorRecord->SourceInputSequence,
-        Behavior.LastFixedStep, Control.FixedStepIndex);
+        Behavior.LastFixedStep, CurrentFixedStepIndex);
     BehaviorByEntity.Add(Entry.EntityRef, MoveTemp(Behavior));
   }
   for (const FCrowdWorkerMovementControlEntry& Entry :
-    Control.Entries)
+    Profiles)
   {
     const FCrowdWorkerDirtyStateRecord* CombatRecord =
       Context.EntityStates->Find(
@@ -284,22 +404,79 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
           > Context.LastAppliedInputSequence
       || !FCrowdWorkerCombatStateCodec::Decode(
         CombatRecord->Payload, Combat)
-      || Combat.SourceFixedStep > Control.FixedStepIndex)
+      || Combat.SourceFixedStep > CurrentFixedStepIndex)
       return Reject(TEXT("combat_state"), Entry.EntityRef,
         CombatRecord->SourceInputSequence);
     CombatByEntity.Add(Entry.EntityRef, MoveTemp(Combat));
   }
+  for (const FCrowdWorkerMovementControlEntry& Entry :
+    Profiles)
+  {
+    const FCrowdWorkerDirtyStateRecord* PlanRecord =
+      Context.EntityStates->Find(
+        Entry.EntityRef, ECrowdWorkerField::MovementPlan);
+    if (!PlanRecord) continue;
+    FPlanState PreviousPlan;
+    if (PlanRecord->SourceInputSequence
+          > Context.LastAppliedInputSequence
+      || !Decode(PlanRecord->Payload, PreviousPlan))
+      return Reject(TEXT("previous_plan"), Entry.EntityRef,
+        PlanRecord->SourceInputSequence);
+    PreviousPlanByEntity.Add(
+      Entry.EntityRef, MoveTemp(PreviousPlan));
+  }
   if (Control.bRunLocalPredictive)
   {
     FCrowdMassLocalPredictiveWorkInput Input;
-    Input.FixedStepIndex = Control.FixedStepIndex;
+    Input.FixedStepIndex = CurrentFixedStepIndex;
     Input.PlanRevision = Control.PlanRevision;
     Input.Environment = Control.Environment;
     Input.Settings = Control.LocalPredictiveSettings;
-    Input.PreviousGrantStates = Control.PreviousGrantStates;
-    Input.Agents.Reserve(Control.Entries.Num());
+    if (PreviousPlanByEntity.IsEmpty())
+    {
+      Input.PreviousGrantStates = Control.PreviousGrantStates;
+    }
+    else
+    {
+      for (const TPair<FCrowdStableEntityRef, FPlanState>& Pair :
+        PreviousPlanByEntity)
+      {
+        const FPlanState& PreviousPlan = Pair.Value;
+        if (PreviousPlan.GrantComponentKey == 0
+          || PreviousPlan.GrantRemainingSteps <= 0)
+          continue;
+        FCrowdLocalPredictiveGrantState& Grant =
+          Input.PreviousGrantStates.AddDefaulted_GetRef();
+        Grant.ComponentKey = PreviousPlan.GrantComponentKey;
+        const FCrowdWorkerMovementControlEntry* Entry =
+          Profiles.FindByPredicate([
+            &Pair](const FCrowdWorkerMovementControlEntry& Candidate)
+          {
+            return Candidate.EntityRef == Pair.Key;
+          });
+        if (!Entry) return Reject(TEXT("previous_grant_entity"));
+        Grant.GrantedAgentId = Entry->AgentId;
+        Grant.GrantEpoch = PreviousPlan.GrantEpoch;
+        Grant.RemainingSteps =
+          PreviousPlan.GrantRemainingSteps;
+      }
+      Input.PreviousGrantStates.Sort([](
+        const FCrowdLocalPredictiveGrantState& A,
+        const FCrowdLocalPredictiveGrantState& B)
+      {
+        return A.ComponentKey < B.ComponentKey;
+      });
+      for (int32 Index = 1;
+        Index < Input.PreviousGrantStates.Num(); ++Index)
+      {
+        if (Input.PreviousGrantStates[Index - 1].ComponentKey
+          == Input.PreviousGrantStates[Index].ComponentKey)
+          return Reject(TEXT("duplicate_previous_grant"));
+      }
+    }
+    Input.Agents.Reserve(Profiles.Num());
     for (const FCrowdWorkerMovementControlEntry& Entry :
-      Control.Entries)
+      Profiles)
     {
       const FCrowdWorkerDirtyStateRecord* Snapshot =
         Context.EntityStates->Find(
@@ -308,12 +485,18 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       if (!Snapshot
         || !FCrowdWorkerBoundaryStateCodec::DecodeKinematicState(
           Snapshot->Payload, Kinematic)
-        || Kinematic.PlanRevision != Control.PlanRevision)
+        || Kinematic.PlanRevision != Control.PlanRevision
+        || Snapshot->SourceInputSequence
+          > Context.LastAppliedInputSequence)
         return Reject(TEXT("kinematic_state"), Entry.EntityRef,
           Snapshot ? Snapshot->SourceInputSequence : 0,
           Kinematic.PlanRevision, Control.PlanRevision);
+      const bool bSnapshotIsCurrent =
+        Snapshot->SourceInputSequence
+          == Context.LastAppliedInputSequence;
       if (Context.RuntimeMode
-          == ECrowdWorkerRuntimeV2Mode::Production)
+          == ECrowdWorkerRuntimeV2Mode::Production
+        || !bSnapshotIsCurrent)
       {
         const FCrowdWorkerDirtyStateRecord* FinalRecord =
           Context.EntityStates->Find(
@@ -348,6 +531,22 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
         TargetVelocity
           ? *TargetVelocity
           : Entry.AutonomousPreferredVelocity;
+      if (!Entry.bUseAuthoritativePreferredVelocity
+        && !TargetVelocity && bHasFlowField)
+      {
+        FVector FlowDirection;
+        bool bReachable = false;
+        if (!FlowField.Sample(
+            Kinematic.Position, FlowDirection, bReachable))
+          return Reject(TEXT("flow_sample"), Entry.EntityRef);
+        if (bReachable)
+        {
+          PreferredVelocity =
+            FlowDirection * Entry.MaximumSpeedCmps;
+          FlowVelocityByEntity.Add(
+            Entry.EntityRef, PreferredVelocity);
+        }
+      }
       float EffectiveMaximumSpeedCmps =
         Entry.MaximumSpeedCmps;
       bool bMovementLocked = false;
@@ -359,7 +558,9 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
         EffectiveMaximumSpeedCmps = FMath::Min(
           EffectiveMaximumSpeedCmps,
           FMath::Max(0.0f, Resolved.SpeedLimitCmps));
-        if (!TargetVelocity && !Resolved.MovementGoal.bHasGoal)
+        if (!Entry.bUseAuthoritativePreferredVelocity
+          && !TargetVelocity
+          && !FlowVelocityByEntity.Contains(Entry.EntityRef))
           PreferredVelocity = Resolved.DesiredVelocity;
         bMovementLocked = Resolved.bMovementLocked;
         if (bMovementLocked
@@ -386,6 +587,11 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
             Combat->HorizontalReactiveVelocity;
           bMovementLocked = false;
         }
+        else if (Combat->bMovementLocked)
+        {
+          PreferredVelocity = FVector::ZeroVector;
+          bMovementLocked = true;
+        }
       }
       if (bMovementLocked)
         EffectiveMaximumSpeedCmps = 0.0f;
@@ -394,11 +600,15 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       Agent.PhysicalRadiusCm = Kinematic.PhysicalRadiusCm;
       Agent.HardSafetyGapCm = Kinematic.HardSafetyGapCm;
       Agent.MaxSpeedCmps = EffectiveMaximumSpeedCmps;
-      Agent.BlockedAgeSteps = Entry.PreviousBlockedAgeSteps;
+      const FPlanState* PreviousPlan =
+        PreviousPlanByEntity.Find(Entry.EntityRef);
+      Agent.BlockedAgeSteps = PreviousPlan
+        ? PreviousPlan->NextBlockedAgeSteps
+        : Entry.PreviousBlockedAgeSteps;
     }
     LocalOutput = FCrowdMassLocalPredictiveWork::Solve(Input);
     if (!LocalOutput.bCompleted
-      || LocalOutput.Results.Num() != Control.Entries.Num())
+      || LocalOutput.Results.Num() != Profiles.Num())
       return false;
     for (const FCrowdLocalPredictiveResult& Result :
       LocalOutput.Results)
@@ -407,15 +617,25 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
         return false;
       ResultByAgentId.Add(Result.AgentId, &Result);
     }
+    for (const FCrowdLocalPredictiveGrantState& Grant :
+      LocalOutput.GrantStates)
+    {
+      if (GrantByAgentId.Contains(Grant.GrantedAgentId))
+        return false;
+      GrantByAgentId.Add(Grant.GrantedAgentId, &Grant);
+    }
   }
 
   for (const FCrowdWorkerMovementControlEntry& Entry :
-    Control.Entries)
+    Profiles)
   {
     FPlanState Plan;
     if (const FVector* TargetVelocity =
       TargetVelocityByEntity.Find(Entry.EntityRef))
       Plan.AutonomousPreferredVelocity = *TargetVelocity;
+    else if (const FVector* FlowVelocity =
+      FlowVelocityByEntity.Find(Entry.EntityRef))
+      Plan.AutonomousPreferredVelocity = *FlowVelocity;
     else
       Plan.AutonomousPreferredVelocity =
         Entry.AutonomousPreferredVelocity;
@@ -427,8 +647,9 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       const float EffectiveMaximumSpeedCmps = FMath::Min(
         Entry.MaximumSpeedCmps,
         FMath::Max(0.0f, Resolved.SpeedLimitCmps));
-      if (!TargetVelocityByEntity.Contains(Entry.EntityRef)
-        && !Resolved.MovementGoal.bHasGoal)
+      if (!Entry.bUseAuthoritativePreferredVelocity
+        && !TargetVelocityByEntity.Contains(Entry.EntityRef)
+        && !FlowVelocityByEntity.Contains(Entry.EntityRef))
         Plan.AutonomousPreferredVelocity =
           Resolved.DesiredVelocity;
       Plan.bMovementLocked = Resolved.bMovementLocked;
@@ -456,6 +677,11 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
           Combat->HorizontalReactiveVelocity;
         Plan.bMovementLocked = false;
       }
+      else if (Combat->bMovementLocked)
+      {
+        Plan.AutonomousPreferredVelocity = FVector::ZeroVector;
+        Plan.bMovementLocked = true;
+      }
     }
     Plan.bUseLocalVelocity = Control.bRunLocalPredictive;
     if (Control.bRunLocalPredictive)
@@ -467,6 +693,15 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       Plan.LocalVelocity = FVector(
         (*Result)->Velocity.X, (*Result)->Velocity.Y, 0.0f);
       Plan.bLocalVelocityValid = (*Result)->bValid;
+      Plan.NextBlockedAgeSteps =
+        (*Result)->NextBlockedAgeSteps;
+      if (const FCrowdLocalPredictiveGrantState* const* Grant =
+        GrantByAgentId.Find(Entry.AgentId))
+      {
+        Plan.GrantComponentKey = (*Grant)->ComponentKey;
+        Plan.GrantEpoch = (*Grant)->GrantEpoch;
+        Plan.GrantRemainingSteps = (*Grant)->RemainingSteps;
+      }
     }
     FCrowdWorkerDirtyStateRecord Dirty;
     Dirty.EntityRef = Entry.EntityRef;
@@ -487,6 +722,18 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     Movement.Priority = ECrowdWorkerWorkPriority::Normal;
     Movement.ReasonMask = 1ull << 9;
     OutOutput.NextWork.Add(MoveTemp(Movement));
+  }
+  if (!Profiles.IsEmpty())
+  {
+    FCrowdWorkerWakeup Wakeup;
+    Wakeup.Key.Domain = ECrowdWorkerDomainId::MovementPlanning;
+    Wakeup.Key.EntityRef = Profiles[0].EntityRef;
+    Wakeup.Key.WakeupId = CrowdWorkerResourceIds::MovementControl;
+    Wakeup.AbsoluteSimulationTick =
+      Context.AbsoluteSimulationTick + 1;
+    Wakeup.Priority = ECrowdWorkerWorkPriority::Normal;
+    Wakeup.ReasonMask = 1ull << 11;
+    OutOutput.Wakeups.Add(MoveTemp(Wakeup));
   }
   return true;
 }
@@ -543,10 +790,26 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
       Input
       && FCrowdWorkerBoundaryStateCodec::DecodeKinematicState(
         Input->Payload, Kinematic);
-    const FCrowdWorkerMovementControlEntry* Control =
-      bHasMovementControl
-        ? MovementControl.Find(Work.Key.PrimaryEntity)
-        : nullptr;
+    FCrowdWorkerMovementControlEntry RevisedProfile;
+    const FCrowdWorkerDirtyStateRecord* ProfileRecord =
+      Context.EntityStates->Find(
+        Work.Key.PrimaryEntity,
+        ECrowdWorkerField::MovementProfile);
+    const FCrowdWorkerMovementControlEntry* Control = nullptr;
+    if (ProfileRecord)
+    {
+      if (ProfileRecord->SourceInputSequence
+          > Context.LastAppliedInputSequence
+        || !FCrowdWorkerMovementProfileCodec::Decode(
+          ProfileRecord->Payload, RevisedProfile)
+        || RevisedProfile.EntityRef != Work.Key.PrimaryEntity)
+        return false;
+      Control = &RevisedProfile;
+    }
+    else if (bHasMovementControl)
+    {
+      Control = MovementControl.Find(Work.Key.PrimaryEntity);
+    }
     if (bHasMovementControl && !Control)
       return false;
     const float MaximumSpeedCmps =
@@ -561,8 +824,11 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
     {
       if (!Decode(PlanRecord->Payload, Plan)
         || PlanRecord->SourceInputSequence
-          != Context.LastAppliedInputSequence)
+          > Context.LastAppliedInputSequence)
         return false;
+      // Plans are revision inputs. A clock-only intent advances simulation
+      // without republishing unchanged control, so an older valid plan is
+      // the authoritative plan for this epoch.
       bHasPlan = true;
     }
     FCrowdWorkerCombatState Combat;
@@ -572,7 +838,7 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
     const bool bHasCombat = CombatRecord != nullptr;
     if (bHasCombat
       && (CombatRecord->SourceInputSequence
-            != Context.LastAppliedInputSequence
+            > Context.LastAppliedInputSequence
         || !FCrowdWorkerCombatStateCodec::Decode(
           CombatRecord->Payload, Combat)))
       return false;
@@ -580,6 +846,9 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
     FCrowdWorkerMovementState Movement;
     uint64 PreviousStateRevision = 0;
     uint64 CorrectionRevision = Work.CorrectionRevision;
+    const FCrowdWorkerDirtyStateRecord* MovementRecord =
+      Context.EntityStates->Find(
+        Work.Key.PrimaryEntity, ECrowdWorkerField::Movement);
     const FCrowdWorkerDirtyStateRecord* Current = nullptr;
     if (Context.RuntimeMode == ECrowdWorkerRuntimeV2Mode::Production)
     {
@@ -587,10 +856,7 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
         Work.Key.PrimaryEntity, ECrowdWorkerField::Facing);
     }
     if (!Current)
-    {
-      Current = Context.EntityStates->Find(
-        Work.Key.PrimaryEntity, ECrowdWorkerField::Movement);
-    }
+      Current = MovementRecord;
     if (Current)
     {
       if (!FCrowdWorkerMovementStateCodec::Decode(
@@ -612,6 +878,13 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
           0.0,
           Context.SimulationTimeSeconds
             - Context.FixedDeltaSeconds);
+    }
+    if (MovementRecord && MovementRecord != Current)
+    {
+      PreviousStateRevision = FMath::Max(
+        PreviousStateRevision, MovementRecord->StateRevision);
+      CorrectionRevision = FMath::Max(
+        CorrectionRevision, MovementRecord->CorrectionRevision);
     }
 
     const bool bUseShadowInputBaseline =
@@ -661,7 +934,10 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
           : Control->AutonomousPreferredVelocity);
       if (bHasPlan && Plan.bMovementLocked)
         Movement.Velocity = FVector::ZeroVector;
-      if (bHasCombat && !Combat.bAlive)
+      if (bHasCombat
+        && (!Combat.bAlive
+          || (Combat.bMovementLocked
+            && !Combat.bReactiveActive)))
         Movement.Velocity = FVector::ZeroVector;
     }
     else if (bHasFlowField)
@@ -733,16 +1009,19 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
       return false;
     OutOutput.DirtyStates.Add(MoveTemp(Dirty));
 
-    FCrowdWorkerWakeup Wakeup;
-    Wakeup.Key.Domain = ECrowdWorkerDomainId::Movement;
-    Wakeup.Key.EntityRef = Work.Key.PrimaryEntity;
-    Wakeup.Key.WakeupId = 1;
-    Wakeup.AbsoluteSimulationTick =
-      Context.AbsoluteSimulationTick + 1;
-    Wakeup.Revision = CorrectionRevision;
-    Wakeup.Priority = ECrowdWorkerWorkPriority::Normal;
-    Wakeup.ReasonMask = 1ull << 7;
-    OutOutput.Wakeups.Add(MoveTemp(Wakeup));
+    if (!bHasMovementControl)
+    {
+      FCrowdWorkerWakeup Wakeup;
+      Wakeup.Key.Domain = ECrowdWorkerDomainId::Movement;
+      Wakeup.Key.EntityRef = Work.Key.PrimaryEntity;
+      Wakeup.Key.WakeupId = 1;
+      Wakeup.AbsoluteSimulationTick =
+        Context.AbsoluteSimulationTick + 1;
+      Wakeup.Revision = CorrectionRevision;
+      Wakeup.Priority = ECrowdWorkerWorkPriority::Normal;
+      Wakeup.ReasonMask = 1ull << 7;
+      OutOutput.Wakeups.Add(MoveTemp(Wakeup));
+    }
 
     // Particle is resource-driven. Snapshot-only autonomous Movement is a
     // valid Worker mode, but it must not wake a domain whose required

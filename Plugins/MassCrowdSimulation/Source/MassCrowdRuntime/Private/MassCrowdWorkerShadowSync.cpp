@@ -581,7 +581,9 @@ FCrowdWorkerBoundaryShadowSync::SubmitSnapshot(
   const TConstArrayView<FCrowdWorkerVersionedResourceInput>
     VersionedResources,
   const TConstArrayView<FCrowdBehaviorCapabilityBindingUpdate>
-    PendingBehaviorBindingUpdates)
+    PendingBehaviorBindingUpdates,
+  const TConstArrayView<FCrowdWorkerExternalGameplayInput>
+    ExternalGameplayInputs)
 {
   Metrics.LastSubmitFailure =
     ECrowdWorkerShadowSubmitFailure::None;
@@ -684,6 +686,40 @@ FCrowdWorkerBoundaryShadowSync::SubmitSnapshot(
       ++CurrentIndex;
     }
 
+  }
+
+  TArray<FCrowdWorkerExternalGameplayInput> SortedExternalInputs(
+    ExternalGameplayInputs);
+  SortedExternalInputs.Sort([](
+    const FCrowdWorkerExternalGameplayInput& A,
+    const FCrowdWorkerExternalGameplayInput& B)
+  {
+    if (A.EntityRef != B.EntityRef)
+      return A.EntityRef < B.EntityRef;
+    if (A.InputTypeId != B.InputTypeId)
+      return A.InputTypeId < B.InputTypeId;
+    return A.FullState.StableHash < B.FullState.StableHash;
+  });
+  FCrowdStableEntityRef PreviousExternalRef;
+  uint16 PreviousExternalType = 0;
+  for (const FCrowdWorkerExternalGameplayInput& Input :
+    SortedExternalInputs)
+  {
+    if (Input.InputSequence != 0
+      || !Input.EntityRef.IsValid()
+      || Input.InputTypeId == 0 || Input.DirtyMask == 0
+      || !Input.FullState.IsValid(
+        Config.RuntimeConfig.ContractLimits.MaxPayloadBytes)
+      || (Input.EntityRef == PreviousExternalRef
+        && Input.InputTypeId == PreviousExternalType))
+      return Reject(ECrowdWorkerShadowSubmitResult::RejectedSnapshot,
+        ECrowdWorkerShadowSubmitFailure::InvalidContext);
+    FCrowdWorkerExternalGameplayInput& Delta =
+      Batch.ExternalGameplayInputs.AddDefaulted_GetRef();
+    Delta = Input;
+    Delta.InputSequence = AllocateSequence();
+    PreviousExternalRef = Input.EntityRef;
+    PreviousExternalType = Input.InputTypeId;
   }
 
   TArray<FCrowdBehaviorSourceCommand> SortedCommands(
@@ -950,7 +986,13 @@ FCrowdWorkerBoundaryShadowSync::SubmitAutonomousFrame(
   const TConstArrayView<FCrowdWorkerVersionedResourceInput>
     VersionedResources,
   const TConstArrayView<FCrowdBehaviorCapabilityBindingUpdate>
-    PendingBehaviorBindingUpdates)
+    PendingBehaviorBindingUpdates,
+  const TConstArrayView<FCrowdWorkerSpawnDelta> Spawns,
+  const TConstArrayView<FCrowdWorkerDespawnDelta> Despawns,
+  const TConstArrayView<FCrowdWorkerExternalGameplayInput>
+    ExternalGameplayInputs,
+  const TConstArrayView<FCrowdWorkerObjectiveRevisionDelta>
+    ObjectiveRevisions)
 {
   if (!bStarted || !bSubmittedResnapshot
     || !PreviousSourceSnapshot.bValid
@@ -987,6 +1029,105 @@ FCrowdWorkerBoundaryShadowSync::SubmitAutonomousFrame(
   {
     return CandidateNextSequence++;
   };
+
+  TArray<FCrowdWorkerDespawnDelta> SortedDespawns(Despawns);
+  SortedDespawns.Sort([](
+    const FCrowdWorkerDespawnDelta& A,
+    const FCrowdWorkerDespawnDelta& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
+  for (const FCrowdWorkerDespawnDelta& Input : SortedDespawns)
+  {
+    if (Input.InputSequence != 0
+      || !Input.EntityRef.IsValid() || Input.ReasonId == 0)
+      return ECrowdWorkerShadowSubmitResult::RejectedSnapshot;
+    FCrowdWorkerDespawnDelta& Delta =
+      Batch.Despawns.AddDefaulted_GetRef();
+    Delta = Input;
+    Delta.InputSequence = AllocateSequence();
+  }
+  TArray<FCrowdWorkerSpawnDelta> SortedSpawns(Spawns);
+  SortedSpawns.Sort([](
+    const FCrowdWorkerSpawnDelta& A,
+    const FCrowdWorkerSpawnDelta& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
+  for (const FCrowdWorkerSpawnDelta& Input : SortedSpawns)
+  {
+    if (Input.InputSequence != 0
+      || !Input.EntityRef.IsValid()
+      || !Input.InitialState.IsValid(
+        Config.RuntimeConfig.ContractLimits.MaxPayloadBytes))
+      return ECrowdWorkerShadowSubmitResult::RejectedSnapshot;
+    FCrowdWorkerSpawnDelta& Delta =
+      Batch.Spawns.AddDefaulted_GetRef();
+    Delta = Input;
+    Delta.InputSequence = AllocateSequence();
+  }
+  TArray<FCrowdWorkerExternalGameplayInput> SortedExternalInputs(
+    ExternalGameplayInputs);
+  SortedExternalInputs.Sort([](
+    const FCrowdWorkerExternalGameplayInput& A,
+    const FCrowdWorkerExternalGameplayInput& B)
+  {
+    if (A.EntityRef != B.EntityRef)
+      return A.EntityRef < B.EntityRef;
+    if (A.InputTypeId != B.InputTypeId)
+      return A.InputTypeId < B.InputTypeId;
+    return A.FullState.StableHash < B.FullState.StableHash;
+  });
+  FCrowdStableEntityRef PreviousExternalRef;
+  uint16 PreviousExternalType = 0;
+  for (const FCrowdWorkerExternalGameplayInput& Input :
+    SortedExternalInputs)
+  {
+    if (Input.InputSequence != 0
+      || !Input.EntityRef.IsValid()
+      || Input.InputTypeId == 0 || Input.DirtyMask == 0
+      || !Input.FullState.IsValid(
+        Config.RuntimeConfig.ContractLimits.MaxPayloadBytes)
+      || (Input.EntityRef == PreviousExternalRef
+        && Input.InputTypeId == PreviousExternalType))
+      return ECrowdWorkerShadowSubmitResult::RejectedSnapshot;
+    FCrowdWorkerExternalGameplayInput& Delta =
+      Batch.ExternalGameplayInputs.AddDefaulted_GetRef();
+    Delta = Input;
+    Delta.InputSequence = AllocateSequence();
+    PreviousExternalRef = Input.EntityRef;
+    PreviousExternalType = Input.InputTypeId;
+  }
+  TArray<FEncodedAgent> CandidateAgents = PreviousAgents;
+  for (const FCrowdWorkerDespawnDelta& Despawn : Batch.Despawns)
+  {
+    const int32 Removed = CandidateAgents.RemoveAll(
+      [&Despawn](const FEncodedAgent& Agent)
+      {
+        return Agent.EntityRef == Despawn.EntityRef;
+      });
+    if (Removed != 1)
+      return ECrowdWorkerShadowSubmitResult::RejectedSnapshot;
+  }
+  for (const FCrowdWorkerSpawnDelta& Spawn : Batch.Spawns)
+  {
+    if (CandidateAgents.ContainsByPredicate(
+        [&Spawn](const FEncodedAgent& Agent)
+        {
+          return Agent.EntityRef.ProviderId
+              == Spawn.EntityRef.ProviderId
+            && Agent.EntityRef.StableEntityId
+              == Spawn.EntityRef.StableEntityId;
+        }))
+      return ECrowdWorkerShadowSubmitResult::RejectedSnapshot;
+    CandidateAgents.Add({Spawn.EntityRef, Spawn.InitialState});
+  }
+  CandidateAgents.Sort([](
+    const FEncodedAgent& A,
+    const FEncodedAgent& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
 
   TArray<FCrowdBehaviorCapabilityBindingUpdate> SortedBindings(
     PendingBehaviorBindingUpdates);
@@ -1078,6 +1219,30 @@ FCrowdWorkerBoundaryShadowSync::SubmitAutonomousFrame(
     PreviousContextRef = Context.EntityRef;
   }
 
+  TArray<FCrowdWorkerObjectiveRevisionDelta> SortedObjectives(
+    ObjectiveRevisions);
+  SortedObjectives.Sort([](
+    const FCrowdWorkerObjectiveRevisionDelta& A,
+    const FCrowdWorkerObjectiveRevisionDelta& B)
+  {
+    return A.ObjectiveId < B.ObjectiveId;
+  });
+  uint64 PreviousObjectiveId = 0;
+  for (FCrowdWorkerObjectiveRevisionDelta& Input :
+    SortedObjectives)
+  {
+    if (Input.InputSequence != 0
+      || Input.ObjectiveId == 0
+      || Input.ObjectiveId == PreviousObjectiveId
+      || Input.Revision == 0
+      || !Input.Payload.IsValid(
+        Config.RuntimeConfig.ContractLimits.MaxPayloadBytes))
+      return ECrowdWorkerShadowSubmitResult::RejectedSnapshot;
+    PreviousObjectiveId = Input.ObjectiveId;
+    Input.InputSequence = AllocateSequence();
+    Batch.ObjectiveRevisions.Add(MoveTemp(Input));
+  }
+
   TArray<FCrowdWorkerVersionedResourceInput> SortedResources(
     VersionedResources);
   SortedResources.Sort([](
@@ -1160,9 +1325,9 @@ FCrowdWorkerBoundaryShadowSync::SubmitAutonomousFrame(
     Expectation.SnapshotResourcePayloadHash =
       LastSnapshotResourcePayloadHash;
     TArray<uint64> PayloadHashes;
-    Expectation.EntityRefs.Reserve(PreviousAgents.Num());
-    PayloadHashes.Reserve(PreviousAgents.Num());
-    for (const FEncodedAgent& Agent : PreviousAgents)
+    Expectation.EntityRefs.Reserve(CandidateAgents.Num());
+    PayloadHashes.Reserve(CandidateAgents.Num());
+    for (const FEncodedAgent& Agent : CandidateAgents)
     {
       Expectation.EntityRefs.Add(Agent.EntityRef);
       PayloadHashes.Add(Agent.Payload.StableHash);
@@ -1174,6 +1339,7 @@ FCrowdWorkerBoundaryShadowSync::SubmitAutonomousFrame(
       Expectation.EntityRefs, PayloadHashes);
     Expectations.Add(MoveTemp(Expectation));
   }
+  PreviousAgents = MoveTemp(CandidateAgents);
   PreviousVersionedResources = MoveTemp(CandidateVersionedResources);
   NextInputSequence = CandidateNextSequence;
   ++Metrics.SubmittedSnapshotCount;

@@ -1,8 +1,10 @@
 #include "MassCrowdWorkerInteractionDomain.h"
 
+#include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerMovementControlResource.h"
 #include "MassCrowdWorkerShadowSync.h"
+#include "MassCrowdWorkerTargetDomain.h"
 #include "MassCrowdParticleWork.h"
 
 namespace CrowdWorkerInteractionDomainPrivate
@@ -389,8 +391,7 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
   if (!Resource
     || !FCrowdWorkerMovementControlResourceCodec::Decode(
       Resource->Payload, Control)
-    || Control.Revision != Resource->Revision
-    || Context.SpatialIndex->Num() != Control.Entries.Num())
+    || Control.Revision != Resource->Revision)
   {
     UE_LOG(LogTemp, Error,
       TEXT("CrowdWorkerParticleDomainRejected stage=control resource=%d resource_revision=%llu control_revision=%llu spatial=%d entries=%d"),
@@ -401,12 +402,31 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
       Control.Entries.Num());
     return false;
   }
+  TArray<FCrowdWorkerMovementControlEntry> Profiles;
+  if (!CrowdWorkerResolveMovementProfiles(
+      *Context.EntityStates,
+      Context.LastAppliedInputSequence,
+      Control,
+      Profiles)
+    || Context.SpatialIndex->Num() != Profiles.Num())
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("CrowdWorkerParticleDomainRejected stage=profiles spatial=%d profiles=%d"),
+      Context.SpatialIndex->Num(),
+      Profiles.Num());
+    return false;
+  }
 
   TMap<int32, FCrowdStableEntityRef> EntityRefByAgentId;
   TMap<FCrowdStableEntityRef, FCrowdWorkerMovementState>
     MovementByEntityRef;
+  TMap<FCrowdStableEntityRef, bool> ParticleActiveByEntityRef;
   FCrowdMassParticleWorkInput Input;
-  Input.FixedStepIndex = Control.FixedStepIndex;
+  if (Context.AbsoluteSimulationTick
+      > static_cast<uint64>(MAX_int32))
+    return false;
+  Input.FixedStepIndex =
+    static_cast<int32>(Context.AbsoluteSimulationTick);
   Input.PlanRevision = Control.PlanRevision;
   Input.Environment.FlowConfig = Control.Environment;
   Input.Environment.bConstrainToFlowBounds =
@@ -415,7 +435,7 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
   Input.bCaptureTrace =
     Control.ParticleSettings.bCaptureRouteDiagnostic;
   for (const FCrowdWorkerMovementControlEntry& Entry :
-    Control.Entries)
+    Profiles)
   {
     if (EntityRefByAgentId.Contains(Entry.AgentId))
       return false;
@@ -434,7 +454,7 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
       || !FCrowdWorkerMovementStateCodec::Decode(
         MovementRecord->Payload, Movement)
       || MovementRecord->SourceInputSequence
-        != Context.LastAppliedInputSequence)
+        > Context.LastAppliedInputSequence)
     {
       UE_LOG(LogTemp, Error,
         TEXT("CrowdWorkerParticleDomainRejected stage=entity stable_id=%llu snapshot=%d movement=%d movement_input=%llu expected_input=%llu"),
@@ -446,8 +466,23 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
       return false;
     }
     MovementByEntityRef.Add(Entry.EntityRef, Movement);
+    bool bParticleActive = Entry.bParticleActive;
+    if (const FCrowdWorkerDirtyStateRecord* CombatRecord =
+      Context.EntityStates->Find(
+        Entry.EntityRef, ECrowdWorkerField::Combat))
+    {
+      FCrowdWorkerCombatState Combat;
+      if (!FCrowdWorkerCombatStateCodec::Decode(
+          CombatRecord->Payload, Combat)
+        || CombatRecord->SourceInputSequence
+          > Context.LastAppliedInputSequence)
+        return false;
+      bParticleActive = bParticleActive && Combat.bAlive;
+    }
+    ParticleActiveByEntityRef.Add(
+      Entry.EntityRef, bParticleActive);
     if (!Control.bRunParticleInteraction
-      || !Entry.bParticleActive)
+      || !bParticleActive)
       continue;
     FCrowdParticleConstraintAgent& Agent =
       Input.Agents.AddDefaulted_GetRef();
@@ -465,6 +500,37 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
   }
   if (Control.bRunParticleInteraction)
     Input.Agents.Append(Control.ExternalParticleAgents);
+  bool bUsesPrimaryTargetObjective = false;
+  if (Control.bRunParticleInteraction)
+  {
+    FCrowdParticleConstraintAgent* TargetAgent =
+      Input.Agents.FindByPredicate([](const auto& Agent)
+      {
+        return Agent.AgentId
+          == CrowdWorkerTargetConstants::PrimaryTargetParticleAgentId;
+      });
+    if (TargetAgent)
+    {
+      const uint64 ObjectiveResourceId =
+        CrowdWorkerResourceIds::ObjectiveRevision(
+          CrowdWorkerTargetObjectiveIds::PrimaryTarget);
+      const FCrowdWorkerResourceRecord* ObjectiveRecord =
+        Context.Resources->FindCurrent(ObjectiveResourceId);
+      FCrowdWorkerTargetObjectiveRevision Objective;
+      if (!ObjectiveRecord || ObjectiveRecord->Revision == 0
+        || !FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
+          ObjectiveRecord->Payload, Objective)
+        || Objective.EffectiveFixedStepIndex > Input.FixedStepIndex)
+        return false;
+      TargetAgent->PredictedPosition = FVector(
+        Objective.TargetLocation.X, Objective.TargetLocation.Y,
+        TargetAgent->PredictedPosition.Z);
+      TargetAgent->StartPosition = TargetAgent->PredictedPosition
+        - FVector(Objective.TargetVelocity.X, Objective.TargetVelocity.Y, 0.0f)
+          * Input.Settings.FixedStepSeconds;
+      bUsesPrimaryTargetObjective = true;
+    }
+  }
   Input.Agents.Sort([](
     const FCrowdParticleConstraintAgent& A,
     const FCrowdParticleConstraintAgent& B)
@@ -507,7 +573,7 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
   }
 
   for (const FCrowdWorkerMovementControlEntry& Entry :
-    Control.Entries)
+    Profiles)
   {
     FCrowdWorkerDependencyDeclaration Declaration;
     Declaration.Source.Kind =
@@ -524,9 +590,24 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
     Observation.Dependent = Declaration.Dependent.Key;
     OutOutput.ObservedDependencies.Add(Observation);
   }
+  if (bUsesPrimaryTargetObjective)
+  {
+    FCrowdWorkerDependencyDeclaration Declaration;
+    Declaration.Source.Kind = ECrowdWorkerDependencyKind::Resource;
+    Declaration.Source.ScopeKey =
+      CrowdWorkerResourceIds::ObjectiveRevision(
+        CrowdWorkerTargetObjectiveIds::PrimaryTarget);
+    Declaration.Dependent = WorkItems[0];
+    Declaration.Dependent.ReasonMask |= 1ull << 11;
+    OutOutput.DeclaredDependencies.Add(Declaration);
+    FCrowdWorkerDependencyObservation Observation;
+    Observation.Source = Declaration.Source;
+    Observation.Dependent = Declaration.Dependent.Key;
+    OutOutput.ObservedDependencies.Add(Observation);
+  }
 
   for (const FCrowdWorkerMovementControlEntry& Entry :
-    Control.Entries)
+    Profiles)
   {
     const FCrowdWorkerMovementState* Movement =
       MovementByEntityRef.Find(Entry.EntityRef);
@@ -535,7 +616,7 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
     FVector FinalVelocity = Movement->Velocity;
     if (Control.bRunParticleInteraction)
     {
-      if (!Entry.bParticleActive)
+      if (!ParticleActiveByEntityRef.FindRef(Entry.EntityRef))
       {
         FinalVelocity = FVector::ZeroVector;
       }

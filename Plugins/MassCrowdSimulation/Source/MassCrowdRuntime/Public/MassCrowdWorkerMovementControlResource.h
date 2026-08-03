@@ -10,6 +10,9 @@ namespace CrowdWorkerResourceIds
   constexpr uint64 MovementControl = 0x43574D4F5643544Cull;
 }
 
+class FCrowdWorkerEntityStateStore;
+struct FCrowdWorkerMovementControlResource;
+
 struct MASSCROWDRUNTIME_API FCrowdWorkerMovementControlEntry
 {
   FCrowdStableEntityRef EntityRef;
@@ -33,9 +36,33 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerMovementControlEntry
   float VerticalVelocityCmps = 0.0f;
   bool bParticleActive = true;
   bool bUseWorkerTargetGuidance = false;
+  bool bUseAuthoritativePreferredVelocity = false;
 
   bool IsValid() const;
 };
+
+// Per-entity static/profile input. This payload travels as an ordered
+// MovementProfileRevision intent and is stored independently from the global
+// MovementControl resource so lifecycle/profile changes remain O(changes).
+class MASSCROWDRUNTIME_API FCrowdWorkerMovementProfileCodec
+{
+public:
+  static constexpr uint32 SchemaId = 0x43574D52u;
+  static constexpr uint16 SchemaVersion = 2;
+
+  static bool Encode(
+    const FCrowdWorkerMovementControlEntry& Profile,
+    FCrowdWorkerPayload& OutPayload);
+  static bool Decode(
+    const FCrowdWorkerPayload& Payload,
+    FCrowdWorkerMovementControlEntry& OutProfile);
+};
+
+MASSCROWDRUNTIME_API bool CrowdWorkerResolveMovementProfiles(
+  const FCrowdWorkerEntityStateStore& EntityStates,
+  uint64 LastAppliedInputSequence,
+  const FCrowdWorkerMovementControlResource& FrozenControl,
+  TArray<FCrowdWorkerMovementControlEntry>& OutProfiles);
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerMovementControlResource
 {
@@ -63,7 +90,7 @@ FCrowdWorkerMovementControlResourceCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43574D43u;
-  static constexpr uint16 SchemaVersion = 7;
+  static constexpr uint16 SchemaVersion = 9;
 
   static bool Encode(
     const FCrowdWorkerMovementControlResource& Resource,

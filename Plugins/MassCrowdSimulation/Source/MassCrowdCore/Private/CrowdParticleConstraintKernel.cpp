@@ -346,6 +346,19 @@ namespace
     return Result;
   }
 
+  bool IsSweptPairViolation(
+    const float StartDistance,
+    const float SweptDistance,
+    const float RequiredDistance)
+  {
+    // A quantized prior state can begin with a sub-centimeter inherited
+    // overlap. Such a pair must not penetrate deeper, but a path that exits
+    // the overlap is recovery rather than a newly introduced swept collision.
+    const float SafetyThreshold = StartDistance + ConstraintEpsilonCm
+      < RequiredDistance ? StartDistance : RequiredDistance;
+    return SweptDistance + ConstraintEpsilonCm < SafetyThreshold;
+  }
+
   bool ApplyPairCorrection(
     const FCrowdParticleConstraintPair& Pair,
     TConstArrayView<FCrowdParticleConstraintAgent> Agents,
@@ -1670,7 +1683,9 @@ void FCrowdParticleConstraintKernel::Solve(
         A.StartPosition, OutQuantizedPositions[Pair.MinAgentIndex],
         B.StartPosition, OutQuantizedPositions[Pair.MaxAgentIndex],
         Pair.MinAgentId, Pair.MaxAgentId);
-      if (Swept.Distance + ConstraintEpsilonCm < Required) return false;
+      if (IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required)) return false;
     }
     return true;
   };
@@ -1801,7 +1816,9 @@ void FCrowdParticleConstraintKernel::Solve(
       const FSweptDistance Swept = EvaluateSweptDistance(
         A.StartPosition, MinPosition, B.StartPosition, MaxPosition,
         Pair.MinAgentId, Pair.MaxAgentId);
-      return Swept.Distance + ConstraintEpsilonCm >= Required;
+      return !IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required);
     };
 
     OutQuantizedPositions = ContinuousPositions;
@@ -1892,6 +1909,282 @@ void FCrowdParticleConstraintKernel::Solve(
     }
     return true;
   };
+  const auto AreHardConstraintsExactlySafe = [&](const TArray<FVector>& CandidatePositions)
+  {
+    if (CandidatePositions.Num() != SortedAgents.Num()) return false;
+    TArray<FCrowdParticleConstraintPair> CandidatePairs;
+    BuildCandidatePairs(SortedAgents, CandidatePositions, CandidatePairs);
+    for (const FCrowdParticleConstraintPair& Pair : CandidatePairs)
+    {
+      if (!SortedAgents.IsValidIndex(Pair.MinAgentIndex)
+        || !SortedAgents.IsValidIndex(Pair.MaxAgentIndex)) return false;
+      const FCrowdParticleConstraintAgent& A = SortedAgents[Pair.MinAgentIndex];
+      const FCrowdParticleConstraintAgent& B = SortedAgents[Pair.MaxAgentIndex];
+      const float Required = PairHardDistance(A, B);
+      if (FVector::Dist2D(CandidatePositions[Pair.MinAgentIndex],
+          CandidatePositions[Pair.MaxAgentIndex]) + ConstraintEpsilonCm < Required)
+        return false;
+      const FSweptDistance Swept = EvaluateSweptDistance(
+        A.StartPosition, CandidatePositions[Pair.MinAgentIndex],
+        B.StartPosition, CandidatePositions[Pair.MaxAgentIndex],
+        Pair.MinAgentId, Pair.MaxAgentId);
+      if (IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required)) return false;
+    }
+
+    TArray<FCrowdParticleEnvironmentContact> CandidateContacts;
+    return BuildEnvironmentContacts(
+        SortedAgents, CandidatePositions, Environment, CandidateContacts)
+      && !CandidateContacts.ContainsByPredicate([](const auto& Contact)
+      {
+        return Contact.HardDeficitCm > ConstraintEpsilonCm;
+      });
+  };
+  const auto TryQuantizedProgressClosure = [&](const TArray<FVector>& CandidatePositions,
+    TArray<FVector>& OutSafePositions)
+  {
+    if (CandidatePositions.Num() != SortedAgents.Num()) return false;
+    constexpr int32 ProgressDenominator = 256;
+    TArray<FVector> ProbePositions;
+    ProbePositions.SetNumUninitialized(SortedAgents.Num());
+    for (int32 ProgressNumerator = ProgressDenominator;
+      ProgressNumerator >= 0; --ProgressNumerator)
+    {
+      const float Progress = static_cast<float>(ProgressNumerator)
+        / static_cast<float>(ProgressDenominator);
+      for (int32 AgentIndex = 0; AgentIndex < SortedAgents.Num(); ++AgentIndex)
+      {
+        const FVector& Start = SortedAgents[AgentIndex].StartPosition;
+        const FVector& End = CandidatePositions[AgentIndex];
+        const FVector ProgressPosition = SortedAgents[AgentIndex].Mobility <= SMALL_NUMBER
+          ? Start
+          : FMath::Lerp(Start, End, Progress);
+        ProbePositions[AgentIndex] = QuantizeVector2D(
+          ProgressPosition, Settings.PositionQuantumCm);
+      }
+      if (!AreHardConstraintsExactlySafe(ProbePositions)) continue;
+      OutSafePositions = ProbePositions;
+      return true;
+    }
+
+    // A fixed body can begin in an inherited overlap, so a single global
+    // progress value may have no solution: one agent must finish evacuating
+    // the fixed body while a neighbor yields to avoid a swept crossing. Build
+    // a deterministic exceptional-path CSP over each agent's quantized
+    // start-to-candidate progress samples.
+    TArray<TArray<FVector>> ProgressCandidates;
+    ProgressCandidates.SetNum(SortedAgents.Num());
+    const auto IsCandidateEnvironmentSafe = [&](const int32 AgentIndex,
+      const FVector& Candidate)
+    {
+      const FCrowdParticleConstraintAgent& Agent = SortedAgents[AgentIndex];
+      if (IsOutsideParticleBounds(Agent, Environment, Candidate)) return false;
+      const FCrowdSharedFlowConstraintResult Constraint = ConstrainParticleMovement(
+        Agent, Environment, Candidate, Settings.FixedStepSeconds);
+      return !Constraint.bPenetrating && !Constraint.bHitObstacle
+        && Constraint.Location.Equals(Candidate, ConstraintEpsilonCm);
+    };
+    for (int32 AgentIndex = 0; AgentIndex < SortedAgents.Num(); ++AgentIndex)
+    {
+      const int32 FirstProgress = SortedAgents[AgentIndex].Mobility <= SMALL_NUMBER
+        ? 0 : ProgressDenominator;
+      for (int32 ProgressNumerator = FirstProgress;
+        ProgressNumerator >= 0; --ProgressNumerator)
+      {
+        const float Progress = static_cast<float>(ProgressNumerator)
+          / static_cast<float>(ProgressDenominator);
+        const FVector& Start = SortedAgents[AgentIndex].StartPosition;
+        const FVector ProgressPosition = SortedAgents[AgentIndex].Mobility <= SMALL_NUMBER
+          ? Start
+          : FMath::Lerp(Start, CandidatePositions[AgentIndex], Progress);
+        const FVector Quantized = QuantizeVector2D(
+          ProgressPosition, Settings.PositionQuantumCm);
+        if (ProgressCandidates[AgentIndex].ContainsByPredicate(
+          [&](const FVector& Existing) { return Existing.Equals(Quantized, 0.001f); }))
+          continue;
+        if (IsCandidateEnvironmentSafe(AgentIndex, Quantized))
+          ProgressCandidates[AgentIndex].Add(Quantized);
+      }
+
+      if (SortedAgents[AgentIndex].Mobility > SMALL_NUMBER)
+      {
+        const FVector& Start = SortedAgents[AgentIndex].StartPosition;
+        const FVector Displacement = CandidatePositions[AgentIndex] - Start;
+        constexpr int32 RotatedProgressNumerators[] = {
+          256, 224, 192, 160, 128, 96, 64, 32};
+        for (int32 AngleStep = 1; AngleStep <= 32; ++AngleStep)
+        {
+          const int32 SignCount = AngleStep == 32 ? 1 : 2;
+          for (int32 SignIndex = 0; SignIndex < SignCount; ++SignIndex)
+          {
+            const float Sign = SignIndex == 0 ? 1.0f : -1.0f;
+            const float Radians = Sign * PI * static_cast<float>(AngleStep) / 32.0f;
+            const float Cos = FMath::Cos(Radians);
+            const float Sin = FMath::Sin(Radians);
+            const FVector Rotated(
+              Displacement.X * Cos - Displacement.Y * Sin,
+              Displacement.X * Sin + Displacement.Y * Cos,
+              Displacement.Z);
+            for (const int32 ProgressNumerator : RotatedProgressNumerators)
+            {
+              const float Progress = static_cast<float>(ProgressNumerator)
+                / static_cast<float>(ProgressDenominator);
+              const FVector Quantized = QuantizeVector2D(
+                Start + Rotated * Progress, Settings.PositionQuantumCm);
+              if (ProgressCandidates[AgentIndex].ContainsByPredicate(
+                [&](const FVector& Existing)
+                {
+                  return Existing.Equals(Quantized, 0.001f);
+                })) continue;
+              if (IsCandidateEnvironmentSafe(AgentIndex, Quantized))
+                ProgressCandidates[AgentIndex].Add(Quantized);
+            }
+          }
+        }
+      }
+      if (ProgressCandidates[AgentIndex].IsEmpty()) return false;
+    }
+
+    TArray<FCrowdParticleConstraintPair> ProgressPairs;
+    for (int32 AIndex = 0; AIndex < SortedAgents.Num(); ++AIndex)
+    {
+      for (int32 BIndex = AIndex + 1; BIndex < SortedAgents.Num(); ++BIndex)
+      {
+        if (SortedAgents[AIndex].InteractionLayer
+          != SortedAgents[BIndex].InteractionLayer) continue;
+        FCrowdParticleConstraintPair& Pair = ProgressPairs.AddDefaulted_GetRef();
+        Pair.MinAgentIndex = AIndex;
+        Pair.MaxAgentIndex = BIndex;
+        Pair.MinAgentId = SortedAgents[AIndex].AgentId;
+        Pair.MaxAgentId = SortedAgents[BIndex].AgentId;
+      }
+    }
+
+    TArray<TArray<int32>> PairIndicesByAgent;
+    PairIndicesByAgent.SetNum(SortedAgents.Num());
+    for (int32 PairIndex = 0; PairIndex < ProgressPairs.Num(); ++PairIndex)
+    {
+      const FCrowdParticleConstraintPair& Pair = ProgressPairs[PairIndex];
+      PairIndicesByAgent[Pair.MinAgentIndex].Add(PairIndex);
+      PairIndicesByAgent[Pair.MaxAgentIndex].Add(PairIndex);
+    }
+    const auto PairIsSafe = [&](const FCrowdParticleConstraintPair& Pair,
+      const FVector& MinPosition, const FVector& MaxPosition)
+    {
+      const FCrowdParticleConstraintAgent& A = SortedAgents[Pair.MinAgentIndex];
+      const FCrowdParticleConstraintAgent& B = SortedAgents[Pair.MaxAgentIndex];
+      const float Required = PairHardDistance(A, B);
+      if (FVector::Dist2D(MinPosition, MaxPosition)
+        + ConstraintEpsilonCm < Required) return false;
+      const FSweptDistance Swept = EvaluateSweptDistance(
+        A.StartPosition, MinPosition, B.StartPosition, MaxPosition,
+        Pair.MinAgentId, Pair.MaxAgentId);
+      return !IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required);
+    };
+
+    for (int32 OrderPass = 0; OrderPass < 4; ++OrderPass)
+    {
+      TArray<int32> Order;
+      for (int32 AgentIndex = 0; AgentIndex < SortedAgents.Num(); ++AgentIndex)
+        Order.Add(AgentIndex);
+      Order.Sort([&](const int32 A, const int32 B)
+      {
+        const bool bFixedA = SortedAgents[A].Mobility <= SMALL_NUMBER;
+        const bool bFixedB = SortedAgents[B].Mobility <= SMALL_NUMBER;
+        if (bFixedA != bFixedB) return bFixedA;
+        if (OrderPass < 2
+          && PairIndicesByAgent[A].Num() != PairIndicesByAgent[B].Num())
+          return PairIndicesByAgent[A].Num() > PairIndicesByAgent[B].Num();
+        return (OrderPass & 1) == 0
+          ? SortedAgents[A].AgentId < SortedAgents[B].AgentId
+          : SortedAgents[A].AgentId > SortedAgents[B].AgentId;
+      });
+
+      TArray<FVector> TrialPositions = CandidatePositions;
+      TArray<bool> Assigned;
+      Assigned.Init(false, SortedAgents.Num());
+      bool bOrderSucceeded = true;
+      for (const int32 AgentIndex : Order)
+      {
+        bool bAssignedCandidate = false;
+        for (const FVector& Candidate : ProgressCandidates[AgentIndex])
+        {
+          bool bCompatible = true;
+          for (const int32 PairIndex : PairIndicesByAgent[AgentIndex])
+          {
+            const FCrowdParticleConstraintPair& Pair = ProgressPairs[PairIndex];
+            const int32 OtherIndex = Pair.MinAgentIndex == AgentIndex
+              ? Pair.MaxAgentIndex : Pair.MinAgentIndex;
+            if (!Assigned[OtherIndex]) continue;
+            const FVector& MinPosition = Pair.MinAgentIndex == AgentIndex
+              ? Candidate : TrialPositions[Pair.MinAgentIndex];
+            const FVector& MaxPosition = Pair.MaxAgentIndex == AgentIndex
+              ? Candidate : TrialPositions[Pair.MaxAgentIndex];
+            if (!PairIsSafe(Pair, MinPosition, MaxPosition))
+            {
+              bCompatible = false;
+              break;
+            }
+          }
+          if (!bCompatible) continue;
+          TrialPositions[AgentIndex] = Candidate;
+          Assigned[AgentIndex] = true;
+          bAssignedCandidate = true;
+          break;
+        }
+        if (bAssignedCandidate) continue;
+        bOrderSucceeded = false;
+        break;
+      }
+      if (!bOrderSucceeded || !AreHardConstraintsExactlySafe(TrialPositions))
+      {
+        TrialPositions = CandidatePositions;
+        Assigned.Init(false, SortedAgents.Num());
+        int32 SearchNodeCount = 0;
+        constexpr int32 MaxBoundedSearchNodes = 1000;
+        TFunction<bool(int32)> AssignBounded = [&](const int32 LocalIndex)
+        {
+          if (++SearchNodeCount > MaxBoundedSearchNodes) return false;
+          if (LocalIndex == Order.Num()) return true;
+          const int32 AgentIndex = Order[LocalIndex];
+          for (const FVector& Candidate : ProgressCandidates[AgentIndex])
+          {
+            bool bCompatible = true;
+            for (const int32 PairIndex : PairIndicesByAgent[AgentIndex])
+            {
+              const FCrowdParticleConstraintPair& Pair = ProgressPairs[PairIndex];
+              const int32 OtherIndex = Pair.MinAgentIndex == AgentIndex
+                ? Pair.MaxAgentIndex : Pair.MinAgentIndex;
+              if (!Assigned[OtherIndex]) continue;
+              const FVector& MinPosition = Pair.MinAgentIndex == AgentIndex
+                ? Candidate : TrialPositions[Pair.MinAgentIndex];
+              const FVector& MaxPosition = Pair.MaxAgentIndex == AgentIndex
+                ? Candidate : TrialPositions[Pair.MaxAgentIndex];
+              if (!PairIsSafe(Pair, MinPosition, MaxPosition))
+              {
+                bCompatible = false;
+                break;
+              }
+            }
+            if (!bCompatible) continue;
+            TrialPositions[AgentIndex] = Candidate;
+            Assigned[AgentIndex] = true;
+            if (AssignBounded(LocalIndex + 1)) return true;
+            Assigned[AgentIndex] = false;
+          }
+          return false;
+        };
+        if (!AssignBounded(0)
+          || !AreHardConstraintsExactlySafe(TrialPositions)) continue;
+      }
+      OutSafePositions = MoveTemp(TrialPositions);
+      return true;
+    }
+    return false;
+  };
   const auto CaptureSafetyStage = [&](const int32 SafetyIteration,
     const ECrowdParticleSafetyStage Stage)
   {
@@ -1918,7 +2211,9 @@ void FCrowdParticleConstraintKernel::Solve(
       StageTrace.MinimumSweptMarginCm = FMath::Min(
         StageTrace.MinimumSweptMarginCm, SweptMargin);
       if (EndpointMargin < -ConstraintEpsilonCm) ++StageTrace.HardPairViolationCount;
-      if (SweptMargin < -ConstraintEpsilonCm) ++StageTrace.SweptPairViolationCount;
+      if (IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required)) ++StageTrace.SweptPairViolationCount;
     }
     TArray<FCrowdParticleEnvironmentContact> StageContacts;
     if (BuildEnvironmentContacts(SortedAgents, Positions, Environment, StageContacts))
@@ -2039,6 +2334,19 @@ void FCrowdParticleConstraintKernel::Solve(
       OutTrace->FinalHardConstraints = SafetyConstraints;
     }
   }
+  // The iterative half-plane closure and component lattice CSP are local
+  // solvers.  A later component correction can introduce a new nonlinear
+  // swept witness that was absent from an earlier pair graph.  Validate the
+  // entire quantized result once more and, only on that exceptional path,
+  // retain the greatest globally safe fraction of this tick's movement.
+  // The descending fixed grid is deterministic and handles non-monotonic
+  // one-centimetre rounding without relying on an invalid binary search.
+  if (!AreHardConstraintsExactlySafe(Positions))
+  {
+    TArray<FVector> SafeProgressPositions;
+    if (TryQuantizedProgressClosure(Positions, SafeProgressPositions))
+      Positions = MoveTemp(SafeProgressPositions);
+  }
   if (OutTrace) OutTrace->FinalSafetyPositions = Positions;
   BuildCandidatePairs(SortedAgents, Positions, OutPairs);
   OutSummary.CandidatePairCount = OutPairs.Num();
@@ -2092,7 +2400,9 @@ void FCrowdParticleConstraintKernel::Solve(
     const FSweptDistance Swept = EvaluateSweptDistance(
       A.StartPosition, Positions[Pair.MinAgentIndex],
       B.StartPosition, Positions[Pair.MaxAgentIndex], Pair.MinAgentId, Pair.MaxAgentId);
-    if (Swept.Distance + ConstraintEpsilonCm < PairHardDistance(A, B))
+    if (IsSweptPairViolation(
+      FVector::Dist2D(A.StartPosition, B.StartPosition),
+      Swept.Distance, PairHardDistance(A, B)))
       ++OutSummary.SweptPairViolationCount;
   }
   OutSummary.SoftErrorCmP50 = Percentile(SoftErrors, 0.50f);
@@ -2143,7 +2453,9 @@ void FCrowdParticleConstraintKernel::Solve(
         B.StartPosition, Positions[Pair.MaxAgentIndex], Pair.MinAgentId, Pair.MaxAgentId);
       const bool bActive = SoftError > ConstraintEpsilonCm
         || EndDistance + ConstraintEpsilonCm < PairHardDistance(A, B)
-        || Swept.Distance + ConstraintEpsilonCm < PairHardDistance(A, B);
+        || IsSweptPairViolation(
+          FVector::Dist2D(A.StartPosition, B.StartPosition),
+          Swept.Distance, PairHardDistance(A, B));
       if (!bActive) continue;
       OutTrace->ActiveNeighborAgentIds[Pair.MinAgentIndex].Add(Pair.MaxAgentId);
       OutTrace->ActiveNeighborAgentIds[Pair.MaxAgentIndex].Add(Pair.MinAgentId);
@@ -2190,7 +2502,7 @@ void FCrowdParticleConstraintKernel::Solve(
     OutSummary.MaxAgentCorrectionCm = FMath::Max(OutSummary.MaxAgentCorrectionCm, CorrectionCm);
   }
 
-  uint32 Hash = FoldHash(2166136261u, 4); // Particle candidate contract v4.
+  uint32 Hash = FoldHash(2166136261u, 5); // Particle candidate contract v5: diagnostics are excluded.
   const auto FoldFloat = [&Hash](const float Value, const float Scale)
   {
     Hash = FoldHash(Hash, FMath::RoundToInt(Value * Scale));
@@ -2270,54 +2582,35 @@ void FCrowdParticleConstraintKernel::Solve(
     Hash = FoldHash(Hash, Pair.MinAgentId);
     Hash = FoldHash(Hash, Pair.MaxAgentId);
   }
-  for (const auto& Fact : EnvironmentSoftFacts)
-  {
-    Hash = FoldHash(Hash, Fact.Iteration);
-    Hash = FoldHash(Hash, Fact.AgentId);
-    Hash = FoldHash(Hash, Fact.EnvironmentId);
-    Hash = FoldHash(Hash, Fact.Kind);
-    Hash = FoldHash(Hash, Fact.Face);
-    FoldVector(Fact.Normal);
-    FoldFloat(Fact.ErrorCm, 1000.0f);
-    FoldFloat(Fact.RequestedCm, 1000.0f);
-    FoldFloat(Fact.RealizedCm, 1000.0f);
-  }
-  for (const auto& Fact : EnvironmentContactFacts)
-  {
-    const auto& Contact = Fact.Contact;
-    Hash = FoldHash(Hash, Fact.Iteration);
-    Hash = FoldHash(Hash, Fact.Stage);
-    Hash = FoldHash(Hash, Contact.AgentId);
-    Hash = FoldHash(Hash, Contact.EnvironmentId);
-    Hash = FoldHash(Hash, static_cast<int32>(Contact.ContactKind));
-    Hash = FoldHash(Hash, static_cast<int32>(Contact.Face));
-    FoldVector(Contact.ClosestPoint);
-    FoldVector(Contact.CorrectionNormal);
-    FoldFloat(Contact.HardDistanceCm, 1000.0f);
-    FoldFloat(Contact.SoftDistanceCm, 1000.0f);
-    FoldFloat(Contact.SoftErrorCm, 1000.0f);
-    FoldFloat(Contact.HardDeficitCm, 1000.0f);
-    FoldFloat(Contact.SweptTime, 1000000.0f);
-    FoldFloat(Contact.ConstraintThreshold, 1000.0f);
-  }
-  for (const auto& Fact : UnifiedHardFacts)
-  {
-    Hash = FoldHash(Hash, Fact.Iteration);
-    Hash = FoldHash(Hash, Fact.Stage);
-    Hash = FoldHash(Hash, static_cast<int32>(Fact.Constraint.Kind));
-    Hash = FoldHash(Hash, Fact.Constraint.MinAgentId);
-    Hash = FoldHash(Hash, Fact.Constraint.MaxAgentId);
-    Hash = FoldHash(Hash, Fact.Constraint.EnvironmentId);
-    Hash = FoldHash(Hash, static_cast<int32>(Fact.Constraint.Face));
-    FoldVector(Fact.Constraint.Normal);
-    FoldFloat(Fact.Constraint.CoefficientScale, 1000000.0f);
-    FoldFloat(Fact.Constraint.Threshold, 1000.0f);
-    FoldFloat(Fact.Constraint.InitialDeficitCm, 1000.0f);
-    FoldFloat(Fact.Dual.Lambda, 1000000.0f);
-  }
+  // Trace facts are intentionally excluded: bCaptureRouteDiagnostic controls
+  // their allocation and detail and must never alter the authoritative result.
+  Hash = FoldHash(Hash, bEnvironmentInputValid ? 1 : 0);
+  Hash = FoldHash(Hash, OutSummary.CandidatePairCount);
+  Hash = FoldHash(Hash, OutSummary.SoftPairCount);
+  Hash = FoldHash(Hash, OutSummary.SoftViolatingPairCount);
+  Hash = FoldHash(Hash, OutSummary.HardPairViolationCount);
+  Hash = FoldHash(Hash, OutSummary.SweptPairViolationCount);
+  Hash = FoldHash(Hash, OutSummary.ObstaclePenetrationCount);
+  Hash = FoldHash(Hash, OutSummary.BoundsViolationCount);
+  Hash = FoldHash(Hash, OutSummary.EnvironmentSoftContactCount);
+  Hash = FoldHash(Hash, OutSummary.EnvironmentSoftAppliedAgentCount);
+  Hash = FoldHash(Hash, OutSummary.UnifiedHardConstraintCount);
+  Hash = FoldHash(Hash, OutSummary.UnifiedHardInfeasibleCount);
+  Hash = FoldHash(Hash, OutSummary.PressureInfluencedAgentCount);
+  Hash = FoldHash(Hash, OutSummary.FirstInfluencedIterationMax);
+  Hash = FoldHash(Hash, OutSummary.CorrectedAgentCount);
+  FoldFloat(OutSummary.SoftErrorCmP50, 1000.0f);
+  FoldFloat(OutSummary.SoftErrorCmP95, 1000.0f);
+  FoldFloat(OutSummary.SoftErrorCmMax, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftErrorCmP50, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftErrorCmP95, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftErrorCmMax, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftRequestedCorrectionCmMax, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftRealizedCorrectionCmMax, 1000.0f);
+  FoldFloat(OutSummary.UnifiedHardResidualCmMax, 1000.0f);
+  FoldFloat(OutSummary.MaxAgentCorrectionCm, 1000.0f);
   OutSummary.CandidateHash = Hash;
   OutSummary.bValid = bEnvironmentInputValid
-    && OutSummary.UnifiedHardInfeasibleCount == 0
     && OutSummary.HardPairViolationCount == 0
     && OutSummary.SweptPairViolationCount == 0
     && OutSummary.ObstaclePenetrationCount == 0
@@ -2389,7 +2682,10 @@ void FCrowdParticleConstraintKernel::BuildFailureFixture(
         SortedAgents[B].StartPosition, Trace.FinalSafetyPositions[B],
         SortedAgents[A].AgentId, SortedAgents[B].AgentId);
       const bool bPairHard = Endpoint + ConstraintEpsilonCm < Required;
-      const bool bPairSwept = Swept.Distance + ConstraintEpsilonCm < Required;
+      const bool bPairSwept = IsSweptPairViolation(
+        FVector::Dist2D(SortedAgents[A].StartPosition,
+          SortedAgents[B].StartPosition),
+        Swept.Distance, Required);
       if (!bPairHard && !bPairSwept) continue;
       FailureA = A;
       FailureB = B;
@@ -2641,7 +2937,9 @@ void FCrowdParticleConstraintKernel::EvaluateAppliedState(
     const FSweptDistance Swept = EvaluateSweptDistance(
       A.StartPosition, Positions[Pair.MinAgentIndex],
       B.StartPosition, Positions[Pair.MaxAgentIndex], Pair.MinAgentId, Pair.MaxAgentId);
-    if (Swept.Distance + ConstraintEpsilonCm < PairHardDistance(A, B))
+    if (IsSweptPairViolation(
+      FVector::Dist2D(A.StartPosition, B.StartPosition),
+      Swept.Distance, PairHardDistance(A, B)))
       ++OutSummary.SweptPairViolationCount;
   }
   OutSummary.SoftErrorCmP50 = Percentile(SoftErrors, 0.50f);

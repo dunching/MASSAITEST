@@ -164,6 +164,7 @@ namespace CrowdWorkerRuntimeV2Tests
         Dirty.Generation = Context.Generation;
         Dirty.WorkerEpoch = Context.WorkerEpoch;
         Dirty.StateRevision = Context.WorkerEpoch;
+        Dirty.CorrectionRevision = Context.CorrectionRevision;
         Dirty.Payload = MakePayload(
           static_cast<uint32>(
             Work.Key.PrimaryEntity.StableEntityId),
@@ -179,6 +180,65 @@ namespace CrowdWorkerRuntimeV2Tests
         Observation.Source = Declaration.Source;
         Observation.Dependent = Work.Key;
         OutOutput.ObservedDependencies.Add(Observation);
+      }
+      return true;
+    }
+  };
+
+  class FCorrectionRevisionBehaviorDomain final :
+    public ICrowdWorkerDomainExecutor
+  {
+  public:
+    virtual ECrowdWorkerDomainId GetDomainId() const override
+    {
+      return ECrowdWorkerDomainId::Behavior;
+    }
+
+    virtual void GetDependencies(
+      TArray<ECrowdWorkerDomainId>& OutDependencies)
+      const override
+    {
+      OutDependencies = {ECrowdWorkerDomainId::LifecycleInput};
+    }
+
+    virtual bool Execute(
+      const FCrowdWorkerDomainContext& Context,
+      const TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
+      FCrowdWorkerDomainOutput& OutOutput) override
+    {
+      for (const FCrowdWorkerWorkItem& Work : WorkItems)
+      {
+        if (!Work.Key.PrimaryEntity.IsValid())
+          continue;
+        FCrowdWorkerDirtyStateRecord& Dirty =
+          OutOutput.DirtyStates.AddDefaulted_GetRef();
+        Dirty.EntityRef = Work.Key.PrimaryEntity;
+        Dirty.Field = ECrowdWorkerField::Behavior;
+        Dirty.Generation = Context.Generation;
+        Dirty.WorkerEpoch = Context.WorkerEpoch;
+        Dirty.StateRevision = Context.WorkerEpoch;
+        Dirty.CorrectionRevision = Context.CorrectionRevision;
+        Dirty.SourceInputSequence =
+          Context.LastAppliedInputSequence;
+        Dirty.Payload = MakePayload(
+          static_cast<uint32>(
+            Work.Key.PrimaryEntity.StableEntityId),
+          91007);
+
+        FCrowdWorkerDependencyDeclaration& Declaration =
+          OutOutput.DeclaredDependencies.AddDefaulted_GetRef();
+        Declaration.Source.Kind =
+          ECrowdWorkerDependencyKind::Entity;
+        Declaration.Source.EntityRef =
+          Work.Key.PrimaryEntity;
+        Declaration.Source.ScopeKey =
+          CrowdWorkerRuntimeV2DependencyScopeForField(
+            ECrowdWorkerField::Lifecycle);
+        Declaration.Dependent = Work;
+        FCrowdWorkerDependencyObservation& Observation =
+          OutOutput.ObservedDependencies.AddDefaulted_GetRef();
+        Observation.Source = Declaration.Source;
+        Observation.Dependent = Work.Key;
       }
       return true;
     }
@@ -757,6 +817,7 @@ bool FCrowdWorkerDomainRegistryCheckpointTest::RunTest(
   Checkpoint.Generation = 7;
   Checkpoint.WorkerEpoch = 3;
   Checkpoint.AbsoluteSimulationTick = 10;
+  Checkpoint.FixedSimulationQuantumSeconds = 1.0 / 30.0;
   Checkpoint.LastAppliedInputSequence = 20;
   Checkpoint.LastOrderedEventSequence = 8;
   Checkpoint.EntityStateHash = 100;
@@ -825,6 +886,7 @@ bool FCrowdWorkerNetworkCheckpointIntentTest::RunTest(
     Checkpoint.Generation = Generation;
     Checkpoint.WorkerEpoch = Epoch;
     Checkpoint.AbsoluteSimulationTick = Tick;
+    Checkpoint.FixedSimulationQuantumSeconds = 1.0 / 30.0;
     Checkpoint.LastAppliedInputSequence =
       LastAppliedInputSequence;
     Checkpoint.LastOrderedEventSequence = LastEventSequence;
@@ -1733,11 +1795,20 @@ bool FCrowdWorkerRuntimeV2SameBatchLifecycleReuseTest::RunTest(
 {
   (void)Parameters;
   FCrowdAsyncSimulationRuntime Runtime;
+  TArray<ECrowdWorkerDomainId> ExecutionOrder;
   TestTrue(TEXT("reuse lifecycle domain registers"),
     Runtime.RegisterDomainExecutor(
       MakeUnique<FCrowdWorkerLifecycleDomainExecutor>()));
+  TestTrue(TEXT("reuse planning probe registers"),
+    Runtime.RegisterDomainExecutor(
+      MakeUnique<FRecordingDomain>(
+        ECrowdWorkerDomainId::MovementPlanning,
+        TArray<ECrowdWorkerDomainId>{}, ExecutionOrder)));
+  FCrowdAsyncSimulationRuntimeConfig Config =
+    MakeSyntheticConfig();
+  Config.ContractLimits.MaxPayloadBytes = 512;
   TestTrue(TEXT("reuse runtime starts"),
-    Runtime.Start(MakeSyntheticConfig(), 17));
+    Runtime.Start(Config, 17));
   TestEqual(TEXT("reuse snapshot accepted"),
     Runtime.SubmitResnapshot(MakeSyntheticSnapshot(17)),
     ECrowdAsyncSimulationSubmitResult::Accepted);
@@ -1755,7 +1826,7 @@ bool FCrowdWorkerRuntimeV2SameBatchLifecycleReuseTest::RunTest(
   FCrowdWorkerIntentBatch Reuse;
   Reuse.Generation = 17;
   Reuse.FirstInputSequence = 4;
-  Reuse.LastInputSequence = 6;
+  Reuse.LastInputSequence = 7;
   Reuse.TargetSimulationTimeSeconds = 2.0 / 30.0;
   FCrowdWorkerDespawnDelta Despawn;
   Despawn.InputSequence = 4;
@@ -1767,7 +1838,27 @@ bool FCrowdWorkerRuntimeV2SameBatchLifecycleReuseTest::RunTest(
   Spawn.EntityRef = {1, 42, 2};
   Spawn.InitialState = MakePayload(43, 91003);
   Reuse.Spawns.Add(Spawn);
-  Reuse.Clock.InputSequence = 6;
+  FCrowdWorkerMovementControlEntry Profile;
+  Profile.EntityRef = Spawn.EntityRef;
+  Profile.AgentId = 43;
+  Profile.MaximumSpeedCmps = 300.0f;
+  Profile.ParticlePhysicalRadiusCm = 40.0f;
+  Profile.ParticleHardSafetyGapCm = 8.0f;
+  Profile.ParticleEnvironmentHardClearanceCm = 8.0f;
+  Profile.ParticleSoftMarginCm = 4.0f;
+  Profile.ParticleMobility = 1.0f;
+  FCrowdWorkerExternalGameplayInput ProfileRevision;
+  ProfileRevision.InputSequence = 6;
+  ProfileRevision.EntityRef = Spawn.EntityRef;
+  ProfileRevision.InputTypeId = static_cast<uint16>(
+    ECrowdWorkerExternalGameplayInputType::
+      MovementProfileRevision);
+  ProfileRevision.DirtyMask = 1;
+  TestTrue(TEXT("reuse movement profile encodes"),
+    FCrowdWorkerMovementProfileCodec::Encode(
+      Profile, ProfileRevision.FullState));
+  Reuse.ExternalGameplayInputs.Add(MoveTemp(ProfileRevision));
+  Reuse.Clock.InputSequence = 7;
   Reuse.Clock.SimulationTick = 2;
   Reuse.RecalculateStableHash();
   TestEqual(TEXT("same-batch lifecycle reuse is admitted"),
@@ -1794,12 +1885,15 @@ bool FCrowdWorkerRuntimeV2SameBatchLifecycleReuseTest::RunTest(
   TestFalse(TEXT("reuse does not fail Worker v2"), bFailed);
   TestTrue(TEXT("reuse runtime reaches idle"), bIdle);
   TestEqual(TEXT("reuse applies through spawn sequence"),
-    Metrics.LastAppliedInputSequence, uint64{6});
+    Metrics.LastAppliedInputSequence, uint64{7});
   TestEqual(TEXT("reuse keeps one logical entity"),
     Metrics.MirrorEntityCount, 1);
   TestEqual(TEXT("reuse latches no Worker failure"),
     Metrics.WorkerV2.LastFailure,
     ECrowdWorkerRuntimeV2Failure::None);
+  TestTrue(TEXT("profile revision schedules planning once"),
+    ExecutionOrder.Contains(
+      ECrowdWorkerDomainId::MovementPlanning));
   TestTrue(TEXT("reuse runtime stops"),
     Runtime.StopAndDrain(5.0));
   return true;
@@ -1824,6 +1918,7 @@ bool FCrowdWorkerRuntimeV2AbsoluteResnapshotClockTest::RunTest(
     TEXT("absolute clock runtime starts"),
     Runtime.Start(MakeSyntheticConfig(), 16));
   FCrowdWorkerIntentBatch Snapshot = MakeSyntheticSnapshot(16);
+  Snapshot.Clock.SimulationTick = 270;
   Snapshot.TargetSimulationTimeSeconds = 9.0;
   Snapshot.RecalculateStableHash();
   TestEqual(
@@ -2469,6 +2564,164 @@ bool FCrowdWorkerRuntimeV2ParticleIslandTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerRuntimeV2ParticleTargetObjectiveTest,
+  "MassCrowd.RuntimeV2.ParticleUsesLiveTargetObjective",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerRuntimeV2ParticleTargetObjectiveTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 10;
+  constexpr uint64 InputSequence = 3;
+  const FCrowdStableEntityRef EntityRef{1, 1, 1};
+  FCrowdWorkerEntityStateStore States;
+  TestTrue(TEXT("target particle states reset"),
+    States.Reset(2, 256));
+  TestEqual(TEXT("target particle entity spawns"),
+    States.Spawn(
+      EntityRef, Generation, InputSequence,
+      MakeBoundaryStatePayload(
+        EntityRef, 1, FVector::ZeroVector)),
+    ECrowdWorkerQueueResult::Added);
+  FCrowdWorkerMovementState Movement;
+  Movement.StartPosition = FVector::ZeroVector;
+  Movement.Position = FVector::ZeroVector;
+  FCrowdWorkerDirtyStateRecord MovementRecord;
+  MovementRecord.EntityRef = EntityRef;
+  MovementRecord.Field = ECrowdWorkerField::Movement;
+  MovementRecord.Generation = Generation;
+  MovementRecord.WorkerEpoch = 2;
+  MovementRecord.StateRevision = 1;
+  MovementRecord.SourceInputSequence = InputSequence;
+  TestTrue(TEXT("target particle movement encodes"),
+    FCrowdWorkerMovementStateCodec::Encode(
+      Movement, MovementRecord.Payload));
+  TestEqual(TEXT("target particle movement applies"),
+    States.ApplyDirty(MovementRecord),
+    ECrowdWorkerQueueResult::Replaced);
+
+  FCrowdWorkerMovementControlResource Control;
+  Control.Revision = 1;
+  Control.FixedStepIndex = 1;
+  Control.PlanRevision = 1;
+  Control.bRunParticleInteraction = true;
+  Control.bParticleConstrainToFlowBounds = false;
+  Control.ParticleSettings.FixedStepSeconds = 1.0f / 30.0f;
+  FCrowdWorkerMovementControlEntry& Profile =
+    Control.Entries.AddDefaulted_GetRef();
+  Profile.EntityRef = EntityRef;
+  Profile.AgentId = 1;
+  Profile.MaximumSpeedCmps = 300.0f;
+  Profile.ParticlePhysicalRadiusCm = 42.0f;
+  Profile.ParticleHardSafetyGapCm = 10.0f;
+  Profile.ParticleSoftMarginCm = 8.0f;
+  Profile.ParticleMobility = 1.0f;
+  FCrowdParticleConstraintAgent& TargetTemplate =
+    Control.ExternalParticleAgents.AddDefaulted_GetRef();
+  TargetTemplate.AgentId =
+    CrowdWorkerTargetConstants::PrimaryTargetParticleAgentId;
+  TargetTemplate.StartPosition = FVector(10000.0, 0.0, 0.0);
+  TargetTemplate.PredictedPosition =
+    FVector(10000.0, 0.0, 0.0);
+  TargetTemplate.PhysicalRadiusCm = 42.0f;
+  TargetTemplate.HardSafetyGapCm = 10.0f;
+  TargetTemplate.SoftMarginCm = 8.0f;
+  TargetTemplate.Mobility = 0.0f;
+  FCrowdWorkerPayload ControlPayload;
+  TestTrue(TEXT("target particle control encodes"),
+    FCrowdWorkerMovementControlResourceCodec::Encode(
+      Control, ControlPayload));
+
+  FCrowdWorkerTargetObjectiveRevision Objective;
+  Objective.TargetRevision = 2;
+  Objective.EffectiveFixedStepIndex = 3;
+  Objective.TargetLocation = FVector2f(50.0f, 0.0f);
+  Objective.TargetVelocity = FVector2f(30.0f, 0.0f);
+  FCrowdWorkerPayload ObjectivePayload;
+  TestTrue(TEXT("live target objective encodes"),
+    FCrowdWorkerTargetObjectiveRevisionCodec::Encode(
+      Objective, ObjectivePayload));
+
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("target particle resources reset"),
+    Resources.Reset(65536));
+  TestEqual(TEXT("target particle control stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::MovementControl,
+      Control.Revision, MoveTemp(ControlPayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("live target objective stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::ObjectiveRevision(
+        CrowdWorkerTargetObjectiveIds::PrimaryTarget),
+      1, MoveTemp(ObjectivePayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  TestTrue(TEXT("target particle resources commit"),
+    Resources.CommitBuildingAtEpoch(3, ResourceEvents));
+
+  FCrowdWorkerSpatialIndex Spatial;
+  TestTrue(TEXT("target particle spatial resets"),
+    Spatial.Reset(2, 400.0f));
+  TestTrue(TEXT("target particle spatial rebuilds"),
+    Spatial.Rebuild(States));
+  FCrowdWorkerDomainContext Context;
+  Context.Generation = Generation;
+  Context.WorkerEpoch = 3;
+  Context.AbsoluteSimulationTick = 3;
+  Context.LastAppliedInputSequence = InputSequence;
+  Context.FixedDeltaSeconds = 1.0 / 30.0;
+  Context.SimulationTimeSeconds = 3.0 / 30.0;
+  Context.RuntimeMode = ECrowdWorkerRuntimeV2Mode::Production;
+  Context.EntityStates = &States;
+  Context.Resources = &Resources;
+  Context.SpatialIndex = &Spatial;
+  FCrowdWorkerWorkItem ParticleWork;
+  ParticleWork.Key.Domain =
+    ECrowdWorkerDomainId::ParticleInteraction;
+  ParticleWork.Key.Kind = ECrowdWorkerWorkKind::Resource;
+  ParticleWork.Key.ScopeKey =
+    CrowdWorkerResourceIds::MovementControl;
+  FCrowdWorkerParticleInteractionDomainExecutor Executor;
+  FCrowdWorkerDomainOutput Output;
+  TestTrue(TEXT("particle consumes live target objective"),
+    Executor.Execute(Context, {ParticleWork}, Output));
+  TestEqual(TEXT("one target particle patch publishes"),
+    Output.DirtyStates.Num(), 1);
+  if (Output.DirtyStates.Num() == 1)
+  {
+    FCrowdWorkerParticleState Particle;
+    TestTrue(TEXT("live target particle patch decodes"),
+      FCrowdWorkerParticleStateCodec::Decode(
+        Output.DirtyStates[0].Payload, Particle));
+    TestTrue(TEXT("live objective moves colliding entity"),
+      !Particle.PositionOffset.IsNearlyZero());
+  }
+  const uint64 ObjectiveResourceId =
+    CrowdWorkerResourceIds::ObjectiveRevision(
+      CrowdWorkerTargetObjectiveIds::PrimaryTarget);
+  TestTrue(TEXT("particle declares objective dependency"),
+    Output.DeclaredDependencies.ContainsByPredicate(
+      [ObjectiveResourceId](const auto& Dependency)
+      {
+        return Dependency.Source.Kind
+            == ECrowdWorkerDependencyKind::Resource
+          && Dependency.Source.ScopeKey == ObjectiveResourceId;
+      }));
+  TestTrue(TEXT("particle observes objective dependency"),
+    Output.ObservedDependencies.ContainsByPredicate(
+      [ObjectiveResourceId](const auto& Observation)
+      {
+        return Observation.Source.Kind
+            == ECrowdWorkerDependencyKind::Resource
+          && Observation.Source.ScopeKey == ObjectiveResourceId;
+      }));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdWorkerRuntimeV2MovementControlCodecTest,
   "MassCrowd.RuntimeV2.MovementControlRoundTrip",
   EAutomationTestFlags::EditorContext
@@ -2494,6 +2747,10 @@ bool FCrowdWorkerRuntimeV2MovementControlCodecTest::RunTest(
     TEXT("plan field is append-only"),
     static_cast<uint8>(ECrowdWorkerField::MovementPlan),
     uint8{11});
+  TestEqual(
+    TEXT("movement profile field is append-only"),
+    static_cast<uint8>(ECrowdWorkerField::MovementProfile),
+    uint8{13});
   FCrowdWorkerMovementControlResource Source;
   Source.Revision = 17;
   Source.FixedStepIndex = 9;
@@ -2547,6 +2804,7 @@ bool FCrowdWorkerRuntimeV2MovementControlCodecTest::RunTest(
   First.LocalVelocity = FVector(80.0, 10.0, 0.0);
   First.bLocalVelocityValid = true;
   First.bUseWorkerTargetGuidance = true;
+  First.bUseAuthoritativePreferredVelocity = true;
   First.bFreezeAtBoundaryLocation = true;
   First.BoundaryLocation = FVector(10.0, 20.0, 30.0);
   First.bParticleActive = false;
@@ -2610,6 +2868,8 @@ bool FCrowdWorkerRuntimeV2MovementControlCodecTest::RunTest(
       Decoded.Entries[0].bUseLocalVelocity);
     TestTrue(TEXT("worker target mode round trips"),
       Decoded.Entries[0].bUseWorkerTargetGuidance);
+    TestTrue(TEXT("authoritative preferred velocity round trips"),
+      Decoded.Entries[0].bUseAuthoritativePreferredVelocity);
     TestTrue(TEXT("local velocity validity round trips"),
       Decoded.Entries[0].bLocalVelocityValid);
     TestTrue(TEXT("preferred velocity round trips"),
@@ -2623,6 +2883,42 @@ bool FCrowdWorkerRuntimeV2MovementControlCodecTest::RunTest(
     TestEqual(TEXT("vertical velocity round trips"),
       Decoded.Entries[1].VerticalVelocityCmps, 42.0f);
   }
+
+  FCrowdWorkerPayload ProfilePayload;
+  TestTrue(TEXT("movement profile encodes independently"),
+    FCrowdWorkerMovementProfileCodec::Encode(
+      Source.Entries[0], ProfilePayload));
+  FCrowdWorkerMovementControlEntry DecodedProfile;
+  TestTrue(TEXT("movement profile decodes independently"),
+    FCrowdWorkerMovementProfileCodec::Decode(
+      ProfilePayload, DecodedProfile));
+  TestTrue(TEXT("movement profile entity round trips"),
+    DecodedProfile.EntityRef == Source.Entries[0].EntityRef);
+  TestEqual(TEXT("movement profile speed round trips"),
+    DecodedProfile.MaximumSpeedCmps,
+    Source.Entries[0].MaximumSpeedCmps);
+  TestTrue(TEXT("movement profile target flag round trips"),
+    DecodedProfile.bUseWorkerTargetGuidance);
+  TestTrue(TEXT("movement profile velocity owner round trips"),
+    DecodedProfile.bUseAuthoritativePreferredVelocity);
+  FCrowdWorkerPayload CorruptProfile = ProfilePayload;
+  CorruptProfile.Bytes[0] ^= 1;
+  TestFalse(TEXT("movement profile rejects corrupt hash"),
+    FCrowdWorkerMovementProfileCodec::Decode(
+      CorruptProfile, DecodedProfile));
+
+  FCrowdWorkerMovementControlResource SparseControl = Source;
+  SparseControl.Entries.Reset();
+  FCrowdWorkerPayload SparsePayload;
+  TestTrue(TEXT("sparse movement control encodes without entries"),
+    FCrowdWorkerMovementControlResourceCodec::Encode(
+      SparseControl, SparsePayload));
+  FCrowdWorkerMovementControlResource DecodedSparseControl;
+  TestTrue(TEXT("sparse movement control decodes without entries"),
+    FCrowdWorkerMovementControlResourceCodec::Decode(
+      SparsePayload, DecodedSparseControl));
+  TestEqual(TEXT("sparse movement control keeps entries empty"),
+    DecodedSparseControl.Entries.Num(), 0);
 
   Swap(Source.Entries[0], Source.Entries[1]);
   TestTrue(
@@ -2691,7 +2987,8 @@ bool FCrowdWorkerRuntimeV2MovementPlanningParityTest::RunTest(
     const FCrowdStableEntityRef& EntityRef,
     const FVector& DesiredVelocity,
     const float SpeedLimitCmps,
-    const bool bMovementLocked)
+    const bool bMovementLocked,
+    const bool bHasMovementGoal)
   {
     FCrowdWorkerBehaviorState Behavior;
     Behavior.LastFixedStep = 4;
@@ -2710,6 +3007,12 @@ bool FCrowdWorkerRuntimeV2MovementPlanningParityTest::RunTest(
       Contributions.Movement.AddDefaulted_GetRef();
     Movement.Key = {1, {1}, {1}, 1};
     Movement.DesiredVelocity = DesiredVelocity;
+    if (bHasMovementGoal)
+    {
+      Movement.Goal.Location = FVector(500.0, 0.0, 0.0);
+      Movement.Goal.FactRevision = 1;
+      Movement.Goal.bHasGoal = true;
+    }
     FCrowdConstraintContribution& Constraint =
       Contributions.Constraints.AddDefaulted_GetRef();
     Constraint.Key = {1, {1}, {1}, 1};
@@ -2732,9 +3035,28 @@ bool FCrowdWorkerRuntimeV2MovementPlanningParityTest::RunTest(
       == ECrowdWorkerQueueResult::Replaced;
   };
   TestTrue(TEXT("A worker behavior locks movement"),
-    ApplyBehavior(A, FVector(250.0, 0.0, 0.0), 300.0f, true));
-  TestTrue(TEXT("B worker behavior limits movement"),
-    ApplyBehavior(B, FVector(-180.0, 0.0, 0.0), 50.0f, false));
+    ApplyBehavior(
+      A, FVector(250.0, 0.0, 0.0), 300.0f, true, false));
+  TestTrue(TEXT("B worker behavior limits goal movement"),
+    ApplyBehavior(
+      B, FVector(-180.0, 0.0, 0.0), 50.0f, false, true));
+
+  FCrowdWorkerCombatState IdleCombat;
+  IdleCombat.SourceFixedStep = 4;
+  IdleCombat.bAlive = true;
+  FCrowdWorkerDirtyStateRecord IdleCombatDirty;
+  IdleCombatDirty.EntityRef = A;
+  IdleCombatDirty.Field = ECrowdWorkerField::Combat;
+  IdleCombatDirty.Generation = Generation;
+  IdleCombatDirty.WorkerEpoch = Epoch;
+  IdleCombatDirty.StateRevision = Epoch;
+  IdleCombatDirty.SourceInputSequence = InputSequence;
+  TestTrue(TEXT("idle combat state encodes"),
+    FCrowdWorkerCombatStateCodec::Encode(
+      IdleCombat, IdleCombatDirty.Payload));
+  TestEqual(TEXT("idle combat state applies"),
+    States.ApplyDirty(IdleCombatDirty),
+    ECrowdWorkerQueueResult::Replaced);
 
   FCrowdWorkerMovementControlResource Control;
   Control.Revision = 5;
@@ -2797,17 +3119,36 @@ bool FCrowdWorkerRuntimeV2MovementPlanningParityTest::RunTest(
   PlanningWork.Key.Kind = ECrowdWorkerWorkKind::Resource;
   PlanningWork.Key.ScopeKey =
     CrowdWorkerResourceIds::MovementControl;
+  FCrowdWorkerWorkItem SupersededEntityPlanningWork;
+  SupersededEntityPlanningWork.Key.Domain =
+    ECrowdWorkerDomainId::MovementPlanning;
+  SupersededEntityPlanningWork.Key.Kind =
+    ECrowdWorkerWorkKind::Resource;
+  SupersededEntityPlanningWork.Key.PrimaryEntity = A;
+  SupersededEntityPlanningWork.Key.ScopeKey =
+    CrowdWorkerResourceIds::MovementControl;
   TArray<FCrowdWorkerWorkItem> PlanningWorkItems{
-    PlanningWork};
+    PlanningWork, SupersededEntityPlanningWork};
   FCrowdWorkerMovementPlanningDomainExecutor Planning;
   FCrowdWorkerDomainOutput PlanningOutput;
-  TestTrue(TEXT("worker planning executes"),
+  TestTrue(TEXT("resource replan supersedes anchored continuation"),
     Planning.Execute(
       Context, PlanningWorkItems, PlanningOutput));
   TestEqual(TEXT("one plan per entity"),
     PlanningOutput.DirtyStates.Num(), 2);
   TestEqual(TEXT("one movement wake per entity"),
     PlanningOutput.NextWork.Num(), 2);
+  TestEqual(TEXT("planning owns one next-tick continuation"),
+    PlanningOutput.Wakeups.Num(), 1);
+  if (PlanningOutput.Wakeups.Num() == 1)
+  {
+    TestEqual(TEXT("planning continuation domain"),
+      PlanningOutput.Wakeups[0].Key.Domain,
+      ECrowdWorkerDomainId::MovementPlanning);
+    TestEqual(TEXT("planning continuation tick"),
+      PlanningOutput.Wakeups[0].AbsoluteSimulationTick,
+      Epoch + 1);
+  }
   for (const FCrowdWorkerDirtyStateRecord& Plan :
     PlanningOutput.DirtyStates)
   {
@@ -2848,16 +3189,54 @@ bool FCrowdWorkerRuntimeV2MovementPlanningParityTest::RunTest(
           : FVector(299.0, 0.0, 0.0),
         0.0));
     if (Dirty.EntityRef == A)
-      TestTrue(TEXT("worker behavior lock reaches movement"),
+      TestTrue(TEXT("idle combat preserves worker behavior lock"),
         State.Velocity.IsNearlyZero(0.0));
     else
     {
       TestTrue(TEXT("worker behavior speed limit reaches movement"),
         State.Velocity.Size2D() <= 50.0f);
-      TestTrue(TEXT("worker behavior desired direction reaches movement"),
+      TestTrue(TEXT("goal movement falls back to behavior direction without flow or target"),
         State.Velocity.X < 0.0f);
     }
+    TestTrue(TEXT("first-tick movement applies"),
+      States.ApplyDirty(Dirty)
+        == ECrowdWorkerQueueResult::Replaced);
   }
+
+  // A normal intent advances only the ordered clock/input waterline. The
+  // immutable MovementControl profile remains at revision 5; planning must
+  // consume its checkpointable prior plan state and continue autonomously.
+  Context.WorkerEpoch = Epoch + 1;
+  Context.AbsoluteSimulationTick = Epoch + 1;
+  Context.LastAppliedInputSequence = InputSequence + 1;
+  Context.SimulationTimeSeconds = FixedDeltaSeconds * 2.0;
+  Context.RuntimeMode = ECrowdWorkerRuntimeV2Mode::Shadow;
+  FCrowdWorkerDomainOutput SecondPlanningOutput;
+  TestTrue(TEXT("clock-only Shadow planning continues from Worker state"),
+    Planning.Execute(
+      Context, PlanningWorkItems, SecondPlanningOutput));
+  TestEqual(TEXT("clock-only tick emits every plan"),
+    SecondPlanningOutput.DirtyStates.Num(), 2);
+  TestEqual(TEXT("clock-only tick emits every movement work item"),
+    SecondPlanningOutput.NextWork.Num(), 2);
+  TestEqual(TEXT("clock-only tick retains one planning continuation"),
+    SecondPlanningOutput.Wakeups.Num(), 1);
+  for (const FCrowdWorkerDirtyStateRecord& Plan :
+    SecondPlanningOutput.DirtyStates)
+  {
+    TestEqual(TEXT("clock-only plan uses new input waterline"),
+      Plan.SourceInputSequence, InputSequence + 1);
+    TestTrue(TEXT("clock-only plan applies"),
+      States.ApplyDirty(Plan)
+        == ECrowdWorkerQueueResult::Replaced);
+  }
+  FCrowdWorkerDomainOutput SecondMovementOutput;
+  TestTrue(TEXT("clock-only second movement tick executes"),
+    Movement.Execute(
+      Context, SecondPlanningOutput.NextWork,
+      SecondMovementOutput));
+  TestEqual(TEXT("clock-only tick emits every movement state"),
+    SecondMovementOutput.DirtyStates.Num(), 2);
   return true;
 }
 
@@ -2921,6 +3300,24 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
     Decoded.Cohorts[0].CohortKey, uint32{0});
   TestEqual(TEXT("target agents survive"),
     Decoded.Cohorts[0].Agents.Num(), 20);
+  FCrowdWorkerTargetObjectiveRevision Objective;
+  Objective.TargetRevision = Cohort.TargetRevision;
+  Objective.EffectiveFixedStepIndex = 1;
+  Objective.TargetLocation = Cohort.Settings.TargetLocation;
+  Objective.TargetVelocity = Cohort.Settings.TargetVelocity;
+  FCrowdWorkerPayload ObjectivePayload;
+  TestTrue(TEXT("target objective encodes"),
+    FCrowdWorkerTargetObjectiveRevisionCodec::Encode(
+      Objective, ObjectivePayload));
+  FCrowdWorkerTargetObjectiveRevision DecodedObjective;
+  TestTrue(TEXT("target objective decodes"),
+    FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
+      ObjectivePayload, DecodedObjective));
+  TestEqual(TEXT("target objective revision survives"),
+    DecodedObjective.TargetRevision, Objective.TargetRevision);
+  TestEqual(TEXT("target objective tick survives"),
+    DecodedObjective.EffectiveFixedStepIndex,
+    Objective.EffectiveFixedStepIndex);
 
   FCrowdTargetPolarTopology AbsoluteTopology;
   AbsoluteTopology.bValid = true;
@@ -2985,6 +3382,12 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
       CrowdWorkerResourceIds::TargetControl,
       Control.Revision, MoveTemp(Payload)}),
     ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("target objective resource stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::ObjectiveRevision(
+        CrowdWorkerTargetObjectiveIds::PrimaryTarget),
+      1, MoveTemp(ObjectivePayload)}),
+    ECrowdWorkerQueueResult::Added);
   TArray<FCrowdWorkerResourceRevisionEvent> Events;
   TestTrue(TEXT("target resource commits"),
     Resources.CommitBuildingAtEpoch(1, Events));
@@ -3012,9 +3415,9 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
   TestEqual(TEXT("member patches plus replicated cohort state"),
     Output.DirtyStates.Num(), 40);
   TestEqual(TEXT("target dependency declared"),
-    Output.DeclaredDependencies.Num(), 22);
+    Output.DeclaredDependencies.Num(), 23);
   TestEqual(TEXT("target observes each member facing dependency"),
-    Output.ObservedDependencies.Num(), 22);
+    Output.ObservedDependencies.Num(), 23);
   for (const FCrowdWorkerDirtyStateRecord& Dirty :
     Output.DirtyStates)
   {
@@ -3063,6 +3466,38 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
   TestEqual(TEXT("only changed target states publish"),
     Metrics.PublishedPatchCount, uint64{20});
 
+  Objective.TargetRevision = 92;
+  Objective.EffectiveFixedStepIndex = 2;
+  Objective.TargetLocation = FVector2f(100.0f, 0.0f);
+  Objective.TargetVelocity = FVector2f(30.0f, 0.0f);
+  TestTrue(TEXT("revised target objective encodes"),
+    FCrowdWorkerTargetObjectiveRevisionCodec::Encode(
+      Objective, ObjectivePayload));
+  TestEqual(TEXT("revised target objective stages without control"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::ObjectiveRevision(
+        CrowdWorkerTargetObjectiveIds::PrimaryTarget),
+      2, MoveTemp(ObjectivePayload)}),
+    ECrowdWorkerQueueResult::Added);
+  Events.Reset();
+  TestTrue(TEXT("revised target objective commits"),
+    Resources.CommitBuildingAtEpoch(2, Events));
+  Context.WorkerEpoch = 2;
+  Context.AbsoluteSimulationTick = 2;
+  Context.SimulationTimeSeconds = 2.0 / 30.0;
+  FCrowdWorkerDomainOutput ObjectiveOutput;
+  TestTrue(TEXT("objective-only target clock executes"),
+    Executor.Execute(Context, Work, ObjectiveOutput));
+  TestTrue(TEXT("objective-only target clock publishes patches"),
+    !ObjectiveOutput.DirtyStates.IsEmpty());
+  TestEqual(TEXT("objective revision rebuilds topology"),
+    Executor.GetMetrics().TopologyBuildCount, uint64{2});
+  for (const FCrowdWorkerDirtyStateRecord& Dirty :
+    ObjectiveOutput.DirtyStates)
+    TestTrue(TEXT("objective target patch applies"),
+      States.ApplyDirty(Dirty)
+        == ECrowdWorkerQueueResult::Replaced);
+
   const FCrowdStableEntityRef RemovedMember =
     Control.Cohorts[0].Agents[0].EntityRef;
   TestTrue(TEXT("former cohort anchor despawns"),
@@ -3081,10 +3516,10 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
     ECrowdWorkerQueueResult::Added);
   Events.Reset();
   TestTrue(TEXT("reduced target resource commits"),
-    Resources.CommitBuildingAtEpoch(2, Events));
-  Context.WorkerEpoch = 2;
-  Context.AbsoluteSimulationTick = 2;
-  Context.SimulationTimeSeconds = 2.0 / 30.0;
+    Resources.CommitBuildingAtEpoch(3, Events));
+  Context.WorkerEpoch = 3;
+  Context.AbsoluteSimulationTick = 3;
+  Context.SimulationTimeSeconds = 3.0 / 30.0;
   FCrowdWorkerTargetDomainExecutor SurvivorExecutor;
   FCrowdWorkerDomainOutput SurvivorOutput;
   TestTrue(TEXT("surviving member restores cohort after anchor despawn"),
@@ -3100,6 +3535,227 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
   }
   TestEqual(TEXT("cohort state replicates to every survivor"),
     SurvivorCohortPatchCount, 19);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerRuntimeV2TargetAffectedCohort10kTest,
+  "MassCrowd.RuntimeV2.Complexity.TargetAffectedCohort10k",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerRuntimeV2TargetAffectedCohort10kTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 41;
+  constexpr uint64 InputSequence = 1;
+  constexpr int32 TotalAgentCount = 10000;
+  constexpr int32 AgentsPerCohort = TotalAgentCount / 2;
+  constexpr int32 GuidanceShardSize = 128;
+  FCrowdWorkerTargetControlResource Control;
+  Control.Revision = 1;
+  for (uint32 CohortIndex = 0; CohortIndex < 2; ++CohortIndex)
+  {
+    FCrowdWorkerTargetCohortInput& Cohort =
+      Control.Cohorts.AddDefaulted_GetRef();
+    Cohort.CohortKey = CohortIndex;
+    Cohort.TopologyRevision = 101 + CohortIndex;
+    Cohort.TargetRevision = 1;
+    Cohort.FixedStepIndex = 0;
+    Cohort.FlowConfig.Revision = 101;
+    Cohort.FlowConfig.BoundsMin =
+      FVector(-2000.0, -2000.0, 0.0);
+    Cohort.FlowConfig.BoundsMax =
+      FVector(2000.0, 2000.0, 0.0);
+    Cohort.FlowConfig.CellSizeCm = 100.0f;
+    Cohort.FlowConfig.AgentInflateCm = 48.0f;
+    Cohort.FlowConfig.GoalLocation = FVector::ZeroVector;
+    Cohort.Settings.MinimumCenterDistanceCm = 152.0f;
+    Cohort.Settings.MaximumCenterDistanceCm = 852.0f;
+    Cohort.Settings.InfluenceBlendWidthCm = 300.0f;
+    Cohort.Settings.RadialBandWidthCm = 2.0f;
+    Cohort.Agents.Reserve(AgentsPerCohort);
+    for (int32 LocalIndex = 0;
+      LocalIndex < AgentsPerCohort; ++LocalIndex)
+    {
+      const int32 GlobalIndex =
+        static_cast<int32>(CohortIndex) * AgentsPerCohort
+        + LocalIndex;
+      FCrowdWorkerTargetAgentInput& Input =
+        Cohort.Agents.AddDefaulted_GetRef();
+      Input.EntityRef = {
+        1, static_cast<uint64>(GlobalIndex + 1), 1};
+      Input.Agent.AgentId = GlobalIndex + 1;
+      const float Angle =
+        (static_cast<float>(LocalIndex % 64) + 0.5f)
+        * 2.0f * PI / 64.0f;
+      const float Radius =
+        500.0f + static_cast<float>((LocalIndex / 64) % 20);
+      Input.Agent.Location =
+        FVector2f(FMath::Cos(Angle), FMath::Sin(Angle))
+        * Radius;
+      Input.Agent.FarFlowPreferredVelocity =
+        -Input.Agent.Location.GetSafeNormal() * 600.0f;
+      Input.Agent.MaxSpeedCmps = 800.0f;
+    }
+  }
+
+  FCrowdWorkerEntityStateStore States;
+  TestTrue(TEXT("10k target state store resets"),
+    States.Reset(TotalAgentCount, 128 * 1024 * 1024));
+  for (const FCrowdWorkerTargetCohortInput& Cohort :
+    Control.Cohorts)
+  {
+    for (const FCrowdWorkerTargetAgentInput& Agent :
+      Cohort.Agents)
+    {
+      const FVector Position(
+        Agent.Agent.Location.X, Agent.Agent.Location.Y, 0.0f);
+      if (States.Spawn(
+          Agent.EntityRef, Generation, InputSequence,
+          MakeBoundaryStatePayload(
+            Agent.EntityRef, Agent.Agent.AgentId, Position))
+        != ECrowdWorkerQueueResult::Added)
+      {
+        AddError(TEXT("10k target entity spawn failed"));
+        return false;
+      }
+    }
+  }
+
+  FCrowdSharedFlowField TargetFlow;
+  TestTrue(TEXT("10k target flow builds"),
+    FCrowdSharedFlowFieldKernel::Build(
+      Control.Cohorts[0].FlowConfig, TargetFlow));
+  FCrowdWorkerPayload FlowPayload;
+  TestTrue(TEXT("10k target flow encodes"),
+    FCrowdWorkerFlowFieldResourceCodec::Encode(
+      TargetFlow, FlowPayload));
+  FCrowdWorkerPayload ControlPayload;
+  TestTrue(TEXT("10k target control encodes"),
+    FCrowdWorkerTargetControlResourceCodec::Encode(
+      Control, ControlPayload));
+  FCrowdWorkerTargetObjectiveRevision Objective;
+  Objective.TargetRevision = 1;
+  Objective.EffectiveFixedStepIndex = 0;
+  FCrowdWorkerPayload ObjectivePayload;
+  TestTrue(TEXT("10k target objective encodes"),
+    FCrowdWorkerTargetObjectiveRevisionCodec::Encode(
+      Objective, ObjectivePayload));
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("10k target resources reset"),
+    Resources.Reset(64 * 1024 * 1024));
+  TestEqual(TEXT("10k target flow stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::Environment,
+      static_cast<uint64>(Control.Cohorts[0].FlowConfig.Revision),
+      MoveTemp(FlowPayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("10k target control stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::TargetControl,
+      Control.Revision, MoveTemp(ControlPayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("10k target objective stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::ObjectiveRevision(
+        CrowdWorkerTargetObjectiveIds::PrimaryTarget),
+      1, MoveTemp(ObjectivePayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  TestTrue(TEXT("10k target resources commit"),
+    Resources.CommitBuildingAtEpoch(1, ResourceEvents));
+
+  FCrowdWorkerDomainContext Context;
+  Context.Generation = Generation;
+  Context.WorkerEpoch = 1;
+  Context.AbsoluteSimulationTick = 1;
+  Context.LastAppliedInputSequence = InputSequence;
+  Context.FixedDeltaSeconds = 1.0 / 30.0;
+  Context.SimulationTimeSeconds = 1.0 / 30.0;
+  Context.RuntimeMode = ECrowdWorkerRuntimeV2Mode::Production;
+  Context.EntityStates = &States;
+  Context.Resources = &Resources;
+  FCrowdWorkerWorkItem FullWork;
+  FullWork.Key.Domain = ECrowdWorkerDomainId::Target;
+  FullWork.Key.Kind = ECrowdWorkerWorkKind::Resource;
+  FullWork.Key.ScopeKey = CrowdWorkerResourceIds::TargetControl;
+  FCrowdWorkerTargetDomainExecutor Executor;
+  FCrowdWorkerDomainOutput Baseline;
+  TestTrue(TEXT("10k target baseline executes"),
+    Executor.Execute(Context, {FullWork}, Baseline));
+  TestEqual(TEXT("10k target baseline dirty count"),
+    Baseline.DirtyStates.Num(), TotalAgentCount * 2);
+  for (const FCrowdWorkerDirtyStateRecord& Dirty :
+    Baseline.DirtyStates)
+  {
+    if (States.ApplyDirty(Dirty)
+      != ECrowdWorkerQueueResult::Replaced)
+    {
+      AddError(TEXT("10k target baseline patch failed"));
+      return false;
+    }
+  }
+  const FCrowdWorkerTargetDomainMetrics BaselineMetrics =
+    Executor.GetMetrics();
+  TestEqual(TEXT("10k target baseline shard count"),
+    BaselineMetrics.GuidanceShardCount,
+    static_cast<uint64>(2 * FMath::DivideAndRoundUp(
+      AgentsPerCohort, GuidanceShardSize)));
+  TestEqual(TEXT("10k target max shard is bounded"),
+    BaselineMetrics.GuidanceMaxShardSize, GuidanceShardSize);
+
+  const FCrowdStableEntityRef ChangedEntity =
+    Control.Cohorts[1].Agents[0].EntityRef;
+  FCrowdWorkerMovementState ChangedMovement;
+  ChangedMovement.StartPosition = FVector(500.0, 0.0, 0.0);
+  ChangedMovement.Position = FVector(540.0, 0.0, 0.0);
+  FCrowdWorkerDirtyStateRecord MovementDirty;
+  MovementDirty.EntityRef = ChangedEntity;
+  MovementDirty.Field = ECrowdWorkerField::Movement;
+  MovementDirty.Generation = Generation;
+  MovementDirty.WorkerEpoch = 2;
+  MovementDirty.StateRevision = 1;
+  MovementDirty.SourceInputSequence = InputSequence + 1;
+  TestTrue(TEXT("affected cohort movement encodes"),
+    FCrowdWorkerMovementStateCodec::Encode(
+      ChangedMovement, MovementDirty.Payload));
+  TestEqual(TEXT("affected cohort movement applies"),
+    States.ApplyDirty(MovementDirty),
+    ECrowdWorkerQueueResult::Replaced);
+  Context.WorkerEpoch = 2;
+  Context.AbsoluteSimulationTick = 2;
+  Context.LastAppliedInputSequence = InputSequence + 1;
+  Context.SimulationTimeSeconds = 2.0 / 30.0;
+  FCrowdWorkerWorkItem AffectedWork;
+  AffectedWork.Key.Domain = ECrowdWorkerDomainId::Target;
+  AffectedWork.Key.Kind = ECrowdWorkerWorkKind::Cohort;
+  AffectedWork.Key.ScopeKey =
+    CrowdWorkerTargetWorkScopes::EncodeCohortKey(1);
+  FCrowdWorkerDomainOutput AffectedOutput;
+  TestTrue(TEXT("only affected target cohort executes"),
+    Executor.Execute(Context, {AffectedWork}, AffectedOutput));
+  for (const FCrowdWorkerDirtyStateRecord& Dirty :
+    AffectedOutput.DirtyStates)
+  {
+    TestTrue(TEXT("unaffected cohort emits no dirty patch"),
+      Dirty.EntityRef.StableEntityId
+        > static_cast<uint64>(AgentsPerCohort));
+  }
+  const FCrowdWorkerTargetDomainMetrics AffectedMetrics =
+    Executor.GetMetrics();
+  TestEqual(TEXT("affected cohort adds only its guidance shards"),
+    AffectedMetrics.GuidanceShardCount
+      - BaselineMetrics.GuidanceShardCount,
+    static_cast<uint64>(FMath::DivideAndRoundUp(
+      AgentsPerCohort, GuidanceShardSize)));
+  TestEqual(TEXT("unaffected cohort topology is not rebuilt"),
+    AffectedMetrics.TopologyBuildCount,
+    BaselineMetrics.TopologyBuildCount);
+  TestEqual(TEXT("affected dependency closure has one cohort"),
+    AffectedOutput.DeclaredDependencies.Num(),
+    AgentsPerCohort + 3);
   return true;
 }
 
@@ -3349,38 +4005,86 @@ bool FCrowdWorkerRuntimeV2ProjectileDomainTest::RunTest(
   TestTrue(TEXT("autonomous projectile bootstrap executes"),
     AutonomousExecutor.Execute(
       LiveContext, Work, AutonomousBootstrapOutput));
-  FCrowdWorkerWorkItem TimerWork = CombatWork;
-  TimerWork.Key.Kind = ECrowdWorkerWorkKind::Timer;
-  TimerWork.Key.PrimaryEntity = Shooter;
-  TimerWork.Key.ScopeKey = 0;
+  FCrowdWorkerWorkItem ClockWork = CombatWork;
+  ClockWork.ReasonMask = CrowdWorkerReasonMasks::CombatClock;
   FCrowdWorkerDomainContext TimerContext = LiveContext;
   TimerContext.WorkerEpoch = 21;
   TimerContext.AbsoluteSimulationTick = 21;
   TimerContext.LastAppliedInputSequence = 21;
   TimerContext.NextOrderedEventSequence = 2;
   TimerContext.SimulationTimeSeconds = 21.0 / 30.0;
-  FCrowdWorkerDomainOutput AutonomousTimerOutput;
-  TestTrue(TEXT("projectile timer advances without resource revision"),
+  FCrowdWorkerDomainOutput AutonomousClockOutput;
+  TestTrue(TEXT("projectile clock advances without resource revision"),
     AutonomousExecutor.Execute(
-      TimerContext, TArray<FCrowdWorkerWorkItem>{TimerWork},
-      AutonomousTimerOutput));
-  FCrowdWorkerProjectileState AutonomousTimerState;
-  TestTrue(TEXT("autonomous timer state decodes"),
-    AutonomousTimerOutput.DirtyStates.Num() == 1
+      TimerContext, TArray<FCrowdWorkerWorkItem>{ClockWork},
+      AutonomousClockOutput));
+  FCrowdWorkerProjectileState AutonomousClockState;
+  TestTrue(TEXT("autonomous clock state decodes"),
+    AutonomousClockOutput.DirtyStates.Num() == 1
       && FCrowdWorkerProjectileStateCodec::Decode(
-        AutonomousTimerOutput.DirtyStates[0].Payload,
-        AutonomousTimerState));
-  TestEqual(TEXT("autonomous timer owns next fixed step"),
-    AutonomousTimerState.Prepared.FixedStepIndex, int64{21});
-  TestEqual(TEXT("autonomous timer keeps control revision"),
-    AutonomousTimerState.ControlRevision,
+        AutonomousClockOutput.DirtyStates[0].Payload,
+        AutonomousClockState));
+  TestEqual(TEXT("autonomous clock owns next fixed step"),
+    AutonomousClockState.Prepared.FixedStepIndex, int64{21});
+  TestEqual(TEXT("autonomous clock keeps control revision"),
+    AutonomousClockState.ControlRevision,
     LiveControl.Revision);
+
+  FCrowdWorkerProjectileControlResource NextRoundControl =
+    LiveControl;
+  NextRoundControl.Revision = LiveControl.Revision + 1;
+  NextRoundControl.bReplaceState = true;
+  NextRoundControl.Input.FixedStepIndex = 0;
+  NextRoundControl.Input.ServerTimeSeconds = 0.0f;
+  NextRoundControl.Input.SpawnRequests.Reset();
+  NextRoundControl.Input.CurrentStates.Reset();
+  FCrowdWorkerPayload NextRoundPayload;
+  TestTrue(TEXT("next-round control encodes"),
+    FCrowdWorkerProjectileControlResourceCodec::Encode(
+      NextRoundControl, NextRoundPayload));
+  FCrowdWorkerResourceStore NextRoundResources;
+  TestTrue(TEXT("next-round resources reset"),
+    NextRoundResources.Reset(
+      FCrowdWorkerProjectileControlResourceCodec::
+        MaxEncodedBytes));
+  TestEqual(TEXT("next-round resource stages"),
+    NextRoundResources.StageBuilding({
+      CrowdWorkerResourceIds::ProjectileControl,
+      NextRoundControl.Revision, MoveTemp(NextRoundPayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TestTrue(TEXT("next-round resource commits"),
+    NextRoundResources.CommitBuildingAtEpoch(
+      TimerContext.WorkerEpoch + 1, ResourceEvents));
+  FCrowdWorkerDomainContext NextRoundContext = TimerContext;
+  NextRoundContext.WorkerEpoch += 1;
+  NextRoundContext.AbsoluteSimulationTick += 1;
+  NextRoundContext.LastAppliedInputSequence += 1;
+  NextRoundContext.SimulationTimeSeconds += 1.0 / 30.0;
+  NextRoundContext.Resources = &NextRoundResources;
+  FCrowdWorkerDomainOutput NextRoundOutput;
+  TestTrue(TEXT("fresh revision restarts projectile round"),
+    AutonomousExecutor.Execute(
+      NextRoundContext, Work, NextRoundOutput));
+  FCrowdWorkerProjectileState NextRoundState;
+  TestTrue(TEXT("next-round state decodes"),
+    NextRoundOutput.DirtyStates.Num() == 1
+      && FCrowdWorkerProjectileStateCodec::Decode(
+        NextRoundOutput.DirtyStates[0].Payload,
+        NextRoundState));
+  TestEqual(TEXT("fresh revision owns reset fixed step"),
+    NextRoundState.Prepared.FixedStepIndex, int64{0});
+  TestEqual(TEXT("fresh revision replaces prior projectiles"),
+    NextRoundState.Prepared.States.Num(), 0);
+  TestEqual(TEXT("fresh revision becomes active control"),
+    NextRoundState.ControlRevision,
+    NextRoundControl.Revision);
 
   FCrowdWorkerCheckpoint ReplayCheckpoint;
   ReplayCheckpoint.Generation = Generation;
   ReplayCheckpoint.WorkerEpoch = LiveContext.WorkerEpoch;
   ReplayCheckpoint.AbsoluteSimulationTick =
     LiveContext.AbsoluteSimulationTick;
+  ReplayCheckpoint.FixedSimulationQuantumSeconds = 1.0 / 30.0;
   ReplayCheckpoint.LastAppliedInputSequence =
     LiveContext.LastAppliedInputSequence;
   ReplayCheckpoint.LastOrderedEventSequence =
@@ -3975,8 +4679,9 @@ bool FCrowdWorkerNoCorrectionPredictionWindowTest::RunTest(
       const ECrowdAsyncSimulationPollResult Result = Runtime.Poll();
       if (Result == ECrowdAsyncSimulationPollResult::Failed)
         return false;
-      if (Runtime.GetMetrics().LastAppliedInputSequence
-        >= InputSequence)
+      if (Result == ECrowdAsyncSimulationPollResult::Idle
+        && Runtime.GetMetrics().LastAppliedInputSequence
+          >= InputSequence)
         return true;
       FPlatformProcess::SleepNoStats(0.0f);
     }
@@ -4053,6 +4758,12 @@ bool FCrowdWorkerSparseCorrectionRecoveryTest::RunTest(
   TestTrue(TEXT("client domain registers"),
     Client.RegisterDomainExecutor(
       MakeUnique<FSyntheticLifecycleDomain>()));
+  TestTrue(TEXT("authority correction revision probe registers"),
+    Authority.RegisterDomainExecutor(
+      MakeUnique<FCorrectionRevisionBehaviorDomain>()));
+  TestTrue(TEXT("client correction revision probe registers"),
+    Client.RegisterDomainExecutor(
+      MakeUnique<FCorrectionRevisionBehaviorDomain>()));
   TestTrue(TEXT("authority starts"),
     Authority.Start(MakeSyntheticConfig(), Generation));
   TestTrue(TEXT("client starts"),
@@ -4079,8 +4790,9 @@ bool FCrowdWorkerSparseCorrectionRecoveryTest::RunTest(
       const ECrowdAsyncSimulationPollResult Result = Runtime.Poll();
       if (Result == ECrowdAsyncSimulationPollResult::Failed)
         return false;
-      if (Runtime.GetMetrics().LastAppliedInputSequence
-        >= InputSequence)
+      if (Result == ECrowdAsyncSimulationPollResult::Idle
+        && Runtime.GetMetrics().LastAppliedInputSequence
+          >= InputSequence)
         return true;
       FPlatformProcess::SleepNoStats(0.0f);
     }
@@ -4184,6 +4896,67 @@ bool FCrowdWorkerSparseCorrectionRecoveryTest::RunTest(
     Client.CompareAuthorityDigest(AuthorityDigest, Mismatches),
     ECrowdWorkerNetworkReadResult::Ready);
   TestEqual(TEXT("post-correction digest fully matches"),
+    Mismatches.Num(), 0);
+
+  const FCrowdWorkerAuthorityDigestEntry* LifecycleEntry =
+    AuthorityDigest.Entries.FindByPredicate([](
+      const FCrowdWorkerAuthorityDigestEntry& Entry)
+    {
+      return Entry.Scope.Field == ECrowdWorkerField::Lifecycle;
+    });
+  TestNotNull(TEXT("authority digest exposes lifecycle scope"),
+    LifecycleEntry);
+  if (!LifecycleEntry)
+  {
+    Authority.StopAndDrain(5.0);
+    Client.StopAndDrain(5.0);
+    return false;
+  }
+  const TArray<FCrowdWorkerAuthorityScopeKey> LifecycleScopes{
+    LifecycleEntry->Scope};
+  FCrowdWorkerAuthorityCorrectionBatch LifecycleCorrection;
+  TestEqual(TEXT("authority builds lifecycle correction"),
+    Authority.BuildAuthorityCorrection(
+      Generation,
+      AuthorityDigest.DigestSequence,
+      2,
+      LifecycleScopes,
+      LifecycleCorrection),
+    ECrowdWorkerNetworkReadResult::Ready);
+  TestTrue(TEXT("client opens ordered correction barrier"),
+    Client.BeginAuthorityCorrectionBarrier(
+      Generation,
+      LifecycleCorrection.ApplySimulationTick,
+      LifecycleCorrection.ThroughInputSequence));
+  TestEqual(TEXT("client queues lifecycle correction"),
+    Client.SubmitAuthorityCorrection(LifecycleCorrection),
+    ECrowdAsyncSimulationCorrectionResult::Accepted);
+  const double LifecycleCorrectionDeadline =
+    FPlatformTime::Seconds() + 5.0;
+  while (FPlatformTime::Seconds() < LifecycleCorrectionDeadline
+    && Client.GetMetrics().AuthorityCorrectionCount < 2)
+  {
+    if (Client.Poll() == ECrowdAsyncSimulationPollResult::Failed)
+      break;
+    FPlatformProcess::SleepNoStats(0.0f);
+  }
+  TestEqual(TEXT("lifecycle correction applies"),
+    Client.GetMetrics().AuthorityCorrectionCount, uint64{2});
+  TestTrue(TEXT("corrected dependent domain continues predicting"),
+    AdvanceBoth(91, 120));
+  TestEqual(TEXT("client remains running after corrected output"),
+    Client.GetState(), ECrowdAsyncSimulationRuntimeState::Running);
+  TestEqual(TEXT("corrected output preserves runtime failure invariant"),
+    Client.GetMetrics().WorkerV2.LastFailure,
+    ECrowdWorkerRuntimeV2Failure::None);
+  TestEqual(TEXT("authority publishes digest after corrected output"),
+    Authority.ReadAuthorityDigest(Generation, AuthorityDigest),
+    ECrowdWorkerNetworkReadResult::Ready);
+  Mismatches.Reset();
+  TestEqual(TEXT("client compares digest after corrected output"),
+    Client.CompareAuthorityDigest(AuthorityDigest, Mismatches),
+    ECrowdWorkerNetworkReadResult::Ready);
+  TestEqual(TEXT("corrected dependent output remains semantically equal"),
     Mismatches.Num(), 0);
   TestTrue(TEXT("authority stops"),
     Authority.StopAndDrain(5.0));
@@ -4296,74 +5069,102 @@ bool FCrowdWorkerSpatialIncrementalMigrationTest::RunTest(
   const FString& Parameters)
 {
   using namespace CrowdWorkerRuntimeV2Tests;
-  FCrowdWorkerEntityStateStore States;
-  FCrowdWorkerSpatialIndex Index;
-  TestTrue(TEXT("state store reset"), States.Reset(128, 65536));
-  TestTrue(TEXT("spatial index reset"), Index.Reset(128, 400.0f));
-  constexpr int32 EntityCount = 100;
-  for (int32 EntityIndex = 0; EntityIndex < EntityCount; ++EntityIndex)
+  constexpr int32 EntityCount = 10000;
+  constexpr int32 GridWidth = 100;
+  const auto RunMigrationCase = [this](const int32 CrossingPercent)
   {
-    const FCrowdStableEntityRef EntityRef = {
-      1, static_cast<uint64>(EntityIndex + 1), 1};
-    const FVector Position(
-      static_cast<double>(EntityIndex % 10) * 20.0,
-      static_cast<double>(EntityIndex / 10) * 20.0, 0.0);
-    const ECrowdWorkerQueueResult SpawnResult = States.Spawn(
-      EntityRef, 1, EntityIndex + 1,
-      MakeBoundaryStatePayload(EntityRef, EntityIndex, Position));
-    if (SpawnResult != ECrowdWorkerQueueResult::Added
-      || !Index.Spawn(States, EntityRef))
+    FCrowdWorkerEntityStateStore States;
+    FCrowdWorkerSpatialIndex Index;
+    if (!States.Reset(EntityCount, 65536)
+      || !Index.Reset(EntityCount, 400.0f))
     {
       AddError(FString::Printf(
-        TEXT("spatial spawn rejected index=%d result=%d"),
-        EntityIndex, static_cast<int32>(SpawnResult)));
+        TEXT("10k spatial reset rejected crossing_percent=%d"),
+        CrossingPercent));
       return false;
     }
-  }
-  for (int32 EntityIndex = 0; EntityIndex < EntityCount; ++EntityIndex)
-  {
-    const FCrowdStableEntityRef EntityRef = {
-      1, static_cast<uint64>(EntityIndex + 1), 1};
-    FCrowdWorkerMovementState Movement;
-    Movement.Position = EntityIndex < 10
-      ? FVector(500.0 + EntityIndex, 0.0, 0.0)
-      : FVector(
-          static_cast<double>(EntityIndex % 10) * 20.0 + 1.0,
-          static_cast<double>(EntityIndex / 10) * 20.0, 0.0);
-    FCrowdWorkerDirtyStateRecord Dirty;
-    Dirty.EntityRef = EntityRef;
-    Dirty.Field = ECrowdWorkerField::Movement;
-    Dirty.Generation = 1;
-    Dirty.WorkerEpoch = 1;
-    Dirty.StateRevision = 1;
-    Dirty.SourceInputSequence = EntityIndex + 1;
-    if (!FCrowdWorkerMovementStateCodec::Encode(
-        Movement, Dirty.Payload))
+    const int32 CrossingCount =
+      EntityCount * CrossingPercent / 100;
+    const auto InitialPosition = [](const int32 EntityIndex)
     {
-      AddError(FString::Printf(
-        TEXT("movement encode rejected index=%d"), EntityIndex));
-      return false;
-    }
-    const ECrowdWorkerQueueResult DirtyResult =
-      States.ApplyDirty(Dirty);
-    if (DirtyResult != ECrowdWorkerQueueResult::Replaced
-      || !Index.UpdateEntity(States, EntityRef))
+      return FVector(
+        static_cast<double>(EntityIndex % GridWidth) * 20.0,
+        static_cast<double>(EntityIndex / GridWidth) * 20.0,
+        0.0);
+    };
+    for (int32 EntityIndex = 0;
+      EntityIndex < EntityCount; ++EntityIndex)
     {
-      AddError(FString::Printf(
-        TEXT("spatial update rejected index=%d result=%d"),
-        EntityIndex, static_cast<int32>(DirtyResult)));
-      return false;
+      const FCrowdStableEntityRef EntityRef = {
+        1, static_cast<uint64>(EntityIndex + 1), 1};
+      const ECrowdWorkerQueueResult SpawnResult = States.Spawn(
+        EntityRef, 1, EntityIndex + 1,
+        MakeBoundaryStatePayload(
+          EntityRef, EntityIndex, InitialPosition(EntityIndex)));
+      if (SpawnResult != ECrowdWorkerQueueResult::Added
+        || !Index.Spawn(States, EntityRef))
+      {
+        AddError(FString::Printf(
+          TEXT("10k spatial spawn rejected percent=%d index=%d result=%d"),
+          CrossingPercent, EntityIndex,
+          static_cast<int32>(SpawnResult)));
+        return false;
+      }
     }
-  }
-  TestEqual(TEXT("all spatial entities retained"),
-    Index.Num(), EntityCount);
-  TestEqual(TEXT("normal updates do not rebuild index"),
-    Index.GetFullRebuildCount(), uint64{0});
-  TestEqual(TEXT("spawn plus movement updates are incremental"),
-    Index.GetIncrementalUpdateCount(), uint64{200});
-  TestEqual(TEXT("only cross-cell entities migrate"),
-    Index.GetCellMigrationCount(), uint64{10});
-  return true;
+    for (int32 EntityIndex = 0;
+      EntityIndex < EntityCount; ++EntityIndex)
+    {
+      const FCrowdStableEntityRef EntityRef = {
+        1, static_cast<uint64>(EntityIndex + 1), 1};
+      FCrowdWorkerMovementState Movement;
+      Movement.Position = InitialPosition(EntityIndex)
+        + FVector(EntityIndex < CrossingCount ? 400.0 : 1.0, 0.0, 0.0);
+      FCrowdWorkerDirtyStateRecord Dirty;
+      Dirty.EntityRef = EntityRef;
+      Dirty.Field = ECrowdWorkerField::Movement;
+      Dirty.Generation = 1;
+      Dirty.WorkerEpoch = 1;
+      Dirty.StateRevision = 1;
+      Dirty.SourceInputSequence = EntityIndex + 1;
+      if (!FCrowdWorkerMovementStateCodec::Encode(
+          Movement, Dirty.Payload))
+      {
+        AddError(FString::Printf(
+          TEXT("10k movement encode rejected percent=%d index=%d"),
+          CrossingPercent, EntityIndex));
+        return false;
+      }
+      const ECrowdWorkerQueueResult DirtyResult =
+        States.ApplyDirty(Dirty);
+      if (DirtyResult != ECrowdWorkerQueueResult::Replaced
+        || !Index.UpdateEntity(States, EntityRef))
+      {
+        AddError(FString::Printf(
+          TEXT("10k spatial update rejected percent=%d index=%d result=%d"),
+          CrossingPercent, EntityIndex,
+          static_cast<int32>(DirtyResult)));
+        return false;
+      }
+    }
+    TestEqual(*FString::Printf(
+        TEXT("10k %d%% case retains every entity"), CrossingPercent),
+      Index.Num(), EntityCount);
+    TestEqual(*FString::Printf(
+        TEXT("10k %d%% case performs no full rebuild"), CrossingPercent),
+      Index.GetFullRebuildCount(), uint64{0});
+    TestEqual(*FString::Printf(
+        TEXT("10k %d%% case uses incremental spawn and update"),
+        CrossingPercent),
+      Index.GetIncrementalUpdateCount(),
+      static_cast<uint64>(EntityCount * 2));
+    TestEqual(*FString::Printf(
+        TEXT("10k %d%% case migrates only cross-cell entities"),
+        CrossingPercent),
+      Index.GetCellMigrationCount(),
+      static_cast<uint64>(CrossingCount));
+    return true;
+  };
+  return RunMigrationCase(1) && RunMigrationCase(10);
 }
 
 #endif

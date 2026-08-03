@@ -570,6 +570,53 @@ bool FCrowdWorkerTargetControlResource::IsValid() const
   return true;
 }
 
+bool FCrowdWorkerTargetObjectiveRevision::IsValid() const
+{
+  return TargetRevision >= 0
+    && EffectiveFixedStepIndex >= 0
+    && !TargetLocation.ContainsNaN()
+    && !TargetVelocity.ContainsNaN();
+}
+
+bool FCrowdWorkerTargetObjectiveRevisionCodec::Encode(
+  const FCrowdWorkerTargetObjectiveRevision& Revision,
+  FCrowdWorkerPayload& OutPayload)
+{
+  OutPayload = {};
+  if (!Revision.IsValid()) return false;
+  OutPayload.SchemaId = SchemaId;
+  OutPayload.SchemaVersion = SchemaVersion;
+  AppendSigned(OutPayload.Bytes, Revision.TargetRevision);
+  AppendSigned(
+    OutPayload.Bytes, Revision.EffectiveFixedStepIndex);
+  AppendVector2(OutPayload.Bytes, Revision.TargetLocation);
+  AppendVector2(OutPayload.Bytes, Revision.TargetVelocity);
+  OutPayload.RecalculateStableHash();
+  return true;
+}
+
+bool FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
+  const FCrowdWorkerPayload& Payload,
+  FCrowdWorkerTargetObjectiveRevision& OutRevision)
+{
+  OutRevision = {};
+  int32 Offset = 0;
+  return Payload.SchemaId == SchemaId
+    && Payload.SchemaVersion == SchemaVersion
+    && Payload.StableHash == Payload.CalculateStableHash()
+    && ReadSigned(
+      Payload.Bytes, Offset, OutRevision.TargetRevision)
+    && ReadSigned(
+      Payload.Bytes, Offset,
+      OutRevision.EffectiveFixedStepIndex)
+    && ReadVector2(
+      Payload.Bytes, Offset, OutRevision.TargetLocation)
+    && ReadVector2(
+      Payload.Bytes, Offset, OutRevision.TargetVelocity)
+    && Offset == Payload.Bytes.Num()
+    && OutRevision.IsValid();
+}
+
 bool FCrowdWorkerTargetControlResourceCodec::Encode(
   const FCrowdWorkerTargetControlResource& Resource,
   FCrowdWorkerPayload& OutPayload)
@@ -859,13 +906,28 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
     return false;
   };
   if (!Context.Resources || !Context.EntityStates
-    || Context.Generation == 0
-    || WorkItems.Num() != 1
-    || WorkItems[0].Key.Domain != ECrowdWorkerDomainId::Target
-    || WorkItems[0].Key.Kind != ECrowdWorkerWorkKind::Resource
-    || WorkItems[0].Key.ScopeKey
-      != CrowdWorkerResourceIds::TargetControl)
+    || Context.Generation == 0 || WorkItems.IsEmpty())
     return Reject(TEXT("contract"));
+  const bool bFullResourceWork = WorkItems.Num() == 1
+    && WorkItems[0].Key.Domain == ECrowdWorkerDomainId::Target
+    && WorkItems[0].Key.Kind == ECrowdWorkerWorkKind::Resource
+    && WorkItems[0].Key.ScopeKey
+      == CrowdWorkerResourceIds::TargetControl;
+  TMap<uint32, const FCrowdWorkerWorkItem*> WorkByCohort;
+  if (!bFullResourceWork)
+  {
+    for (const FCrowdWorkerWorkItem& Work : WorkItems)
+    {
+      uint32 CohortKey = 0;
+      if (Work.Key.Domain != ECrowdWorkerDomainId::Target
+        || Work.Key.Kind != ECrowdWorkerWorkKind::Cohort
+        || !CrowdWorkerTargetWorkScopes::DecodeCohortKey(
+          Work.Key.ScopeKey, CohortKey)
+        || WorkByCohort.Contains(CohortKey))
+        return Reject(TEXT("cohort_work"), CohortKey);
+      WorkByCohort.Add(CohortKey, &Work);
+    }
+  }
   const FCrowdWorkerResourceRecord* Record =
     Context.Resources->FindCurrent(
       CrowdWorkerResourceIds::TargetControl);
@@ -884,6 +946,19 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
       FlowRecord->Payload, FlowField)
     || FlowField.Revision != FlowRecord->Revision)
     return Reject(TEXT("flow_resource_decode"));
+  const uint64 ObjectiveResourceId =
+    CrowdWorkerResourceIds::ObjectiveRevision(
+      CrowdWorkerTargetObjectiveIds::PrimaryTarget);
+  const FCrowdWorkerResourceRecord* ObjectiveRecord =
+    Context.Resources->FindCurrent(ObjectiveResourceId);
+  FCrowdWorkerTargetObjectiveRevision Objective;
+  if (!ObjectiveRecord
+    || !FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
+      ObjectiveRecord->Payload, Objective)
+    || ObjectiveRecord->Revision == 0
+    || Objective.EffectiveFixedStepIndex
+      > static_cast<int64>(Context.AbsoluteSimulationTick))
+    return Reject(TEXT("objective_decode"));
 
   FScopeLock Lock(&StateMutex);
   if (StateGeneration != Context.Generation)
@@ -961,13 +1036,37 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
   for (const FCrowdWorkerTargetCohortInput& Input :
     Control.Cohorts)
   {
+    const FCrowdWorkerWorkItem* SourceWork = bFullResourceWork
+      ? &WorkItems[0]
+      : WorkByCohort.FindRef(Input.CohortKey);
+    if (!SourceWork) continue;
+    FCrowdWorkerWorkItem DependentWork = *SourceWork;
+    DependentWork.Key.Kind = ECrowdWorkerWorkKind::Cohort;
+    DependentWork.Key.PrimaryEntity = {};
+    DependentWork.Key.SecondaryEntity = {};
+    DependentWork.Key.ScopeKey =
+      CrowdWorkerTargetWorkScopes::EncodeCohortKey(
+        Input.CohortKey);
+    FCrowdTargetRegionTransportSettings EffectiveSettings =
+      Input.Settings;
+    const double ObjectiveAgeSeconds =
+      static_cast<double>(Context.AbsoluteSimulationTick
+        - static_cast<uint64>(Objective.EffectiveFixedStepIndex))
+      * Context.FixedDeltaSeconds;
+    EffectiveSettings.TargetLocation =
+      Objective.TargetLocation
+      + Objective.TargetVelocity
+        * static_cast<float>(ObjectiveAgeSeconds);
+    EffectiveSettings.TargetVelocity = Objective.TargetVelocity;
     CurrentCohorts.Add(Input.CohortKey);
     FCohortRuntime& Runtime = Cohorts.FindOrAdd(Input.CohortKey);
     if (!Runtime.Topology.bValid
-      || Runtime.TopologyRevision != Input.TopologyRevision)
+      || Runtime.TopologyRevision != Input.TopologyRevision
+      || Runtime.ObjectiveResourceRevision
+        != ObjectiveRecord->Revision)
     {
       FCrowdMassTargetRegionTopologyInput TopologyInput;
-      TopologyInput.Settings = Input.Settings;
+      TopologyInput.Settings = EffectiveSettings;
       if (!IsTopologyCompatible(
           Input.FlowConfig, FlowField.Field.Config))
         return Reject(
@@ -976,13 +1075,15 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
       Runtime.Topology =
         FCrowdMassTargetRegionWork::BuildTopology(TopologyInput);
       Runtime.TopologyRevision = Input.TopologyRevision;
+      Runtime.ObjectiveResourceRevision =
+        ObjectiveRecord->Revision;
       ++Metrics.TopologyBuildCount;
       if (!Runtime.Topology.bValid)
         return Reject(TEXT("topology"), Input.CohortKey);
     }
 
     FCrowdMassTargetRegionDemandInput DemandInput;
-    DemandInput.Settings = Input.Settings;
+    DemandInput.Settings = EffectiveSettings;
     if (!IsTopologyCompatible(
         Input.FlowConfig, FlowField.Field.Config))
       return Reject(
@@ -1011,7 +1112,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         FCrowdTargetRegionTransportKernel::
           ComposeTargetAdvectedFarFlowVelocity(
             Agent.FarFlowPreferredVelocity,
-            Input.Settings.TargetVelocity,
+            EffectiveSettings.TargetVelocity,
             Agent.MaxSpeedCmps);
     for (FCrowdTargetRegionTransportAgent& Agent :
       DemandInput.ExternalAgents)
@@ -1019,7 +1120,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         FCrowdTargetRegionTransportKernel::
           ComposeTargetAdvectedFarFlowVelocity(
             Agent.FarFlowPreferredVelocity,
-            Input.Settings.TargetVelocity,
+            EffectiveSettings.TargetVelocity,
             Agent.MaxSpeedCmps);
     const FCrowdMassTargetRegionDemandOutput Demand =
       FCrowdMassTargetRegionWork::BuildDemand(DemandInput);
@@ -1036,8 +1137,8 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         Demand.Demand.SourceAttachmentFailureCount,
         Runtime.Topology.Topology.Cells.Num(),
         Runtime.Topology.Topology.Edges.Num(),
-        Input.Settings.TargetLocation.X,
-        Input.Settings.TargetLocation.Y,
+        EffectiveSettings.TargetLocation.X,
+        EffectiveSettings.TargetLocation.Y,
         FlowField.Revision,
         FlowField.BuildHash);
       return Reject(TEXT("demand"), Input.CohortKey);
@@ -1058,7 +1159,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         return Reject(TEXT("cohort_state"), Input.CohortKey);
       if (Candidate.CohortKey != Input.CohortKey
         || Candidate.TopologyRevision != Input.TopologyRevision
-        || Candidate.TargetRevision != Input.TargetRevision)
+        || Candidate.TargetRevision != Objective.TargetRevision)
         continue;
       if (bHasPreviousCohort
         && !(PreviousCohortPayload == PreviousRecord->Payload))
@@ -1077,16 +1178,16 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
       ? PreviousCohort.Execution : Input.BootstrapExecution;
     PlanInput.FixedStepIndex = static_cast<int32>(
       Context.AbsoluteSimulationTick);
-    PlanInput.TargetRevision = Input.TargetRevision;
+    PlanInput.TargetRevision = Objective.TargetRevision;
     PlanInput.PlanLifetimeSteps =
-      Input.Settings.PlanLifetimeSteps;
+      EffectiveSettings.PlanLifetimeSteps;
     const FCrowdMassTargetRegionPlanOutput Plan =
       FCrowdMassTargetRegionWork::SolvePlan(PlanInput);
     if (!Plan.bValid)
       return Reject(TEXT("plan"), Input.CohortKey);
 
     FCrowdMassTargetRegionGuidanceInput GuidanceInput;
-    GuidanceInput.Settings = Input.Settings;
+    GuidanceInput.Settings = EffectiveSettings;
     GuidanceInput.Topology = Runtime.Topology.Topology;
     GuidanceInput.Demand = Demand.Demand;
     GuidanceInput.Plan = Plan.Plan;
@@ -1115,7 +1216,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
     FCrowdWorkerTargetCohortState CohortState;
     CohortState.CohortKey = Input.CohortKey;
     CohortState.TopologyRevision = Input.TopologyRevision;
-    CohortState.TargetRevision = Input.TargetRevision;
+    CohortState.TargetRevision = Objective.TargetRevision;
     CohortState.Plan = Plan.Plan;
     CohortState.Execution = Guidance.Execution;
     FCrowdWorkerPayload CohortPayload;
@@ -1142,7 +1243,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
             ExistingCohort->StateRevision + 1)
         : FMath::Max(Control.Revision, Context.WorkerEpoch);
       CohortDirty.CorrectionRevision =
-        WorkItems[0].CorrectionRevision;
+        SourceWork->CorrectionRevision;
       CohortDirty.SourceInputSequence =
         Context.LastAppliedInputSequence;
       CohortDirty.Payload = CohortPayload;
@@ -1160,7 +1261,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         return Reject(TEXT("agent_join"), Input.CohortKey);
       FCrowdWorkerTargetState State;
       State.CohortKey = Input.CohortKey;
-      State.TargetRevision = Input.TargetRevision;
+      State.TargetRevision = Objective.TargetRevision;
       State.CurrentCellKey = Result.CurrentCellKey;
       State.NextCellKey = Result.NextCellKey;
       State.DemandRegionKey = Result.DemandRegionKey;
@@ -1176,7 +1277,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
       Dirty.Generation = Context.Generation;
       Dirty.WorkerEpoch = Context.WorkerEpoch;
       Dirty.CorrectionRevision =
-        WorkItems[0].CorrectionRevision;
+        SourceWork->CorrectionRevision;
       Dirty.SourceInputSequence =
         Context.LastAppliedInputSequence;
       if (!FCrowdWorkerTargetStateCodec::Encode(
@@ -1197,48 +1298,59 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         ++Metrics.PublishedPatchCount;
       }
     }
+    const auto AddResourceDependency =
+      [&OutOutput, &DependentWork](const uint64 ResourceId)
+    {
+      FCrowdWorkerDependencyDeclaration Declaration;
+      Declaration.Source.Kind =
+        ECrowdWorkerDependencyKind::Resource;
+      Declaration.Source.ScopeKey = ResourceId;
+      Declaration.Dependent = DependentWork;
+      OutOutput.DeclaredDependencies.Add(Declaration);
+      FCrowdWorkerDependencyObservation Observation;
+      Observation.Source = Declaration.Source;
+      Observation.Dependent = DependentWork.Key;
+      OutOutput.ObservedDependencies.Add(Observation);
+    };
+    AddResourceDependency(CrowdWorkerResourceIds::TargetControl);
+    AddResourceDependency(CrowdWorkerResourceIds::Environment);
+    AddResourceDependency(ObjectiveResourceId);
+    TArray<FCrowdStableEntityRef> DependencyEntities;
+    DependencyEntities.Reserve(
+      Input.Agents.Num() + Input.ExternalAgents.Num());
+    for (const FCrowdWorkerTargetAgentInput& Agent : Input.Agents)
+      DependencyEntities.AddUnique(Agent.EntityRef);
+    for (const FCrowdTargetRegionTransportAgent& External :
+      Input.ExternalAgents)
+    {
+      if (const FCrowdStableEntityRef* EntityRef =
+        EntityRefByAgentId.Find(External.AgentId))
+        DependencyEntities.AddUnique(*EntityRef);
+    }
+    DependencyEntities.Sort();
+    for (const FCrowdStableEntityRef& EntityRef :
+      DependencyEntities)
+    {
+      FCrowdWorkerDependencyDeclaration Declaration;
+      Declaration.Source.Kind =
+        ECrowdWorkerDependencyKind::Entity;
+      Declaration.Source.EntityRef = EntityRef;
+      Declaration.Source.ScopeKey =
+        CrowdWorkerRuntimeV2DependencyScopeForField(
+          ECrowdWorkerField::Facing);
+      Declaration.Dependent = DependentWork;
+      OutOutput.DeclaredDependencies.Add(Declaration);
+      FCrowdWorkerDependencyObservation Observation;
+      Observation.Source = Declaration.Source;
+      Observation.Dependent = DependentWork.Key;
+      OutOutput.ObservedDependencies.Add(Observation);
+    }
   }
-  for (auto It = Cohorts.CreateIterator(); It; ++It)
-    if (!CurrentCohorts.Contains(It.Key()))
-      It.RemoveCurrent();
-
-  FCrowdWorkerDependencyDeclaration Declaration;
-  Declaration.Source.Kind = ECrowdWorkerDependencyKind::Resource;
-  Declaration.Source.ScopeKey =
-    CrowdWorkerResourceIds::TargetControl;
-  Declaration.Dependent = WorkItems[0];
-  OutOutput.DeclaredDependencies.Add(Declaration);
-  FCrowdWorkerDependencyObservation Observation;
-  Observation.Source = Declaration.Source;
-  Observation.Dependent = Declaration.Dependent.Key;
-  OutOutput.ObservedDependencies.Add(Observation);
-  FCrowdWorkerDependencyDeclaration FlowDeclaration;
-  FlowDeclaration.Source.Kind =
-    ECrowdWorkerDependencyKind::Resource;
-  FlowDeclaration.Source.ScopeKey =
-    CrowdWorkerResourceIds::Environment;
-  FlowDeclaration.Dependent = WorkItems[0];
-  OutOutput.DeclaredDependencies.Add(FlowDeclaration);
-  FCrowdWorkerDependencyObservation FlowObservation;
-  FlowObservation.Source = FlowDeclaration.Source;
-  FlowObservation.Dependent = FlowDeclaration.Dependent.Key;
-  OutOutput.ObservedDependencies.Add(FlowObservation);
-  for (const TPair<int32, FCrowdStableEntityRef>& Pair :
-    EntityRefByAgentId)
+  if (bFullResourceWork)
   {
-    FCrowdWorkerDependencyDeclaration EntityDeclaration;
-    EntityDeclaration.Source.Kind =
-      ECrowdWorkerDependencyKind::Entity;
-    EntityDeclaration.Source.EntityRef = Pair.Value;
-    EntityDeclaration.Source.ScopeKey =
-      CrowdWorkerRuntimeV2DependencyScopeForField(
-        ECrowdWorkerField::Facing);
-    EntityDeclaration.Dependent = WorkItems[0];
-    OutOutput.DeclaredDependencies.Add(EntityDeclaration);
-    FCrowdWorkerDependencyObservation EntityObservation;
-    EntityObservation.Source = EntityDeclaration.Source;
-    EntityObservation.Dependent = EntityDeclaration.Dependent.Key;
-    OutOutput.ObservedDependencies.Add(EntityObservation);
+    for (auto It = Cohorts.CreateIterator(); It; ++It)
+      if (!CurrentCohorts.Contains(It.Key()))
+        It.RemoveCurrent();
   }
   return true;
 }

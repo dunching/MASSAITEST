@@ -199,10 +199,10 @@ finally {
 
 Write-Host "[CrowdDemo] Logs: $LogDir"
 if (Test-Path -LiteralPath $ServerLog) {
-  Select-String -Path $ServerLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoCorrectionFrame" -SimpleMatch | Select-Object -Last 20
+  Select-String -Path $ServerLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoRoundCheckpoint" -SimpleMatch | Select-Object -Last 20
 }
 if (Test-Path -LiteralPath $ClientLog) {
-  Select-String -Path $ClientLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoCorrectionFrame" -SimpleMatch | Select-Object -Last 20
+  Select-String -Path $ClientLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoRoundCheckpoint" -SimpleMatch | Select-Object -Last 20
 }
 
 $HardFailures = @($ServerLog, $ClientLog) |
@@ -217,9 +217,9 @@ if ($HardFailures.Count -gt 0) {
 }
 
 if ($RangedProjectileGolden) {
-  $ExpectedAttackHash = "41852579"
-  $ExpectedProjectileHash = "488896174"
-  $ExpectedEventHash = "4204062592"
+  $ExpectedAttackHash = "439379904"
+  $ExpectedProjectileHash = "1411313634"
+  $ExpectedEventHash = "6141440"
   $ServerProjectile = Select-String -Path $ServerLog `
     -Pattern "CrowdDemoProjectileCheckpoint role=server round_id=1 " |
     Select-Object -Last 1
@@ -433,6 +433,14 @@ if ($FriendlyLogisticsSmall) {
   }
   $HashMatch = $NoClient
   $CargoVisualReady = $NoClient
+  $RequireDirectWorkerApply =
+    $CommonArgs -match '-CrowdWorkerMovementMode=Production\b' -and
+    $CommonArgs -match '-CrowdWorkerBehaviorMode=Production\b'
+  $DirectWorkerApplyReady = !$RequireDirectWorkerApply
+  if ($ServerPass -and $RequireDirectWorkerApply) {
+    $DirectWorkerApplyReady =
+      $ServerPass.Line -match 'direct_worker_apply=1\b'
+  }
   if ((!$NoClient) -and $ServerPass -and $ClientPass -and
     ($ServerPass.Line -match 'state_hash=(\d+)')) {
     $ServerHash = $Matches[1]
@@ -444,9 +452,9 @@ if ($FriendlyLogisticsSmall) {
       $ClientPass.Line -match 'presentation_instances=20'
   }
   if ((!$ServerPass) -or (!$ClientPass) -or (!$HashMatch) -or
-    (!$CargoVisualReady) -or
+    (!$CargoVisualReady) -or (!$DirectWorkerApplyReady) -or
     ($FriendlyViolations.Count -gt 0)) {
-    throw "CrowdDemo FriendlyLogisticsSmall gate failed: server=$([bool]$ServerPass) client=$([bool]$ClientPass) hash=$HashMatch cargo_visual=$CargoVisualReady violations=$($FriendlyViolations.Count)"
+    throw "CrowdDemo FriendlyLogisticsSmall gate failed: server=$([bool]$ServerPass) client=$([bool]$ClientPass) hash=$HashMatch cargo_visual=$CargoVisualReady direct_worker=$DirectWorkerApplyReady violations=$($FriendlyViolations.Count)"
   }
   Write-Host "[CrowdDemo] FriendlyLogisticsSmall gate passed"
 }

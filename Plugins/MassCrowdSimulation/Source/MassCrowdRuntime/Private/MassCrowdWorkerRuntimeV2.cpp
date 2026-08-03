@@ -1654,6 +1654,7 @@ uint64 FCrowdWorkerCheckpoint::CalculateStableHash() const
   V2Fold(Hash, Generation);
   V2Fold(Hash, WorkerEpoch);
   V2Fold(Hash, AbsoluteSimulationTick);
+  V2Fold(Hash, FixedSimulationQuantumSeconds);
   V2Fold(Hash, LastAppliedInputSequence);
   V2Fold(Hash, LastOrderedEventSequence);
   V2Fold(Hash, EntityStateHash);
@@ -1671,6 +1672,8 @@ bool FCrowdWorkerCheckpoint::IsValid() const
   return Generation != 0
     && WorkerEpoch != 0
     && AbsoluteSimulationTick != 0
+    && FMath::IsFinite(FixedSimulationQuantumSeconds)
+    && FixedSimulationQuantumSeconds > 0.0
     && EntityStateHash != 0
     && ResourceRevisionHash != 0
     && StableHash == CalculateStableHash();

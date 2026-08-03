@@ -251,6 +251,6 @@ HitFlashProfileKey
 
 [COMPUTED][HIGH] 8755 T7技术回归为20 agents/20 visible、fixed-step p95=`2.452ms`；旧身份布局8756 T8得到spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`，server/client hash一致为`2730049702/4215166500/4204062592`，fixed-step p95=`2.247ms`。该组Hash属于历史Schema，不作为现行黄金值；本切片没有重录T7/T8人工视频，也不外推移动目标、100/500或entity-native projectile能力。
 
-[COMPUTED][HIGH] 8365的真实StableEntityRef合同曾使用attack/projectile/event=`3512277419/488896174/4204062592`；T9统一攻击状态机后，现行版本化黄金值为`41852579/488896174/4204062592`。`RunCrowdDemo.ps1 -RangedProjectileGolden`会拒绝任一功能计数、双端匹配或第1轮黄金Hash漂移。
+[COMPUTED][HIGH] 8365的真实StableEntityRef合同曾使用attack/projectile/event=`3512277419/488896174/4204062592`；T9统一攻击状态机后的wall-time版本曾为`41852579/488896174/4204062592`。canonical SimulationTick Combat时钟后的现行黄金值为`439379904/1411313634/6141440`。`RunCrowdDemo.ps1 -RangedProjectileGolden`会拒绝任一功能计数、双端匹配或第1轮黄金Hash漂移。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

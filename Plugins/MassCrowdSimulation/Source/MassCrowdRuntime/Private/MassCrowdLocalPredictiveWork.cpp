@@ -37,6 +37,25 @@ FCrowdMassLocalPredictiveWorkOutput FCrowdMassLocalPredictiveWork::Solve(
     Output.Summary,
     Input.bCaptureDiagnostic ? &Output.DiagnosticTrace : nullptr);
 
+  if (!Output.Summary.bValid && !Input.bCaptureDiagnostic)
+  {
+    Output.bFailureTraceReplayAttempted = true;
+    TArray<FCrowdLocalPredictivePair> ReplayConflictPairs;
+    TArray<FCrowdLocalPredictiveGrantState> ReplayGrantStates;
+    TArray<FCrowdLocalPredictiveResult> ReplayResults;
+    FCrowdLocalPredictiveSummary ReplaySummary;
+    FCrowdLocalPredictiveInteractionKernel::Solve(
+      Agents, Input.Environment, Input.Settings, Input.PreviousGrantStates,
+      ReplayConflictPairs, ReplayGrantStates, ReplayResults, ReplaySummary,
+      &Output.DiagnosticTrace);
+    Output.FailureTraceReplayCandidateHash = ReplaySummary.CandidateHash;
+    Output.bFailureTraceReplayMatched =
+      ReplaySummary.CandidateHash == Output.Summary.CandidateHash;
+    Output.bFailureTraceReplayValid = Output.bFailureTraceReplayMatched
+      && !ReplaySummary.bValid
+      && ReplayResults.Num() == Output.Results.Num();
+  }
+
   if (Output.Results.Num() != Agents.Num()) return Output;
   for (int32 Index = 0; Index < Agents.Num(); ++Index)
     if (Output.Results[Index].AgentId != Agents[Index].AgentId)

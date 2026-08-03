@@ -6,6 +6,9 @@
 #include "Mass/CrowdDemoRoundSimProcessors.h"
 #include "Mass/CrowdDemoProjectileAdapters.h"
 #include "MassCrowdRuntimeFragments.h"
+#include "MassCrowdRuntimeSubsystem.h"
+#include "MassCrowdWorkerMovementControlResource.h"
+#include "MassCrowdWorkerShadowSync.h"
 #include "MassCommonFragments.h"
 #include "MassEntityTemplate.h"
 #include "MassEntityTemplateRegistry.h"
@@ -23,6 +26,7 @@
 namespace
 {
   constexpr uint32 CrowdDemoStableProviderId = 1;
+  constexpr int32 MaxWorkerLifecycleProfileJournalRecords = 4096;
   TAutoConsoleVariable<int32> CVarCrowdDemoProjectileCapacity(
     TEXT("crowd.ProjectileMassCapacity"),
     1024,
@@ -69,6 +73,69 @@ namespace
     if (bUsesTargetRegion)
       Capabilities |= ECrowdDemoMassCapability::Target;
     return Capabilities;
+  }
+
+  bool BuildWorkerLifecyclePayloads(
+    const FMassEntityManager& EntityManager,
+    const FMassEntityHandle Entity,
+    FCrowdWorkerPayload& OutInitialState,
+    FCrowdWorkerPayload& OutMovementProfile)
+  {
+    OutInitialState = {};
+    OutMovementProfile = {};
+    if (!EntityManager.IsEntityValid(Entity)) return false;
+    const auto* Identity =
+      EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(Entity);
+    const auto* Behavior =
+      EntityManager.GetFragmentDataPtr<FCrowdMassBehaviorFragment>(Entity);
+    const auto* State = EntityManager.GetFragmentDataPtr<
+      FCrowdMassSimulationStateFragment>(Entity);
+    const auto* Properties = EntityManager.GetFragmentDataPtr<
+      FCrowdMassPropertiesFragment>(Entity);
+    const auto* Transform =
+      EntityManager.GetFragmentDataPtr<FTransformFragment>(Entity);
+    const auto* Velocity =
+      EntityManager.GetFragmentDataPtr<FMassVelocityFragment>(Entity);
+    const auto* DemoMovement = EntityManager.GetFragmentDataPtr<
+      FCrowdDemoMassMovementFragment>(Entity);
+    const auto* Stats = EntityManager.GetFragmentDataPtr<
+      FCrowdDemoMassStatsFragment>(Entity);
+    if (!Identity || !Behavior || !State || !Properties
+      || !Transform || !Velocity || !DemoMovement
+      || !Identity->GetStableEntityRef().IsValid())
+      return false;
+
+    FCrowdMassBoundaryAgentRecord Record;
+    Record.Identity = *Identity;
+    Record.AgentFacts = Behavior->GetAgentFacts(*Identity);
+    Record.State = *State;
+    Record.State.Position = Transform->GetTransform().GetLocation();
+    Record.State.Velocity = Velocity->Value;
+    Record.State.YawDegrees = Transform->GetTransform().Rotator().Yaw;
+    Record.State.bInitialized = true;
+    Record.Properties = *Properties;
+    if (!FCrowdWorkerBoundaryStateCodec::EncodeState(
+        Record, OutInitialState))
+      return false;
+
+    FCrowdWorkerMovementControlEntry Profile;
+    Profile.EntityRef = Identity->GetStableEntityRef();
+    Profile.AgentId = Identity->AgentId;
+    Profile.MaximumSpeedCmps = Properties->MaximumSpeedCmps;
+    Profile.ParticleEnvironmentHardClearanceCm =
+      Properties->HardSafetyGapCm;
+    Profile.ParticlePhysicalRadiusCm =
+      Properties->PhysicalRadiusCm;
+    Profile.ParticleHardSafetyGapCm =
+      Properties->HardSafetyGapCm;
+    Profile.ParticleSoftMarginCm = Properties->SoftMarginCm;
+    Profile.ParticleMobility = Properties->Mobility;
+    Profile.AutonomousPreferredVelocity =
+      DemoMovement->DesiredVelocity;
+    Profile.bParticleActive = !Stats
+      || (Stats->bAlive && Stats->Health > 0.0f);
+    return FCrowdWorkerMovementProfileCodec::Encode(
+      Profile, OutMovementProfile);
   }
 
   void AddCrowdDemoTemplateFragments(FMassEntityTemplateData& TemplateData, const FMassEntityTemplateID TemplateID)
@@ -320,6 +387,11 @@ void UCrowdDemoMassSubsystem::Deinitialize()
   UnregisterRoundSimProcessors();
   TargetActor.Reset();
   TrackedAgents.Reset();
+  StableEntityHandles.Reset();
+  PendingWorkerSpawns.Reset();
+  PendingWorkerDespawns.Reset();
+  PendingWorkerProfileRevisions.Reset();
+  bWorkerLifecycleProfileJournalOverflowed = false;
   ProjectileStore.ResetTracking();
   Super::Deinitialize();
 }
@@ -482,6 +554,13 @@ FCrowdDemoMassSpawnResult UCrowdDemoMassSubsystem::SpawnAgents(const int32 Agent
     for (int32 Index = 0; Index < TrackedAgents.Num(); ++Index)
     {
       InitializeAgentFragments(EntityManager, TrackedAgents[Index], Index, Result.RequestedAgents);
+      const FCrowdMassAgentFragment& Identity =
+        EntityManager.GetFragmentDataChecked<FCrowdMassAgentFragment>(
+          TrackedAgents[Index]);
+      checkf(!StableEntityHandles.Contains(Identity.GetStableEntityRef()),
+        TEXT("Duplicate stable entity registered while spawning Mass agents"));
+      StableEntityHandles.Add(
+        Identity.GetStableEntityRef(), TrackedAgents[Index]);
     }
   }
   const int32 MaxProjectilePoolCapacity = FMath::Clamp(
@@ -757,26 +836,16 @@ bool UCrowdDemoMassSubsystem::ApplyProductBoundaryCommit(
 
   FMassEntityManager& EntityManager =
     EntitySubsystem->GetMutableEntityManager();
-  TMap<FCrowdStableEntityRef, FMassEntityHandle> Resolved;
-  for (const FMassEntityHandle Entity : TrackedAgents)
-  {
-    if (!EntityManager.IsEntityValid(Entity))
-      return false;
-    const auto* Identity =
-      EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(Entity);
-    if (!Identity || Resolved.Contains(Identity->GetStableEntityRef()))
-      return false;
-    Resolved.Add(Identity->GetStableEntityRef(), Entity);
-  }
-  if (Resolved.Num() != Targets.Num())
+  if (StableEntityHandles.Num() != Targets.Num())
     return false;
   for (const FCrowdMassCommitTarget& Target : Targets)
   {
-    const FMassEntityHandle* Entity = Resolved.Find(Target.EntityRef);
-    if (!Entity)
+    FMassEntityHandle Entity;
+    if (!ResolveTrackedAgentHandle(
+        Target.EntityRef, EntityManager, Entity))
       return false;
     const auto* Identity =
-      EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(*Entity);
+      EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(Entity);
     if (!Identity || Identity->AgentId != Target.AgentId
       || Identity->LifecycleSerial != Target.LifecycleSerial)
       return false;
@@ -784,8 +853,9 @@ bool UCrowdDemoMassSubsystem::ApplyProductBoundaryCommit(
 
   for (const FCrowdMassCommitRecord& Record : Plan.Records)
   {
-    const FMassEntityHandle Entity =
-      Resolved.FindChecked(Record.EntityRef);
+    FMassEntityHandle Entity;
+    check(ResolveTrackedAgentHandle(
+      Record.EntityRef, EntityManager, Entity));
     const FCrowdMassCommitTarget* Target = Targets.FindByPredicate(
       [&Record](const FCrowdMassCommitTarget& Value)
       {
@@ -827,6 +897,23 @@ bool UCrowdDemoMassSubsystem::ApplyProductBoundaryCommit(
   return true;
 }
 
+bool UCrowdDemoMassSubsystem::ResolveTrackedAgentHandle(
+  const FCrowdStableEntityRef& EntityRef,
+  FMassEntityManager& EntityManager,
+  FMassEntityHandle& OutEntity) const
+{
+  OutEntity = {};
+  const FMassEntityHandle* Found = StableEntityHandles.Find(EntityRef);
+  if (!Found || !EntityManager.IsEntityValid(*Found))
+    return false;
+  const FCrowdMassAgentFragment* Identity =
+    EntityManager.GetFragmentDataPtr<FCrowdMassAgentFragment>(*Found);
+  if (!Identity || Identity->GetStableEntityRef() != EntityRef)
+    return false;
+  OutEntity = *Found;
+  return true;
+}
+
 bool UCrowdDemoMassSubsystem::RecycleTrackedAgent(
   const FCrowdStableEntityRef& EntityRef,
   FCrowdStableEntityRef& OutReplacementRef)
@@ -864,7 +951,6 @@ bool UCrowdDemoMassSubsystem::RecycleTrackedAgent(
   if (TrackedIndex == INDEX_NONE || !Template)
     return false;
 
-  EntityManager.DestroyEntity(TrackedAgents[TrackedIndex]);
   TArray<FMassEntityHandle> Replacement;
   SpawnerSubsystem->SpawnEntities(*Template, 1, Replacement);
   if (Replacement.Num() != 1
@@ -892,8 +978,88 @@ bool UCrowdDemoMassSubsystem::RecycleTrackedAgent(
   Facts.DerivedBehaviorLabel =
     static_cast<uint32>(ECrowdActiveBehavior::Idle);
   Behavior.SetAgentFacts(Facts);
+
+  FCrowdWorkerSpawnDelta WorkerSpawn;
+  FCrowdWorkerDespawnDelta WorkerDespawn;
+  FCrowdWorkerExternalGameplayInput WorkerProfile;
+  bool bPublishWorkerLifecycle = false;
+  if (const UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    World->GetSubsystem<UMassCrowdRuntimeSubsystem>())
+  {
+    bPublishWorkerLifecycle =
+      RuntimeSubsystem->GetWorkerShadowSync().IsStarted();
+  }
+  if (bPublishWorkerLifecycle)
+  {
+    const int32 PendingRecordCount = PendingWorkerSpawns.Num()
+      + PendingWorkerDespawns.Num()
+      + PendingWorkerProfileRevisions.Num();
+    if (PendingRecordCount
+        > MaxWorkerLifecycleProfileJournalRecords - 3
+      || !BuildWorkerLifecyclePayloads(
+        EntityManager, Replacement[0],
+        WorkerSpawn.InitialState, WorkerProfile.FullState))
+    {
+      bWorkerLifecycleProfileJournalOverflowed = true;
+      EntityManager.DestroyEntity(Replacement[0]);
+      return false;
+    }
+    WorkerDespawn.EntityRef = EntityRef;
+    WorkerDespawn.ReasonId = 1;
+    WorkerSpawn.EntityRef = RuntimeIdentity.GetStableEntityRef();
+    WorkerProfile.EntityRef = WorkerSpawn.EntityRef;
+    WorkerProfile.InputTypeId = static_cast<uint16>(
+      ECrowdWorkerExternalGameplayInputType::
+        MovementProfileRevision);
+    WorkerProfile.DirtyMask = 1;
+  }
+
+  EntityManager.DestroyEntity(TrackedAgents[TrackedIndex]);
+  StableEntityHandles.Remove(EntityRef);
   TrackedAgents[TrackedIndex] = Replacement[0];
   OutReplacementRef = RuntimeIdentity.GetStableEntityRef();
+  checkf(!StableEntityHandles.Contains(OutReplacementRef),
+    TEXT("Duplicate stable entity registered while recycling Mass agent"));
+  StableEntityHandles.Add(OutReplacementRef, Replacement[0]);
+  if (bPublishWorkerLifecycle)
+  {
+    PendingWorkerDespawns.Add(MoveTemp(WorkerDespawn));
+    PendingWorkerSpawns.Add(MoveTemp(WorkerSpawn));
+    PendingWorkerProfileRevisions.Add(MoveTemp(WorkerProfile));
+  }
+  return true;
+}
+
+bool UCrowdDemoMassSubsystem::CopyPendingWorkerLifecycleProfileJournal(
+  TArray<FCrowdWorkerSpawnDelta>& OutSpawns,
+  TArray<FCrowdWorkerDespawnDelta>& OutDespawns,
+  TArray<FCrowdWorkerExternalGameplayInput>& OutProfileRevisions) const
+{
+  check(IsInGameThread());
+  OutSpawns = PendingWorkerSpawns;
+  OutDespawns = PendingWorkerDespawns;
+  OutProfileRevisions = PendingWorkerProfileRevisions;
+  return !bWorkerLifecycleProfileJournalOverflowed;
+}
+
+bool UCrowdDemoMassSubsystem::AcknowledgeWorkerLifecycleProfileJournal(
+  const int32 SpawnCount,
+  const int32 DespawnCount,
+  const int32 ProfileRevisionCount)
+{
+  check(IsInGameThread());
+  if (SpawnCount < 0 || SpawnCount > PendingWorkerSpawns.Num()
+    || DespawnCount < 0
+    || DespawnCount > PendingWorkerDespawns.Num()
+    || ProfileRevisionCount < 0
+    || ProfileRevisionCount > PendingWorkerProfileRevisions.Num())
+    return false;
+  PendingWorkerSpawns.RemoveAt(
+    0, SpawnCount, EAllowShrinking::No);
+  PendingWorkerDespawns.RemoveAt(
+    0, DespawnCount, EAllowShrinking::No);
+  PendingWorkerProfileRevisions.RemoveAt(
+    0, ProfileRevisionCount, EAllowShrinking::No);
   return true;
 }
 
@@ -904,6 +1070,11 @@ void UCrowdDemoMassSubsystem::DestroyTrackedAgents()
   if (!EntitySubsystem)
   {
     TrackedAgents.Reset();
+    StableEntityHandles.Reset();
+    PendingWorkerSpawns.Reset();
+    PendingWorkerDespawns.Reset();
+    PendingWorkerProfileRevisions.Reset();
+    bWorkerLifecycleProfileJournalOverflowed = false;
     ProjectileStore.ResetTracking();
     return;
   }
@@ -917,6 +1088,11 @@ void UCrowdDemoMassSubsystem::DestroyTrackedAgents()
     }
   }
   TrackedAgents.Reset();
+  StableEntityHandles.Reset();
+  PendingWorkerSpawns.Reset();
+  PendingWorkerDespawns.Reset();
+  PendingWorkerProfileRevisions.Reset();
+  bWorkerLifecycleProfileJournalOverflowed = false;
   ProjectileStore.DestroyAll(EntityManager);
 }
 

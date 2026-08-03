@@ -38,7 +38,8 @@ bool FCrowdWorkerCombatStateCodec::Encode(
   FCrowdWorkerCombatState Copy = State;
   Writer << Copy.SourceFixedStep;
   uint8 Flags = (Copy.bAlive ? 1 : 0)
-    | (Copy.bReactiveActive ? 2 : 0);
+    | (Copy.bReactiveActive ? 2 : 0)
+    | (Copy.bMovementLocked ? 4 : 0);
   Writer << Flags;
   Writer << Copy.HorizontalReactiveVelocity;
   Writer << Copy.ProposedZ;
@@ -77,6 +78,7 @@ bool FCrowdWorkerCombatStateCodec::Decode(
   SerializePayload(Reader, OutState.HostState);
   OutState.bAlive = (Flags & 1) != 0;
   OutState.bReactiveActive = (Flags & 2) != 0;
+  OutState.bMovementLocked = (Flags & 4) != 0;
   return !Reader.IsError() && Reader.AtEnd()
-    && (Flags & ~3u) == 0 && OutState.IsValid();
+    && (Flags & ~7u) == 0 && OutState.IsValid();
 }

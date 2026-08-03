@@ -132,6 +132,57 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
     11, 3, BoundaryRecords, BoundaryReverse);
   TestEqual(TEXT("boundary snapshot order independent"),
     BoundaryReverse.StableHash, BoundaryForward.StableHash);
+  FCrowdMassBoundarySnapshot EpochBoundary = BoundaryForward;
+  const FCrowdMassBoundaryAgentRecord* const EpochData =
+    EpochBoundary.Agents.GetData();
+  TestTrue(TEXT("epoch token advances a validated snapshot without scanning records"),
+    FCrowdMassRuntimeBridge::AdvanceBoundarySnapshotEpochToken(
+      EpochBoundary, BoundaryForward.StableHash, 12, 3, 99));
+  TestTrue(TEXT("epoch token preserves record allocation"),
+    EpochBoundary.Agents.GetData() == EpochData);
+  TestEqual(TEXT("epoch token advances fixed step"),
+    EpochBoundary.FixedStepIndex, 12);
+  TestNotEqual(TEXT("epoch token differs from full state hash"),
+    EpochBoundary.StableHash, BoundaryForward.StableHash);
+  FCrowdMassBoundarySnapshot SameEpochBoundary = BoundaryForward;
+  TestTrue(TEXT("same epoch token inputs are accepted"),
+    FCrowdMassRuntimeBridge::AdvanceBoundarySnapshotEpochToken(
+      SameEpochBoundary, BoundaryForward.StableHash, 12, 3, 99));
+  TestEqual(TEXT("epoch token is deterministic"),
+    SameEpochBoundary.StableHash, EpochBoundary.StableHash);
+  FCrowdMassBoundarySnapshot NextEpochBoundary = BoundaryForward;
+  TestTrue(TEXT("next input waterline epoch is accepted"),
+    FCrowdMassRuntimeBridge::AdvanceBoundarySnapshotEpochToken(
+      NextEpochBoundary, BoundaryForward.StableHash, 12, 3, 100));
+  TestNotEqual(TEXT("input waterline participates in epoch token"),
+    NextEpochBoundary.StableHash, EpochBoundary.StableHash);
+  TestFalse(TEXT("epoch token rejects a missing trusted baseline"),
+    FCrowdMassRuntimeBridge::AdvanceBoundarySnapshotEpochToken(
+      NextEpochBoundary, 0, 13, 3, 101));
+  TestFalse(TEXT("epoch token rejects a missing input waterline"),
+    FCrowdMassRuntimeBridge::AdvanceBoundarySnapshotEpochToken(
+      NextEpochBoundary, BoundaryForward.StableHash, 13, 3, 0));
+  FCrowdMassBoundarySnapshot InPlaceBoundary = BoundaryForward;
+  const FCrowdMassBoundaryAgentRecord* const InPlaceData =
+    InPlaceBoundary.Agents.GetData();
+  InPlaceBoundary.FixedStepIndex = 12;
+  InPlaceBoundary.Agents[0].State.Position.X += 25.0;
+  InPlaceBoundary.Agents[0].State.PlanRevision = 3;
+  TestTrue(TEXT("in-place boundary refresh accepts sorted hot-state update"),
+    FCrowdMassRuntimeBridge::RefreshBoundarySnapshot(InPlaceBoundary));
+  TestTrue(TEXT("in-place boundary refresh preserves record allocation"),
+    InPlaceBoundary.Agents.GetData() == InPlaceData);
+  TestNotEqual(TEXT("in-place boundary refresh updates stable hash"),
+    InPlaceBoundary.StableHash, BoundaryForward.StableHash);
+  FCrowdMassBoundarySnapshot RebuiltInPlaceBoundary;
+  FCrowdMassRuntimeBridge::BuildBoundarySnapshot(
+    InPlaceBoundary.FixedStepIndex, InPlaceBoundary.PlanRevision,
+    InPlaceBoundary.Agents, RebuiltInPlaceBoundary);
+  TestEqual(TEXT("in-place refresh hash matches rebuilding the same state"),
+    InPlaceBoundary.StableHash, RebuiltInPlaceBoundary.StableHash);
+  Algo::Reverse(InPlaceBoundary.Agents);
+  TestFalse(TEXT("in-place boundary refresh rejects unsorted membership"),
+    FCrowdMassRuntimeBridge::RefreshBoundarySnapshot(InPlaceBoundary));
   TArray<FCrowdGuidanceCandidate> FlowCandidates;
   TArray<FCrowdGuidanceCandidate> TargetCandidates;
   TArray<FCrowdGuidanceCandidate> BusinessCandidates;
@@ -419,6 +470,31 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
     FCrowdMassLocalPredictiveWork::Solve(LocalInput);
   TestEqual(TEXT("Runtime local predictive WORK input order stable"),
     LocalReverse.StableHash, LocalForward.StableHash);
+
+  FCrowdMassLocalPredictiveWorkInput InvalidLocalInput;
+  InvalidLocalInput.FixedStepIndex = 13;
+  InvalidLocalInput.PlanRevision = 3;
+  InvalidLocalInput.Environment =
+    FCrowdSharedFlowFieldKernel::MakeSf1Config(1);
+  InvalidLocalInput.Environment.BoundsMin = FVector(-10.0f, -10.0f, 0.0f);
+  InvalidLocalInput.Environment.BoundsMax = FVector(10.0f, 10.0f, 0.0f);
+  FCrowdLocalPredictiveAgent ConfinedAgent = LocalA;
+  ConfinedAgent.Position = FVector2f::ZeroVector;
+  InvalidLocalInput.Agents = {ConfinedAgent};
+  const FCrowdMassLocalPredictiveWorkOutput InvalidLocal =
+    FCrowdMassLocalPredictiveWork::Solve(InvalidLocalInput);
+  TestTrue(TEXT("Runtime invalid local predictive WORK still completes"),
+    InvalidLocal.bCompleted && !InvalidLocal.Summary.bValid);
+  TestTrue(TEXT("Runtime invalid local predictive WORK captures exact trace"),
+    InvalidLocal.bFailureTraceReplayAttempted
+      && InvalidLocal.bFailureTraceReplayMatched
+      && InvalidLocal.bFailureTraceReplayValid);
+  TestEqual(TEXT("Runtime invalid local predictive replay preserves hash"),
+    InvalidLocal.FailureTraceReplayCandidateHash,
+    InvalidLocal.Summary.CandidateHash);
+  TestTrue(TEXT("Runtime invalid local predictive replay captures results"),
+    !InvalidLocal.DiagnosticTrace.InitialIndependentResults.IsEmpty());
+
   const FCrowdLocalPredictiveAgent DuplicateLocalAgent = LocalInput.Agents[0];
   LocalInput.Agents.Add(DuplicateLocalAgent);
   TestFalse(TEXT("Runtime local predictive WORK rejects duplicate agent"),
@@ -513,6 +589,24 @@ bool FMassCrowdRuntimeGatherMergeCommitTest::RunTest(
     FCrowdMassParticleWork::Solve(ParticleInput);
   TestEqual(TEXT("Runtime particle WORK input order stable"),
     ParticleReverse.StableHash, ParticleForward.StableHash);
+  FCrowdMassParticleWorkInput ParticleFailureInput = ParticleInput;
+  ParticleFailureInput.Settings.IterationCount = 1;
+  ParticleFailureInput.Settings.SafetyIterationCount = 1;
+  ParticleFailureInput.Settings.SoftResponsePerSecond = 0.0f;
+  ParticleFailureInput.Settings.HardMaxPairCorrectionPerIterationCm = 0.0f;
+  ParticleFailureInput.Agents[0].PredictedPosition = FVector::ZeroVector;
+  ParticleFailureInput.Agents[1].PredictedPosition = FVector::ZeroVector;
+  const FCrowdMassParticleWorkOutput ParticleFailure =
+    FCrowdMassParticleWork::Solve(ParticleFailureInput);
+  TestTrue(TEXT("Runtime particle constrained WORK completes"),
+    ParticleFailure.bCompleted);
+  TestTrue(TEXT("Runtime particle final exact closure is authoritative"),
+    ParticleFailure.Summary.bValid
+      && ParticleFailure.AppliedSummary.bValid
+      && ParticleFailure.Summary.HardPairViolationCount == 0
+      && ParticleFailure.Summary.SweptPairViolationCount == 0);
+  TestFalse(TEXT("Runtime particle safe closure does not capture failure trace"),
+    ParticleFailure.bFailureTraceReplayAttempted);
   const FCrowdParticleConstraintAgent DuplicateParticleAgent =
     ParticleInput.Agents[0];
   ParticleInput.Agents.Add(DuplicateParticleAgent);

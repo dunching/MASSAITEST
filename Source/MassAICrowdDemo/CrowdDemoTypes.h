@@ -55,13 +55,6 @@ enum class ECrowdDemoVisualState : uint8
 };
 
 UENUM()
-enum class ECrowdDemoRoundFrameKind : uint8
-{
-  Correction = 0,
-  RoundResultCheckpoint = 1
-};
-
-UENUM()
 enum class ECrowdDemoLifecycleState : uint8
 {
   Spawning = 0,
@@ -257,7 +250,7 @@ struct FCrowdDemoCrowdAggregateState
 };
 
 USTRUCT(BlueprintType)
-struct FCrowdDemoCorrectionFrame
+struct FCrowdDemoRoundCheckpointFrame
 {
   GENERATED_BODY()
 
@@ -265,10 +258,7 @@ struct FCrowdDemoCorrectionFrame
   uint8 bValid = 0;
 
   UPROPERTY()
-  ECrowdDemoRoundFrameKind FrameKind = ECrowdDemoRoundFrameKind::Correction;
-
-  UPROPERTY()
-  int32 CorrectionRevision = 0;
+  int32 StateFrameRevision = 0;
 
   UPROPERTY()
   int32 RoundId = 0;
@@ -277,7 +267,7 @@ struct FCrowdDemoCorrectionFrame
   int32 RoundRevision = 0;
 
   UPROPERTY()
-  int32 SourceCheckpointRevision = 0;
+  int32 CheckpointRevision = 0;
 
   UPROPERTY()
   float ServerTimeSeconds = 0.0f;
@@ -293,7 +283,7 @@ struct FCrowdDemoCorrectionFrame
 };
 
 USTRUCT(BlueprintType)
-struct FCrowdDemoCorrectionFrameHeader
+struct FCrowdDemoRoundCheckpointHeader
 {
   GENERATED_BODY()
 
@@ -301,10 +291,7 @@ struct FCrowdDemoCorrectionFrameHeader
   uint8 bValid = 0;
 
   UPROPERTY()
-  ECrowdDemoRoundFrameKind FrameKind = ECrowdDemoRoundFrameKind::Correction;
-
-  UPROPERTY()
-  int32 CorrectionRevision = 0;
+  int32 StateFrameRevision = 0;
 
   UPROPERTY()
   int32 RoundId = 0;
@@ -313,7 +300,7 @@ struct FCrowdDemoCorrectionFrameHeader
   int32 RoundRevision = 0;
 
   UPROPERTY()
-  int32 SourceCheckpointRevision = 0;
+  int32 CheckpointRevision = 0;
 
   UPROPERTY()
   float ServerTimeSeconds = 0.0f;
@@ -332,7 +319,7 @@ struct FCrowdDemoCorrectionFrameHeader
 };
 
 USTRUCT()
-struct FCrowdDemoCorrectionFrameChunk
+struct FCrowdDemoRoundCheckpointChunk
 {
   GENERATED_BODY()
 
@@ -343,7 +330,7 @@ struct FCrowdDemoCorrectionFrameChunk
   int32 StableKey = 0;
 
   UPROPERTY()
-  int32 CorrectionRevision = 0;
+  int32 StateFrameRevision = 0;
 
   UPROPERTY()
   int32 RoundId = 0;
@@ -361,15 +348,15 @@ struct FCrowdDemoCorrectionFrameChunk
   int32 AgentCountInChunk = 0;
 
   UPROPERTY()
-  FCrowdDemoCorrectionFrameHeader Header;
+  FCrowdDemoRoundCheckpointHeader Header;
 
   UPROPERTY()
   TArray<FCrowdDemoRoundAgentState> Agents;
 };
 
-struct FCrowdDemoPendingCorrectionAssembly
+struct FCrowdDemoPendingRoundCheckpointAssembly
 {
-  FCrowdDemoCorrectionFrameHeader Header;
+  FCrowdDemoRoundCheckpointHeader Header;
   TArray<uint8> ReceivedChunks;
   TArray<FCrowdDemoRoundAgentState> AgentBuffer;
   int32 ReceivedChunkCount = 0;
@@ -379,7 +366,7 @@ struct FCrowdDemoPendingCorrectionAssembly
 };
 
 USTRUCT(BlueprintType)
-struct FCrowdDemoCorrectionFrameMetrics
+struct FCrowdDemoRoundCheckpointFrameMetrics
 {
   GENERATED_BODY()
 
@@ -390,7 +377,7 @@ struct FCrowdDemoCorrectionFrameMetrics
   int32 CorrectionFrameAppliedCount = 0;
 
   UPROPERTY()
-  int32 CorrectionFrameHeaderReceivedCount = 0;
+  int32 RoundCheckpointHeaderReceivedCount = 0;
 
   UPROPERTY()
   int32 CorrectionFrameChunkReceivedCount = 0;
@@ -1524,8 +1511,6 @@ struct FCrowdDemoRoundCompareMetrics
 
   UPROPERTY()
   FCrowdDemoSharedFlowMetrics SharedFlowMetrics;
-  FCrowdDemoParticleMetrics ParticleMetrics;
-  int32 ServerClientParticleHashMatch = 0;
 
   UPROPERTY()
   int32 CorridorDeadlockAgentCount = 0;

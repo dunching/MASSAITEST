@@ -529,6 +529,67 @@ bool FCrowdDemoProjectileDuplicateRequestTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoProjectileImpactIdTickOrderingTest,
+  "CrowdDemo.Combat.T8.ImpactIdTickOrdering",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoProjectileImpactIdTickOrderingTest::RunTest(
+  const FString& Parameters)
+{
+  const FCrowdDemoRangedCombatSettings Settings =
+    MakeProjectileSettings();
+  const TArray<FCrowdDemoRangedCombatAgent> Agents = {
+    MakeRangedAgent(1, 0, FVector::ZeroVector),
+    MakeRangedAgent(2, 1, FVector(150.0f, 0.0f, 0.0f))};
+  TArray<FCrowdProjectileState> Projectiles;
+  TArray<FCrowdDemoProjectileVisualEvent> Events;
+  FCrowdDemoProjectileStepSummary Summary;
+
+  const FCrowdProjectileSpawnRequest EarlierRequest =
+    MakeSpawnRequest(
+      MAX_uint64 - 1, 10, FVector::ZeroVector,
+      FVector(6000.0f, 0.0f, 0.0f));
+  FCrowdProjectilePublicApiFixture::SpawnProjectiles(
+    10, 1.0f, Settings, MakeArrayView(&EarlierRequest, 1),
+    Projectiles, Events, Summary);
+  TArray<FCrowdImpactFact> EarlierImpacts;
+  FCrowdProjectilePublicApiFixture::AdvanceProjectiles(
+    10, 1.0f, 1.0f / 30.0f, Settings, Agents,
+    Projectiles, EarlierImpacts, Events, Summary);
+
+  const FCrowdProjectileSpawnRequest LaterRequest =
+    MakeSpawnRequest(
+      1, 11, FVector::ZeroVector,
+      FVector(6000.0f, 0.0f, 0.0f));
+  FCrowdProjectilePublicApiFixture::SpawnProjectiles(
+    11, 1.0f + 1.0f / 30.0f, Settings,
+    MakeArrayView(&LaterRequest, 1),
+    Projectiles, Events, Summary);
+  TArray<FCrowdImpactFact> LaterImpacts;
+  FCrowdProjectilePublicApiFixture::AdvanceProjectiles(
+    11, 1.0f + 1.0f / 30.0f, 1.0f / 30.0f,
+    Settings, Agents, Projectiles, LaterImpacts,
+    Events, Summary);
+
+  if (!TestEqual(TEXT("earlier tick emits one impact"),
+      EarlierImpacts.Num(), 1)
+    || !TestEqual(TEXT("later tick emits one impact"),
+      LaterImpacts.Num(), 1))
+    return false;
+  TestTrue(TEXT("impact ids are nonzero"),
+    EarlierImpacts[0].ImpactId != 0
+      && LaterImpacts[0].ImpactId != 0);
+  TestTrue(TEXT("later tick dominates projectile id ordering"),
+    EarlierImpacts[0].ImpactId
+      < LaterImpacts[0].ImpactId);
+  TestEqual(TEXT("earlier impact carries its tick"),
+    EarlierImpacts[0].FixedStepIndex, 10ll);
+  TestEqual(TEXT("later impact carries its tick"),
+    LaterImpacts[0].FixedStepIndex, 11ll);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoProjectileTenLaneRoundTest,
   "CrowdDemo.Combat.T8.TenLaneRound",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

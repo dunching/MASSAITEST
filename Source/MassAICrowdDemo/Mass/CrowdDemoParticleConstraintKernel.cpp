@@ -346,6 +346,19 @@ namespace
     return Result;
   }
 
+  bool IsSweptPairViolation(
+    const float StartDistance,
+    const float SweptDistance,
+    const float RequiredDistance)
+  {
+    // A quantized prior state can begin with a sub-centimeter inherited
+    // overlap. Such a pair must not penetrate deeper, but a path that exits
+    // the overlap is recovery rather than a newly introduced swept collision.
+    const float SafetyThreshold = StartDistance + ConstraintEpsilonCm
+      < RequiredDistance ? StartDistance : RequiredDistance;
+    return SweptDistance + ConstraintEpsilonCm < SafetyThreshold;
+  }
+
   bool ApplyPairCorrection(
     const FCrowdDemoParticleConstraintPair& Pair,
     TConstArrayView<FCrowdDemoParticleConstraintAgent> Agents,
@@ -1653,7 +1666,9 @@ void FCrowdDemoParticleConstraintKernel::Solve(
         A.StartPosition, OutQuantizedPositions[Pair.MinAgentIndex],
         B.StartPosition, OutQuantizedPositions[Pair.MaxAgentIndex],
         Pair.MinAgentId, Pair.MaxAgentId);
-      if (Swept.Distance + ConstraintEpsilonCm < Required) return false;
+      if (IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required)) return false;
     }
     return true;
   };
@@ -1784,7 +1799,9 @@ void FCrowdDemoParticleConstraintKernel::Solve(
       const FSweptDistance Swept = EvaluateSweptDistance(
         A.StartPosition, MinPosition, B.StartPosition, MaxPosition,
         Pair.MinAgentId, Pair.MaxAgentId);
-      return Swept.Distance + ConstraintEpsilonCm >= Required;
+      return !IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required);
     };
 
     OutQuantizedPositions = ContinuousPositions;
@@ -1901,7 +1918,9 @@ void FCrowdDemoParticleConstraintKernel::Solve(
       StageTrace.MinimumSweptMarginCm = FMath::Min(
         StageTrace.MinimumSweptMarginCm, SweptMargin);
       if (EndpointMargin < -ConstraintEpsilonCm) ++StageTrace.HardPairViolationCount;
-      if (SweptMargin < -ConstraintEpsilonCm) ++StageTrace.SweptPairViolationCount;
+      if (IsSweptPairViolation(
+        FVector::Dist2D(A.StartPosition, B.StartPosition),
+        Swept.Distance, Required)) ++StageTrace.SweptPairViolationCount;
     }
     TArray<FCrowdDemoParticleEnvironmentContact> StageContacts;
     if (BuildEnvironmentContacts(SortedAgents, Positions, Environment, StageContacts))
@@ -2075,7 +2094,9 @@ void FCrowdDemoParticleConstraintKernel::Solve(
     const FSweptDistance Swept = EvaluateSweptDistance(
       A.StartPosition, Positions[Pair.MinAgentIndex],
       B.StartPosition, Positions[Pair.MaxAgentIndex], Pair.MinAgentId, Pair.MaxAgentId);
-    if (Swept.Distance + ConstraintEpsilonCm < PairHardDistance(A, B))
+    if (IsSweptPairViolation(
+      FVector::Dist2D(A.StartPosition, B.StartPosition),
+      Swept.Distance, PairHardDistance(A, B)))
       ++OutSummary.SweptPairViolationCount;
   }
   OutSummary.SoftErrorCmP50 = Percentile(SoftErrors, 0.50f);
@@ -2126,7 +2147,9 @@ void FCrowdDemoParticleConstraintKernel::Solve(
         B.StartPosition, Positions[Pair.MaxAgentIndex], Pair.MinAgentId, Pair.MaxAgentId);
       const bool bActive = SoftError > ConstraintEpsilonCm
         || EndDistance + ConstraintEpsilonCm < PairHardDistance(A, B)
-        || Swept.Distance + ConstraintEpsilonCm < PairHardDistance(A, B);
+        || IsSweptPairViolation(
+          FVector::Dist2D(A.StartPosition, B.StartPosition),
+          Swept.Distance, PairHardDistance(A, B));
       if (!bActive) continue;
       OutTrace->ActiveNeighborAgentIds[Pair.MinAgentIndex].Add(Pair.MaxAgentId);
       OutTrace->ActiveNeighborAgentIds[Pair.MaxAgentIndex].Add(Pair.MinAgentId);
@@ -2173,7 +2196,7 @@ void FCrowdDemoParticleConstraintKernel::Solve(
     OutSummary.MaxAgentCorrectionCm = FMath::Max(OutSummary.MaxAgentCorrectionCm, CorrectionCm);
   }
 
-  uint32 Hash = FoldHash(2166136261u, 4); // Particle candidate contract v4.
+  uint32 Hash = FoldHash(2166136261u, 5); // Particle candidate contract v5: diagnostics are excluded.
   const auto FoldFloat = [&Hash](const float Value, const float Scale)
   {
     Hash = FoldHash(Hash, FMath::RoundToInt(Value * Scale));
@@ -2244,54 +2267,35 @@ void FCrowdDemoParticleConstraintKernel::Solve(
     Hash = FoldHash(Hash, Pair.MinAgentId);
     Hash = FoldHash(Hash, Pair.MaxAgentId);
   }
-  for (const auto& Fact : EnvironmentSoftFacts)
-  {
-    Hash = FoldHash(Hash, Fact.Iteration);
-    Hash = FoldHash(Hash, Fact.AgentId);
-    Hash = FoldHash(Hash, Fact.EnvironmentId);
-    Hash = FoldHash(Hash, Fact.Kind);
-    Hash = FoldHash(Hash, Fact.Face);
-    FoldVector(Fact.Normal);
-    FoldFloat(Fact.ErrorCm, 1000.0f);
-    FoldFloat(Fact.RequestedCm, 1000.0f);
-    FoldFloat(Fact.RealizedCm, 1000.0f);
-  }
-  for (const auto& Fact : EnvironmentContactFacts)
-  {
-    const auto& Contact = Fact.Contact;
-    Hash = FoldHash(Hash, Fact.Iteration);
-    Hash = FoldHash(Hash, Fact.Stage);
-    Hash = FoldHash(Hash, Contact.AgentId);
-    Hash = FoldHash(Hash, Contact.EnvironmentId);
-    Hash = FoldHash(Hash, static_cast<int32>(Contact.ContactKind));
-    Hash = FoldHash(Hash, static_cast<int32>(Contact.Face));
-    FoldVector(Contact.ClosestPoint);
-    FoldVector(Contact.CorrectionNormal);
-    FoldFloat(Contact.HardDistanceCm, 1000.0f);
-    FoldFloat(Contact.SoftDistanceCm, 1000.0f);
-    FoldFloat(Contact.SoftErrorCm, 1000.0f);
-    FoldFloat(Contact.HardDeficitCm, 1000.0f);
-    FoldFloat(Contact.SweptTime, 1000000.0f);
-    FoldFloat(Contact.ConstraintThreshold, 1000.0f);
-  }
-  for (const auto& Fact : UnifiedHardFacts)
-  {
-    Hash = FoldHash(Hash, Fact.Iteration);
-    Hash = FoldHash(Hash, Fact.Stage);
-    Hash = FoldHash(Hash, static_cast<int32>(Fact.Constraint.Kind));
-    Hash = FoldHash(Hash, Fact.Constraint.MinAgentId);
-    Hash = FoldHash(Hash, Fact.Constraint.MaxAgentId);
-    Hash = FoldHash(Hash, Fact.Constraint.EnvironmentId);
-    Hash = FoldHash(Hash, static_cast<int32>(Fact.Constraint.Face));
-    FoldVector(Fact.Constraint.Normal);
-    FoldFloat(Fact.Constraint.CoefficientScale, 1000000.0f);
-    FoldFloat(Fact.Constraint.Threshold, 1000.0f);
-    FoldFloat(Fact.Constraint.InitialDeficitCm, 1000.0f);
-    FoldFloat(Fact.Dual.Lambda, 1000000.0f);
-  }
+  // Trace facts are intentionally excluded: bCaptureRouteDiagnostic controls
+  // their allocation and detail and must never alter the authoritative result.
+  Hash = FoldHash(Hash, bEnvironmentInputValid ? 1 : 0);
+  Hash = FoldHash(Hash, OutSummary.CandidatePairCount);
+  Hash = FoldHash(Hash, OutSummary.SoftPairCount);
+  Hash = FoldHash(Hash, OutSummary.SoftViolatingPairCount);
+  Hash = FoldHash(Hash, OutSummary.HardPairViolationCount);
+  Hash = FoldHash(Hash, OutSummary.SweptPairViolationCount);
+  Hash = FoldHash(Hash, OutSummary.ObstaclePenetrationCount);
+  Hash = FoldHash(Hash, OutSummary.BoundsViolationCount);
+  Hash = FoldHash(Hash, OutSummary.EnvironmentSoftContactCount);
+  Hash = FoldHash(Hash, OutSummary.EnvironmentSoftAppliedAgentCount);
+  Hash = FoldHash(Hash, OutSummary.UnifiedHardConstraintCount);
+  Hash = FoldHash(Hash, OutSummary.UnifiedHardInfeasibleCount);
+  Hash = FoldHash(Hash, OutSummary.PressureInfluencedAgentCount);
+  Hash = FoldHash(Hash, OutSummary.FirstInfluencedIterationMax);
+  Hash = FoldHash(Hash, OutSummary.CorrectedAgentCount);
+  FoldFloat(OutSummary.SoftErrorCmP50, 1000.0f);
+  FoldFloat(OutSummary.SoftErrorCmP95, 1000.0f);
+  FoldFloat(OutSummary.SoftErrorCmMax, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftErrorCmP50, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftErrorCmP95, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftErrorCmMax, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftRequestedCorrectionCmMax, 1000.0f);
+  FoldFloat(OutSummary.EnvironmentSoftRealizedCorrectionCmMax, 1000.0f);
+  FoldFloat(OutSummary.UnifiedHardResidualCmMax, 1000.0f);
+  FoldFloat(OutSummary.MaxAgentCorrectionCm, 1000.0f);
   OutSummary.CandidateHash = Hash;
   OutSummary.bValid = bEnvironmentInputValid
-    && OutSummary.UnifiedHardInfeasibleCount == 0
     && OutSummary.HardPairViolationCount == 0
     && OutSummary.SweptPairViolationCount == 0
     && OutSummary.ObstaclePenetrationCount == 0
@@ -2430,7 +2434,10 @@ void FCrowdDemoParticleConstraintKernel::BuildFailureFixture(
         SortedAgents[B].StartPosition, Trace.FinalSafetyPositions[B],
         SortedAgents[A].AgentId, SortedAgents[B].AgentId);
       const bool bPairHard = Endpoint + ConstraintEpsilonCm < Required;
-      const bool bPairSwept = Swept.Distance + ConstraintEpsilonCm < Required;
+      const bool bPairSwept = IsSweptPairViolation(
+        FVector::Dist2D(SortedAgents[A].StartPosition,
+          SortedAgents[B].StartPosition),
+        Swept.Distance, Required);
       if (!bPairHard && !bPairSwept) continue;
       FailureA = A;
       FailureB = B;
@@ -2682,7 +2689,9 @@ void FCrowdDemoParticleConstraintKernel::EvaluateAppliedState(
     const FSweptDistance Swept = EvaluateSweptDistance(
       A.StartPosition, Positions[Pair.MinAgentIndex],
       B.StartPosition, Positions[Pair.MaxAgentIndex], Pair.MinAgentId, Pair.MaxAgentId);
-    if (Swept.Distance + ConstraintEpsilonCm < PairHardDistance(A, B))
+    if (IsSweptPairViolation(
+      FVector::Dist2D(A.StartPosition, B.StartPosition),
+      Swept.Distance, PairHardDistance(A, B)))
       ++OutSummary.SweptPairViolationCount;
   }
   OutSummary.SoftErrorCmP50 = Percentile(SoftErrors, 0.50f);

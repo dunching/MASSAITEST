@@ -30,15 +30,12 @@ namespace
   constexpr float CrowdDemoRoundStartLeadSeconds = 0.0f;
   constexpr float CrowdDemoRoundRestartDelaySeconds = 0.0f;
   constexpr float CrowdDemoRoundInitialStartDelaySeconds = 9.0f;
-  constexpr float CrowdDemoCorrectionFrameIntervalSeconds = 0.50f;
-  constexpr float CrowdDemoCorrectionAssemblyTimeoutSeconds = 3.0f;
   constexpr float CrowdDemoRoundResultAssemblyTimeoutSeconds = 5.0f;
-  constexpr float CrowdDemoMaxCorrectionFrameAgeMs = 1000.0f;
-  constexpr int32 CrowdDemoCorrectionFrameChunkSize = 100;
-  constexpr int32 CrowdDemoCorrectionFrameHistoryRevisions = 4;
+  constexpr int32 CrowdDemoRoundCheckpointChunkSize = 100;
+  constexpr int32 CrowdDemoRoundCheckpointHistoryRevisions = 4;
   constexpr uint32 CrowdDemoProductPayloadVersion = 1;
-  constexpr uint32 CrowdDemoCorrectionHeaderMagic = 0x48435231u;
-  constexpr uint32 CrowdDemoCorrectionAgentMagic = 0x41435231u;
+  constexpr uint32 CrowdDemoRoundCheckpointHeaderMagic = 0x48435231u;
+  constexpr uint32 CrowdDemoRoundCheckpointAgentMagic = 0x41435231u;
   constexpr uint32 CrowdDemoProjectileEventMagic = 0x45565031u;
   constexpr uint32 CrowdDemoRoundResultHeaderMagic = 0x48525231u;
 
@@ -128,7 +125,7 @@ namespace
     return true;
   }
 
-  bool EncodeProductCorrectionAgent(
+  bool EncodeProductRoundCheckpointAgent(
     const FCrowdDemoRoundAgentState& Agent,
     TArray<uint8>& OutBytes)
   {
@@ -139,7 +136,7 @@ namespace
       return false;
     OutBytes.Reset();
     FMemoryWriter Writer(OutBytes, true);
-    uint32 Magic = CrowdDemoCorrectionAgentMagic;
+    uint32 Magic = CrowdDemoRoundCheckpointAgentMagic;
     uint32 Version = CrowdDemoProductPayloadVersion;
     Writer << Magic;
     Writer << Version;
@@ -149,7 +146,7 @@ namespace
     return !Writer.IsError() && OutBytes.Num() <= 4096;
   }
 
-  bool DecodeProductCorrectionAgent(
+  bool DecodeProductRoundCheckpointAgent(
     const TConstArrayView<uint8> Bytes,
     FCrowdDemoRoundAgentState& OutAgent)
   {
@@ -164,7 +161,7 @@ namespace
     Reader << Magic;
     Reader << Version;
     if (Reader.IsError()
-      || Magic != CrowdDemoCorrectionAgentMagic
+      || Magic != CrowdDemoRoundCheckpointAgentMagic
       || Version != CrowdDemoProductPayloadVersion)
       return false;
     FCrowdRelevantSnapshotEntityPayload Payload;
@@ -649,7 +646,7 @@ const FCrowdDemoRoundCompareMetrics& ACrowdDemoRoundSimCoordinator::GetLastCompa
   return Pipeline ? Pipeline->GetLastCompareMetrics() : LastCompareMetrics;
 }
 
-const FCrowdDemoCorrectionFrameMetrics& ACrowdDemoRoundSimCoordinator::GetLastCorrectionFrameMetrics() const
+const FCrowdDemoRoundCheckpointFrameMetrics& ACrowdDemoRoundSimCoordinator::GetLastCorrectionFrameMetrics() const
 {
   const UWorld* World = GetWorld();
   const UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World
@@ -695,7 +692,7 @@ void ACrowdDemoRoundSimCoordinator::ConsumeProductRoundResultHeader(
     RoundResultHeader.StateFrameRevision,
     RoundResultHeader.AgentCount,
     RoundResultHeaderReceivedCount);
-  TryProcessClientCorrectionAssemblies();
+  TryProcessClientRoundCheckpoints();
 }
 
 void ACrowdDemoRoundSimCoordinator::MulticastRoundPlan_Implementation(const FCrowdDemoRoundPlanPacket& Plan)
@@ -757,8 +754,6 @@ void ACrowdDemoRoundSimCoordinator::TickServer()
     return;
   }
 
-  PublishServerCorrectionFrame();
-
   if (Pipeline->IsActive() && !bRoundResultPublished)
   {
     const float RoundEndServerTime = CurrentRoundPlan.StartServerTimeSeconds + CurrentRoundPlan.DurationSeconds;
@@ -804,8 +799,8 @@ void ACrowdDemoRoundSimCoordinator::TickClient()
     return;
   }
 
-  DropExpiredCorrectionAssemblies();
-  TryProcessClientCorrectionAssemblies();
+  DropExpiredRoundCheckpoints();
+  TryProcessClientRoundCheckpoints();
   TryValidateProjectileVisualEvents();
 }
 
@@ -1000,6 +995,7 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
   RefreshLastCompareCounters();
   LastRoundCompletedWorldSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
   PublishProductRoundResultHeader(RoundResultHeader);
+  PublishProductRoundCheckpoint(RoundResultPacket);
   ForceNetUpdate();
 
   UE_LOG(
@@ -1497,60 +1493,6 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
   }
 }
 
-void ACrowdDemoRoundSimCoordinator::PublishServerCorrectionFrame()
-{
-  UWorld* World = GetWorld();
-  UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World
-    ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>()
-    : nullptr;
-  FCrowdDemoCorrectionFrame FullFrame;
-  if (!World || !Pipeline || !Pipeline->DequeueOutgoingCorrectionFrame(FullFrame))
-  {
-    return;
-  }
-
-  TArray<FCrowdDemoCorrectionFrameChunk> MetricChunks;
-  FCrowdDemoRoundCheckpointTransport::BuildChunks(
-    FullFrame,
-    CrowdDemoCorrectionFrameChunkSize,
-    CorrectionFrameHeader,
-    MetricChunks);
-  const int32 ChunkSize = CorrectionFrameHeader.ChunkSize;
-  const int32 ChunkCount = CorrectionFrameHeader.ChunkCount;
-
-  const int32 OldestKeptRevision = FullFrame.CorrectionRevision - CrowdDemoCorrectionFrameHistoryRevisions + 1;
-  DroppedCorrectionRevisions.Remove(OldestKeptRevision);
-
-  LastCorrectionFrameWorldSeconds = World->GetTimeSeconds();
-  if (LastCorrectionFramePublishWorldSeconds > -999.0)
-  {
-    CorrectionFramePublishIntervalMsSamples.Add(static_cast<float>((World->GetTimeSeconds() - LastCorrectionFramePublishWorldSeconds) * 1000.0));
-  }
-  LastCorrectionFramePublishWorldSeconds = World->GetTimeSeconds();
-  ++CorrectionFramePublishedCount;
-  LastAppliedCorrectionRevision = FullFrame.CorrectionRevision;
-  LastServerCorrectionChunkCount = ChunkCount;
-  LastServerCorrectionChunkSize = ChunkSize;
-  PublishProductCorrectionFrame(FullFrame);
-  RefreshLastCorrectionCounters();
-
-  UE_LOG(
-    LogTemp,
-    Display,
-    TEXT("CrowdDemoCorrectionFrame role=server revision=%d round_id=%d round_revision=%d publish_count=%d chunks=%d chunk_size=%d agents=%d server_time=%.3f plan_phase=%.3f source_checkpoint_revision=%d publish_interval_ms_p95=%.3f source=RoundSim"),
-    FullFrame.CorrectionRevision,
-    FullFrame.RoundId,
-    FullFrame.RoundRevision,
-    CorrectionFramePublishedCount,
-    ChunkCount,
-    ChunkSize,
-    FullFrame.AgentCount,
-    FullFrame.ServerTimeSeconds,
-    FullFrame.CrowdState.PlanPhase,
-    FullFrame.SourceCheckpointRevision,
-    LastCorrectionFrameMetrics.CorrectionIntervalMsP95);
-}
-
 void ACrowdDemoRoundSimCoordinator::RefreshProductReplicationChannels()
 {
   UWorld* World = GetWorld();
@@ -1611,18 +1553,58 @@ bool ACrowdDemoRoundSimCoordinator::PublishProductReliable(
   return true;
 }
 
-void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
-  const FCrowdDemoCorrectionFrame& Frame)
+void ACrowdDemoRoundSimCoordinator::PublishProductRoundCheckpoint(
+  const FCrowdDemoRoundResultPacket& Result)
 {
+  FCrowdDemoRoundCheckpointFrame Frame;
+  Frame.bValid = 1;
+  Frame.StateFrameRevision = Result.StateFrameRevision;
+  Frame.RoundId = Result.RoundId;
+  Frame.RoundRevision = Result.Revision;
+  Frame.CheckpointRevision = Result.CheckpointRevision;
+  Frame.ServerTimeSeconds = Result.EndServerTimeSeconds;
+  Frame.AgentCount = Result.Agents.Num();
+  Frame.AgentStates = Result.Agents;
+  Frame.CrowdState.AgentCount = Result.Agents.Num();
+  FVector Center = FVector::ZeroVector;
+  FVector Velocity = FVector::ZeroVector;
+  for (const FCrowdDemoRoundAgentState& Agent : Result.Agents)
+  {
+    Center += FVector(Agent.Location);
+    Velocity += FVector(Agent.Velocity);
+  }
+  if (!Result.Agents.IsEmpty())
+  {
+    Center /= Result.Agents.Num();
+    Velocity /= Result.Agents.Num();
+  }
+  Frame.CrowdState.CrowdCenter = FVector_NetQuantize10(Center);
+  Frame.CrowdState.CrowdVelocity = FVector_NetQuantize10(Velocity);
+  Frame.CrowdState.CrowdYawDegrees = Result.Agents.IsEmpty()
+    ? 0.0f : Result.Agents[0].YawDegrees;
+  Frame.CrowdState.PlanPhase = 1.0f;
+  TArray<FCrowdDemoRoundCheckpointChunk> CheckpointChunks;
+  if (!FCrowdDemoRoundCheckpointTransport::BuildChunks(
+      Frame, CrowdDemoRoundCheckpointChunkSize,
+      RoundCheckpointHeader, CheckpointChunks))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=build_checkpoint_chunks state_frame_revision=%d"),
+      Result.StateFrameRevision);
+    return;
+  }
+  LastServerCorrectionChunkCount = RoundCheckpointHeader.ChunkCount;
+  LastServerCorrectionChunkSize = RoundCheckpointHeader.ChunkSize;
+  ++CorrectionFramePublishedCount;
   TArray<uint8> HeaderPayload;
   if (!EncodeProductPayload(
-      CrowdDemoCorrectionHeaderMagic,
-      CorrectionFrameHeader,
+      CrowdDemoRoundCheckpointHeaderMagic,
+      RoundCheckpointHeader,
       HeaderPayload))
   {
     UE_LOG(LogTemp, Error,
       TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_correction_header revision=%d"),
-      Frame.CorrectionRevision);
+      Frame.StateFrameRevision);
     return;
   }
   for (TPair<TWeakObjectPtr<APlayerController>,
@@ -1636,36 +1618,7 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
     {
       UE_LOG(LogTemp, Error,
         TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=missing_sequence revision=%d"),
-        Frame.CorrectionRevision);
-      continue;
-    }
-    TArray<FCrowdMovementCorrectionRecord> Corrections;
-    Corrections.Reserve(Frame.AgentStates.Num());
-    if (!Channel->IsServerAwaitingBaselineAck())
-      for (const FCrowdDemoRoundAgentState& Agent : Frame.AgentStates)
-      {
-        FCrowdMovementCorrectionRecord Correction;
-        Correction.EntityRef = {
-          1,
-          static_cast<uint64>(FMath::Max(0, Agent.AgentId)) + 1ull,
-          static_cast<uint32>(FMath::Max(1, Agent.LifecycleSerial))};
-        Correction.Sequence =
-          static_cast<uint64>(Frame.CorrectionRevision);
-        Correction.FixedStepIndex = Frame.CorrectionRevision;
-        Correction.Position = Agent.Location;
-        Correction.Velocity = Agent.Velocity;
-        Correction.YawDegrees = Agent.YawDegrees;
-        Correction.StableHash =
-          FCrowdReplicationTransport::CalculateMovementCorrectionHash(
-            Correction);
-        Corrections.Add(Correction);
-      }
-    if (!Corrections.IsEmpty()
-      && !Channel->PublishMovementCorrections(Corrections))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_correction_batch revision=%d agents=%d"),
-        Frame.CorrectionRevision, Corrections.Num());
+        Frame.StateFrameRevision);
       continue;
     }
     TArray<FCrowdReliableStateRecord> ReliableRecords;
@@ -1676,9 +1629,9 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
     HeaderRecord.Kind =
       ECrowdReliableStateKind::ResolvedBehaviorState;
     HeaderRecord.EntityRef = {
-      8, static_cast<uint64>(Frame.CorrectionRevision), 1};
+      8, static_cast<uint64>(Frame.StateFrameRevision), 1};
     HeaderRecord.Revision =
-      static_cast<uint32>(Frame.CorrectionRevision);
+      static_cast<uint32>(Frame.StateFrameRevision);
     HeaderRecord.Payload = HeaderPayload;
     HeaderRecord.StableHash =
       FCrowdReplicationTransport::CalculateReliableRecordHash(
@@ -1691,13 +1644,13 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
         1,
         static_cast<uint64>(FMath::Max(0, Agent.AgentId)) + 1ull,
         static_cast<uint32>(FMath::Max(1, Agent.LifecycleSerial))};
-      if (!EncodeProductCorrectionAgent(
+      if (!EncodeProductRoundCheckpointAgent(
           Agent, AgentPayload))
       {
         bEncodeSucceeded = false;
         UE_LOG(LogTemp, Error,
           TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_agent revision=%d agent=%d"),
-          Frame.CorrectionRevision, Agent.AgentId);
+          Frame.StateFrameRevision, Agent.AgentId);
         break;
       }
       FCrowdReliableStateRecord& Record =
@@ -1709,7 +1662,7 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
         ECrowdReliableStateKind::ResolvedBehaviorState;
       Record.EntityRef = EntityRef;
       Record.Revision =
-        static_cast<uint32>(Frame.CorrectionRevision);
+        static_cast<uint32>(Frame.StateFrameRevision);
       Record.Payload = MoveTemp(AgentPayload);
       Record.StableHash =
         FCrowdReplicationTransport::CalculateReliableRecordHash(
@@ -1718,8 +1671,8 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
     if (!bEncodeSucceeded)
     {
       UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_correction_batch revision=%d records=%d"),
-        Frame.CorrectionRevision, ReliableRecords.Num());
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=encode_checkpoint_batch revision=%d records=%d"),
+        Frame.StateFrameRevision, ReliableRecords.Num());
       continue;
     }
     bool bPublished = true;
@@ -1740,10 +1693,15 @@ void ACrowdDemoRoundSimCoordinator::PublishProductCorrectionFrame(
     if (!bPublished)
     {
       UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_correction_batch revision=%d records=%d"),
-        Frame.CorrectionRevision, ReliableRecords.Num());
+        TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_checkpoint_batch revision=%d records=%d"),
+        Frame.StateFrameRevision, ReliableRecords.Num());
     }
   }
+  RefreshLastCorrectionCounters();
+  UE_LOG(LogTemp, Display,
+    TEXT("CrowdDemoRoundCheckpointTransport role=server state_frame_revision=%d checkpoint_revision=%d round_id=%d agents=%d chunks=%d source=RoundSim"),
+    Result.StateFrameRevision, Result.CheckpointRevision, Result.RoundId,
+    Result.Agents.Num(), RoundCheckpointHeader.ChunkCount);
 }
 
 void ACrowdDemoRoundSimCoordinator::PublishProductRoundResultHeader(
@@ -1867,12 +1825,6 @@ void ACrowdDemoRoundSimCoordinator::
           : ApplyFrame.ReliableRecords)
           ConsumeProductReliableRecord(*Channel, Record);
       }
-      else if (ApplyFrame.Kind
-        == ECrowdReplicationApplyFrameKind::MovementCorrection)
-      {
-        LatestProductCorrectionCount =
-          ApplyFrame.Corrections.Num();
-      }
     }
   }
 }
@@ -1881,26 +1833,26 @@ void ACrowdDemoRoundSimCoordinator::ConsumeProductReliableRecord(
   AMassCrowdReplicationActor& Channel,
   const FCrowdReliableStateRecord& Record)
 {
-  FCrowdDemoCorrectionFrameHeader Header;
+  FCrowdDemoRoundCheckpointHeader Header;
   if (DecodeProductPayload(
       Record.Payload,
-      CrowdDemoCorrectionHeaderMagic,
+      CrowdDemoRoundCheckpointHeaderMagic,
       Header))
   {
-    ProductCorrectionHeaders.Add(
-      Header.CorrectionRevision, Header);
-    ProductCorrectionAgents.FindOrAdd(
-      Header.CorrectionRevision).Reset();
-    CacheClientCorrectionHeader(Header);
+    ProductRoundCheckpointHeaders.Add(
+      Header.StateFrameRevision, Header);
+    ProductRoundCheckpointAgents.FindOrAdd(
+      Header.StateFrameRevision).Reset();
+    CacheClientRoundCheckpointHeader(Header);
     return;
   }
 
   FCrowdDemoRoundAgentState Agent;
-  if (DecodeProductCorrectionAgent(
+  if (DecodeProductRoundCheckpointAgent(
       Record.Payload, Agent))
   {
     TArray<FCrowdDemoRoundAgentState>& Agents =
-      ProductCorrectionAgents.FindOrAdd(
+      ProductRoundCheckpointAgents.FindOrAdd(
         static_cast<int32>(Record.Revision));
     if (!Agents.ContainsByPredicate(
       [&](const FCrowdDemoRoundAgentState& Existing)
@@ -1910,7 +1862,7 @@ void ACrowdDemoRoundSimCoordinator::ConsumeProductReliableRecord(
     {
       Agents.Add(Agent);
     }
-    TryFinalizeProductCorrection(
+    TryFinalizeProductRoundCheckpoint(
       static_cast<int32>(Record.Revision));
     return;
   }
@@ -1946,13 +1898,13 @@ void ACrowdDemoRoundSimCoordinator::ConsumeProductReliableRecord(
     Record.Sequence, static_cast<int32>(Record.Kind));
 }
 
-void ACrowdDemoRoundSimCoordinator::TryFinalizeProductCorrection(
-  const int32 CorrectionRevisionValue)
+void ACrowdDemoRoundSimCoordinator::TryFinalizeProductRoundCheckpoint(
+  const int32 StateFrameRevisionValue)
 {
-  FCrowdDemoCorrectionFrameHeader* Header =
-    ProductCorrectionHeaders.Find(CorrectionRevisionValue);
+  FCrowdDemoRoundCheckpointHeader* Header =
+    ProductRoundCheckpointHeaders.Find(StateFrameRevisionValue);
   TArray<FCrowdDemoRoundAgentState>* Agents =
-    ProductCorrectionAgents.Find(CorrectionRevisionValue);
+    ProductRoundCheckpointAgents.Find(StateFrameRevisionValue);
   if (!Header || !Agents || Agents->Num() != Header->AgentCount)
     return;
   Agents->Sort([](
@@ -1966,39 +1918,43 @@ void ACrowdDemoRoundSimCoordinator::TryFinalizeProductCorrection(
     {
       UE_LOG(LogTemp, Error,
         TEXT("VIOLATION CrowdDemoRoundProductChannel role=client stage=duplicate_agent revision=%d"),
-        CorrectionRevisionValue);
+        StateFrameRevisionValue);
       return;
     }
 
-  FCrowdDemoCorrectionFrame Frame;
+  FCrowdDemoRoundCheckpointFrame Frame;
   Frame.bValid = Header->bValid;
-  Frame.FrameKind = Header->FrameKind;
-  Frame.CorrectionRevision = Header->CorrectionRevision;
+  Frame.StateFrameRevision = Header->StateFrameRevision;
   Frame.RoundId = Header->RoundId;
   Frame.RoundRevision = Header->RoundRevision;
-  Frame.SourceCheckpointRevision =
-    Header->SourceCheckpointRevision;
+  Frame.CheckpointRevision =
+    Header->CheckpointRevision;
   Frame.ServerTimeSeconds = Header->ServerTimeSeconds;
   Frame.AgentCount = Header->AgentCount;
   Frame.CrowdState = Header->CrowdState;
   Frame.AgentStates = *Agents;
-  FCrowdDemoCorrectionFrameHeader BuiltHeader;
-  TArray<FCrowdDemoCorrectionFrameChunk> Chunks;
-  FCrowdDemoRoundCheckpointTransport::BuildChunks(
-    Frame,
-    CrowdDemoCorrectionFrameChunkSize,
-    BuiltHeader,
-    Chunks);
-  for (const FCrowdDemoCorrectionFrameChunk& Chunk : Chunks)
-    CacheClientCorrectionChunk(Chunk);
+  FCrowdDemoRoundCheckpointHeader BuiltHeader;
+  TArray<FCrowdDemoRoundCheckpointChunk> Chunks;
+  if (!FCrowdDemoRoundCheckpointTransport::BuildChunks(
+      Frame,
+      CrowdDemoRoundCheckpointChunkSize,
+      BuiltHeader,
+      Chunks))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoRoundProductChannel role=client stage=checkpoint_rechunk_invalid state_frame_revision=%d"),
+      StateFrameRevisionValue);
+    return;
+  }
+  for (const FCrowdDemoRoundCheckpointChunk& Chunk : Chunks)
+    CacheClientRoundCheckpointChunk(Chunk);
   UE_LOG(LogTemp, Display,
-    TEXT("CrowdDemoRoundProductChannel role=client stage=correction_complete revision=%d agents=%d chunks=%d latest_corrections=%d source=MassCrowdReplicationChannel"),
-    CorrectionRevisionValue,
+    TEXT("CrowdDemoRoundProductChannel role=client stage=checkpoint_complete state_frame_revision=%d agents=%d chunks=%d source=MassCrowdReplicationChannel"),
+    StateFrameRevisionValue,
     Agents->Num(),
-    Chunks.Num(),
-    LatestProductCorrectionCount);
-  ProductCorrectionHeaders.Remove(CorrectionRevisionValue);
-  ProductCorrectionAgents.Remove(CorrectionRevisionValue);
+    Chunks.Num());
+  ProductRoundCheckpointHeaders.Remove(StateFrameRevisionValue);
+  ProductRoundCheckpointAgents.Remove(StateFrameRevisionValue);
 }
 
 FCrowdDemoRoundPlanPacket ACrowdDemoRoundSimCoordinator::BuildRoundPlanPacket(
@@ -2247,24 +2203,24 @@ void ACrowdDemoRoundSimCoordinator::ActivateClientRoundPlan(
 
 void ACrowdDemoRoundSimCoordinator::TryProcessClientResult()
 {
-  TryProcessClientCorrectionAssemblies();
+  TryProcessClientRoundCheckpoints();
 }
 
 bool ACrowdDemoRoundSimCoordinator::TryBuildClientRoundResult(
-  const FCrowdDemoPendingCorrectionAssembly& Assembly,
+  const FCrowdDemoPendingRoundCheckpointAssembly& Assembly,
   FCrowdDemoRoundResultPacket& OutResult)
 {
   const FCrowdDemoRoundResultHeader* Header = PendingClientResultHeaders.Find(
-    Assembly.Header.CorrectionRevision);
+    Assembly.Header.StateFrameRevision);
   if (!Header)
   {
     return false;
   }
-  if (Header->StateFrameRevision != Assembly.Header.CorrectionRevision
+  if (Header->StateFrameRevision != Assembly.Header.StateFrameRevision
     || Header->RoundId != Assembly.Header.RoundId
     || Header->Revision != Assembly.Header.RoundRevision
     || Header->AgentCount != Assembly.ReceivedAgentCount
-    || Header->CheckpointRevision != Assembly.Header.SourceCheckpointRevision)
+    || Header->CheckpointRevision != Assembly.Header.CheckpointRevision)
   {
     ++RoundResultRevisionMismatchCount;
     UE_LOG(
@@ -2274,7 +2230,7 @@ bool ACrowdDemoRoundSimCoordinator::TryBuildClientRoundResult(
       Header->RoundId,
       Header->CheckpointRevision,
       Header->StateFrameRevision,
-      Assembly.Header.CorrectionRevision,
+      Assembly.Header.StateFrameRevision,
       Header->AgentCount,
       Assembly.ReceivedAgentCount,
       RoundResultRevisionMismatchCount);
@@ -2300,41 +2256,40 @@ bool ACrowdDemoRoundSimCoordinator::TryBuildClientRoundResult(
   return true;
 }
 
-void ACrowdDemoRoundSimCoordinator::CacheClientCorrectionHeader(const FCrowdDemoCorrectionFrameHeader& Header)
+void ACrowdDemoRoundSimCoordinator::CacheClientRoundCheckpointHeader(const FCrowdDemoRoundCheckpointHeader& Header)
 {
   if (HasAuthority() || Header.bValid == 0)
   {
     return;
   }
 
-  if (DroppedCorrectionRevisions.Contains(Header.CorrectionRevision)
-    || Header.CorrectionRevision <= LastAppliedCorrectionRevision)
+  if (DroppedRoundCheckpointRevisions.Contains(Header.StateFrameRevision)
+    || Header.StateFrameRevision <= LastAppliedRoundCheckpointStateFrameRevision)
   {
     return;
   }
 
-  FCrowdDemoPendingCorrectionAssembly* ExistingAssembly = PendingCorrectionAssemblies.Find(Header.CorrectionRevision);
+  FCrowdDemoPendingRoundCheckpointAssembly* ExistingAssembly = PendingRoundCheckpointAssemblies.Find(Header.StateFrameRevision);
   const bool bFirstHeaderForRevision = !ExistingAssembly || ExistingAssembly->Header.bValid == 0;
   if (bFirstHeaderForRevision)
   {
-    ++CorrectionFrameHeaderReceivedCount;
+    ++RoundCheckpointHeaderReceivedCount;
     ++CorrectionFrameReceivedCount;
-    CorrectionFrameHeader = Header;
-    CorrectionFrameLatestRevisionSeen = FMath::Max(CorrectionFrameLatestRevisionSeen, Header.CorrectionRevision);
+    RoundCheckpointHeader = Header;
+    CorrectionFrameLatestRevisionSeen = FMath::Max(CorrectionFrameLatestRevisionSeen, Header.StateFrameRevision);
     CorrectionExpectedChunkCount = Header.ChunkCount;
-    if (LastReceivedCorrectionRevision > 0)
+    if (LastReceivedRoundCheckpointStateFrameRevision > 0)
     {
-      CorrectionFrameRevisionGapCount += FMath::Max(0, Header.CorrectionRevision - LastReceivedCorrectionRevision - 1);
+      CorrectionFrameRevisionGapCount += FMath::Max(0, Header.StateFrameRevision - LastReceivedRoundCheckpointStateFrameRevision - 1);
     }
-    LastReceivedCorrectionRevision = Header.CorrectionRevision;
+    LastReceivedRoundCheckpointStateFrameRevision = Header.StateFrameRevision;
   }
 
-  const int32 OldestKeptRevision = CorrectionFrameLatestRevisionSeen - CrowdDemoCorrectionFrameHistoryRevisions + 1;
+  const int32 OldestKeptRevision = CorrectionFrameLatestRevisionSeen - CrowdDemoRoundCheckpointHistoryRevisions + 1;
   TArray<int32> SupersededRevisions;
-  for (const TPair<int32, FCrowdDemoPendingCorrectionAssembly>& Pair : PendingCorrectionAssemblies)
+  for (const TPair<int32, FCrowdDemoPendingRoundCheckpointAssembly>& Pair : PendingRoundCheckpointAssemblies)
   {
-    if (Pair.Key < OldestKeptRevision
-      && Pair.Value.Header.FrameKind != ECrowdDemoRoundFrameKind::RoundResultCheckpoint)
+    if (Pair.Key < OldestKeptRevision)
     {
       SupersededRevisions.Add(Pair.Key);
     }
@@ -2344,12 +2299,12 @@ void ACrowdDemoRoundSimCoordinator::CacheClientCorrectionHeader(const FCrowdDemo
     CorrectionAssemblySupersededCount += SupersededRevisions.Num();
     for (const int32 SupersededRevision : SupersededRevisions)
     {
-      PendingCorrectionAssemblies.Remove(SupersededRevision);
-      DroppedCorrectionRevisions.Add(SupersededRevision);
+      PendingRoundCheckpointAssemblies.Remove(SupersededRevision);
+      DroppedRoundCheckpointRevisions.Add(SupersededRevision);
     }
   }
 
-  FCrowdDemoPendingCorrectionAssembly& Assembly = PendingCorrectionAssemblies.FindOrAdd(Header.CorrectionRevision);
+  FCrowdDemoPendingRoundCheckpointAssembly& Assembly = PendingRoundCheckpointAssemblies.FindOrAdd(Header.StateFrameRevision);
   Assembly.Header = Header;
   if (Assembly.ReceivedChunks.Num() < Header.ChunkCount)
   {
@@ -2380,11 +2335,11 @@ void ACrowdDemoRoundSimCoordinator::CacheClientCorrectionHeader(const FCrowdDemo
     UE_LOG(
       LogTemp,
       Display,
-      TEXT("CrowdDemoCorrectionFrameHeader role=client revision=%d round_id=%d round_revision=%d header_received_count=%d chunks=%d chunk_size=%d agents=%d revision_gap_total=%d source=RoundSim"),
-      Header.CorrectionRevision,
+      TEXT("CrowdDemoRoundCheckpointHeader role=client revision=%d round_id=%d round_revision=%d header_received_count=%d chunks=%d chunk_size=%d agents=%d revision_gap_total=%d source=RoundSim"),
+      Header.StateFrameRevision,
       Header.RoundId,
       Header.RoundRevision,
-      CorrectionFrameHeaderReceivedCount,
+      RoundCheckpointHeaderReceivedCount,
       Header.ChunkCount,
       Header.ChunkSize,
       Header.AgentCount,
@@ -2392,7 +2347,7 @@ void ACrowdDemoRoundSimCoordinator::CacheClientCorrectionHeader(const FCrowdDemo
   }
 }
 
-void ACrowdDemoRoundSimCoordinator::CacheClientCorrectionChunk(const FCrowdDemoCorrectionFrameChunk& Chunk)
+void ACrowdDemoRoundSimCoordinator::CacheClientRoundCheckpointChunk(const FCrowdDemoRoundCheckpointChunk& Chunk)
 {
   if (HasAuthority())
   {
@@ -2401,26 +2356,23 @@ void ACrowdDemoRoundSimCoordinator::CacheClientCorrectionChunk(const FCrowdDemoC
   if (Chunk.bValid != 0)
   {
     ++CorrectionChunkReceivedCount;
-    if (Chunk.Header.FrameKind == ECrowdDemoRoundFrameKind::RoundResultCheckpoint)
-    {
-      ++RoundResultCheckpointChunkReceivedCount;
-    }
-    LatestChunkRevisionSeen = FMath::Max(LatestChunkRevisionSeen, Chunk.CorrectionRevision);
+    ++RoundResultCheckpointChunkReceivedCount;
+    LatestChunkRevisionSeen = FMath::Max(LatestChunkRevisionSeen, Chunk.StateFrameRevision);
   }
   UWorld* World = GetWorld();
   const double NowSeconds = World ? World->GetTimeSeconds() : 0.0;
   bool bCachedAnyChunk = false;
   if (Chunk.bValid != 0
-    && Chunk.CorrectionRevision > LastAppliedCorrectionRevision
-    && !DroppedCorrectionRevisions.Contains(Chunk.CorrectionRevision)
+    && Chunk.StateFrameRevision > LastAppliedRoundCheckpointStateFrameRevision
+    && !DroppedRoundCheckpointRevisions.Contains(Chunk.StateFrameRevision)
     && Chunk.ChunkIndex >= 0
     && Chunk.Agents.Num() == Chunk.AgentCountInChunk)
   {
     if (Chunk.Header.bValid != 0)
     {
-      CacheClientCorrectionHeader(Chunk.Header);
+      CacheClientRoundCheckpointHeader(Chunk.Header);
     }
-    FCrowdDemoPendingCorrectionAssembly& Assembly = PendingCorrectionAssemblies.FindOrAdd(Chunk.CorrectionRevision);
+    FCrowdDemoPendingRoundCheckpointAssembly& Assembly = PendingRoundCheckpointAssemblies.FindOrAdd(Chunk.StateFrameRevision);
     if (Assembly.ReceivedChunks.Num() <= Chunk.ChunkIndex)
     {
       Assembly.ReceivedChunks.SetNumZeroed(Chunk.ChunkIndex + 1);
@@ -2458,7 +2410,7 @@ void ACrowdDemoRoundSimCoordinator::CacheClientCorrectionChunk(const FCrowdDemoC
   }
 }
 
-void ACrowdDemoRoundSimCoordinator::TryProcessClientCorrectionAssemblies()
+void ACrowdDemoRoundSimCoordinator::TryProcessClientRoundCheckpoints()
 {
   const UWorld* World = GetWorld();
   const UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World
@@ -2469,20 +2421,19 @@ void ACrowdDemoRoundSimCoordinator::TryProcessClientCorrectionAssemblies()
     return;
   }
 
-  int32 HighestCompleteRevision = INDEX_NONE;
   int32 CheckpointCompleteRevision = INDEX_NONE;
   TArray<int32> RevisionsToRemove;
-  for (const TPair<int32, FCrowdDemoPendingCorrectionAssembly>& Pair : PendingCorrectionAssemblies)
+  for (const TPair<int32, FCrowdDemoPendingRoundCheckpointAssembly>& Pair : PendingRoundCheckpointAssemblies)
   {
     const int32 PendingRevision = Pair.Key;
-    const FCrowdDemoPendingCorrectionAssembly& Assembly = Pair.Value;
-    if (PendingRevision <= LastAppliedCorrectionRevision)
+    const FCrowdDemoPendingRoundCheckpointAssembly& Assembly = Pair.Value;
+    if (PendingRevision <= LastAppliedRoundCheckpointStateFrameRevision)
     {
       RevisionsToRemove.Add(PendingRevision);
       continue;
     }
 
-    const FCrowdDemoCorrectionFrameHeader& Header = Assembly.Header;
+    const FCrowdDemoRoundCheckpointHeader& Header = Assembly.Header;
     bool bComplete = Header.bValid != 0
       && Assembly.ReceivedChunkCount == Header.ChunkCount
       && Assembly.ReceivedAgentCount == Header.AgentCount;
@@ -2493,39 +2444,29 @@ void ACrowdDemoRoundSimCoordinator::TryProcessClientCorrectionAssemblies()
     }
     if (bComplete)
     {
-      if (Header.FrameKind == ECrowdDemoRoundFrameKind::RoundResultCheckpoint)
-      {
-        CheckpointCompleteRevision = CheckpointCompleteRevision == INDEX_NONE
-          ? PendingRevision
-          : FMath::Min(CheckpointCompleteRevision, PendingRevision);
-      }
-      else
-      {
-        HighestCompleteRevision = FMath::Max(HighestCompleteRevision, PendingRevision);
-      }
+      CheckpointCompleteRevision = CheckpointCompleteRevision == INDEX_NONE
+        ? PendingRevision
+        : FMath::Min(CheckpointCompleteRevision, PendingRevision);
     }
   }
 
   for (const int32 RevisionToRemove : RevisionsToRemove)
   {
-    PendingCorrectionAssemblies.Remove(RevisionToRemove);
-    DroppedCorrectionRevisions.Add(RevisionToRemove);
+    PendingRoundCheckpointAssemblies.Remove(RevisionToRemove);
+    DroppedRoundCheckpointRevisions.Add(RevisionToRemove);
   }
 
-  const int32 RevisionToApply = CheckpointCompleteRevision != INDEX_NONE
-    ? CheckpointCompleteRevision
-    : HighestCompleteRevision;
+  const int32 RevisionToApply = CheckpointCompleteRevision;
   if (RevisionToApply != INDEX_NONE)
   {
-    FCrowdDemoPendingCorrectionAssembly* Assembly = PendingCorrectionAssemblies.Find(RevisionToApply);
-    if (Assembly && TryApplyClientCorrectionAssembly(*Assembly))
+    FCrowdDemoPendingRoundCheckpointAssembly* Assembly = PendingRoundCheckpointAssemblies.Find(RevisionToApply);
+    if (Assembly && TryApplyClientRoundCheckpoint(*Assembly))
     {
-      PendingCorrectionAssemblies.Remove(RevisionToApply);
+      PendingRoundCheckpointAssemblies.Remove(RevisionToApply);
       TArray<int32> SupersededRevisions;
-      for (const TPair<int32, FCrowdDemoPendingCorrectionAssembly>& Pair : PendingCorrectionAssemblies)
+      for (const TPair<int32, FCrowdDemoPendingRoundCheckpointAssembly>& Pair : PendingRoundCheckpointAssemblies)
       {
-        if (Pair.Key < RevisionToApply
-          && Pair.Value.Header.FrameKind != ECrowdDemoRoundFrameKind::RoundResultCheckpoint)
+        if (Pair.Key < RevisionToApply)
         {
           SupersededRevisions.Add(Pair.Key);
         }
@@ -2533,8 +2474,8 @@ void ACrowdDemoRoundSimCoordinator::TryProcessClientCorrectionAssemblies()
       CorrectionAssemblySupersededCount += SupersededRevisions.Num();
       for (const int32 SupersededRevision : SupersededRevisions)
       {
-        PendingCorrectionAssemblies.Remove(SupersededRevision);
-        DroppedCorrectionRevisions.Add(SupersededRevision);
+        PendingRoundCheckpointAssemblies.Remove(SupersededRevision);
+        DroppedRoundCheckpointRevisions.Add(SupersededRevision);
       }
     }
   }
@@ -2542,9 +2483,9 @@ void ACrowdDemoRoundSimCoordinator::TryProcessClientCorrectionAssemblies()
   RefreshLastCorrectionCounters();
 }
 
-bool ACrowdDemoRoundSimCoordinator::TryApplyClientCorrectionAssembly(FCrowdDemoPendingCorrectionAssembly& Assembly)
+bool ACrowdDemoRoundSimCoordinator::TryApplyClientRoundCheckpoint(FCrowdDemoPendingRoundCheckpointAssembly& Assembly)
 {
-  const FCrowdDemoCorrectionFrameHeader& Header = Assembly.Header;
+  const FCrowdDemoRoundCheckpointHeader& Header = Assembly.Header;
   if (Header.bValid == 0)
   {
     return false;
@@ -2561,9 +2502,9 @@ bool ACrowdDemoRoundSimCoordinator::TryApplyClientCorrectionAssembly(FCrowdDemoP
 
   if (Header.RoundId > Pipeline->GetCurrentRoundId())
   {
-    if (!FuturePendingCorrectionRevisions.Contains(Header.CorrectionRevision))
+    if (!FuturePendingRoundCheckpointRevisions.Contains(Header.StateFrameRevision))
     {
-      FuturePendingCorrectionRevisions.Add(Header.CorrectionRevision);
+      FuturePendingRoundCheckpointRevisions.Add(Header.StateFrameRevision);
       ++CorrectionFrameFuturePendingCount;
     }
     return false;
@@ -2572,14 +2513,14 @@ bool ACrowdDemoRoundSimCoordinator::TryApplyClientCorrectionAssembly(FCrowdDemoP
   if (Header.RoundId < Pipeline->GetCurrentRoundId() || Header.RoundRevision != Pipeline->GetCurrentPlanRevision())
   {
     ++CorrectionFrameDroppedMismatchCount;
-    DroppedCorrectionRevisions.Add(Header.CorrectionRevision);
+    DroppedRoundCheckpointRevisions.Add(Header.StateFrameRevision);
     if (DroppedCorrectionWarningCount < 8)
     {
       UE_LOG(
         LogTemp,
         Warning,
-        TEXT("CrowdDemoCorrectionFrameMismatch role=client correction_revision=%d frame_round_id=%d frame_round_revision=%d runtime_round_id=%d runtime_revision=%d action=drop source=RoundSim"),
-        Header.CorrectionRevision,
+        TEXT("CrowdDemoRoundCheckpointMismatch role=client state_frame_revision=%d frame_round_id=%d frame_round_revision=%d runtime_round_id=%d runtime_revision=%d action=drop source=RoundSim"),
+        Header.StateFrameRevision,
         Header.RoundId,
         Header.RoundRevision,
         Pipeline->GetCurrentRoundId(),
@@ -2602,9 +2543,9 @@ bool ACrowdDemoRoundSimCoordinator::TryApplyClientCorrectionAssembly(FCrowdDemoP
     }
   }
 
-  if (!CompletedCorrectionRevisions.Contains(Header.CorrectionRevision))
+  if (!CompletedRoundCheckpointRevisions.Contains(Header.StateFrameRevision))
   {
-    CompletedCorrectionRevisions.Add(Header.CorrectionRevision);
+    CompletedRoundCheckpointRevisions.Add(Header.StateFrameRevision);
     ++CorrectionFrameCompleteCount;
     ++CorrectionAssemblyCompleteCount;
   }
@@ -2615,9 +2556,9 @@ bool ACrowdDemoRoundSimCoordinator::TryApplyClientCorrectionAssembly(FCrowdDemoP
     : (World ? World->GetTimeSeconds() : Header.ServerTimeSeconds);
   if (CurrentClientServerTime + KINDA_SMALL_NUMBER < Header.ServerTimeSeconds)
   {
-    if (!FuturePendingCorrectionRevisions.Contains(Header.CorrectionRevision))
+    if (!FuturePendingRoundCheckpointRevisions.Contains(Header.StateFrameRevision))
     {
-      FuturePendingCorrectionRevisions.Add(Header.CorrectionRevision);
+      FuturePendingRoundCheckpointRevisions.Add(Header.StateFrameRevision);
       ++CorrectionFrameFuturePendingCount;
     }
     return false;
@@ -2625,89 +2566,33 @@ bool ACrowdDemoRoundSimCoordinator::TryApplyClientCorrectionAssembly(FCrowdDemoP
 
   const float FrameAgeMs = FMath::Max(0.0f, (CurrentClientServerTime - Header.ServerTimeSeconds) * 1000.0f);
   CorrectionFrameAgeMsSamples.Add(FrameAgeMs);
-  if (Header.FrameKind == ECrowdDemoRoundFrameKind::Correction
-    && FrameAgeMs > CrowdDemoMaxCorrectionFrameAgeMs)
+  FCrowdDemoRoundResultPacket Result;
+  if (!TryBuildClientRoundResult(Assembly, Result))
   {
-    ++CorrectionFrameStaleDropCount;
-    DroppedCorrectionRevisions.Add(Header.CorrectionRevision);
-    RefreshLastCorrectionCounters();
-    if (DroppedCorrectionWarningCount < 8)
-    {
-      UE_LOG(
-        LogTemp,
-        Warning,
-        TEXT("CrowdDemoCorrectionFrameStale role=client revision=%d round_id=%d frame_age_ms=%.3f max_age_ms=%.3f chunks=%d agents=%d action=drop source=RoundSim"),
-        Header.CorrectionRevision,
-        Header.RoundId,
-        FrameAgeMs,
-        CrowdDemoMaxCorrectionFrameAgeMs,
-        Header.ChunkCount,
-        Header.AgentCount);
-      ++DroppedCorrectionWarningCount;
-    }
-    return true;
+    return false;
   }
-
-  if (Header.FrameKind == ECrowdDemoRoundFrameKind::RoundResultCheckpoint)
-  {
-    FCrowdDemoRoundResultPacket Result;
-    if (!TryBuildClientRoundResult(Assembly, Result))
-    {
-      return false;
-    }
-    Pipeline->QueueRoundResult(Result);
-    ++RoundResultAssemblyCompleteCount;
-    ++RoundResultPipelineQueuedCount;
-    LastAppliedCorrectionRevision = Header.CorrectionRevision;
-    PendingClientResultHeaders.Remove(Header.CorrectionRevision);
-    PendingClientResultHeaderReceiveTimes.Remove(Header.CorrectionRevision);
-    UE_LOG(
-      LogTemp,
-      Display,
-      TEXT("CrowdDemoRoundResultTransport role=client stage=assembly_queued round_id=%d checkpoint_revision=%d state_frame_revision=%d agents=%d chunks=%d assembly_complete_count=%d pipeline_queued_count=%d source=RoundSim"),
-      Result.RoundId,
-      Result.CheckpointRevision,
-      Result.StateFrameRevision,
-      Result.Agents.Num(),
-      Header.ChunkCount,
-      RoundResultAssemblyCompleteCount,
-      RoundResultPipelineQueuedCount);
-    return true;
-  }
-
-  FCrowdDemoCorrectionFrame FullFrame;
-  FullFrame.bValid = 1;
-  FullFrame.FrameKind = Header.FrameKind;
-  FullFrame.CorrectionRevision = Header.CorrectionRevision;
-  FullFrame.RoundId = Header.RoundId;
-  FullFrame.RoundRevision = Header.RoundRevision;
-  FullFrame.SourceCheckpointRevision = Header.SourceCheckpointRevision;
-  FullFrame.ServerTimeSeconds = Header.ServerTimeSeconds;
-  FullFrame.AgentCount = Header.AgentCount;
-  FullFrame.CrowdState = Header.CrowdState;
-  FullFrame.AgentStates = Assembly.AgentBuffer;
-
-  Pipeline->QueueCorrectionFrame(FullFrame, CurrentClientServerTime);
-  LastAppliedCorrectionRevision = Header.CorrectionRevision;
-  RefreshLastCorrectionCounters();
-
-  TArray<int32> OldRevisions;
-  for (const TPair<int32, FCrowdDemoPendingCorrectionAssembly>& Pair : PendingCorrectionAssemblies)
-  {
-    if (Pair.Key < Header.CorrectionRevision)
-    {
-      OldRevisions.Add(Pair.Key);
-    }
-  }
-  for (const int32 OldRevision : OldRevisions)
-  {
-    PendingCorrectionAssemblies.Remove(OldRevision);
-    DroppedCorrectionRevisions.Add(OldRevision);
-  }
+  Pipeline->QueueRoundResult(Result);
+  ++RoundResultAssemblyCompleteCount;
+  ++RoundResultPipelineQueuedCount;
+  LastAppliedRoundCheckpointStateFrameRevision = Header.StateFrameRevision;
+  PendingClientResultHeaders.Remove(Header.StateFrameRevision);
+  PendingClientResultHeaderReceiveTimes.Remove(Header.StateFrameRevision);
+  UE_LOG(
+    LogTemp,
+    Display,
+    TEXT("CrowdDemoRoundResultTransport role=client stage=assembly_queued round_id=%d checkpoint_revision=%d state_frame_revision=%d agents=%d chunks=%d assembly_complete_count=%d pipeline_queued_count=%d source=RoundSim"),
+    Result.RoundId,
+    Result.CheckpointRevision,
+    Result.StateFrameRevision,
+    Result.Agents.Num(),
+    Header.ChunkCount,
+    RoundResultAssemblyCompleteCount,
+    RoundResultPipelineQueuedCount);
   return true;
+
 }
 
-void ACrowdDemoRoundSimCoordinator::DropExpiredCorrectionAssemblies()
+void ACrowdDemoRoundSimCoordinator::DropExpiredRoundCheckpoints()
 {
   if (HasAuthority())
   {
@@ -2722,46 +2607,43 @@ void ACrowdDemoRoundSimCoordinator::DropExpiredCorrectionAssemblies()
 
   const double NowSeconds = World->GetTimeSeconds();
   TArray<int32> ExpiredRevisions;
-  for (const TPair<int32, FCrowdDemoPendingCorrectionAssembly>& Pair : PendingCorrectionAssemblies)
+  for (const TPair<int32, FCrowdDemoPendingRoundCheckpointAssembly>& Pair : PendingRoundCheckpointAssemblies)
   {
-    const FCrowdDemoPendingCorrectionAssembly& Assembly = Pair.Value;
-    const float TimeoutSeconds = Assembly.Header.FrameKind == ECrowdDemoRoundFrameKind::RoundResultCheckpoint
-      ? CrowdDemoRoundResultAssemblyTimeoutSeconds
-      : CrowdDemoCorrectionAssemblyTimeoutSeconds;
+    const FCrowdDemoPendingRoundCheckpointAssembly& Assembly = Pair.Value;
     if (Assembly.FirstReceiveWorldSeconds >= 0.0
-      && NowSeconds - Assembly.FirstReceiveWorldSeconds > TimeoutSeconds)
+      && NowSeconds - Assembly.FirstReceiveWorldSeconds
+        > CrowdDemoRoundResultAssemblyTimeoutSeconds)
     {
       ExpiredRevisions.Add(Pair.Key);
-      if (Assembly.Header.FrameKind == ECrowdDemoRoundFrameKind::RoundResultCheckpoint)
+      const bool bHasResultHeader =
+        PendingClientResultHeaders.Contains(Pair.Key);
+      if (bHasResultHeader)
       {
-        const bool bHasResultHeader = PendingClientResultHeaders.Contains(Pair.Key);
-        if (bHasResultHeader)
-        {
-          ++RoundResultChunkWaitTimeoutCount;
-        }
-        else
-        {
-          ++RoundResultHeaderWaitTimeoutCount;
-        }
-        UE_LOG(
-          LogTemp,
-          Error,
-          TEXT("VIOLATION CrowdDemoRoundResultTransport role=client stage=%s state_frame_revision=%d chunks=%d/%d agents=%d/%d timeout_count=%d source=RoundSim"),
-          bHasResultHeader ? TEXT("chunk_wait_timeout") : TEXT("header_wait_timeout"),
-          Pair.Key,
-          Assembly.ReceivedChunkCount,
-          Assembly.Header.ChunkCount,
-          Assembly.ReceivedAgentCount,
-          Assembly.Header.AgentCount,
-          bHasResultHeader ? RoundResultChunkWaitTimeoutCount : RoundResultHeaderWaitTimeoutCount);
+        ++RoundResultChunkWaitTimeoutCount;
       }
+      else
+      {
+        ++RoundResultHeaderWaitTimeoutCount;
+      }
+      UE_LOG(
+        LogTemp,
+        Error,
+        TEXT("VIOLATION CrowdDemoRoundResultTransport role=client stage=%s state_frame_revision=%d chunks=%d/%d agents=%d/%d timeout_count=%d source=RoundSim"),
+        bHasResultHeader ? TEXT("chunk_wait_timeout") : TEXT("header_wait_timeout"),
+        Pair.Key,
+        Assembly.ReceivedChunkCount,
+        Assembly.Header.ChunkCount,
+        Assembly.ReceivedAgentCount,
+        Assembly.Header.AgentCount,
+        bHasResultHeader ? RoundResultChunkWaitTimeoutCount
+          : RoundResultHeaderWaitTimeoutCount);
     }
   }
 
   TArray<int32> ExpiredResultHeaders;
   for (const TPair<int32, double>& Pair : PendingClientResultHeaderReceiveTimes)
   {
-    if (!PendingCorrectionAssemblies.Contains(Pair.Key)
+    if (!PendingRoundCheckpointAssemblies.Contains(Pair.Key)
       && NowSeconds - Pair.Value > CrowdDemoRoundResultAssemblyTimeoutSeconds)
     {
       ExpiredResultHeaders.Add(Pair.Key);
@@ -2780,8 +2662,8 @@ void ACrowdDemoRoundSimCoordinator::DropExpiredCorrectionAssemblies()
     CorrectionFrameIncompleteDropCount += ExpiredRevisions.Num();
     for (const int32 RevisionToDrop : ExpiredRevisions)
     {
-      PendingCorrectionAssemblies.Remove(RevisionToDrop);
-      DroppedCorrectionRevisions.Add(RevisionToDrop);
+      PendingRoundCheckpointAssemblies.Remove(RevisionToDrop);
+      DroppedRoundCheckpointRevisions.Add(RevisionToDrop);
       PendingClientResultHeaders.Remove(RevisionToDrop);
       PendingClientResultHeaderReceiveTimes.Remove(RevisionToDrop);
     }
@@ -2854,9 +2736,9 @@ void ACrowdDemoRoundSimCoordinator::RecordRoundBoundaryMetrics(
 
 void ACrowdDemoRoundSimCoordinator::RefreshLastCorrectionCounters()
 {
-  LastCorrectionFrameMetrics.CorrectionFrameRevision = LastAppliedCorrectionRevision;
+  LastCorrectionFrameMetrics.CorrectionFrameRevision = LastAppliedRoundCheckpointStateFrameRevision;
   LastCorrectionFrameMetrics.CorrectionFrameAppliedCount = CorrectionFrameAppliedCount;
-  LastCorrectionFrameMetrics.CorrectionFrameHeaderReceivedCount = CorrectionFrameHeaderReceivedCount;
+  LastCorrectionFrameMetrics.RoundCheckpointHeaderReceivedCount = RoundCheckpointHeaderReceivedCount;
   LastCorrectionFrameMetrics.CorrectionFrameChunkReceivedCount = CorrectionFrameChunkReceivedCount;
   LastCorrectionFrameMetrics.LatestChunkRevisionSeen = LatestChunkRevisionSeen;
   LastCorrectionFrameMetrics.CorrectionChunkReceivedCount = CorrectionChunkReceivedCount;
@@ -2879,10 +2761,10 @@ void ACrowdDemoRoundSimCoordinator::RefreshLastCorrectionCounters()
   LastCorrectionFrameMetrics.CorrectionFrameRevisionGapCount = CorrectionFrameRevisionGapCount;
   LastCorrectionFrameMetrics.CorrectionFrameChunksPerFrame = HasAuthority()
     ? LastServerCorrectionChunkCount
-    : FMath::Max(0, CorrectionFrameHeader.ChunkCount);
+    : FMath::Max(0, RoundCheckpointHeader.ChunkCount);
   LastCorrectionFrameMetrics.CorrectionFrameChunkSize = HasAuthority()
     ? LastServerCorrectionChunkSize
-    : FMath::Max(0, CorrectionFrameHeader.ChunkSize);
+    : FMath::Max(0, RoundCheckpointHeader.ChunkSize);
   LastCorrectionFrameMetrics.CorrectionIntervalMsP95 = HasAuthority()
     ? ComputeCoordinatorP95(CorrectionFramePublishIntervalMsSamples)
     : ComputeCoordinatorP95(CorrectionFrameIntervalMsSamples);

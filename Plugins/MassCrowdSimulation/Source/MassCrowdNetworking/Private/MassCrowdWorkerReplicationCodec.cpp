@@ -3,7 +3,7 @@
 namespace CrowdWorkerReplicationCodecPrivate
 {
 constexpr uint32 Magic = 0x324e5743u;
-constexpr uint16 CodecVersion = 1;
+constexpr uint16 CodecVersion = 2;
 constexpr uint8 CheckpointKind = 1;
 constexpr uint8 IntentKind = 2;
 constexpr uint8 CorrectionKind = 3;
@@ -426,6 +426,7 @@ void WriteHeader(FWriter& Writer, const FCrowdWorkerCheckpoint& Header)
   Writer.U64(Header.Generation);
   Writer.U64(Header.WorkerEpoch);
   Writer.U64(Header.AbsoluteSimulationTick);
+  Writer.Double(Header.FixedSimulationQuantumSeconds);
   Writer.U64(Header.LastAppliedInputSequence);
   Writer.U64(Header.LastOrderedEventSequence);
   Writer.U64(Header.EntityStateHash);
@@ -438,6 +439,7 @@ bool ReadHeader(FReader& Reader, FCrowdWorkerCheckpoint& OutHeader)
   return Reader.U64(OutHeader.Generation)
     && Reader.U64(OutHeader.WorkerEpoch)
     && Reader.U64(OutHeader.AbsoluteSimulationTick)
+    && Reader.Double(OutHeader.FixedSimulationQuantumSeconds)
     && Reader.U64(OutHeader.LastAppliedInputSequence)
     && Reader.U64(OutHeader.LastOrderedEventSequence)
     && Reader.U64(OutHeader.EntityStateHash)

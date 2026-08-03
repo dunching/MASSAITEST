@@ -4,6 +4,8 @@
 #include "GameFramework/PlayerController.h"
 #include "MassCrowdRuntimeSubsystem.h"
 #include "MassCrowdWorkerReplicationCodec.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(MassCrowdReplicationActor)
 
@@ -14,6 +16,15 @@ namespace
     1,
     TEXT("Enable sparse Worker authority correction requests. Intent, digest, simulation and presentation remain active when disabled."),
     ECVF_Default);
+
+  bool IsWorkerAuthorityCorrectionEnabled()
+  {
+    return CVarCrowdWorkerAuthorityCorrectionEnabled.GetValueOnGameThread()
+        != 0
+      && !FParse::Param(
+        FCommandLine::Get(),
+        TEXT("CrowdWorkerAuthorityCorrectionDisabled"));
+  }
 
   uint64 CalculateBaselineBeginHash(
     const uint32 Revision, const uint64 ResumeSequence)
@@ -53,7 +64,8 @@ AMassCrowdReplicationActor::AMassCrowdReplicationActor()
   Limits.SnapshotLimits.AssemblyTimeoutSeconds = 10.0;
   ServerState.Initialize(Limits);
   ClientState.Initialize(Limits);
-  WorkerPacketConfig.MaxChunkBytes = 48 * 1024;
+  WorkerPacketConfig.MaxChunkBytes =
+    FCrowdWorkerPacketTransportConfig::ReliableRpcSafeChunkBytes;
   WorkerPacketConfig.MaxPacketBytes = FMath::Max(
     WorkerNetworkConfig.MaxEncodedCheckpointBytes,
     FMath::Max(
@@ -71,9 +83,10 @@ void AMassCrowdReplicationActor::BeginPlay()
 {
   Super::BeginPlay();
   UE_LOG(LogTemp, Display,
-    TEXT("MassCrowdReplicationChannel role=%s stage=begin owner=%s"),
+    TEXT("MassCrowdReplicationChannel role=%s stage=begin owner=%s worker_authority_correction=%d"),
     HasAuthority() ? TEXT("server") : TEXT("client"),
-    *GetNameSafe(GetOwner()));
+    *GetNameSafe(GetOwner()),
+    IsWorkerAuthorityCorrectionEnabled() ? 1 : 0);
 }
 
 void AMassCrowdReplicationActor::Tick(const float DeltaSeconds)
@@ -156,7 +169,15 @@ void AMassCrowdReplicationActor::Tick(const float DeltaSeconds)
     return;
   }
 
-  if (bWorkerCheckpointReady
+  PumpWorkerClientRuntime(Runtime);
+}
+
+void AMassCrowdReplicationActor::PumpWorkerClientRuntime(
+  FCrowdAsyncSimulationRuntime& Runtime)
+{
+  if (HasAuthority())
+    return;
+  if (!bWorkerClientReady
     || Runtime.GetState()
       != ECrowdAsyncSimulationRuntimeState::Running)
     return;
@@ -180,23 +201,24 @@ void AMassCrowdReplicationActor::Tick(const float DeltaSeconds)
   ProcessPendingAuthorityDigest(Runtime);
   if (bWorkerCorrectionPending)
     return;
-  TArray<FCrowdWorkerIntentBatch> Intents;
-  const uint64 MaximumInputSequence = PendingAuthorityDigest.IsSet()
-    ? PendingAuthorityDigest->ThroughInputSequence
+  const FCrowdWorkerAuthorityDigestBatch* PendingDigest =
+    AuthorityDigestInbox.Peek();
+  const uint64 MaximumInputSequence = PendingDigest != nullptr
+    ? PendingDigest->ThroughInputSequence
     : MAX_uint64;
-  int32 DrainCount = 0;
-  while (DrainCount < PendingWorkerIntents.Num()
-    && PendingWorkerIntents[DrainCount].LastInputSequence
-      <= MaximumInputSequence)
-    ++DrainCount;
-  if (DrainCount == 0) return;
-  Intents.Append(PendingWorkerIntents.GetData(), DrainCount);
-  PendingWorkerIntents.RemoveAt(
-    0, DrainCount, EAllowShrinking::No);
-  for (int32 Index = 0; Index < Intents.Num(); ++Index)
+  constexpr int32 MaxIntentSubmitsPerPump = 4;
+  int32 SubmittedIntentCount = 0;
+  while (!PendingWorkerIntents.IsEmpty()
+    && PendingWorkerIntents[0].LastInputSequence
+      <= MaximumInputSequence
+    && SubmittedIntentCount < MaxIntentSubmitsPerPump)
   {
+    const FCrowdWorkerIntentBatch& Intent =
+      PendingWorkerIntents[0];
     const ECrowdAsyncSimulationSubmitResult Result =
-      Runtime.SubmitIntentBatch(Intents[Index]);
+      Runtime.SubmitIntentBatch(Intent);
+    if (Result == ECrowdAsyncSimulationSubmitResult::RejectedCapacity)
+      return;
     if (Result != ECrowdAsyncSimulationSubmitResult::Accepted)
     {
       const FCrowdAsyncSimulationRuntimeMetrics Metrics =
@@ -204,15 +226,18 @@ void AMassCrowdReplicationActor::Tick(const float DeltaSeconds)
       UE_LOG(LogTemp, Error,
         TEXT("MassCrowdWorkerNetwork role=client stage=runtime_intent_rejected result=%u generation=%llu first_sequence=%llu last_sequence=%llu runtime_generation=%llu runtime_state=%u requires_resnapshot=%d"),
         static_cast<uint32>(Result),
-        Intents[Index].Generation,
-        Intents[Index].FirstInputSequence,
-        Intents[Index].LastInputSequence,
+        Intent.Generation,
+        Intent.FirstInputSequence,
+        Intent.LastInputSequence,
         Runtime.GetGeneration(),
         static_cast<uint32>(Runtime.GetState()),
         Metrics.bRequiresResnapshot ? 1 : 0);
       HandleClientFailure(TEXT("worker_runtime_intent_submit"));
       return;
     }
+    PendingWorkerIntents.RemoveAt(
+      0, 1, EAllowShrinking::No);
+    ++SubmittedIntentCount;
   }
   ProcessPendingAuthorityDigest(Runtime);
 }
@@ -457,7 +482,7 @@ void AMassCrowdReplicationActor::ClientBaselineBegin_Implementation(
   bWorkerCheckpointReady = false;
   LastWorkerReceivedInputSequence = 0;
   PendingWorkerIntents.Reset();
-  PendingAuthorityDigest.Reset();
+  AuthorityDigestInbox.Reset();
   PendingAuthorityCorrections.Reset();
   bWorkerCorrectionPending = false;
   if (ClientState.AcceptBaselineBegin(
@@ -791,35 +816,50 @@ void AMassCrowdReplicationActor::ClientWorkerDigest_Implementation(
     HandleClientFailure(TEXT("worker_digest_contract"));
     return;
   }
-  if (PendingAuthorityDigest.IsSet()
-    && PendingAuthorityDigest->DigestSequence >= DigestSequence)
-    return;
-  PendingAuthorityDigest = MoveTemp(Digest);
+  AuthorityDigestInbox.Offer(MoveTemp(Digest));
 }
 
 void AMassCrowdReplicationActor::ProcessPendingAuthorityDigest(
   FCrowdAsyncSimulationRuntime& Runtime)
 {
-  if (!PendingAuthorityDigest.IsSet() || bWorkerCorrectionPending)
+  const FCrowdWorkerAuthorityDigestBatch* PendingDigest =
+    AuthorityDigestInbox.Peek();
+  if (PendingDigest == nullptr || bWorkerCorrectionPending)
     return;
   TArray<FCrowdWorkerAuthorityScopeKey> Mismatches;
   const ECrowdWorkerNetworkReadResult Result =
     Runtime.CompareAuthorityDigest(
-      PendingAuthorityDigest.GetValue(), Mismatches);
+      *PendingDigest, Mismatches);
   if (Result == ECrowdWorkerNetworkReadResult::NoData) return;
   if (Result != ECrowdWorkerNetworkReadResult::Ready)
   {
     HandleClientFailure(TEXT("worker_digest_compare"));
     return;
   }
-  const uint64 Generation = PendingAuthorityDigest->Generation;
-  const uint64 DigestSequence =
-    PendingAuthorityDigest->DigestSequence;
-  PendingAuthorityDigest.Reset();
+  const uint64 Generation = PendingDigest->Generation;
+  const uint64 DigestSequence = PendingDigest->DigestSequence;
+  const uint64 DigestSimulationTick = PendingDigest->SimulationTick;
+  const uint64 DigestInputSequence = PendingDigest->ThroughInputSequence;
+  AuthorityDigestInbox.Consume();
   if (Mismatches.IsEmpty()) return;
   ++WorkerTrafficMetrics.DigestMismatchCount;
-  if (CVarCrowdWorkerAuthorityCorrectionEnabled.GetValueOnGameThread() == 0)
+  UE_LOG(LogTemp, Display,
+    TEXT("MassCrowdWorkerDigestMismatch digest=%llu tick=%llu input=%llu scopes=%d first_field=%u first_kind=%u first_scope=%lld"),
+    DigestSequence,
+    DigestSimulationTick,
+    DigestInputSequence,
+    Mismatches.Num(),
+    static_cast<uint32>(Mismatches[0].Field),
+    static_cast<uint32>(Mismatches[0].Kind),
+    Mismatches[0].ScopeId);
+  if (!IsWorkerAuthorityCorrectionEnabled())
     return;
+  if (!Runtime.BeginAuthorityCorrectionBarrier(
+      Generation, DigestSimulationTick, DigestInputSequence))
+  {
+    HandleClientFailure(TEXT("worker_correction_barrier"));
+    return;
+  }
   TArray<uint8> Fields;
   TArray<uint8> Kinds;
   TArray<int64> ScopeIds;
@@ -993,7 +1033,7 @@ void AMassCrowdReplicationActor::HandleClientFailure(
   bWorkerCheckpointReady = false;
   LastWorkerReceivedInputSequence = 0;
   PendingWorkerIntents.Reset();
-  PendingAuthorityDigest.Reset();
+  AuthorityDigestInbox.Reset();
   PendingAuthorityCorrections.Reset();
   bWorkerCorrectionPending = false;
   UE_LOG(LogTemp, Error,
@@ -1153,7 +1193,7 @@ void AMassCrowdReplicationActor::HandleCompletedWorkerPacket()
     LastWorkerReceivedInputSequence =
       ReadyWorkerCheckpoint.Header.LastAppliedInputSequence;
     PendingWorkerIntents.Reset();
-    PendingAuthorityDigest.Reset();
+    AuthorityDigestInbox.Reset();
     PendingAuthorityCorrections.Reset();
     bWorkerCorrectionPending = false;
     UE_LOG(LogTemp, Display,

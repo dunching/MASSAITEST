@@ -1,5 +1,110 @@
 # MassAI Crowd Demo 功能检查表
 
+## 2026-08-03 当前状态
+
+- [x] [COMPUTED][HIGH] 每 Tick Commit 已收敛为唯一 Movement Boundary Commit；重复 CommitPlan、PostFinalize State 和常驻 Checkpoint State 数组已物理删除。
+- [x] [COMPUTED][HIGH] Final Business 只为 Dirty Ref 构造；Checkpoint State 只在发布门之后临时构造；DisableUnity、17 项自动化、9785 T5/600 与 9786 T8/900 Golden 通过。
+- [x] [COMPUTED][HIGH] Legacy Round 普通 Correction 已默认关闭；只有 `-CrowdDemoLegacyFullCorrectionDiagnostic` 可显式开启。默认双 PIE 的旧 server full frame/client header 均为 0，WA7-R 稀疏 Scope Correction 门通过。
+- [x] [COMPUTED][HIGH] WA7-R Digest 已改为 Unreliable 自覆盖传输；丢失、乱序、重复、更新覆盖和 resync reset 单元门通过。
+- [x] [COMPUTED][HIGH] Worker Result Apply Proxy 已提供稳定实体视图、Stable Slot、Published Dirty Batch 与 ACK；普通 Intent/Proxy refresh 无完整 membership copy/sort/map。
+- [x] [COMPUTED][HIGH] `FCrowdDemoRoundBoundaryGatherStage`、`RequestSubmitQuery`、公共 Runner/Orchestrator/WorkGraph、Round 四阶段和 Poll shell 已物理删除；完整 Snapshot Mass 读取只允许 Input Sync bootstrap/Plan Revision。
+- [x] [COMPUTED][HIGH] 9779 T8/900 Golden 与 9781 T5/600 通过；step 600 均为 full-publish/hash/token=`1/3/598`，零 stale lifecycle。
+- [x] [COMPUTED][HIGH] 最终 Mass Result Apply 已使用持久 StableEntityRef→Handle 索引和 Dirty EntityCollection；写入前验证完整成员/Lifecycle/Fragment 集合，正常帧无无界完整 Query traversal。
+- [x] [COMPUTED][HIGH] 9782 T5/600 与 9784 T8/900 Golden 通过；Dirty Mass 遥测在 T8 动态场景为每批 20/20。
+- [x] [COMPUTED][HIGH] 9790 全 Production T5/600 与 9791 T8/900 通过；T8 只保留 1 个 `plan_phase=1.000` RoundResult Checkpoint，普通完整 Correction 为 0。
+- [x] [COMPUTED][HIGH] Target 已按 Cohort scope 增量失效；10k 双 Cohort 回归中仅受影响的 5000 实体执行 40 个 128 Guidance shard，未受影响 Cohort 无 Dirty/Topology rebuild。
+- [x] [COMPUTED][HIGH] Particle 多闭合 Interaction Island 已独立 Solve 并稳定归并，且有全局 exact Applied-State 验证与单体 fail-closed fallback。
+- [ ] [INFERRED][HIGH] Particle 大型单 Island 的 Cell-Pair Owner/逐轮 Barrier 分片仍 OPEN；当前 Cell 遥测不等于 Cell Solver 完成。
+- [ ] [COMPUTED][HIGH] 9780 T5 step 886 Target Demand 可行区不足仍 OPEN；不得用 9781 的 600 Tick 门覆盖该长窗口缺陷。
+- [ ] [INFERRED][HIGH] WA8 下一项是把 RoundResult/Late Join 迁到专用 Checkpoint 载荷，再物理删除 Legacy Correction producer/consumer/RPC；随后关闭 Target 长窗口缺陷，WA8.5/WA9 继续后置。
+
+## 历史切片记录（不覆盖上方当前状态）
+
+- [x] [COMPUTED][HIGH] Round 公共 Boundary Runner/commit envelope 依赖已移除，插件 Runner 文件与 Legacy Runner 测试已物理删除。
+- [x] [COMPUTED][HIGH] Round 直接 Apply Plan 验证与原子提交已通过 DisableUnity、结构自动化和真实 T8 step 300 门。
+- [ ] [COMPUTED][HIGH] 完整 T8 回归仍 OPEN：9724 step 415 Particle failure-trace replay hash mismatch。
+- [ ] [INFERRED][HIGH] 下一项是修复 Particle replay 后删除 Round 四阶段/Poll shell；WorkGraph/Orchestrator 类型仍有 Round 消费者，当前不得删除。
+
+- [x] [COMPUTED][HIGH] WA8 Demo transaction shell 脱钩：Friendly/Mixed Coordinator 均不再引用 Runner，Mixed 不再引用 WorkGraph；fallback 改为纯 Kernel plan，GT 仍以完整验证后的原子 Apply 为唯一写入边界。
+- [x] [COMPUTED][HIGH] 本切片构建/结构/功能回归：Development Editor DisableUnity、Mixed/Friendly Architecture、9706 fallback、9707 Friendly Production、9709 Mixed 六 Domain Production 通过。
+- [x] [COMPUTED][HIGH] Behavior Shadow 自主预测合同：bootstrap 严格状态 parity，普通 Intent 严格控制/命令 parity；9714 完成 600/600 expectation、双端业务 PASS、零 violation。
+- [ ] [INFERRED][HIGH] WA8 下一结构项：迁移 Round 的最后一个生产 Runner/WorkGraph 消费者，再物理删除公共 API/Legacy 测试并执行 AST/注册审计。
+- [ ] [COMPUTED][HIGH] WA9 性能仍 OPEN：9709 客户端 frame p95=`35.949ms`，高于 `33.333ms`，且该运行只有 20 实体。
+
+- [x] [COMPUTED][HIGH] WA8 Friendly Production 直接 Apply：Movement+Behavior Production 不创建 Runner，bootstrap 仅发布空全局 MovementControl 与静态实体 Profile，普通帧只发 Intent 增量；9703 完成全部 Friendly 业务/生命周期门，`direct_worker_apply=1`、双端 hash=`3180435972084878253`、硬失败 0。
+- [ ] [INFERRED][HIGH] WA8 下一结构项：让 Mixed/Friendly Shadow/Canary parity 脱离 Runner/WorkGraph transaction shell，删除失去消费者的公共 Legacy API 和测试，再删除 Round 四阶段/Poll shell。
+
+[COMPUTED][HIGH] 9701 更新：full-Worker Mixed Production 已绕过 Legacy Runner/WorkGraph，使用 sparse MovementControl v8 + per-entity profile 和 Worker dirty Facing 原子 Apply；600 Tick PASS，Impact/Damage/Death=`66/66/13`、duplicate/stale=`0/0`、min separation=`70.04cm`、p95=`17.641ms`。
+
+[COMPUTED][HIGH] Mixed 当前没有 TargetControl cohort/flow，因此 LocalPredictive 在该 sparse control 中保持关闭；Worker Movement/Particle 与 GT safety commit 仍启用。WA8 仍因 Friendly Runner、Round 四阶段 shell 与 fallback/public Legacy API 存在而不勾选。
+
+[COMPUTED][HIGH] WA8 增量更新：full-Worker Mixed 9689 已在 Movement/Behavior/Target/Particle/Projectile/Combat 全 Production 下完成 600 Tick，业务计数、projectile 守恒、零 duplicate、零 stale reject 和 p95 门均通过；Production combat/projectile apply 不再被 Legacy parity 否决，指标也改由 Worker output 累计。
+
+[INFERRED][HIGH] WA8 仍不得勾选完成：Mixed Production 尚会执行 Legacy combat/projectile prepare，Friendly/Mixed Legacy Runner 与 Round Boundary shell 尚未物理删除。
+
+[COMPUTED][HIGH] 9690 更新：Mixed Production 的 Legacy projectile/impact/health prepare 已删除，600 Tick 回归 PASS；尚存 GT Attack Planner（Behavior MovementLock/标签消费者）、Friendly/Mixed Legacy Runner 与 Round Boundary shell，因此 WA8 仍不勾选。
+
+[COMPUTED][HIGH] 9691 更新：Combat state v2 已承载 Commit movement lock，Mixed Production GT Attack Planner 已从热路径删除，600 Tick 再次 PASS。WA8 仍因 Friendly/Mixed Boundary Runner/WorkGraph 与 Round transaction shell 存在而不勾选。
+
+## 2026-08-02 WA8 T8 realtime closure
+
+- [x] [COMPUTED][HIGH] Production Movement/Particle/Facing tail直接从完整验证后的Worker输出构造原子Commit Plan；Shadow/Canary对照路径不变。
+- [x] [COMPUTED][HIGH] 普通全Worker T8的Clock Intent在Legacy domain staging前提交；同Generation、同Plan、bootstrap完成、无Target且五域Production门均有结构断言。
+- [x] [COMPUTED][HIGH] 9687 Round 1/2性能通过：p95=`33.999/33.981ms`、realtime=`0.998/1.000`、pending=`902/901`。
+- [x] [COMPUTED][HIGH] 两轮900 Tick业务闭合；Round 1为50次spawn/impact/damage、duplicate=0、hash=`439379904/1411313634/6141440`，零Violation/Rejected。
+- [x] [COMPUTED][HIGH] Development Editor DisableUnity与`CrowdDemo.Architecture.PostFinalizeMinimalQuery`通过。
+- [ ] [INFERRED][HIGH] 下一门：全Worker Mixed 600 Tick完整业务覆盖；WA8 Legacy shell仍不得标记删除完成。
+
+## 2026-08-02 WA8 Round transition closure
+
+- [x] [COMPUTED][HIGH] ProjectileControl fresh Revision 可显式替换状态并从 FixedStep 0 开始新 Round；同 Revision CombatClock 仍只做 autonomous continuation。
+- [x] [COMPUTED][HIGH] MovementControl 完整 Resource replan 稳定覆盖同轮 anchored TimeWheel continuation，不重复规划。
+- [x] [COMPUTED][HIGH] PlanRevision 变化发送一次 input-owned InputSnapshot baseline；普通 Tick 不发送实体状态。
+- [x] [COMPUTED][HIGH] 9685 在同一 Generation、`resnapshots=1` 下从 Round 1 的 900 Tick 进入 Round 2，并继续到 step 300，无 Domain failure。
+- [x] [COMPUTED][HIGH] 该历史性能缺口已由9686/9687关闭；最新Round 1 p95=`33.999ms`、realtime=`0.998`、boundary pending=`902`。
+- [ ] [INFERRED][HIGH] WA8仍不得关闭；下一项是Mixed完整业务门，不是直接宣告Legacy删除完成。
+
+## 2026-08-02 WA8 T8 closure update
+
+- [x] [COMPUTED][HIGH] Round autonomous Behavior expectation 不再为无消费者路径累计 MatchedEventBatch；容量专项通过。
+- [x] [COMPUTED][HIGH] Combat/HitFlash 使用 canonical SimulationTick 时钟，900 Tick Worker/Legacy Combat payload 一致。
+- [x] [COMPUTED][HIGH] Round 末尾不再提交重复 Clock Tick；9680 终局 50/50/50、duplicate=0，ProjectileControl `published=1/reused=899`。
+- [ ] [COMPUTED][HIGH] 性能未通过：fixed-step p95=`67.871ms`、realtime=`0.500`。
+- [x] [COMPUTED][HIGH] 该9680历史失败已由9685关闭：同 World Round 2 已继续到step 300。
+- [ ] [INFERRED][HIGH] WA8 不得关闭，Legacy shell 不得删除。
+
+## 2026-08-02 WA8 Projectile clock slice
+
+- [COMPUTED][HIGH] PASS：不更新 ProjectileControl revision 的 CombatClock 可连续推进 Projectile/Combat executor。
+- [COMPUTED][HIGH] PASS：Projectile 语义 hash 排除 tick/time、动态 position/velocity/health/attack state 与当前 projectile mirror。
+- [COMPUTED][HIGH] PASS：Mixed 等待/校验区分 Worker StateRevision 与配置 ControlRevision。
+- [COMPUTED][HIGH] PASS：Shadow/Canary 保留逐 Tick HostInput；9664 Mixed Behavior+Combat Production 兼容门在 step 600 PASS。
+- [x] [COMPUTED][HIGH] RESOLVED：全 Worker T8 step 9 Behavior Authority event-batch容量问题已修复；9680完成900 Tick业务终局。
+- [COMPUTED][HIGH] BLOCKED：全 Worker Mixed 到 step 2106 仍未满足 death/target-switch/impact 业务覆盖。
+- [INFERRED][HIGH] WA8 不得关闭，Legacy Runner/四阶段不得开始删除。
+
+## WA8 Mixed ordinary intent checkpoint (2026-08-02)
+
+- [x] [COMPUTED][HIGH] Mixed bootstrap保留一次完整`BoundarySnapshot`；普通Worker帧改用`SubmitIntentBatch`，不把普通帧Snapshot传入Worker输入合同。
+- [x] [COMPUTED][HIGH] Mixed生产生命周期操作通过有界Coordinator journal提交显式Despawn、Spawn与Movement Profile Revision；Runtime接受后才清空journal。
+- [x] [COMPUTED][HIGH] Worker Despawn `ReasonId`与零基业务枚举解耦并映射为1-based非零值；9651在step 226接受首次Despawn、step 271接受Spawn/Profile Revision。
+- [x] [COMPUTED][HIGH] Mixed Production提交Worker-owned Behavior输出，不要求异步Worker运动学或Source输出Hash等于GT Prepared镜像；生命周期、输入水位、fixed step、事件和事务token仍fail-closed验证。
+- [x] [COMPUTED][HIGH] 9651真实Production服务端运行到step 600 PASS，spawn/despawn=`1/1`、stale reject=`0`、Worker普通Intent submitted=`600`且零`VIOLATION`；Development Editor DisableUnity、Architecture 1/1与`WorkerAuthoritativeSparse` 1/1通过。
+
+## WA8 Friendly Behavior incremental checkpoint (2026-08-02)
+
+- [x] [COMPUTED][HIGH] Added ordered Spawn, Despawn, and typed Movement Profile Revision input adapters with stable sequence assignment.
+- [x] [COMPUTED][HIGH] Added per-entity MovementProfile codec/store field and shared live-profile resolution for MovementPlanning, Movement, and Particle.
+- [x] [COMPUTED][HIGH] Round bootstrap publishes profiles once; ordinary intent frames do not encode the complete MovementControl profile.
+- [x] [COMPUTED][HIGH] Same-batch LifecycleSerial reuse plus Profile Revision is covered by RuntimeV2 automation.
+- [x] [COMPUTED][HIGH] Sparse Movement correction invalidates derived continuation and passes the formal dual-PIE recovery gate.
+- [x] [COMPUTED][HIGH] Friendly Logistics real Mass recycle now appends a bounded Despawn -> Spawn -> Movement Profile Revision journal from the production entity-replacement site; Worker Input Sync drains and acknowledges it only after Runtime accepts the intent batch.
+- [x] [COMPUTED][HIGH] Friendly Worker bootstrap uses one BoundarySnapshot, while ordinary Worker frames use the intent-only entry and publish an ordered reliable lifecycle Spawn before records for the replacement lifecycle.
+- [x] [COMPUTED][HIGH] Friendly ordinary intents no longer carry complete per-entity Behavior contexts. Clock intents schedule local Behavior evaluation from Worker Movement; only contexts containing typed external records enter the intent batch, and sparse parity validates only the affected entities.
+- [x] [COMPUTED][HIGH] Friendly Production commits Worker-owned Source/Resolved/Business output after validating lifecycle, input sequence, fixed step, ordered events, and the unchanged GT transaction token. The dedicated `WorkerAuthoritativeSparse` test locks sparse matching and rejects duplicate authoritative commits.
+- [x] [COMPUTED][HIGH] Friendly server run 9644 and real server+client run 9645 passed the 40-second Claim/Pickup/recycle/Fallback/Deliver gate. Run 9645 closed the previous external-client backlog failure.
+- [ ] [INFERRED][HIGH] Delete the Legacy Round BoundarySnapshot/four-stage transaction only after the remaining Target/Projectile inputs are independent deltas and Friendly/Mixed no longer consume the Legacy Runner.
+
 [INFERRED][HIGH] 本表只在生产调用链和对应专项门同时满足时勾选。接口、Codec或测试夹具存在但未接入生产，不得标为完整通过；Behavior Source现行状态以`EntityBehaviorSourceArchitecture.md`为准。
 
 [COMPUTED][HIGH] T9 Mixed Combat Integration、DP0–DP6、PJ0–PJ6、S0–S6和R0–R7均已关闭。pre-T9提交`5b947389`只作为历史恢复基线；当前未关闭的游戏循环阶段是T10，另有独立性能架构阶段AB1–AB6尚未关闭。
@@ -13,8 +118,8 @@
 - [x] [COMPUTED][HIGH] WA4：Worker Target Executor持有Cohort Membership、Demand、Plan、Quota execution、Target Revision与Flow/Target资源订阅；Topology/Plan按Revision缓存，OutputDirty只发布变化代理。Shadow/封闭Canary/Production门已接入，Production停止Legacy Target资源发布并以Worker Target proxy驱动Guidance，同时保持BusinessOverride优先级。RuntimeV2 20/20、Development Editor DisableUnity、9424/9425/9431通过；9431到step 300为20/20 verified且无Violation。
 - [x] [COMPUTED][HIGH] WA5：Projectile/CombatReactive Domain与全局闭合集Writer、终态不回灌、ordered lifecycle/hit event已实现；Round T8及Mixed T9的Attack/Cooldown、Damage/Death/Hit React和同Epoch Combat→Movement均已切为Worker Commit Writer。9451/9452/9453完成T8 Shadow/闭合Canary/Production到step 300；9467/9468/9469完成T9 Shadow/闭合Canary/Production到step 600，三次业务计数和entity/membership/commit hash一致。Demo Combat状态、active Projectile checkpoint和event baseline已通过新Executor下一步逐字重放；Codec专项与RuntimeV2 21/21通过。
 - [x] [COMPUTED][HIGH] WA6：Lifecycle与Behavior Worker权威已关闭；覆盖同批StableEntityRef复用、LifecycleSerial失效、Capability Binding、Source/Command幂等、Business Commit Ledger、Worker prepared commit及Behavior→Movement同Epoch消费。RuntimeV2 24/24，T6M 9531、Friendly 9532、Mixed 9533 Production正式门通过。
-- [ ] [INFERRED][HIGH] WA7：Checkpoint/Delta/Late Join/Client Prediction/Correction。
-- [ ] [INFERRED][HIGH] WA8：删除四节点Boundary、Frame Transaction、完整Gather/Commit与旧Mailbox。
+- [x] [COMPUTED][HIGH] WA7-R：有序Intent、Digest、稀疏Correction、Checkpoint、Late Join顺序门和300 Tick双PIE无纠错/单Scope恢复门已通过。
+- [ ] [COMPUTED][HIGH] WA8：Round、Friendly与Mixed普通Worker帧均已切到Intent入口；完整MovementControl Profile已冻结，同Plan Mass与Mixed Coordinator的Spawn/Despawn/Profile journal已接通，Friendly/Mixed Behavior提交均消费Worker-owned输出。仍待Target/Projectile增量化、完整Legacy Mass Snapshot/Runner及四节点Boundary/旧Mailbox物理删除。
 - [ ] [INFERRED][HIGH] WA9：完整自动化、构建、场景、规模、网络、视觉与性能关闭门。
 
 ## PW0–PW8 持久Worker Simulation Runtime检查表

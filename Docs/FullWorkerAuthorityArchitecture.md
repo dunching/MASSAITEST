@@ -2,9 +2,15 @@
 
 ## 0. 文档状态
 
-[INFERRED][HIGH] 本文是 WA0–WA9 的目标架构事实源，并正式取代“四个 GT Boundary Processor”作为 AB5 终态。`AB5FourNodeBoundaryContract.md`只保留迁移历史；现有四节点是临时 `Legacy Domain Adapter`，不得再扩展为长期模拟架构。
+[INFERRED][HIGH] 本文是 WA0–WA9 的目标架构事实源，并正式取代“四个 GT Boundary Processor”作为终态。`AB5FourNodeBoundaryContract.md`及下方四节点描述只保留迁移历史；四节点、公共 Runner/Orchestrator/WorkGraph 与 Round Poll shell 已从当前生产结构删除。
 
-[COMPUTED][HIGH] 当前生产仍是混合态：Movement、Particle/Interaction与Target/Cohort已拥有Worker Production Owner，Combat、Lifecycle和Behavior仍依赖Legacy Boundary。本文描述目标及迁移门，不把尚未完成的迁移写成现状。
+[COMPUTED][HIGH] 当前所有模拟域均已有 Worker Production Owner：Movement、Particle/Interaction、Target/Cohort、Combat/Projectile、Lifecycle 与 Behavior 均由 Worker 持有。WA7-R Intent/Correction/Checkpoint/Late Join 主合同已关闭，Digest 也已对齐为 Unreliable 自覆盖传输。
+
+[COMPUTED][HIGH] WA8 已删除 `FCrowdDemoRoundBoundaryGatherStage`、`RequestSubmitQuery` 和普通 Result Apply 全查询 fallback；稳定实体视图和 Dirty Batch 使普通 Proxy refresh 只验证/应用 Dirty Slot。9779 T8/900 Golden 与 9781 T5/600 通过。
+
+[COMPUTED][HIGH] 持久 StableEntityRef→Mass Handle 索引和最终 Dirty Mass Apply Plan 已完成；普通 Mass 写入只遍历已验证 Dirty EntityCollection。
+
+[INFERRED][HIGH] 当前下一结构门是删除 Demo-local 普通帧完整成员 DAG 和 Commit/PostFinalize/Checkpoint CPU 数组。9780 的 T5 step 886 Target Demand 拒绝也必须在 WA9 前单独关闭；不得直接开始三个 10k 场景。
 
 ## 1. 唯一权威与方向
 

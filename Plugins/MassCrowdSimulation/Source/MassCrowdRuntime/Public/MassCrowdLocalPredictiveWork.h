@@ -24,6 +24,10 @@ struct FCrowdMassLocalPredictiveWorkOutput
   FCrowdLocalPredictiveSummary Summary;
   FCrowdLocalPredictiveDiagnosticTrace DiagnosticTrace;
   uint32 StableHash = 2166136261u;
+  uint32 FailureTraceReplayCandidateHash = 2166136261u;
+  bool bFailureTraceReplayAttempted = false;
+  bool bFailureTraceReplayMatched = false;
+  bool bFailureTraceReplayValid = false;
   bool bCompleted = false;
 };
 

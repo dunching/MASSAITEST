@@ -837,9 +837,22 @@ bool FMassCrowdWorkerResultApplyProxyTest::RunTest(
   TestTrue(TEXT("result proxy initializes"),
     Proxy.ResetQuiescent(7, Limits));
   const FCrowdStableEntityRef CurrentRefs[] = {
-    {1, 10, 1}, {1, 20, 2}};
+    {1, 20, 2}, {1, 10, 1}};
   TestTrue(TEXT("current GT lifecycle set accepted"),
     Proxy.UpdateCurrentEntities(7, CurrentRefs));
+  const TConstArrayView<FCrowdStableEntityRef> StableEntityView =
+    Proxy.GetStableEntityView();
+  TestEqual(TEXT("stable lifecycle view is complete"),
+    StableEntityView.Num(), 2);
+  if (StableEntityView.Num() == 2)
+  {
+    TestEqual(TEXT("stable lifecycle view is stable-ref ordered first"),
+      StableEntityView[0], FCrowdStableEntityRef({1, 10, 1}));
+    TestEqual(TEXT("stable lifecycle view is stable-ref ordered second"),
+      StableEntityView[1], FCrowdStableEntityRef({1, 20, 2}));
+    TestEqual(TEXT("stable lifecycle slot lookup is persistent"),
+      Proxy.FindStableEntitySlot({1, 20, 2}), 1);
+  }
 
   FCrowdWorkerPublishedExchange Exchange;
   TestTrue(TEXT("result fixture exchange initializes"),
@@ -895,6 +908,26 @@ bool FMassCrowdWorkerResultApplyProxyTest::RunTest(
     Proxy.GetMetrics().LastAppliedEventSequence, uint64{1});
   TestEqual(TEXT("domain patch counted"),
     Proxy.GetMetrics().AppliedDomainPatchCount, uint64{1});
+  const FCrowdWorkerResultApplyDirtyBatch* DirtyBatch =
+    Proxy.PeekDirtyBatch();
+  TestNotNull(TEXT("published dirty batch is available"), DirtyBatch);
+  if (DirtyBatch)
+  {
+    TestEqual(TEXT("dirty batch carries only domain patches"),
+      DirtyBatch->Records.Num(), 1);
+    if (DirtyBatch->Records.Num() == 1)
+    {
+      TestEqual(TEXT("dirty record uses stable slot"),
+        DirtyBatch->Records[0].StableSlot, 0);
+      TestEqual(TEXT("dirty record preserves field owner"),
+        DirtyBatch->Records[0].DomainState.Field,
+        ECrowdWorkerField::Movement);
+    }
+    TestTrue(TEXT("dirty batch consumes by publish sequence"),
+      Proxy.AcknowledgeDirtyBatch(DirtyBatch->PublishSequence));
+    TestNull(TEXT("dirty batch is absent after consume"),
+      Proxy.PeekDirtyBatch());
+  }
 
   FCrowdWorkerPublishedExchange RestoredExchange;
   TestTrue(TEXT("checkpoint event baseline restores"),
@@ -1821,6 +1854,7 @@ bool FMassCrowdWorkerShadowNetworkCheckpointStartTest::RunTest(
   Header.Generation = 41;
   Header.WorkerEpoch = 1;
   Header.AbsoluteSimulationTick = 1;
+  Header.FixedSimulationQuantumSeconds = 1.0 / 30.0;
   Header.LastAppliedInputSequence = InputSequence;
   Header.EntityStateHash = States.CalculateStableHash();
   Header.ResourceRevisionHash = Resources.CalculateCurrentStableHash();

@@ -8,6 +8,7 @@
 #include "MassCrowdReplicationActor.generated.h"
 
 class APlayerController;
+class FCrowdAsyncSimulationRuntime;
 
 struct MASSCROWDNETWORKING_API FCrowdWorkerNetworkTrafficMetrics
 {
@@ -57,6 +58,9 @@ public:
     FCrowdWorkerNetworkCheckpoint& OutCheckpoint);
   bool DrainWorkerIntents(
     TArray<FCrowdWorkerIntentBatch>& OutBatches);
+  // Called after the client Runtime polls so a newly-produced local digest is
+  // compared in the same frame as its network counterpart.
+  void PumpWorkerClientRuntime(FCrowdAsyncSimulationRuntime& Runtime);
   bool IsWorkerReady() const { return bWorkerClientReady; }
   const FCrowdWorkerNetworkTrafficMetrics&
     GetWorkerTrafficMetrics() const { return WorkerTrafficMetrics; }
@@ -137,6 +141,9 @@ protected:
   void ServerAckBaseline(uint32 Revision, uint64 ResumeSequence);
   UFUNCTION(Server, Reliable)
   void ServerRequestResync();
+  // Digest is low frequency and self-replacing. Loss is tolerated because the
+  // next cadence covers the same authority scopes; ordering is enforced by
+  // DigestSequence without coupling digest delivery to reliable intent traffic.
   UFUNCTION(Client, Unreliable)
   void ClientWorkerDigest(
     uint64 Generation,
@@ -208,7 +215,7 @@ private:
   uint64 NextWorkerCorrectionSequence = 1;
   TArray<FOutgoingWorkerPacket> OutgoingWorkerPackets;
   TArray<FCrowdWorkerIntentBatch> PendingWorkerIntents;
-  TOptional<FCrowdWorkerAuthorityDigestBatch> PendingAuthorityDigest;
+  FCrowdWorkerAuthorityDigestInbox AuthorityDigestInbox;
   TArray<FCrowdWorkerAuthorityCorrectionBatch>
     PendingAuthorityCorrections;
   TArray<FCrowdWorkerAuthorityCorrectionBatch>

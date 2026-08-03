@@ -1,5 +1,6 @@
 #include "MassCrowdWorkerLifecycleBehaviorDomain.h"
 
+#include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerShadowSync.h"
 
 namespace CrowdWorkerLifecycleBehaviorPrivate
@@ -155,6 +156,18 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
   {
     FCrowdBehaviorSourceSet Canonical = SourceSet;
     Canonical.Revision = 1;
+    Canonical.RecalculateStableHash();
+    return Canonical.StableHash;
+  }
+
+  uint64 CalculateSourceSetControlHash(
+    const FCrowdBehaviorSourceSet& SourceSet)
+  {
+    FCrowdBehaviorSourceSet Canonical = SourceSet;
+    Canonical.Revision = 1;
+    for (FCrowdBehaviorSourceInstance& Instance :
+      Canonical.Instances)
+      Instance.State = {};
     Canonical.RecalculateStableHash();
     return Canonical.StableHash;
   }
@@ -532,6 +545,54 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
         EmptyContributions, OutState.ResolvedChannels))
       return false;
     return OutState.IsValid();
+  }
+
+  bool RefreshEvaluationKinematics(
+    const FCrowdWorkerDomainContext& Context,
+    const FCrowdStableEntityRef& EntityRef,
+    const int64 FixedStepIndex,
+    FCrowdBehaviorEntityEvaluationContext& InOutContext)
+  {
+    if (!Context.EntityStates) return false;
+
+    FVector Position = FVector::ZeroVector;
+    FVector Velocity = FVector::ZeroVector;
+    float YawDegrees = 0.0f;
+    if (const FCrowdWorkerDirtyStateRecord* Movement =
+        Context.EntityStates->Find(
+          EntityRef, ECrowdWorkerField::Movement))
+    {
+      FCrowdWorkerMovementState State;
+      if (!FCrowdWorkerMovementStateCodec::Decode(
+          Movement->Payload, State))
+        return false;
+      Position = State.Position;
+      Velocity = State.Velocity;
+      YawDegrees = State.YawDegrees;
+    }
+    else
+    {
+      const FCrowdWorkerDirtyStateRecord* Input =
+        Context.EntityStates->Find(
+          EntityRef, ECrowdWorkerField::InputSnapshot);
+      FCrowdWorkerBoundaryKinematicState State;
+      if (!Input
+        || !FCrowdWorkerBoundaryStateCodec::DecodeKinematicState(
+          Input->Payload, State))
+        return false;
+      Position = State.Position;
+      Velocity = State.Velocity;
+      YawDegrees = State.YawDegrees;
+    }
+
+    InOutContext.EntityRef = EntityRef;
+    InOutContext.FixedStepIndex = FixedStepIndex;
+    InOutContext.Position = Position;
+    InOutContext.Velocity = Velocity;
+    InOutContext.Facing =
+      FRotator(0.0f, YawDegrees, 0.0f).Vector();
+    InOutContext.RecalculateStableHash();
+    return InOutContext.IsValid();
   }
 }
 
@@ -1153,9 +1214,17 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
           TEXT("boundary_clock"), {}, 0, 0, 0, 0);
     }
   }
-  const int64 EpochBehaviorFixedStep = BoundaryFixedStep >= 0
-    ? static_cast<int64>(BoundaryFixedStep)
-    : static_cast<int64>(Context.AbsoluteSimulationTick);
+  // The bootstrap boundary resource remains in the versioned resource store
+  // during autonomous epochs. It is a state baseline, not a clock ceiling.
+  // Ordered Clock intents own forward progress after bootstrap.
+  const int64 EpochBehaviorInputCeiling = FMath::Max<int64>(
+    BoundaryFixedStep,
+    static_cast<int64>(Context.AbsoluteSimulationTick));
+  const int64 EpochBehaviorFixedStep = FMath::Max<int64>(
+    BoundaryFixedStep,
+    Context.AbsoluteSimulationTick > 0
+      ? static_cast<int64>(Context.AbsoluteSimulationTick - 1)
+      : 0);
   for (const FCrowdWorkerWorkItem& Work : WorkItems)
   {
     if (Work.Key.Domain != GetDomainId()
@@ -1178,6 +1247,7 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
 
     FCrowdWorkerBehaviorState Current;
     bool bHadState = false;
+    uint64 CurrentBehaviorStateRevision = 0;
     if (const FCrowdWorkerDirtyStateRecord* Existing =
       Context.EntityStates->Find(
         EntityRef, ECrowdWorkerField::Behavior))
@@ -1191,6 +1261,7 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
           TEXT("decode_state"), EntityRef,
           0, 0, 0, 0);
       bHadState = true;
+      CurrentBehaviorStateRevision = Existing->StateRevision;
     }
     else
     {
@@ -1206,7 +1277,7 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
               Record.Payload, Update)
           || Update.EntityRef != EntityRef
           || Update.EffectiveFixedStep
-            > EpochBehaviorFixedStep)
+            > EpochBehaviorInputCeiling)
           return Reject(
             TEXT("bootstrap_binding"), EntityRef,
             DueRecords.Num(), 0, 0, 0);
@@ -1271,7 +1342,7 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
             Record.Payload, InputContext)
           || InputContext.EntityRef != EntityRef
           || InputContext.FixedStepIndex
-            > EpochBehaviorFixedStep)
+            > EpochBehaviorInputCeiling)
           return Reject(
             TEXT("decode_context"), EntityRef,
             DueRecords.Num(),
@@ -1291,7 +1362,7 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
             Record.Payload, Update)
           || Update.EntityRef != EntityRef
           || Update.EffectiveFixedStep
-            > EpochBehaviorFixedStep)
+            > EpochBehaviorInputCeiling)
           return Reject(
             TEXT("decode_binding"), EntityRef,
             DueRecords.Num(),
@@ -1337,6 +1408,14 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
     if (BehaviorFixedStep < Current.LastFixedStep)
       return Reject(
         TEXT("fixed_step_regression"), EntityRef,
+        Commands.Num(),
+        Current.SourceSet.CapabilityBinding.ProfileKey.Value,
+        0, 0);
+    if (!RefreshEvaluationKinematics(
+        Context, EntityRef, BehaviorFixedStep,
+        EvaluationContext))
+      return Reject(
+        TEXT("refresh_evaluation_kinematics"), EntityRef,
         Commands.Num(),
         Current.SourceSet.CapabilityBinding.ProfileKey.Value,
         0, 0);
@@ -1755,7 +1834,8 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
       Dirty.Field = ECrowdWorkerField::Behavior;
       Dirty.Generation = Context.Generation;
       Dirty.WorkerEpoch = Context.WorkerEpoch;
-      Dirty.StateRevision = FMath::Max<uint64>(
+      Dirty.StateRevision = FMath::Max3<uint64>(
+        CurrentBehaviorStateRevision + 1,
         Context.WorkerEpoch,
         Next.LastConsumedCommandInputSequence);
       Dirty.SourceInputSequence =
@@ -1937,7 +2017,9 @@ bool FCrowdWorkerBehaviorAuthority::QueueCommittedExpectation(
   const uint64 InputSequence,
   const FCrowdBehaviorSourceRuntime& Runtime,
   const TConstArrayView<FCrowdBehaviorEntityEvaluationContext>
-    CommittedContexts)
+    CommittedContexts,
+  const bool bRequireKinematicParity,
+  const bool bRequireSourceStateParity)
 {
   if (!bInitialized || Metrics.bViolation
     || Generation != Metrics.Generation || InputSequence == 0
@@ -1973,6 +2055,9 @@ bool FCrowdWorkerBehaviorAuthority::QueueCommittedExpectation(
 
   FExpectation Expectation;
   Expectation.InputSequence = InputSequence;
+  Expectation.bRequireKinematicParity = bRequireKinematicParity;
+  Expectation.bRequireSourceStateParity =
+    bRequireSourceStateParity;
   TArray<FCrowdStableEntityRef> SortedRefs;
   LatestContexts.GetKeys(SortedRefs);
   SortedRefs.Sort();
@@ -1996,6 +2081,8 @@ bool FCrowdWorkerBehaviorAuthority::QueueCommittedExpectation(
     Entity.SourceSetHash = SourceSet->StableHash;
     Entity.SourceSetContentHash =
       CalculateSourceSetContentHash(*SourceSet);
+    Entity.SourceSetControlHash =
+      CalculateSourceSetControlHash(*SourceSet);
     CalculateSourceSetTraceHashes(
       *SourceSet,
       Entity.SourceStateTraceHash,
@@ -2005,6 +2092,11 @@ bool FCrowdWorkerBehaviorAuthority::QueueCommittedExpectation(
     Entity.SourceInstanceCount = SourceSet->Instances.Num();
     Entity.ResolvedChannelsHash = Resolved->StableHash;
     Entity.EvaluationContextHash = (*Context)->StableHash;
+    Entity.EvaluationPosition = (*Context)->Position;
+    Entity.EvaluationVelocity = (*Context)->Velocity;
+    Entity.FirstContextRecordHash = (*Context)->Records.IsEmpty()
+      ? 0 : (*Context)->Records[0].CalculateStableHash();
+    Entity.EvaluationContextRecordCount = (*Context)->Records.Num();
   }
   Expectations.Add(MoveTemp(Expectation));
   ++Metrics.QueuedExpectationCount;
@@ -2017,7 +2109,9 @@ bool FCrowdWorkerBehaviorAuthority::QueuePreparedExpectation(
   const uint64 InputSequence,
   const FCrowdBehaviorPreparedBoundary& Prepared,
   const TConstArrayView<FCrowdBehaviorEntityEvaluationContext>
-    StagedContexts)
+    StagedContexts,
+  const bool bRequireKinematicParity,
+  const bool bRequireSourceParity)
 {
   if (!bInitialized || Metrics.bViolation
     || Generation != Metrics.Generation || InputSequence == 0
@@ -2046,20 +2140,23 @@ bool FCrowdWorkerBehaviorAuthority::QueuePreparedExpectation(
   }
   FExpectation Expectation;
   Expectation.InputSequence = InputSequence;
-  Expectation.Entities.Reserve(Prepared.Entities.Num());
+  Expectation.bRequireKinematicParity = bRequireKinematicParity;
+  Expectation.bRequireSourceParity = bRequireSourceParity;
+  Expectation.Entities.Reserve(StagedContexts.Num());
   for (const FCrowdBehaviorPreparedEntity& PreparedEntity :
     Prepared.Entities)
   {
     const FCrowdBehaviorEntityEvaluationContext* const* Context =
       ContextByRef.Find(PreparedEntity.EntityRef);
     if (!CurrentEntities.Contains(PreparedEntity.EntityRef)
-      || !Context || !*Context
-      || PreparedEntity.EvaluationContextHash
-        != (*Context)->StableHash)
+      || (Context && *Context
+        && PreparedEntity.EvaluationContextHash
+          != (*Context)->StableHash))
     {
       LatchViolation();
       return false;
     }
+    if (!Context) continue;
     FExpectedEntity& Entity =
       Expectation.Entities.AddDefaulted_GetRef();
     Entity.EntityRef = PreparedEntity.EntityRef;
@@ -2078,7 +2175,13 @@ bool FCrowdWorkerBehaviorAuthority::QueuePreparedExpectation(
       PreparedEntity.StagedSourceSet.Instances.Num();
     Entity.ResolvedChannelsHash =
       PreparedEntity.ResolvedChannels.StableHash;
-    Entity.EvaluationContextHash = (*Context)->StableHash;
+    Entity.EvaluationContextHash =
+      PreparedEntity.EvaluationContextHash;
+  }
+  if (Expectation.Entities.Num() != ContextByRef.Num())
+  {
+    LatchViolation();
+    return false;
   }
   Expectations.Add(MoveTemp(Expectation));
   ++Metrics.QueuedExpectationCount;
@@ -2089,7 +2192,16 @@ bool FCrowdWorkerBehaviorAuthority::QueuePreparedExpectation(
 bool FCrowdWorkerBehaviorAuthority::IngestOrderedEvents(
   const TConstArrayView<FCrowdWorkerGameplayEvent> Events)
 {
-  if (!bInitialized || Metrics.bViolation) return false;
+  if (!bInitialized || Metrics.bViolation)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("CrowdWorkerBehaviorAuthorityIngestReject reason=authority_state initialized=%d violation=%d generation=%llu events=%d"),
+      bInitialized ? 1 : 0,
+      Metrics.bViolation ? 1 : 0,
+      Metrics.Generation,
+      Events.Num());
+    return false;
+  }
   if (Mode != ECrowdWorkerBehaviorAuthorityMode::Production)
     return true;
   for (const FCrowdWorkerGameplayEvent& Ordered : Events)
@@ -2108,6 +2220,20 @@ bool FCrowdWorkerBehaviorAuthority::IngestOrderedEvents(
       || PendingBehaviorEvents.Num()
           + PendingBusinessCommits.Num() >= 64000)
     {
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdWorkerBehaviorAuthorityIngestReject reason=admission event_generation=%llu authority_generation=%llu source_input=%llu event_sequence=%llu previous_event_sequence=%llu entity=%u:%llu:%u entity_current=%d pending_source=%d pending_business=%d schema=%u"),
+        Ordered.Generation,
+        Metrics.Generation,
+        Ordered.SourceInputSequence,
+        Ordered.EventSequence,
+        LastIngestedBehaviorEventSequence,
+        Ordered.EntityRef.ProviderId,
+        Ordered.EntityRef.StableEntityId,
+        Ordered.EntityRef.LifecycleSerial,
+        CurrentEntities.Contains(Ordered.EntityRef) ? 1 : 0,
+        PendingBehaviorEvents.Num(),
+        PendingBusinessCommits.Num(),
+        Ordered.Payload.SchemaId);
       LatchViolation();
       return false;
     }
@@ -2118,6 +2244,12 @@ bool FCrowdWorkerBehaviorAuthority::IngestOrderedEvents(
           Ordered.Payload, SourceEvent)
         || Ordered.EntityRef != SourceEvent.Handle.EntityRef)
       {
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdWorkerBehaviorAuthorityIngestReject reason=source_decode event_sequence=%llu entity=%u:%llu:%u"),
+          Ordered.EventSequence,
+          Ordered.EntityRef.ProviderId,
+          Ordered.EntityRef.StableEntityId,
+          Ordered.EntityRef.LifecycleSerial);
         LatchViolation();
         return false;
       }
@@ -2134,6 +2266,12 @@ bool FCrowdWorkerBehaviorAuthority::IngestOrderedEvents(
           Ordered.Payload, Contribution)
         || Ordered.EntityRef != Contribution.InstigatorRef)
       {
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdWorkerBehaviorAuthorityIngestReject reason=business_decode event_sequence=%llu entity=%u:%llu:%u"),
+          Ordered.EventSequence,
+          Ordered.EntityRef.ProviderId,
+          Ordered.EntityRef.StableEntityId,
+          Ordered.EntityRef.LifecycleSerial);
         LatchViolation();
         return false;
       }
@@ -2152,7 +2290,8 @@ bool FCrowdWorkerBehaviorAuthority::IngestOrderedEvents(
 bool FCrowdWorkerBehaviorAuthority::QueueAutonomousExpectation(
   const uint64 Generation,
   const uint64 InputSequence,
-  const TConstArrayView<FCrowdStableEntityRef> EntityRefs)
+  const TConstArrayView<FCrowdStableEntityRef> EntityRefs,
+  const bool bCaptureEvents)
 {
   if (!bInitialized || Metrics.bViolation
     || Mode != ECrowdWorkerBehaviorAuthorityMode::Production
@@ -2167,7 +2306,7 @@ bool FCrowdWorkerBehaviorAuthority::QueueAutonomousExpectation(
   FExpectation Expectation;
   Expectation.InputSequence = InputSequence;
   Expectation.bRequireContent = false;
-  Expectation.bCaptureEvents = false;
+  Expectation.bCaptureEvents = bCaptureEvents;
   FCrowdStableEntityRef PreviousRef;
   for (const FCrowdStableEntityRef& EntityRef : EntityRefs)
   {
@@ -2278,11 +2417,18 @@ FCrowdWorkerBehaviorAuthority::ValidateAvailable(
       && Actual.SourceSet.Revision >= Expected.SourceSetRevision
       && CalculateSourceSetContentHash(Actual.SourceSet)
         == Expected.SourceSetContentHash;
-    if ((!bExactSource && !bProductionEquivalentSource)
-      || Actual.ResolvedChannels.StableHash
-        != Expected.ResolvedChannelsHash
-      || Actual.EvaluationContext.StableHash
-        != Expected.EvaluationContextHash)
+    const bool bPredictedControlEquivalentSource = bDecoded
+      && !Expectation.bRequireSourceStateParity
+      && CalculateSourceSetControlHash(Actual.SourceSet)
+        == Expected.SourceSetControlHash;
+    if ((Expectation.bRequireSourceParity
+        && !bExactSource && !bProductionEquivalentSource
+        && !bPredictedControlEquivalentSource)
+      || (Expectation.bRequireKinematicParity
+        && (Actual.ResolvedChannels.StableHash
+            != Expected.ResolvedChannelsHash
+          || Actual.EvaluationContext.StableHash
+            != Expected.EvaluationContextHash)))
     {
       uint64 ActualStateTrace = 0;
       uint64 ActualTimelineTrace = 0;
@@ -2316,6 +2462,30 @@ FCrowdWorkerBehaviorAuthority::ValidateAvailable(
         Actual.ResolvedChannels.StableHash,
         Expected.EvaluationContextHash,
         Actual.EvaluationContext.StableHash);
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdWorkerBehaviorAuthorityContextMismatch entity=%u:%llu:%u input=%llu expected_position=(%.3f,%.3f,%.3f) actual_position=(%.3f,%.3f,%.3f) expected_velocity=(%.3f,%.3f,%.3f) actual_velocity=(%.3f,%.3f,%.3f) expected_records=%d actual_records=%d expected_first_record=%llu actual_first_record=%llu"),
+        Expected.EntityRef.ProviderId,
+        Expected.EntityRef.StableEntityId,
+        Expected.EntityRef.LifecycleSerial,
+        Expectation.InputSequence,
+        Expected.EvaluationPosition.X,
+        Expected.EvaluationPosition.Y,
+        Expected.EvaluationPosition.Z,
+        Actual.EvaluationContext.Position.X,
+        Actual.EvaluationContext.Position.Y,
+        Actual.EvaluationContext.Position.Z,
+        Expected.EvaluationVelocity.X,
+        Expected.EvaluationVelocity.Y,
+        Expected.EvaluationVelocity.Z,
+        Actual.EvaluationContext.Velocity.X,
+        Actual.EvaluationContext.Velocity.Y,
+        Actual.EvaluationContext.Velocity.Z,
+        Expected.EvaluationContextRecordCount,
+        Actual.EvaluationContext.Records.Num(),
+        Expected.FirstContextRecordHash,
+        Actual.EvaluationContext.Records.IsEmpty()
+          ? 0
+          : Actual.EvaluationContext.Records[0].CalculateStableHash());
       LatchViolation();
       return ECrowdWorkerBehaviorValidationResult::Violation;
     }
@@ -2327,6 +2497,13 @@ FCrowdWorkerBehaviorAuthority::ValidateAvailable(
   {
     if (MatchedEventBatches.Num() >= MaxPendingExpectations)
     {
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdWorkerBehaviorAuthorityValidationReject reason=matched_event_capacity input=%llu matched_event_batches=%d capacity=%d pending_source=%d pending_business=%d"),
+        Expectation.InputSequence,
+        MatchedEventBatches.Num(),
+        MaxPendingExpectations,
+        PendingBehaviorEvents.Num(),
+        PendingBusinessCommits.Num());
       LatchViolation();
       return ECrowdWorkerBehaviorValidationResult::Violation;
     }

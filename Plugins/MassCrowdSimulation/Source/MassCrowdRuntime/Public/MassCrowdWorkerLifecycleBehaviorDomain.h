@@ -259,19 +259,24 @@ public:
     uint64 InputSequence,
     const FCrowdBehaviorSourceRuntime& Runtime,
     TConstArrayView<FCrowdBehaviorEntityEvaluationContext>
-      CommittedContexts);
+      CommittedContexts,
+    bool bRequireKinematicParity = true,
+    bool bRequireSourceStateParity = true);
 
   bool QueuePreparedExpectation(
     uint64 Generation,
     uint64 InputSequence,
     const FCrowdBehaviorPreparedBoundary& Prepared,
     TConstArrayView<FCrowdBehaviorEntityEvaluationContext>
-      StagedContexts);
+      StagedContexts,
+    bool bRequireKinematicParity = true,
+    bool bRequireSourceParity = true);
 
   bool QueueAutonomousExpectation(
     uint64 Generation,
     uint64 InputSequence,
-    TConstArrayView<FCrowdStableEntityRef> EntityRefs);
+    TConstArrayView<FCrowdStableEntityRef> EntityRefs,
+    bool bCaptureEvents = true);
 
   bool IngestOrderedEvents(
     TConstArrayView<FCrowdWorkerGameplayEvent> Events);
@@ -301,11 +306,16 @@ private:
     FCrowdStableEntityRef EntityRef;
     uint64 SourceSetHash = 0;
     uint64 SourceSetContentHash = 0;
+    uint64 SourceSetControlHash = 0;
     uint64 SourceStateTraceHash = 0;
     uint64 SourceTimelineTraceHash = 0;
     uint64 SourceCursorTraceHash = 0;
     uint64 ResolvedChannelsHash = 0;
     uint64 EvaluationContextHash = 0;
+    FVector EvaluationPosition = FVector::ZeroVector;
+    FVector EvaluationVelocity = FVector::ZeroVector;
+    uint64 FirstContextRecordHash = 0;
+    int32 EvaluationContextRecordCount = 0;
     uint32 SourceSetRevision = 0;
     int32 SourceInstanceCount = 0;
   };
@@ -315,6 +325,9 @@ private:
     uint64 InputSequence = 0;
     TArray<FExpectedEntity> Entities;
     bool bRequireContent = true;
+    bool bRequireKinematicParity = true;
+    bool bRequireSourceParity = true;
+    bool bRequireSourceStateParity = true;
     bool bCaptureEvents = true;
   };
 

@@ -493,6 +493,25 @@ bool FMassCrowdWorkerPacketTransportTest::RunTest(
       ECrowdWorkerPacketKind::Checkpoint,
       9, 4, 0x12345678ull, Payload, TightConfig,
       Header, Chunks, End));
+
+  FCrowdWorkerPacketTransportConfig NetworkConfig;
+  NetworkConfig.MaxPacketBytes = 64 * 1024;
+  NetworkConfig.MaxChunkCount = 16;
+  TArray<uint8> LargeCheckpoint;
+  LargeCheckpoint.SetNumUninitialized(49 * 1024);
+  for (int32 Index = 0; Index < LargeCheckpoint.Num(); ++Index)
+    LargeCheckpoint[Index] = static_cast<uint8>(Index & 0xff);
+  TestTrue(TEXT("49 KiB checkpoint builds as bounded reliable RPC chunks"),
+    FCrowdWorkerPacketTransport::Build(
+      ECrowdWorkerPacketKind::Checkpoint,
+      10, 5, 0x87654321ull, LargeCheckpoint, NetworkConfig,
+      Header, Chunks, End));
+  TestEqual(TEXT("49 KiB checkpoint uses thirteen 4 KiB chunks"),
+    Chunks.Num(), 13);
+  for (const FCrowdWorkerPacketChunk& Chunk : Chunks)
+    TestTrue(TEXT("worker network chunk stays within reliable RPC cap"),
+      Chunk.Bytes.Num()
+        <= FCrowdWorkerPacketTransportConfig::ReliableRpcSafeChunkBytes);
   return true;
 }
 
@@ -546,6 +565,7 @@ bool FMassCrowdWorkerReplicationCodecTest::RunTest(
     Header.Generation = Generation;
     Header.WorkerEpoch = Epoch;
     Header.AbsoluteSimulationTick = Epoch;
+    Header.FixedSimulationQuantumSeconds = 1.0 / 30.0;
     Header.LastAppliedInputSequence = InputSequence;
     Header.LastOrderedEventSequence = LastOrderedEventSequence;
     Header.EntityStateHash = States.CalculateStableHash();
@@ -680,6 +700,61 @@ bool FMassCrowdWorkerReplicationCodecTest::RunTest(
   TestTrue(TEXT("authority digest contract validates"),
     Digest.IsValid(Config));
 
+  FCrowdWorkerAuthorityDigestInbox DigestInbox;
+  TestTrue(TEXT("first digest is accepted"),
+    DigestInbox.Offer(FCrowdWorkerAuthorityDigestBatch{Digest}));
+  TestEqual(TEXT("first digest is pending"),
+    DigestInbox.Peek()->DigestSequence, uint64{1});
+  DigestInbox.Consume();
+
+  FCrowdWorkerAuthorityDigestBatch DigestThree = Digest;
+  DigestThree.DigestSequence = 3;
+  DigestThree.SimulationTick = 90;
+  DigestThree.ThroughInputSequence = 13;
+  DigestThree.Entries[0].SimulationTick = 90;
+  DigestThree.Entries[0].ThroughInputSequence = 13;
+  DigestThree.RecalculateStableHash();
+  TestTrue(TEXT("digest loss does not create a sequence gap"),
+    DigestInbox.Offer(MoveTemp(DigestThree)));
+
+  FCrowdWorkerAuthorityDigestBatch LateDigest = Digest;
+  LateDigest.DigestSequence = 2;
+  LateDigest.SimulationTick = 60;
+  LateDigest.ThroughInputSequence = 12;
+  LateDigest.Entries[0].SimulationTick = 60;
+  LateDigest.Entries[0].ThroughInputSequence = 12;
+  LateDigest.RecalculateStableHash();
+  TestFalse(TEXT("late out-of-order digest is rejected"),
+    DigestInbox.Offer(MoveTemp(LateDigest)));
+  TestEqual(TEXT("late digest does not replace newer pending digest"),
+    DigestInbox.Peek()->DigestSequence, uint64{3});
+
+  FCrowdWorkerAuthorityDigestBatch DigestFour = Digest;
+  DigestFour.DigestSequence = 4;
+  DigestFour.SimulationTick = 120;
+  DigestFour.ThroughInputSequence = 14;
+  DigestFour.Entries[0].SimulationTick = 120;
+  DigestFour.Entries[0].ThroughInputSequence = 14;
+  DigestFour.RecalculateStableHash();
+  TestTrue(TEXT("newer digest supersedes pending digest"),
+    DigestInbox.Offer(MoveTemp(DigestFour)));
+  TestEqual(TEXT("latest digest remains pending"),
+    DigestInbox.Peek()->DigestSequence, uint64{4});
+  DigestInbox.Consume();
+
+  FCrowdWorkerAuthorityDigestBatch DuplicateFour = Digest;
+  DuplicateFour.DigestSequence = 4;
+  DuplicateFour.SimulationTick = 120;
+  DuplicateFour.ThroughInputSequence = 14;
+  DuplicateFour.Entries[0].SimulationTick = 120;
+  DuplicateFour.Entries[0].ThroughInputSequence = 14;
+  DuplicateFour.RecalculateStableHash();
+  TestFalse(TEXT("consumed digest sequence cannot arrive again"),
+    DigestInbox.Offer(MoveTemp(DuplicateFour)));
+  DigestInbox.Reset();
+  TestTrue(TEXT("resync reset accepts a new digest sequence baseline"),
+    DigestInbox.Offer(FCrowdWorkerAuthorityDigestBatch{Digest}));
+
   FCrowdWorkerAuthorityCorrectionBatch Correction;
   Correction.Generation = Generation;
   Correction.CorrectionSequence = 1;
@@ -755,6 +830,7 @@ bool FMassCrowdWorkerReplicationOrderTest::RunTest(
   Header.Generation = Generation;
   Header.WorkerEpoch = 1;
   Header.AbsoluteSimulationTick = 1;
+  Header.FixedSimulationQuantumSeconds = 1.0 / 30.0;
   Header.LastAppliedInputSequence = 1;
   Header.EntityStateHash = States.CalculateStableHash();
   Header.ResourceRevisionHash =

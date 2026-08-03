@@ -26,14 +26,6 @@ struct FCrowdDemoRoundSharedFlowFieldBuildStage
   void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context);
 };
 
-struct FCrowdDemoRoundBoundaryGatherStage
-{
-  void BindQuery(FMassEntityQuery& Query);
-  void UseQuery(FMassEntityQuery& Query) { EntityQuery = &Query; }
-  void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context);
-  FMassEntityQuery* EntityQuery = nullptr;
-};
-
 struct FCrowdDemoRoundOpenSpawnRelaxationPhasePrepareStage
 {
   void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context);
@@ -94,6 +86,7 @@ struct FCrowdDemoRoundFacingFinalizeStage
   void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context);
   bool ApplyPreparedCommit(
     UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
+    FMassEntityManager& EntityManager,
     FMassExecutionContext& Context);
   FMassEntityQuery* EntityQuery = nullptr;
 };
@@ -153,5 +146,4 @@ protected:
     FMassExecutionContext& Context) override;
 private:
   FMassEntityQuery ResultCommitQuery;
-  FMassEntityQuery RequestSubmitQuery;
 };

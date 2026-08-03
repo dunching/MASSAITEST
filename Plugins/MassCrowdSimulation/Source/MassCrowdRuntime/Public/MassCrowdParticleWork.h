@@ -24,6 +24,16 @@ struct FCrowdMassParticleWorkOutput
   FCrowdParticleConstraintTrace Trace;
   uint32 AppliedStateHash = 2166136261u;
   uint32 StableHash = 2166136261u;
+  uint32 FailureTraceReplayCandidateHash = 2166136261u;
+  int32 InteractionIslandCount = 0;
+  int32 CellShardCount = 0;
+  int32 CrossCellPairCount = 0;
+  int32 MaxIslandAgentCount = 0;
+  bool bUsedIslandSharding = false;
+  bool bUsedMonolithicFallback = false;
+  bool bFailureTraceReplayAttempted = false;
+  bool bFailureTraceReplayMatched = true;
+  bool bFailureTraceReplayValid = false;
   bool bCompleted = false;
 };
 

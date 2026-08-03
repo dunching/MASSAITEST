@@ -4,10 +4,68 @@
 #include "MassCrowdTargetRegionWork.h"
 #include "MassCrowdWorkerRuntimeV2.h"
 
+namespace CrowdWorkerTargetWorkScopes
+{
+  constexpr uint64 EncodeCohortKey(const uint32 CohortKey)
+  {
+    return static_cast<uint64>(CohortKey) + 1;
+  }
+
+  constexpr bool DecodeCohortKey(
+    const uint64 ScopeKey,
+    uint32& OutCohortKey)
+  {
+    if (ScopeKey == 0
+      || ScopeKey > static_cast<uint64>(MAX_uint32) + 1)
+      return false;
+    OutCohortKey = static_cast<uint32>(ScopeKey - 1);
+    return true;
+  }
+}
+
 namespace CrowdWorkerResourceIds
 {
   constexpr uint64 TargetControl = 0x4357544152474554ull;
 }
+
+namespace CrowdWorkerTargetObjectiveIds
+{
+  // Objective ids are wrapped by CrowdWorkerResourceIds::ObjectiveRevision
+  // before entering the versioned resource store.
+  constexpr uint64 PrimaryTarget = 1;
+}
+
+namespace CrowdWorkerTargetConstants
+{
+  // Stable external Particle identity shared by the Target objective and the
+  // Particle domain. Its kinematics come from the per-tick objective revision,
+  // never from the frozen MovementControl template.
+  constexpr int32 PrimaryTargetParticleAgentId = -1000000001;
+}
+
+struct MASSCROWDRUNTIME_API FCrowdWorkerTargetObjectiveRevision
+{
+  int32 TargetRevision = INDEX_NONE;
+  int32 EffectiveFixedStepIndex = INDEX_NONE;
+  FVector2f TargetLocation = FVector2f::ZeroVector;
+  FVector2f TargetVelocity = FVector2f::ZeroVector;
+
+  bool IsValid() const;
+};
+
+class MASSCROWDRUNTIME_API FCrowdWorkerTargetObjectiveRevisionCodec
+{
+public:
+  static constexpr uint32 SchemaId = 0x4357544Fu;
+  static constexpr uint16 SchemaVersion = 1;
+
+  static bool Encode(
+    const FCrowdWorkerTargetObjectiveRevision& Revision,
+    FCrowdWorkerPayload& OutPayload);
+  static bool Decode(
+    const FCrowdWorkerPayload& Payload,
+    FCrowdWorkerTargetObjectiveRevision& OutRevision);
+};
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerTargetAgentInput
 {
@@ -147,6 +205,7 @@ private:
   struct FCohortRuntime
   {
     uint32 TopologyRevision = 0;
+    uint64 ObjectiveResourceRevision = 0;
     FCrowdMassTargetRegionTopologyOutput Topology;
   };
 

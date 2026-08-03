@@ -93,6 +93,17 @@ float PairQuantizationSafetyMargin(
     * FMath::Max(Settings.FixedStepSeconds, Settings.TimeHorizonSeconds);
 }
 
+bool IsPairMotionSafe(
+  const float StartDistance,
+  const float ClosestDistance,
+  const float RequiredDistance)
+{
+  constexpr float ValidationToleranceCm = 0.5f;
+  if (StartDistance + ValidationToleranceCm < RequiredDistance)
+    return ClosestDistance + ValidationToleranceCm >= StartDistance;
+  return ClosestDistance + ValidationToleranceCm >= RequiredDistance;
+}
+
 void ClosestApproach(
   const FCrowdDemoLocalPredictiveAgent& A,
   const FCrowdDemoLocalPredictiveAgent& B,
@@ -616,7 +627,9 @@ bool FCrowdDemoLocalPredictiveInteractionKernel::ValidateJointResult(
           / SpeedSquared, 0.0f, Horizon)
       : 0.0f;
     const float Separation = (RelativePosition + RelativeVelocity * Time).Size();
-    if (Separation + 0.5f < Pair.RequiredSeparationCm) return false;
+    if (!IsPairMotionSafe(
+      RelativePosition.Size(), Separation, Pair.RequiredSeparationCm))
+      return false;
   }
   return true;
 }
@@ -867,7 +880,8 @@ void FCrowdDemoLocalPredictiveInteractionKernel::Solve(
           / SpeedSquared, 0.0f, ValidationHorizon)
       : 0.0f;
     const float Separation = (RelativePosition + RelativeVelocity * Time).Size();
-    return Separation + 0.5f >= Pair.RequiredSeparationCm;
+    return IsPairMotionSafe(
+      RelativePosition.Size(), Separation, Pair.RequiredSeparationCm);
   };
 
   const auto ResolveAgentAgainstCurrentPairs = [&](const int32 AgentIndex)
@@ -1083,8 +1097,10 @@ void FCrowdDemoLocalPredictiveInteractionKernel::Solve(
             ? FMath::Clamp(-FVector2f::DotProduct(RelativePosition, RelativeVelocity)
                 / SpeedSquared, 0.0f, ValidationHorizon)
             : 0.0f;
-          if ((RelativePosition + RelativeVelocity * Time).Size() + 0.5f
-            < Pair.RequiredSeparationCm) return false;
+          if (!IsPairMotionSafe(
+            RelativePosition.Size(),
+            (RelativePosition + RelativeVelocity * Time).Size(),
+            Pair.RequiredSeparationCm)) return false;
         }
         if (OutObjective) *OutObjective = Objective;
         return true;
@@ -1563,8 +1579,10 @@ void FCrowdDemoLocalPredictiveInteractionKernel::Solve(
             ? FMath::Clamp(-FVector2f::DotProduct(RelativePosition, RelativeVelocity)
                 / SpeedSquared, 0.0f, ValidationHorizon)
             : 0.0f;
-          if ((RelativePosition + RelativeVelocity * Time).Size() + 0.5f
-            < Pair.RequiredSeparationCm) return false;
+          if (!IsPairMotionSafe(
+            RelativePosition.Size(),
+            (RelativePosition + RelativeVelocity * Time).Size(),
+            Pair.RequiredSeparationCm)) return false;
         }
         return true;
       };

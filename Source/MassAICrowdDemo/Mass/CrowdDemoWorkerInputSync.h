@@ -25,14 +25,31 @@ public:
     TConstArrayView<FCrowdWorkerVersionedResourceInput>
       AdditionalResources = {},
     const FCrowdBehaviorPreparedBoundary* StagedBehavior = nullptr,
-    bool bAutonomousAfterBootstrap = false);
+    TConstArrayView<FCrowdWorkerExternalGameplayInput>
+      ExternalGameplayInputs = {});
+
+  // Ordinary frames submit only ordered intent and resource revisions. The
+  // complete Mass snapshot is legal exclusively on the bootstrap path above.
+  static bool SubmitIntentBatch(
+    UWorld& World,
+    int32 SimulationTick,
+    int32 PlanRevision,
+    double TargetSimulationTimeSeconds,
+    TConstArrayView<FCrowdWorkerVersionedResourceInput>
+      ResourceRevisions = {},
+    TConstArrayView<FCrowdWorkerSpawnDelta> Spawns = {},
+    TConstArrayView<FCrowdWorkerDespawnDelta> Despawns = {},
+    TConstArrayView<FCrowdWorkerExternalGameplayInput>
+      ExternalGameplayInputs = {},
+    const FCrowdBehaviorPreparedBoundary* StagedBehavior = nullptr,
+    TConstArrayView<FCrowdWorkerObjectiveRevisionDelta>
+      ObjectiveRevisions = {});
 
   static bool Poll(UWorld& World);
 
   static bool StartClientFromNetworkCheckpoint(
     UWorld& World,
-    const FCrowdWorkerNetworkCheckpoint& Checkpoint,
-    double FixedSimulationQuantumSeconds = 1.0 / 30.0);
+    const FCrowdWorkerNetworkCheckpoint& Checkpoint);
 
   static bool ConsumePublishedResults(
     UWorld& World,

@@ -418,7 +418,8 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
   const float ClientServerSeconds = GameState
     ? GameState->GetServerWorldTimeSeconds()
     : World->GetTimeSeconds();
-  const int32 AppliedCorrectionRevision = Pipeline->GetLastAppliedCorrectionRevision();
+  const int32 AppliedCorrectionRevision =
+    Pipeline->GetLastAppliedCheckpointStateFrameRevision();
   ++PresentationSequence;
   int32 SubmittedCount = 0;
   int32 VatPlaybackCount = 0;

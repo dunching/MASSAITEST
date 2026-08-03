@@ -6,6 +6,7 @@
 #include "MassEntityHandle.h"
 #include "MassCrowdProjectileMassStore.h"
 #include "MassCrowdRuntimeBridge.h"
+#include "MassCrowdWorkerContracts.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CrowdDemoMassSubsystem.generated.h"
 
@@ -72,9 +73,28 @@ public:
   bool ApplyProductBoundaryCommit(
     const FCrowdMassCommitPlan& Plan,
     TConstArrayView<FCrowdMassCommitTarget> Targets);
+  bool ResolveTrackedAgentHandle(
+    const FCrowdStableEntityRef& EntityRef,
+    FMassEntityManager& EntityManager,
+    FMassEntityHandle& OutEntity) const;
+  int32 GetStableEntityHandleCount() const
+  { return StableEntityHandles.Num(); }
   bool RecycleTrackedAgent(
     const FCrowdStableEntityRef& EntityRef,
     FCrowdStableEntityRef& OutReplacementRef);
+  bool CopyPendingWorkerLifecycleProfileJournal(
+    TArray<FCrowdWorkerSpawnDelta>& OutSpawns,
+    TArray<FCrowdWorkerDespawnDelta>& OutDespawns,
+    TArray<FCrowdWorkerExternalGameplayInput>& OutProfileRevisions)
+    const;
+  bool AcknowledgeWorkerLifecycleProfileJournal(
+    int32 SpawnCount,
+    int32 DespawnCount,
+    int32 ProfileRevisionCount);
+  bool HasWorkerLifecycleProfileJournalOverflowed() const
+  {
+    return bWorkerLifecycleProfileJournalOverflowed;
+  }
   bool PrepareProjectileCapacity(int32 RequiredCount);
   void ApplyProjectileStates(
     TConstArrayView<struct FCrowdProjectileState> Projectiles);
@@ -87,6 +107,12 @@ public:
   }
 private:
   TArray<FMassEntityHandle> TrackedAgents;
+  TMap<FCrowdStableEntityRef, FMassEntityHandle> StableEntityHandles;
+  TArray<FCrowdWorkerSpawnDelta> PendingWorkerSpawns;
+  TArray<FCrowdWorkerDespawnDelta> PendingWorkerDespawns;
+  TArray<FCrowdWorkerExternalGameplayInput>
+    PendingWorkerProfileRevisions;
+  bool bWorkerLifecycleProfileJournalOverflowed = false;
   FCrowdMassProjectileStore ProjectileStore;
   TWeakObjectPtr<AActor> TargetActor;
   ECrowdDemoScenario CurrentScenario = ECrowdDemoScenario::SimRoundObstacle;

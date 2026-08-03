@@ -112,6 +112,14 @@ void UCrowdDemoWorkerNetworkBridgeSubsystem::Tick(
 
   if (Runtime.GetState() != ECrowdAsyncSimulationRuntimeState::Running)
     return;
+
+  // Process a digest/correction before Poll is allowed to launch the next
+  // owner epoch. This is the network-side half of the correction tick
+  // barrier; the runtime keeps the barrier closed until the patch is queued.
+  for (TActorIterator<AMassCrowdReplicationActor> It(World); It; ++It)
+    if (AMassCrowdReplicationActor* Channel = *It)
+      Channel->PumpWorkerClientRuntime(Runtime);
+
   const ECrowdAsyncSimulationPollResult PollResult = Runtime.Poll();
   if (PollResult == ECrowdAsyncSimulationPollResult::Failed)
   {
@@ -120,6 +128,12 @@ void UCrowdDemoWorkerNetworkBridgeSubsystem::Tick(
         Channel->RequestResync();
     return;
   }
+
+  // Actor Tick may have received the authority digest before this poll made
+  // the matching local digest visible. Pump again at this owner barrier.
+  for (TActorIterator<AMassCrowdReplicationActor> It(World); It; ++It)
+    if (AMassCrowdReplicationActor* Channel = *It)
+      Channel->PumpWorkerClientRuntime(Runtime);
 
   const uint64 AppliedInputSequence =
     Runtime.GetMetrics().LastAppliedInputSequence;

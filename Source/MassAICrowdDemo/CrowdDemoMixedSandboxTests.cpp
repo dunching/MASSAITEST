@@ -269,6 +269,92 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
     Coordinator.Contains(TEXT("Resolved.DesiredVelocity"))
       && Coordinator.Contains(TEXT("Resolved.DesiredFacing"))
       && Coordinator.Contains(TEXT("Resolved.MovementGoal")));
+  const int32 WorkerBootstrapBranch = MovementBody.Find(
+    TEXT("const bool bNeedsWorkerBootstrap"));
+  const int32 WorkerBootstrapSubmit = MovementBody.Find(
+    TEXT("FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot("));
+  const int32 WorkerIntentSubmit = MovementBody.Find(
+    TEXT("FCrowdDemoWorkerInputSync::SubmitIntentBatch("));
+  TestTrue(TEXT("mixed worker input separates bootstrap from ordinary intent"),
+    WorkerBootstrapBranch != INDEX_NONE
+      && WorkerBootstrapSubmit > WorkerBootstrapBranch
+      && WorkerIntentSubmit > WorkerBootstrapSubmit);
+  const int32 WorkerIntentEnd = MovementBody.Find(
+    TEXT("&PreparedBehavior));"),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    WorkerIntentSubmit);
+  const FString WorkerIntentCall =
+    WorkerIntentSubmit != INDEX_NONE
+      && WorkerIntentEnd > WorkerIntentSubmit
+      ? MovementBody.Mid(
+          WorkerIntentSubmit,
+          WorkerIntentEnd - WorkerIntentSubmit)
+      : FString();
+  TestFalse(TEXT("ordinary mixed worker intent does not receive a snapshot"),
+    WorkerIntentCall.IsEmpty()
+      || WorkerIntentCall.Contains(TEXT("Snapshot")));
+  TestTrue(TEXT("ordinary mixed worker intent drains explicit lifecycle/profile journals"),
+    WorkerIntentCall.Contains(TEXT("PendingWorkerSpawns"))
+      && WorkerIntentCall.Contains(TEXT("PendingWorkerDespawns"))
+      && WorkerIntentCall.Contains(
+        TEXT("PendingWorkerMovementProfileRevisions")));
+  TestTrue(TEXT("mixed maps gameplay despawn reason to nonzero Worker reason id"),
+    Coordinator.Contains(
+      TEXT("static_cast<uint32>(Operation.DespawnReason) + 1u")));
+  TestTrue(TEXT("mixed lifecycle journal carries spawn state and profile revision"),
+    Coordinator.Contains(TEXT("QueueWorkerLifecycleIntent(Operation)"))
+      && Coordinator.Contains(TEXT(
+        "FCrowdWorkerBoundaryStateCodec::EncodeState("))
+      && Coordinator.Contains(TEXT(
+        "FCrowdWorkerMovementProfileCodec::Encode(")));
+  TestTrue(TEXT("mixed autonomous Projectile control publishes only on semantic revision"),
+    MovementBody.Contains(TEXT(
+      "CalculateCrowdDemoWorkerProjectileControlSemanticHash("))
+      && MovementBody.Contains(TEXT(
+        "if (bPublishWorkerCombatControl)"))
+      && MovementBody.Contains(TEXT(
+        "WorkerMixedCombatControlReuseCount"))
+      && MovementBody.Contains(TEXT(
+        "ActiveWorkerCombatControlRevision"))
+      && MovementBody.Contains(TEXT(
+        "bAutonomousWorkerRuntime")));
+  TestFalse(TEXT("mixed combat apply does not confuse Worker epoch with control revision"),
+    Coordinator.Contains(TEXT(
+      "ProjectileProxy->State.StateRevision"))
+      || Coordinator.Contains(TEXT(
+        "CombatProxy->State.StateRevision")));
+  TestTrue(TEXT("mixed production behavior commits Worker-authoritative state"),
+    Coordinator.Contains(TEXT(
+      "BehaviorSourceRuntime->CommitWorkerAuthoritative(")));
+  TestTrue(TEXT("mixed Production combat is not vetoed by Legacy parity"),
+    Coordinator.Contains(TEXT(
+      "WorkerMixedCombatMode !=\n        EWorkerMixedCombatAuthorityMode::Production"))
+      && Coordinator.Contains(TEXT(
+        "Pending.WorkerCombatApply->bRequireLegacyParity"))
+      && Coordinator.Contains(TEXT(
+        "WorkerCombatApply->HostResult")));
+  TestTrue(TEXT("mixed Production skips Legacy projectile and health prepare"),
+    Coordinator.Contains(TEXT(
+      "const bool bPrepareLegacyMixedCombat"))
+      && Coordinator.Contains(TEXT(
+        "? !bPrepareLegacyMixedCombat\n      || PrepareMixedCombatBoundary("))
+      && Coordinator.Contains(TEXT(
+        "if (bPrepareLegacyMixedCombat)")));
+  TestTrue(TEXT("mixed Production skips the Legacy attack planner"),
+    Coordinator.Contains(TEXT(
+      "if (bPrepareLegacyMixedCombat\n    && !PrepareMixedCombatAttackPlan(")));
+  TestTrue(TEXT("mixed Production combat telemetry comes from Worker output"),
+    Coordinator.Contains(TEXT(
+      "WorkerCombatApply->ProjectileState.ResolvedHits.Hits.Num()"))
+      && Coordinator.Contains(TEXT(
+        "WorkerCombat.TargetSwitchCount"))
+      && Coordinator.Contains(TEXT(
+        "WorkerProjectile.Summary.SpawnedCount")));
+  TestFalse(TEXT("mixed production behavior does not require GT kinematic hash parity"),
+    MovementBody.Contains(TEXT(
+      "WorkerState.ResolvedChannels.StableHash\n          != Expected"))
+      || MovementBody.Contains(TEXT(
+        "WorkerState.EvaluationContext.StableHash\n          != Expected")));
   TestTrue(TEXT("mixed movement executes the complete runtime work chain"),
     Coordinator.Contains(
       TEXT("FCrowdMassMovementPipelineWork::Run("))
@@ -279,16 +365,27 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
   TestFalse(TEXT("business output does not implicitly suppress movement"),
     Coordinator.Contains(
       TEXT("ResolvedChannels.Business.IsEmpty()")));
-  const int32 MarkValidated =
-    Coordinator.Find(TEXT("Runner.MarkValidated("));
-  const int32 FinalTransformWrite =
-    Coordinator.Find(TEXT("SetLocation("),
-      ESearchCase::CaseSensitive,
-      ESearchDir::FromStart,
-      MarkValidated);
-  TestTrue(TEXT("mixed final movement write follows validation"),
-    MarkValidated != INDEX_NONE
-      && FinalTransformWrite > MarkValidated);
+  const int32 PollStart = Coordinator.Find(TEXT(
+    "bool ACrowdDemoMixedSandboxCoordinator::PollProductMovementBoundary()"));
+  const int32 PollEnd = Coordinator.Find(TEXT(
+    "bool ACrowdDemoMixedSandboxCoordinator::GetOrBuildFlow("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    PollStart + 1);
+  const FString PollBody =
+    PollStart != INDEX_NONE && PollEnd > PollStart
+      ? Coordinator.Mid(PollStart, PollEnd - PollStart)
+      : FString();
+  const int32 DirectValidated = PollBody.Find(TEXT(
+    "const FCrowdMassMovementFinalizeWorkOutput DirectFinalize"));
+  const int32 LegacyWorkValidated = PollBody.Find(TEXT(
+    "Pending.LegacyWork.Get()"));
+  const int32 FinalTransformWrite = PollBody.Find(TEXT(
+    "Write.Transform->GetMutableTransform().SetLocation("));
+  TestTrue(TEXT("mixed final movement write follows both completed plans"),
+    DirectValidated != INDEX_NONE
+      && LegacyWorkValidated != INDEX_NONE
+      && FinalTransformWrite > DirectValidated
+      && FinalTransformWrite > LegacyWorkValidated);
   TestTrue(TEXT("source authority is the Runtime world store"),
     Coordinator.Contains(
       TEXT("&RuntimeSubsystem->GetBehaviorSourceRuntime()")));
@@ -303,12 +400,65 @@ bool FCrowdDemoMixedSandboxArchitectureTest::RunTest(const FString& Parameters)
   TestFalse(TEXT("mixed path does not build a private Recast graph"),
     Coordinator.Contains(TEXT("ExtractStaticRecast"))
       || Coordinator.Contains(TEXT("FCrowdNavSurfaceGraphExtractor::BuildFlow")));
-  TestTrue(TEXT("mixed path uses the product boundary runner"),
-    Coordinator.Contains(
-      TEXT("MakeUnique<FCrowdMassBoundaryRunner>()"))
-      && Coordinator.Contains(TEXT("BeginProductMovementBoundary"))
-      && Coordinator.Contains(TEXT("PollProductMovementBoundary"))
-      && Coordinator.Contains(TEXT("BuildAndSealCommit")));
+  TestTrue(TEXT("mixed fallback uses an asynchronous typed kernel chain"),
+    Coordinator.Contains(TEXT("Pending->LegacyWork = Async("))
+      && Coordinator.Contains(TEXT("BuildMixedLegacyParticleInput("))
+      && Coordinator.Contains(TEXT("BuildMixedLegacyFacingInput(")));
+  TestFalse(TEXT("mixed no longer references Runner or WorkGraph shells"),
+    Coordinator.Contains(TEXT("FCrowdMassBoundaryRunner"))
+      || Coordinator.Contains(TEXT("FCrowdMassBoundaryWorkGraph"))
+      || Coordinator.Contains(TEXT("BuildAndSealCommit("))
+      || Coordinator.Contains(TEXT("MarkValidated("))
+      || Coordinator.Contains(TEXT("MarkCommitted(")));
+  const int32 DirectProductionApply = MovementBody.Find(
+    TEXT("const bool bDirectWorkerProductionApply"));
+  const int32 LegacyWorkGraph = MovementBody.Find(
+    TEXT("Pending->LegacyWork = Async("));
+  TestTrue(TEXT("full Worker Mixed bypasses the Legacy work graph"),
+    DirectProductionApply != INDEX_NONE
+      && LegacyWorkGraph > DirectProductionApply
+      && MovementBody.Mid(
+        DirectProductionApply,
+        LegacyWorkGraph - DirectProductionApply).Contains(
+          TEXT("Pending->bDirectWorkerProductionApply = true"))
+      && MovementBody.Mid(
+        DirectProductionApply,
+        LegacyWorkGraph - DirectProductionApply).Contains(
+          TEXT("return true;")));
+  TestTrue(TEXT("direct Mixed apply builds a commit plan from Worker proxies"),
+    Coordinator.Contains(TEXT(
+      "Proxy.FindDomain(\n          Slot.Facts.StableEntityRef,\n          ECrowdWorkerField::Facing)"))
+      && Coordinator.Contains(TEXT(
+        "FCrowdMassMovementFinalizeWork::BuildCommitPlan("))
+      && Coordinator.Contains(TEXT(
+        "const uint64 CommitHash = Work->Plan.StableHash")));
+  const int32 StagedSafetyIndex = PollBody.Find(TEXT(
+    "FCrowdSpatialSafetyIndex StagedSpatialSafety = SpatialSafety"));
+  const int32 ProfileLayerDeltaIndex = PollBody.Find(TEXT(
+    "!= ResolvedInteractionLayers[SlotIndex]"));
+  const int32 ProfileRevisionTypeIndex = PollBody.Find(TEXT(
+    "MovementProfileRevision"), ESearchCase::CaseSensitive,
+    ESearchDir::FromStart, ProfileLayerDeltaIndex);
+  const int32 ProfileJournalCommitIndex = PollBody.Find(TEXT(
+    "PendingWorkerMovementProfileRevisions.Append("));
+  TestTrue(TEXT("direct Mixed apply journals sparse nav-layer profile revisions"),
+    StagedSafetyIndex != INDEX_NONE
+      && ProfileLayerDeltaIndex > StagedSafetyIndex
+      && ProfileRevisionTypeIndex > ProfileLayerDeltaIndex
+      && ProfileJournalCommitIndex > FinalTransformWrite);
+  TestTrue(TEXT("direct Mixed apply stages the spatial index until validation"),
+    PollBody.Contains(TEXT(
+      "StagedSpatialSafety.IsCandidateSafe("))
+      && PollBody.Contains(TEXT(
+        "StagedSpatialSafety.Update("))
+      && PollBody.Find(TEXT(
+        "SpatialSafety = MoveTemp(StagedSpatialSafety)"))
+        > FinalTransformWrite);
+  TestTrue(TEXT("mixed checkpoint identifies direct Worker apply"),
+    Coordinator.Contains(TEXT(
+      "bLastMovementAppliedDirectWorker"))
+      && Coordinator.Contains(TEXT(
+        "WorkerResultApply+MassCrowdNavRuntime+ApplyFrame")));
   TestFalse(TEXT("mixed path has no direct shared-flow movement owner"),
     Coordinator.Contains(TEXT("MoveAlongSharedFlow")));
   TestTrue(TEXT("mixed path drains public apply frames"),

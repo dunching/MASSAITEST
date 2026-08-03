@@ -280,8 +280,22 @@ public:
     uint64 CorrectionSequence,
     TConstArrayView<FCrowdWorkerAuthorityScopeKey> Scopes,
     FCrowdWorkerAuthorityCorrectionBatch& OutCorrection) const;
+  bool BeginAuthorityCorrectionBarrier(
+    uint64 ExpectedGeneration,
+    uint64 ApplySimulationTick,
+    uint64 ThroughInputSequence);
   ECrowdAsyncSimulationCorrectionResult SubmitAuthorityCorrection(
     const FCrowdWorkerAuthorityCorrectionBatch& Correction);
+#if WITH_DEV_AUTOMATION_TESTS
+  // Automation-only fault injection. The mutation is applied at the next
+  // authority-digest barrier so the normal digest/correction path observes it.
+  bool QueueDiagnosticMovementCorruption(
+    uint64 ExpectedGeneration,
+    const FCrowdStableEntityRef& EntityRef,
+    const FVector& PositionOffset,
+    const FVector& VelocityOffset,
+    float YawOffsetDegrees);
+#endif
   FCrowdAsyncSimulationRuntimeMetrics GetMetrics() const;
 
   ECrowdWorkerExchangeResult TryExchangePublishedBatch(

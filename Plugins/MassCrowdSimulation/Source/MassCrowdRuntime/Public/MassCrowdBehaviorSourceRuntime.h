@@ -235,6 +235,10 @@ public:
     const FCrowdBehaviorPreparedBoundary& Prepared,
     TConstArrayView<FCrowdBehaviorWorkerCommitEntity> WorkerEntities,
     TConstArrayView<FCrowdBehaviorSourceEvent> WorkerEvents);
+  bool CommitWorkerAuthoritative(
+    const FCrowdBehaviorPreparedBoundary& Prepared,
+    TConstArrayView<FCrowdBehaviorWorkerCommitEntity> WorkerEntities,
+    TConstArrayView<FCrowdBehaviorSourceEvent> WorkerEvents);
 
   int32 GetPendingCommandCount() const
   {

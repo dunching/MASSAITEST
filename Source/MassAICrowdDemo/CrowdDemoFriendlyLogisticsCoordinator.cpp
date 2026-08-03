@@ -15,8 +15,10 @@
 #include "Mass/CrowdDemoPresentationAdapter.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "MassCrowdPresentationSubsystem.h"
+#include "MassCrowdMovementFinalizeWork.h"
 #include "MassCrowdRuntimeSubsystem.h"
 #include "MassCrowdWorkerLifecycleBehaviorDomain.h"
+#include "MassCrowdWorkerMovementControlResource.h"
 #include "MassCrowdRelevantSnapshot.h"
 #include "MassCrowdReplicationActor.h"
 #include "MassCrowdReplicationChannel.h"
@@ -29,11 +31,6 @@ namespace
   constexpr double TransitionDelaySeconds = 2.0;
   constexpr uint32 FriendlyPresentationProfile = 2;
   constexpr float ProductFixedStepSeconds = 1.0f / 30.0f;
-
-  class FFriendlyLogisticsPreparedPayload final
-    : public ICrowdBoundaryPreparedPatchPayload
-  {
-  };
 
   uint64 FoldProductHash(uint64 Hash, const uint64 Value)
   {
@@ -273,6 +270,34 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
     : (bFallbackApplied ? FallbackSinkLocation : PrimarySinkLocation);
   BehaviorSourceRuntime =
     &Runtime->GetBehaviorSourceRuntime();
+  const bool bUseWorkerBehaviorKinematics =
+    Runtime->GetWorkerShadowSync().IsStarted()
+    && Runtime->GetWorkerBehaviorAuthority().GetMode()
+      == ECrowdWorkerBehaviorAuthorityMode::Production;
+  const auto ResolveBehaviorKinematics =
+    [Runtime, bUseWorkerBehaviorKinematics](
+      const FCrowdMassBoundaryAgentRecord& Agent,
+      FVector& OutPosition,
+      FVector& OutVelocity,
+      FVector& OutFacing)
+    {
+      OutPosition = Agent.State.Position;
+      OutVelocity = Agent.State.Velocity;
+      OutFacing = FRotator(
+        0.0f, Agent.State.YawDegrees, 0.0f).Vector();
+      if (!bUseWorkerBehaviorKinematics) return true;
+      FCrowdWorkerMovementSample Sample;
+      if (!Runtime->GetWorkerMovementAuthority().Sample(
+          Agent.AgentFacts.StableEntityRef,
+          TNumericLimits<double>::Max(), Sample)
+        || !Sample.bValid)
+        return true;
+      OutPosition = Sample.Position;
+      OutVelocity = Sample.Velocity;
+      OutFacing = FRotator(
+        0.0f, Sample.YawDegrees, 0.0f).Vector();
+      return true;
+    };
   if (!bBehaviorEntitiesRegistered)
   {
     for (const FCrowdMassBoundaryAgentRecord& Agent
@@ -336,11 +361,18 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
           return Agent.AgentFacts.StableEntityRef == Carrier;
         });
     if (!CarrierAgent) return EProductBoundaryAdvance::Failed;
+    FVector CarrierPosition;
+    FVector CarrierVelocity;
+    FVector CarrierFacing;
+    if (!ResolveBehaviorKinematics(
+        *CarrierAgent, CarrierPosition,
+        CarrierVelocity, CarrierFacing))
+      return EProductBoundaryAdvance::Failed;
     FCrowdDemoFriendlyLogisticsPlanningFact PlanningFact;
     PlanningFact.EntityRef = Carrier;
     PlanningFact.TaskRef = Task.TaskRef;
-    PlanningFact.Position = CarrierAgent->State.Position;
-    PlanningFact.Velocity = CarrierAgent->State.Velocity;
+    PlanningFact.Position = CarrierPosition;
+    PlanningFact.Velocity = CarrierVelocity;
     PlanningFact.SourceLocation = SourceLocation;
     PlanningFact.SinkLocation =
       bFallbackApplied
@@ -370,12 +402,17 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   for (const FCrowdMassBoundaryAgentRecord& Agent
     : Snapshot.Agents)
   {
+    FVector Position;
+    FVector Velocity;
+    FVector Facing;
+    if (!ResolveBehaviorKinematics(
+        Agent, Position, Velocity, Facing))
+      return EProductBoundaryAdvance::Failed;
     RuntimeFacts.Add({
       Agent.AgentFacts.StableEntityRef,
-      Agent.State.Position,
-      Agent.State.Velocity,
-      FRotator(
-        0.0f, Agent.State.YawDegrees, 0.0f).Vector(),
+      Position,
+      Velocity,
+      Facing,
       0});
   }
   TArray<FCrowdDemoPlannerDecision> Decisions;
@@ -392,11 +429,71 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
       ProductFixedStepIndex, PreparedBehavior)
     || !BehaviorSourceRuntime->ValidatePrepared(PreparedBehavior))
     return EProductBoundaryAdvance::Failed;
-  if (!FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
-      *World, Snapshot, FixedStepSeconds,
-      static_cast<double>(ProductFixedStepIndex + 1)
-        * FixedStepSeconds,
-      {}, &PreparedBehavior))
+  FCrowdWorkerBoundaryShadowSync& WorkerShadow =
+    Runtime->GetWorkerShadowSync();
+  const bool bNeedsWorkerBootstrap = !WorkerShadow.IsStarted()
+    || WorkerShadow.GetMetrics().FullResnapshotCount == 0;
+  TArray<FCrowdWorkerVersionedResourceInput>
+    BootstrapResources;
+  TArray<FCrowdWorkerExternalGameplayInput>
+    BootstrapMovementProfiles;
+  if (bNeedsWorkerBootstrap)
+  {
+    FCrowdWorkerMovementControlResource Control;
+    Control.Revision = 1;
+    Control.FixedStepIndex = Snapshot.FixedStepIndex;
+    Control.PlanRevision = Snapshot.PlanRevision;
+    Control.bRunLocalPredictive = false;
+    Control.bRunParticleInteraction = false;
+    FCrowdWorkerVersionedResourceInput& Resource =
+      BootstrapResources.AddDefaulted_GetRef();
+    Resource.ResourceId = CrowdWorkerResourceIds::MovementControl;
+    Resource.Revision = Control.Revision;
+    if (!FCrowdWorkerMovementControlResourceCodec::Encode(
+        Control, Resource.Payload))
+      return EProductBoundaryAdvance::Failed;
+
+    BootstrapMovementProfiles.Reserve(Snapshot.Agents.Num());
+    for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
+    {
+      FCrowdWorkerMovementControlEntry Profile;
+      Profile.EntityRef = Agent.AgentFacts.StableEntityRef;
+      Profile.AgentId = Agent.Identity.AgentId;
+      Profile.MaximumSpeedCmps = Agent.Properties.MaximumSpeedCmps;
+      Profile.ParticleEnvironmentHardClearanceCm =
+        Agent.Properties.HardSafetyGapCm;
+      Profile.ParticlePhysicalRadiusCm =
+        Agent.Properties.PhysicalRadiusCm;
+      Profile.ParticleHardSafetyGapCm =
+        Agent.Properties.HardSafetyGapCm;
+      Profile.ParticleSoftMarginCm = Agent.Properties.SoftMarginCm;
+      Profile.ParticleMobility = Agent.Properties.Mobility;
+      Profile.bParticleActive = true;
+      FCrowdWorkerExternalGameplayInput& Input =
+        BootstrapMovementProfiles.AddDefaulted_GetRef();
+      Input.EntityRef = Agent.AgentFacts.StableEntityRef;
+      Input.InputTypeId = static_cast<uint16>(
+        ECrowdWorkerExternalGameplayInputType::
+          MovementProfileRevision);
+      Input.DirtyMask = 1;
+      if (!FCrowdWorkerMovementProfileCodec::Encode(
+          Profile, Input.FullState))
+        return EProductBoundaryAdvance::Failed;
+    }
+  }
+  const bool bWorkerInputAccepted = !WorkerShadow.IsStarted()
+    ? FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
+        *World, Snapshot, FixedStepSeconds,
+        static_cast<double>(ProductFixedStepIndex + 1)
+          * FixedStepSeconds,
+        BootstrapResources, &PreparedBehavior,
+        BootstrapMovementProfiles)
+    : FCrowdDemoWorkerInputSync::SubmitIntentBatch(
+        *World, ProductFixedStepIndex, ProductPlanRevision,
+        static_cast<double>(ProductFixedStepIndex + 1)
+          * FixedStepSeconds,
+        {}, {}, {}, {}, &PreparedBehavior);
+  if (!bWorkerInputAccepted)
   {
     UE_LOG(LogTemp, Error,
       TEXT("VIOLATION CrowdDemoFriendlyWorkerInputSync step=%d"),
@@ -409,6 +506,10 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   const bool bWorkerBehaviorProduction =
     Runtime->GetWorkerBehaviorAuthority().GetMode()
       == ECrowdWorkerBehaviorAuthorityMode::Production;
+  const bool bDirectWorkerProductionApply =
+    bWorkerBehaviorProduction
+    && Runtime->GetWorkerMovementAuthority().GetMode()
+      == ECrowdWorkerMovementAuthorityMode::Production;
   if (WorkerBehaviorInputSequence == 0)
     return EProductBoundaryAdvance::Failed;
   FVector ResolvedObjective = Objective;
@@ -428,7 +529,8 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   }
   TSharedPtr<const FCrowdNavSurfaceGraph, ESPMode::ThreadSafe> Graph;
   TSharedPtr<const FCrowdNavSurfaceFlow, ESPMode::ThreadSafe> Flow;
-  if ((bMoveToSource || bMoveToSink) && Carrier.IsValid())
+  if (!bDirectWorkerProductionApply
+    && (bMoveToSource || bMoveToSink) && Carrier.IsValid())
   {
     if (!Runtime->BuildOrRefreshNavGraph())
     {
@@ -474,14 +576,9 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   const float CarrierSpeed = MaximumCarrierSpeedCmps;
   TUniquePtr<FPendingProductBoundary> Pending =
     MakeUnique<FPendingProductBoundary>();
-  Pending->Runner = MakeUnique<FCrowdMassBoundaryRunner>();
-  const FCrowdBoundaryTransactionId TransactionId =
-    FCrowdBoundaryTransactionId::FromSnapshot(
-      Snapshot, ProductBoundaryGeneration);
-  if (!Pending->Runner->Begin(Snapshot, 0.0, TransactionId))
-    return EProductBoundaryAdvance::Failed;
-  if (!Pending->Runner->AddTask(
-      {{3}, {301}, 0}, {},
+  if (!bDirectWorkerProductionApply)
+  {
+    const bool bLegacyPlanBuilt =
       [Snapshot, Carrier, ResolvedObjective, Graph, Flow,
         FixedStepSeconds, Work, AcceptanceRadius, CarrierSpeed]()
       {
@@ -504,7 +601,7 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
             {
               Work->FailurePosition = Agent.State.Position;
               Work->FailureStage = 1;
-              return FCrowdBoundaryTaskResult::Failure();
+              return false;
             }
             const FCrowdNavSurfaceFlowNode* FlowNode =
               Flow->Nodes.FindByPredicate(
@@ -520,7 +617,7 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
               Work->FailureGoalNodeId = Flow->GoalStableNodeId;
               Work->FailureLayer = CurrentLayer;
               Work->FailureStage = 2;
-              return FCrowdBoundaryTaskResult::Failure();
+              return false;
             }
             FVector Direction = FlowNode->Direction;
             const FVector ToObjective =
@@ -573,12 +670,12 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
         Plan.StableHash = PlanHash == 0 ? 1 : PlanHash;
         Plan.bValid = true;
         Work->Plan = MoveTemp(Plan);
-        Work->bCompleted = true;
-        return FCrowdBoundaryTaskResult::Success(PlanHash);
-      }))
-    return EProductBoundaryAdvance::Failed;
-  if (!Pending->Runner->Dispatch())
-    return EProductBoundaryAdvance::Failed;
+        Work->bCompleted.Store(true);
+        return true;
+      }();
+    if (!bLegacyPlanBuilt)
+      return EProductBoundaryAdvance::Failed;
+  }
   Pending->Work = Work;
   Pending->Snapshot = Snapshot;
   Pending->Targets = MoveTemp(Targets);
@@ -593,6 +690,8 @@ ACrowdDemoFriendlyLogisticsCoordinator::RunProductBoundary(
   Pending->bMoveToSink = bMoveToSink;
   Pending->bWorkerBehaviorProduction =
     bWorkerBehaviorProduction;
+  Pending->bDirectWorkerProductionApply =
+    bDirectWorkerProductionApply;
   PendingRollback.bCommitted = true;
   PendingProductBoundary = MoveTemp(Pending);
   return EProductBoundaryAdvance::Pending;
@@ -603,16 +702,10 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
   UCrowdDemoMassSubsystem& MassSubsystem)
 {
   if (!PendingProductBoundary.IsValid()
-    || !PendingProductBoundary->Runner.IsValid()
     || !PendingProductBoundary->Work.IsValid())
     return EProductBoundaryAdvance::Failed;
 
   FPendingProductBoundary& Pending = *PendingProductBoundary;
-  FCrowdMassBoundaryRunner& Runner = *Pending.Runner;
-  const ECrowdBoundaryPollResult PollResult = Runner.PollAndDrain();
-  if (PollResult == ECrowdBoundaryPollResult::Pending)
-    return EProductBoundaryAdvance::Pending;
-
   const auto FailPending = [this]()
   {
     if (BehaviorSourceRuntime && PendingProductBoundary.IsValid())
@@ -626,13 +719,12 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
       ProductBoundaryGeneration = 1;
     return EProductBoundaryAdvance::Failed;
   };
-  if (PollResult == ECrowdBoundaryPollResult::Failed
-    || !Pending.Work->bCompleted)
+  if (!Pending.bDirectWorkerProductionApply
+    && !Pending.Work->bCompleted.Load())
   {
-    const FCrowdBoundaryOrchestratorResult Result = Runner.BuildResult();
     UE_LOG(LogTemp, Warning,
-      TEXT("CrowdDemoFriendlyLogistics diagnostic=runner_work_failed state=%d tasks=%d failure_stage=%u position=%s node=%llu goal=%llu layer=%u"),
-      static_cast<int32>(Result.State), Result.Tasks.Num(),
+      TEXT("CrowdDemoFriendlyLogistics diagnostic=legacy_plan_failed completed=%d failure_stage=%u position=%s node=%llu goal=%llu layer=%u"),
+      Pending.Work->bCompleted.Load() ? 1 : 0,
       Pending.Work->FailureStage,
       *Pending.Work->FailurePosition.ToCompactString(),
       Pending.Work->FailureNodeId,
@@ -654,6 +746,10 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
   const bool bMoveToSink = Pending.bMoveToSink;
   const TSharedPtr<FProductMovementWork, ESPMode::ThreadSafe>& Work =
     Pending.Work;
+
+  UMassCrowdRuntimeSubsystem* WorkerRuntimeSubsystem = GetWorld()
+    ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+    : nullptr;
 
   TArray<FCrowdBehaviorWorkerCommitEntity> WorkerBehaviorEntities;
   TArray<FCrowdBehaviorSourceEvent> WorkerBehaviorEvents;
@@ -700,10 +796,8 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
         || WorkerState.EvaluationContext.FixedStepIndex
           != PreparedBehavior.FixedStepIndex
         || WorkerState.SourceSet.EntityRef != Expected.EntityRef
-        || WorkerState.ResolvedChannels.StableHash
-          != Expected.ResolvedChannels.StableHash
-        || WorkerState.EvaluationContext.StableHash
-          != Expected.EvaluationContextHash)
+        || !WorkerState.SourceSet.IsValid()
+        || !WorkerState.ResolvedChannels.bValid)
         return FailPending();
       FCrowdBehaviorWorkerCommitEntity& Entity =
         WorkerBehaviorEntities.AddDefaulted_GetRef();
@@ -719,8 +813,8 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
         WorkerBehaviorEvents, WorkerBusinessCommits))
       return FailPending();
     TArray<FCrowdBusinessContribution> ExpectedBusinessCommits;
-    for (const FCrowdBehaviorPreparedEntity& Entity
-      : PreparedBehavior.Entities)
+    for (const FCrowdBehaviorWorkerCommitEntity& Entity
+      : WorkerBehaviorEntities)
       ExpectedBusinessCommits.Append(
         Entity.ResolvedChannels.Business);
     if (ExpectedBusinessCommits.Num()
@@ -740,28 +834,107 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
     }
   }
 
-  TArray<FCrowdBoundaryPreparedPatch> Patches;
+  if (Pending.bDirectWorkerProductionApply)
+  {
+    if (!WorkerRuntimeSubsystem
+      || Pending.WorkerBehaviorInputSequence == 0)
+      return FailPending();
+    const FCrowdWorkerResultApplyProxy& Proxy =
+      WorkerRuntimeSubsystem->GetWorkerResultApplyProxy();
+    if (Proxy.GetMetrics().LastAppliedInputSequence
+        < Pending.WorkerBehaviorInputSequence)
+      return EProductBoundaryAdvance::Pending;
+    if (Proxy.GetMetrics().LastAppliedInputSequence
+        != Pending.WorkerBehaviorInputSequence)
+      return FailPending();
+    const FCrowdAsyncSimulationRuntimeMetrics RuntimeMetrics =
+      WorkerRuntimeSubsystem->GetAsyncSimulationRuntime().GetMetrics();
+    if (RuntimeMetrics.LastAppliedInputSequence
+          < Pending.WorkerBehaviorInputSequence
+      || RuntimeMetrics.WorkerV2.WorkCurrentDepth > 0
+      || RuntimeMetrics.WorkerV2.WorkNextDepth > 0
+      || RuntimeMetrics.WorkerV2.ShardInFlightCount > 0)
+      return EProductBoundaryAdvance::Pending;
+    if (RuntimeMetrics.LastAppliedInputSequence
+        != Pending.WorkerBehaviorInputSequence)
+      return FailPending();
+
+    FCrowdMassMovementFinalizeWorkInput FinalizeInput;
+    FinalizeInput.FixedStepIndex = Snapshot.FixedStepIndex;
+    FinalizeInput.PlanRevision = Snapshot.PlanRevision;
+    FinalizeInput.Records.Reserve(Snapshot.Agents.Num());
+    for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
+    {
+      const FCrowdWorkerDomainProxyState* FacingProxy =
+        Proxy.FindDomain(
+          Agent.AgentFacts.StableEntityRef,
+          ECrowdWorkerField::Facing);
+      if (!FacingProxy
+        || FacingProxy->SourceInputSequence
+          < Pending.WorkerBehaviorInputSequence)
+        return EProductBoundaryAdvance::Pending;
+      if (FacingProxy->SourceInputSequence
+          != Pending.WorkerBehaviorInputSequence)
+        return FailPending();
+      FCrowdWorkerMovementState FacingState;
+      if (!FCrowdWorkerMovementStateCodec::Decode(
+          FacingProxy->State.Payload, FacingState))
+        return FailPending();
+      FinalizeInput.Records.Add({
+        Agent.AgentFacts.StableEntityRef,
+        Agent.Identity.AgentId,
+        Agent.AgentFacts.StableEntityRef.LifecycleSerial,
+        Agent.Properties.CapabilityProfileKey,
+        FacingState.Position,
+        FacingState.Velocity,
+        FacingState.YawDegrees});
+    }
+    const FCrowdMassMovementFinalizeWorkOutput DirectFinalize =
+      FCrowdMassMovementFinalizeWork::BuildCommitPlan(FinalizeInput);
+    if (!DirectFinalize.bCompleted
+      || !DirectFinalize.CommitPlan.bValid)
+      return FailPending();
+    Work->Plan = DirectFinalize.CommitPlan;
+    Work->bCompleted.Store(true);
+  }
+
   FCrowdLogisticsPreparedPatch LogisticsPatch;
   bool bHasLogisticsPatch = false;
   ECrowdLogisticsCommitKind TransitionKind =
     ECrowdLogisticsCommitKind::Claim;
   uint64 PlannerCommitId = 0;
-  const FCrowdBehaviorPreparedEntity* CarrierBehavior =
-    Carrier.IsValid()
-    ? PreparedBehavior.Entities.FindByPredicate(
-      [&Carrier](const auto& Entity)
-      {
-        return Entity.EntityRef == Carrier;
-      })
-    : nullptr;
-  if (CarrierBehavior
-    && CarrierBehavior->ResolvedChannels.Business.Num() > 1)
+  const FCrowdResolvedBehaviorChannels* CarrierResolved = nullptr;
+  if (Carrier.IsValid())
+  {
+    if (Pending.bWorkerBehaviorProduction)
+    {
+      const FCrowdBehaviorWorkerCommitEntity* CarrierBehavior =
+        WorkerBehaviorEntities.FindByPredicate(
+          [&Carrier](const auto& Entity)
+          {
+            return Entity.EntityRef == Carrier;
+          });
+      CarrierResolved = CarrierBehavior
+        ? &CarrierBehavior->ResolvedChannels : nullptr;
+    }
+    else
+    {
+      const FCrowdBehaviorPreparedEntity* CarrierBehavior =
+        PreparedBehavior.Entities.FindByPredicate(
+          [&Carrier](const auto& Entity)
+          {
+            return Entity.EntityRef == Carrier;
+          });
+      CarrierResolved = CarrierBehavior
+        ? &CarrierBehavior->ResolvedChannels : nullptr;
+    }
+  }
+  if (CarrierResolved && CarrierResolved->Business.Num() > 1)
     return FailPending();
-  if (CarrierBehavior
-    && CarrierBehavior->ResolvedChannels.Business.Num() == 1)
+  if (CarrierResolved && CarrierResolved->Business.Num() == 1)
   {
     const FCrowdBusinessContribution& Contribution =
-      CarrierBehavior->ResolvedChannels.Business[0];
+      CarrierResolved->Business[0];
     PlannerCommitId = Contribution.CommitId;
     if (Contribution.InstigatorRef != Carrier
       || Contribution.TargetRef != Task.TaskRef)
@@ -795,25 +968,9 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
     if (Store.Prepare(Request, LogisticsPatch)
       != ECrowdLogisticsPrepareResult::Prepared)
       return FailPending();
-    FCrowdBoundaryPreparedPatch& Patch =
-      Patches.AddDefaulted_GetRef();
-    Patch.ApplyPhase = {2};
-    Patch.AdapterId = {8101};
-    Patch.PatchKey = {1};
-    Patch.FixedStepIndex = Snapshot.FixedStepIndex;
-    Patch.PlanRevision = Snapshot.PlanRevision;
-    for (const FCrowdMassBoundaryAgentRecord& Agent : Snapshot.Agents)
-      Patch.EntityRefs.Add(Agent.AgentFacts.StableEntityRef);
-    Patch.StableHash = LogisticsPatch.StableHash;
-    Patch.Payload =
-      MakeShared<FFriendlyLogisticsPreparedPayload, ESPMode::ThreadSafe>();
-    Patch.bValid = true;
   }
 
-  if (!Runner.BuildAndSealCommit(
-      Work->Plan, Patches, Targets, 0.0)
-    || !Runner.MarkValidated(0.0)
-    || !Mass->ApplyProductBoundaryCommit(Work->Plan, Targets))
+  if (!Mass->ApplyProductBoundaryCommit(Work->Plan, Targets))
     return FailPending();
   if (bHasLogisticsPatch)
   {
@@ -821,10 +978,8 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
     Store.ApplyPrepared(LogisticsPatch);
     ++AppliedCount;
   }
-  if (!Runner.MarkCommitted(0.0))
-    return FailPending();
   const bool bBehaviorCommitted = Pending.bWorkerBehaviorProduction
-    ? BehaviorSourceRuntime->CommitWorkerPrepared(
+    ? BehaviorSourceRuntime->CommitWorkerAuthoritative(
       PreparedBehavior, WorkerBehaviorEntities,
       WorkerBehaviorEvents)
     : BehaviorSourceRuntime->CommitPrepared(PreparedBehavior);
@@ -841,7 +996,9 @@ ACrowdDemoFriendlyLogisticsCoordinator::PollAndCommitProductBoundary(
             Pending.WorkerBehaviorInputSequence),
       TEXT("Validated Friendly Worker behavior events changed before ACK"));
   }
-  LastProductCommitHash = Runner.GetCommitEnvelope().StableHash;
+  LastProductCommitHash = Work->Plan.StableHash;
+  bLastProductAppliedDirectWorker =
+    Pending.bDirectWorkerProductionApply;
   LastPlannerDecisionHash = StagedPlannerDecisionHash;
 
   for (const FCrowdMassCommitRecord& Record : Work->Plan.Records)
@@ -992,6 +1149,7 @@ void ACrowdDemoFriendlyLogisticsCoordinator::AdvanceObservedState()
           TEXT("VIOLATION CrowdDemoFriendlyLogistics role=server stage=death_respawn"));
         return;
       }
+      PendingReliableLifecycleSpawns.Add(Replacement);
       bDeathInjected = true;
       ++DeathRecoveryCount;
       bStateChanged = true;
@@ -1101,6 +1259,20 @@ void ACrowdDemoFriendlyLogisticsCoordinator::PublishState()
     }
   }
   TArray<FCrowdReliableStateRecord> Records;
+  PendingReliableLifecycleSpawns.Sort();
+  for (const FCrowdStableEntityRef& EntityRef :
+    PendingReliableLifecycleSpawns)
+  {
+    FCrowdReliableStateRecord& SpawnRecord =
+      Records.AddDefaulted_GetRef();
+    SpawnRecord.Sequence = NextReliableSequence++;
+    SpawnRecord.Kind = ECrowdReliableStateKind::Spawn;
+    SpawnRecord.EntityRef = EntityRef;
+    SpawnRecord.Revision = EntityRef.LifecycleSerial;
+    SpawnRecord.StableHash =
+      FCrowdReplicationTransport::CalculateReliableRecordHash(
+        SpawnRecord);
+  }
   FCrowdReliableStateRecord& TaskRecord =
     Records.AddDefaulted_GetRef();
   TaskRecord.Sequence = NextReliableSequence++;
@@ -1117,6 +1289,16 @@ void ACrowdDemoFriendlyLogisticsCoordinator::PublishState()
     SourceFacts.Reserve(BehaviorEntityRefsBySlot.Num());
     for (const auto& Pair : BehaviorEntityRefsBySlot)
     {
+      if (PendingReliableLifecycleSpawns.ContainsByPredicate(
+          [&Pair](const FCrowdStableEntityRef& SpawnRef)
+          {
+            return SpawnRef.ProviderId == Pair.Value.ProviderId
+              && SpawnRef.StableEntityId
+                == Pair.Value.StableEntityId
+              && SpawnRef.LifecycleSerial
+                > Pair.Value.LifecycleSerial;
+          }))
+        continue;
       const FCrowdBehaviorSourceSet* SourceSet =
         BehaviorSourceRuntime->FindSourceSet(Pair.Value);
       if (!SourceSet) continue;
@@ -1145,6 +1327,7 @@ void ACrowdDemoFriendlyLogisticsCoordinator::PublishState()
     if (!Channel) continue;
     Channel->PublishReliables(Records);
   }
+  PendingReliableLifecycleSpawns.Reset();
 }
 
 void ACrowdDemoFriendlyLogisticsCoordinator::ConsumeState()
@@ -1182,7 +1365,24 @@ void ACrowdDemoFriendlyLogisticsCoordinator::ConsumeState()
         {
           if (Record.Sequence <= LastConsumedSequence)
             continue;
-          if (Record.Kind == ECrowdReliableStateKind::Task)
+          if (Record.Kind == ECrowdReliableStateKind::Spawn)
+          {
+            const uint64 StableId =
+              Record.EntityRef.StableEntityId;
+            if (const FCrowdStableEntityRef* Existing =
+                ClientEntitiesByStableId.Find(StableId);
+              Existing && *Existing != Record.EntityRef)
+            {
+              ClientLocations.Remove(*Existing);
+              if (BehaviorSourceRuntime)
+                BehaviorSourceRuntime->RemoveEntity(*Existing);
+            }
+            ClientEntitiesByStableId.Add(
+              StableId, Record.EntityRef);
+            BehaviorEntityRefsBySlot.Add(
+              StableId, Record.EntityRef);
+          }
+          else if (Record.Kind == ECrowdReliableStateKind::Task)
           {
             if (!DecodeState(Record.Payload))
             {
@@ -1694,9 +1894,13 @@ void ACrowdDemoFriendlyLogisticsCoordinator::TryLogPass()
     {
       bServerPassLogged = true;
       UE_LOG(LogTemp, Display,
-        TEXT("PASS CrowdDemoFriendlyLogistics role=server agents=20 quantity=40 delivered=5 competition=1 death_recovery=1 fallback=1 unreachable_backoff=2 cancellation=1 source_accept=%d sink_accept=%d max_step_cm=%.3f commit_hash=%llu state_hash=%llu source=MassCrowdBoundaryRunner+MassCrowdNavRuntime+MassCrowdLogistics"),
+        TEXT("PASS CrowdDemoFriendlyLogistics role=server agents=20 quantity=40 delivered=5 competition=1 death_recovery=1 fallback=1 unreachable_backoff=2 cancellation=1 source_accept=%d sink_accept=%d max_step_cm=%.3f commit_hash=%llu state_hash=%llu direct_worker_apply=%d source=%s"),
         SourceAcceptanceCount, SinkAcceptanceCount,
-        MaximumObservedStepDistanceCm, LastProductCommitHash, StateHash);
+        MaximumObservedStepDistanceCm, LastProductCommitHash, StateHash,
+        bLastProductAppliedDirectWorker ? 1 : 0,
+        bLastProductAppliedDirectWorker
+          ? TEXT("MassCrowdWorkerResultApply+MassCrowdLogistics")
+          : TEXT("MassCrowdLegacyNavPlan+MassCrowdLogistics"));
     }
   }
   else if (bFactsComplete

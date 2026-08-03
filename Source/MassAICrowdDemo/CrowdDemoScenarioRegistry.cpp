@@ -49,6 +49,19 @@ namespace CrowdDemoScenarioRegistry
         || TestCase == ECrowdDemoSoftPressureTestCase::HeterogeneousTransit)
       ? 15.0f
       : 0.0f;
+#if WITH_DEV_AUTOMATION_TESTS
+    float AutomationDurationSeconds = 0.0f;
+    if (FParse::Value(
+        FCommandLine::Get(),
+        TEXT("CrowdDemoAutomationRoundDurationSeconds="),
+        AutomationDurationSeconds)
+      && FMath::IsFinite(AutomationDurationSeconds)
+      && AutomationDurationSeconds > 0.0f)
+    {
+      Timing.NominalDurationSeconds = AutomationDurationSeconds;
+      Timing.CompletionGraceSeconds = 0.0f;
+    }
+#endif
     return Timing;
   }
 }

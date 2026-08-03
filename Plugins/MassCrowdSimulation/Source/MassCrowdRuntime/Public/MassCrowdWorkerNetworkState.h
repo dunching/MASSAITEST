@@ -101,6 +101,43 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerAuthorityDigestBatch
   bool IsValid(const FCrowdWorkerNetworkStateConfig& Config) const;
 };
 
+class MASSCROWDRUNTIME_API FCrowdWorkerAuthorityDigestInbox
+{
+public:
+  bool Offer(FCrowdWorkerAuthorityDigestBatch&& Digest)
+  {
+    if (Digest.DigestSequence <= LastAcceptedSequence) return false;
+    LastAcceptedSequence = Digest.DigestSequence;
+    Pending = MoveTemp(Digest);
+    return true;
+  }
+
+  const FCrowdWorkerAuthorityDigestBatch* Peek() const
+  {
+    return Pending.IsSet() ? &Pending.GetValue() : nullptr;
+  }
+
+  void Consume()
+  {
+    Pending.Reset();
+  }
+
+  void Reset()
+  {
+    Pending.Reset();
+    LastAcceptedSequence = 0;
+  }
+
+  uint64 GetLastAcceptedSequence() const
+  {
+    return LastAcceptedSequence;
+  }
+
+private:
+  TOptional<FCrowdWorkerAuthorityDigestBatch> Pending;
+  uint64 LastAcceptedSequence = 0;
+};
+
 struct MASSCROWDRUNTIME_API FCrowdWorkerAuthorityTombstone
 {
   FCrowdStableEntityRef EntityRef;
@@ -137,7 +174,7 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerNetworkContinuationState
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerNetworkCheckpoint
 {
-  static constexpr uint16 CurrentVersion = 2;
+  static constexpr uint16 CurrentVersion = 3;
 
   uint16 Version = CurrentVersion;
   FCrowdWorkerCheckpoint Header;

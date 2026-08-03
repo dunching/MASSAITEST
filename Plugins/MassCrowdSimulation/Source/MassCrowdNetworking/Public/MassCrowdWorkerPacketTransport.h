@@ -20,7 +20,9 @@ enum class ECrowdWorkerPacketAcceptResult : uint8
 
 struct MASSCROWDNETWORKING_API FCrowdWorkerPacketTransportConfig
 {
-  int32 MaxChunkBytes = 48 * 1024;
+  static constexpr int32 ReliableRpcSafeChunkBytes = 4 * 1024;
+
+  int32 MaxChunkBytes = ReliableRpcSafeChunkBytes;
   int32 MaxPacketBytes = 64 * 1024 * 1024;
   int32 MaxChunkCount = 2048;
   double AssemblyTimeoutSeconds = 10.0;

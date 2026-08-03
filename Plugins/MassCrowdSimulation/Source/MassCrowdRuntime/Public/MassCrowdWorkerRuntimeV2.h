@@ -32,6 +32,13 @@ namespace CrowdWorkerResourceIds
   }
 }
 
+namespace CrowdWorkerReasonMasks
+{
+  // A Clock intent advances host Combat even when no projectile is active and
+  // no ProjectileControl configuration revision was published this tick.
+  constexpr uint64 CombatClock = 1ull << 19;
+}
+
 enum class ECrowdWorkerDomainId : uint8
 {
   LifecycleInput = 0,
@@ -65,7 +72,8 @@ enum class ECrowdWorkerField : uint8
   // Public contract: append new fields so persisted field masks remain stable.
   MovementPlan = 11,
   TargetCohort = 12,
-  Count = 13
+  MovementProfile = 13,
+  Count = 14
 };
 
 // Stable public domain IDs are append-only and therefore cannot also encode
@@ -694,6 +702,7 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerCheckpoint
   uint64 Generation = 0;
   uint64 WorkerEpoch = 0;
   uint64 AbsoluteSimulationTick = 0;
+  double FixedSimulationQuantumSeconds = 0.0;
   uint64 LastAppliedInputSequence = 0;
   uint64 LastOrderedEventSequence = 0;
   uint64 EntityStateHash = 0;

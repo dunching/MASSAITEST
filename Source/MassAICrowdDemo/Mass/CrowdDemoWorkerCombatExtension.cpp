@@ -654,6 +654,10 @@ namespace
         Patch.State.SourceFixedStep =
           CurrentMixedInput.FixedStepIndex;
         Patch.State.bAlive = (*Health)->bAlive;
+        Patch.State.bMovementLocked =
+          (*Health)->bAlive
+          && Agent.AttackState.Phase
+            == ECrowdDemoAttackPlannerPhase::Commit;
         FCrowdDemoWorkerMixedCombatState HostState;
         HostState.Health = Agent.Health;
         HostState.bAlive = (*Health)->bAlive;
@@ -777,6 +781,77 @@ bool FCrowdDemoWorkerCombatHostInputCodec::Decode(
   return !Reader.IsError() && Reader.AtEnd()
     && OutInput.FixedStepIndex >= 0
     && OutInput.FixedStepSeconds > 0.0f;
+}
+
+bool CalculateCrowdDemoWorkerProjectileControlSemanticHash(
+  const FCrowdWorkerProjectileControlResource& Control,
+  uint64& OutSemanticHash)
+{
+  OutSemanticHash = 0;
+  if (!Control.IsValid()) return false;
+
+  FCrowdWorkerProjectileControlResource Semantic = Control;
+  Semantic.Revision = 1;
+  Semantic.bReplaceState = false;
+  Semantic.Input.FixedStepIndex = 0;
+  Semantic.Input.ServerTimeSeconds = 0.0f;
+  Semantic.Input.SpawnRequests.Reset();
+  Semantic.Input.Targets.Reset();
+  Semantic.Input.CurrentStates.Reset();
+
+  if (Semantic.HostCombatInput.SchemaId
+      == FCrowdDemoWorkerCombatHostInputCodec::SchemaId)
+  {
+    FCrowdDemoWorkerCombatHostInput Host;
+    if (!FCrowdDemoWorkerCombatHostInputCodec::Decode(
+        Semantic.HostCombatInput, Host))
+      return false;
+    Host.FixedStepIndex = 0;
+    Host.ServerTimeSeconds = 0.0f;
+    for (FCrowdDemoRangedCombatAgent& Agent : Host.Agents)
+    {
+      Agent.Position = FVector::ZeroVector;
+      Agent.Velocity = FVector::ZeroVector;
+      Agent.bAlive = true;
+      const int32 MaximumHealth = Agent.Combat.MaxHealth;
+      Agent.Combat = {};
+      Agent.Combat.AgentId = Agent.AgentId;
+      Agent.Combat.LifecycleSerial = Agent.LifecycleSerial;
+      Agent.Combat.Health = MaximumHealth;
+      Agent.Combat.MaxHealth = MaximumHealth;
+      Agent.Combat.bAlive = true;
+    }
+    if (!FCrowdDemoWorkerCombatHostInputCodec::Encode(
+        Host, Semantic.HostCombatInput))
+      return false;
+  }
+  else if (Semantic.HostCombatInput.SchemaId
+      == FCrowdDemoWorkerMixedCombatHostInputCodec::SchemaId)
+  {
+    FCrowdDemoWorkerMixedCombatHostInput Host;
+    if (!FCrowdDemoWorkerMixedCombatHostInputCodec::Decode(
+        Semantic.HostCombatInput, Host))
+      return false;
+    Host.FixedStepIndex = 0;
+    for (FCrowdDemoWorkerMixedCombatAgent& Agent : Host.Agents)
+    {
+      Agent.Position = FVector::ZeroVector;
+      Agent.Velocity = FVector::ZeroVector;
+      Agent.Facing = FVector::ForwardVector;
+      Agent.Health = 100;
+      Agent.AttackState = {};
+    }
+    if (!FCrowdDemoWorkerMixedCombatHostInputCodec::Encode(
+        Host, Semantic.HostCombatInput))
+      return false;
+  }
+
+  FCrowdWorkerPayload Payload;
+  if (!FCrowdWorkerProjectileControlResourceCodec::Encode(
+      Semantic, Payload))
+    return false;
+  OutSemanticHash = Payload.StableHash;
+  return OutSemanticHash != 0;
 }
 
 bool FCrowdDemoWorkerCombatStatePayloadCodec::Encode(
@@ -993,8 +1068,13 @@ bool FCrowdDemoWorkerMixedCombatHostResultCodec::Encode(
     || Result.MeleeIntentCount < 0
     || Result.MidRangeIntentCount < 0
     || Result.RangedIntentCount < 0
+    || Result.MissCount < 0
+    || Result.EnvironmentImpactCount < 0
     || Result.AppliedDamageCount < 0
-    || Result.DeathCount < 0)
+    || Result.DuplicateHitCount < 0
+    || Result.FriendlyFireCount < 0
+    || Result.DeathCount < 0
+    || Result.TargetSwitchCount < 0)
     return false;
   TArray<uint8> Bytes;
   FMemoryWriter Writer(Bytes, true);
@@ -1054,8 +1134,13 @@ bool FCrowdDemoWorkerMixedCombatHostResultCodec::Decode(
     && OutResult.MeleeIntentCount >= 0
     && OutResult.MidRangeIntentCount >= 0
     && OutResult.RangedIntentCount >= 0
+    && OutResult.MissCount >= 0
+    && OutResult.EnvironmentImpactCount >= 0
     && OutResult.AppliedDamageCount >= 0
-    && OutResult.DeathCount >= 0;
+    && OutResult.DuplicateHitCount >= 0
+    && OutResult.FriendlyFireCount >= 0
+    && OutResult.DeathCount >= 0
+    && OutResult.TargetSwitchCount >= 0;
 }
 
 TUniquePtr<ICrowdWorkerCombatExtension>

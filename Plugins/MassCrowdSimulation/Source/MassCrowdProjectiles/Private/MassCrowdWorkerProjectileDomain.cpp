@@ -542,6 +542,14 @@ bool FCrowdWorkerProjectileDomainExecutor::Execute(
     {
       return Work.Key.Kind == ECrowdWorkerWorkKind::Timer;
     });
+  const bool bHasClockWork = WorkItems.ContainsByPredicate(
+    [](const FCrowdWorkerWorkItem& Work)
+    {
+      return (Work.ReasonMask
+        & CrowdWorkerReasonMasks::CombatClock) != 0;
+    });
+  const bool bHasContinuationWork =
+    bHasTimerWork || bHasClockWork;
 
   FScopeLock Lock(&StateMutex);
   if (StateGeneration != Context.Generation)
@@ -552,25 +560,31 @@ bool FCrowdWorkerProjectileDomainExecutor::Execute(
     Projectiles.Reset();
     Metrics = {};
   }
-  if (Control.Revision < LastControlRevision
-    || Control.Input.FixedStepIndex < LastFixedStepIndex)
+  const bool bFreshControlRevision =
+    Control.Revision > LastControlRevision;
+  if (Control.Revision < LastControlRevision)
+    return false;
+  if (Control.Input.FixedStepIndex < LastFixedStepIndex
+    && !(bFreshControlRevision && Control.bReplaceState))
   {
     // A versioned control resource is configuration, not the simulation
     // clock. Timer wakeups deliberately reuse its revision while the Worker
     // advances the absolute tick on its own timeline.
-    if (!bHasTimerWork
+    if (!bHasContinuationWork
       || Control.Revision != LastControlRevision)
       return false;
   }
-  if (Control.Input.FixedStepIndex == LastFixedStepIndex)
+  if (Control.Input.FixedStepIndex == LastFixedStepIndex
+    && !bFreshControlRevision)
   {
-    if (!bHasTimerWork)
+    if (!bHasContinuationWork)
     {
       ++Metrics.DuplicateStepCount;
       return true;
     }
   }
-  const bool bAutonomousContinuation = bHasTimerWork
+  const bool bAutonomousContinuation = bHasContinuationWork
+    && !bFreshControlRevision
     && Control.Input.FixedStepIndex <= LastFixedStepIndex;
   if (Control.bReplaceState && !bAutonomousContinuation)
     Projectiles = Control.Input.CurrentStates;
