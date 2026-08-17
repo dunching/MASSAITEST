@@ -2,63 +2,186 @@
 
 ## 1. 文档职责
 
-[INFERRED][HIGH] 本文件是 Demo 自制静态网格、骨骼网格、动画序列和 AnimToTexture VAT 的生产合同；它不定义战斗业务、Particle 运动或 T7 关卡验收。
+本文只定义 Demo 自制 VAT 资产的**可重复生产合同**：源资产如何生成、UE5.7 如何导入与烘焙、运行时需要哪些稳定帧范围和 Per-Instance Custom Data。
 
-[COMPUTED][HIGH] 本管线不读取、迁移、复制或重命名 `E:\Projects\SuperInvincibleTank_BugFix` 的 `.uasset`、源模型或动画。原工程只用于确认需要五种可辨识状态、30fps采样和批量 ISM/VAT 表现这一需求边界。
+本文不证明 T7/T8 已通过，也不定义战斗、HitResponse 或 Particle 逻辑。能力状态与验收证据分别查看 `FeatureChecklist.md`、`TestScenarioMatrix.md` 和 `RangedCombatVatAndHitResponseDesign.md`。
 
-## 2. 权威生成链
+---
+
+## 2. 资产来源原则
+
+本管线不复制、迁移或重命名原工程的 `.uasset`、源模型或动画二进制。
+
+原工程只提供产品需求参考：
+
+```text
+可辨识的 Idle / Move / Attack / HitReact / Death
+30 fps 统一时间基线
+适合 Mass ISM / VAT 的批量表现
+```
+
+最终交付资产必须能够从当前仓库脚本和明确的外部工具环境重新生成。
+
+---
+
+## 3. 权威生成链
 
 ```text
 Scripts/BuildCrowdDemoVatSource.py
-→ Blender 5.0 headless
-→ 新建低模虫体、12骨骼骨架、五个Action
-→ Intermediate/CrowdDemoVatSource/*.fbx + manifest + .blend
-
+        ↓
+Blender headless
+        ↓
+低模虫体 + 骨架 + 五个 Action
+        ↓
+Intermediate/CrowdDemoVatSource/
+  FBX / manifest / blend
+        ↓
 Scripts/BuildCrowdDemoVatAssets.py
-→ 完整 UE 5.7 Editor 隐藏会话
-→ 导入 SkeletalMesh / 5×AnimSequence / StaticMesh
-→ 创建3张纹理与AnimToTexture DataAsset
-→ Bone VAT bake
-→ 创建5个状态MaterialInstance、项目自有VAT父材质和1个运行时手动播放MaterialInstance
-→ /Game/CrowdDemo/VAT/T7
-
+        ↓
+UE 5.7 Editor
+        ↓
+SkeletalMesh / AnimSequence / StaticMesh
+AnimToTexture DataAsset / VAT textures / materials
+        ↓
+/Game/CrowdDemo/VAT/T7
+        ↓
 Scripts/ValidateCrowdDemoVatAssets.py
-→ 只读检查类型、引用、帧范围、UV、纹理尺寸、材质Parent、PICD[2]、WPO和旧overlay资产不存在
 ```
 
-[COMPUTED][HIGH] `Intermediate/CrowdDemoVatSource` 是可删除的生成中间物，不是事实源；生成脚本和最终 `/Game/CrowdDemo/VAT/T7` Unreal资产才属于工程交付物。
+`Intermediate/CrowdDemoVatSource` 是可删除中间物，不是最终事实源。
 
-## 3. 五状态帧合同
+生成脚本、生成清单和 `/Game/CrowdDemo/VAT/T7` 下的最终 Unreal 资产才构成交付管线。
 
-| VisualState | AnimSequence | VAT范围 | Loop |
+---
+
+## 4. 五状态帧合同
+
+| VisualState | AnimSequence | VAT Frame Range | Loop |
 |---|---|---:|---|
-| [COMPUTED][HIGH] Idle | `A_CrowdDemoBug_Idle` | `0–24` | 是 |
-| [COMPUTED][HIGH] Move | `A_CrowdDemoBug_Move` | `25–49` | 是 |
-| [COMPUTED][HIGH] Attack | `A_CrowdDemoBug_Attack` | `50–74` | 否 |
-| [COMPUTED][HIGH] HitReact | `A_CrowdDemoBug_HitReact` | `75–99` | 否 |
-| [COMPUTED][HIGH] Death | `A_CrowdDemoBug_Death` | `100–124` | 否 |
+| Idle | `A_CrowdDemoBug_Idle` | `0–24` | 是 |
+| Move | `A_CrowdDemoBug_Move` | `25–49` | 是 |
+| Attack | `A_CrowdDemoBug_Attack` | `50–74` | 否 |
+| HitReact | `A_CrowdDemoBug_HitReact` | `75–99` | 否 |
+| Death | `A_CrowdDemoBug_Death` | `100–124` | 否 |
 
-[COMPUTED][HIGH] 每个源序列固定25个采样帧，DataAsset固定30fps、Bone mode、16-bit、单骨骼影响、总帧数125。Death是实际烘焙的第五段，不使用越界帧、末帧钳制或其他状态替代。
+固定合同：
 
-[COMPUTED][HIGH] VAT静态网格关闭自动生成Lightmap UV，保留UV0作为普通网格坐标，UV1由AnimToTexture写入骨骼权重查找数据。当前验证结果为UV通道数2。
+```text
+Sample Rate = 30 fps
+Frames Per Clip = 25
+Total VAT Frames = 125
+Mode = Bone VAT
+```
 
-## 4. 当前生成结果（2026-07-30）
+Death 必须拥有自己的真实烘焙区间，不能依赖越界帧、末帧钳制或复用其他状态。
 
-[COMPUTED][HIGH] 已生成并保存：1个SkeletalMesh、1个Skeleton、1个StaticMesh、5个AnimSequence、1个AnimToTexture DataAsset、3张Bone VAT纹理、5个状态MaterialInstance、项目父材质`M_CrowdDemoBug_Runtime_VAT`和1个运行时手动播放MaterialInstance。旧`MI_CrowdDemoBug_Runtime_HitFlash_VAT`已删除。
+运行时代码必须消费 DataAsset / descriptor 中的实际范围，不能重新维护另一套历史帧号。
 
-[COMPUTED][HIGH] 只读验证结果：`ranges=[0–24,25–49,50–74,75–99,100–124]`、`uv_count=2`、Bone position/rotation纹理=`12×126`、bone weight纹理=`230×2`、材质实例=`6`、运行时手动材质=`1`、PICD索引=`2`、`HitFlashColor=(1,1,1,1)`、`HitFlashEmissiveStrength=1.0`，且完整Material Attributes与VAT WPO连接均存在。
+---
 
-[COMPUTED][HIGH] 运行时材质关闭 AutoPlay；客户端 `CrowdInstances` 通过 per-instance custom data 写入 Frame、PreviousFrame 与 HitFlashIntensity，从同一 VAT mesh/material 按实体播放五种状态。8436 已证明五种状态均被提交。
+## 5. Mesh / UV / Texture 合同
 
-[COMPUTED][HIGH] `M_CrowdDemoBug_Runtime_VAT`在同一主体材质内执行`BaseColor=lerp(OriginalBaseColor,HitFlashColor,saturate(PICD[2]))`与`Emissive=OriginalEmissive+HitFlashColor×PICD[2]×HitFlashEmissiveStrength`。slot 2为0时保留原像素属性；非零时只改变对应主体实例，不创建或缩放第二套ISM。9208 T7逐帧证据显示Knockback只闪白2个目标、KnockUp只闪白2个目标并约5帧衰减、Death只闪白4个目标；实例总数始终20，无红色副本、重影或Z-fighting。运行时统一scale=`34`使视觉footprint约为`81.7×69.4×84.9cm`，不改变Particle碰撞事实。
+VAT StaticMesh：
 
-## 5. 生产约束与禁止项
+- UV0 保留普通网格坐标；
+- UV1 由 AnimToTexture 保存骨骼查找数据；
+- 不为了 VAT 自动重排已有运行时 UV 语义；
+- VAT Position / Rotation / Weight texture 尺寸由 bake 结果决定，运行时代码不硬编码纹理分辨率。
 
-- [INFERRED][HIGH] 不允许把原工程资产路径写入生成脚本或DataAsset。
-- [INFERRED][HIGH] 不允许通过文件系统复制`.uasset`，也不允许用旧帧号硬编码覆盖生成清单。
-- [INFERRED][HIGH] Blender输出必须可从空目录重复生成；五个动画FBX必须来自五个不同Action。
-- [INFERRED][HIGH] Unreal导入和烘焙必须在完整Editor会话执行。UE5.7的AssetTools在Python commandlet保存路径会触发Slate断言，不能把commandlet作为受支持的写入入口。
-- [INFERRED][HIGH] 运行时clip映射必须消费DataAsset/生成描述符中的实际范围；客户端仍只负责视觉播放，不计算伤害或运动。
-- [INFERRED][HIGH] T7只有在真实关卡中完成五状态、命中闪色、击退/击飞、双端同步和录像门后才能标记通过；资源存在不等于能力通过。
+资产验证至少检查：
 
-[RULES I BROKE]：[COMPUTED][HIGH] 无。
+```text
+Asset type / reference
+五段 frame range
+UV channel
+VAT DataAsset
+Bone position / rotation / weight texture
+Material parent
+Per-instance custom data index
+WPO connection
+旧 overlay 资产不存在
+```
+
+---
+
+## 6. 运行时材质合同
+
+主体 ISM 使用同一 VAT mesh / material，不通过创建第二套“闪色副本”表现 HitFlash。
+
+Per-Instance Custom Data 固定：
+
+```text
+slot 0 = Frame
+slot 1 = PreviousFrame
+slot 2 = HitFlashIntensity
+```
+
+HitFlash 在主体材质内部完成，例如：
+
+```text
+BaseColor = lerp(BaseColor, HitFlashColor, intensity)
+Emissive  = BaseEmissive + HitFlashColor * intensity * strength
+```
+
+`HitFlashIntensity = 0` 时必须恢复普通材质。
+
+视觉缩放只影响 Presentation footprint，不改变 Worker / Particle 的物理半径、HardGap 或安全事实。
+
+---
+
+## 7. Runtime 数据边界
+
+Server / Worker 只发布稳定视觉事实，例如：
+
+```text
+VisualState
+VisualRevision
+StateStartServerTime
+PlayRate
+HitFlash state / revision
+```
+
+Client Presentation 根据同步 ServerTime 和 VAT descriptor 计算当前 frame 并提交 ISM custom data。
+
+客户端 VAT 播放不得：
+
+- 决定 Attack 合法性；
+- 生成 Damage；
+- 修改 Worker Movement；
+- 修改生命周期；
+- 用动画帧反推 gameplay authority。
+
+---
+
+## 8. 可重复生成要求
+
+- Blender 源输出必须能从空的 `Intermediate/CrowdDemoVatSource` 重新生成。
+- 五个动画 FBX 必须来自五个明确 Action，而不是一个文件通过运行时猜区间。
+- Unreal 导入和 AnimToTexture bake 使用受支持的完整 Editor 会话。
+- 脚本不得包含原工程绝对资产路径作为生产输入。
+- 不通过文件系统直接复制 `.uasset`。
+- 生成失败必须保留明确错误，不静默复用旧资产冒充成功。
+
+---
+
+## 9. 资产存在不等于能力通过
+
+VAT 管线完成只证明：
+
+```text
+资产能够稳定生成
++
+运行时拥有可消费的五状态描述
+```
+
+它不自动证明：
+
+```text
+攻击状态正确
+HitResponse 正确
+Knockback / KnockUp 正确
+双端同步正确
+视觉连续性正确
+```
+
+这些必须由 Demo 场景和 `TestScenarioMatrix.md` 单独证明。
