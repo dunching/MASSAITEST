@@ -11,6 +11,7 @@
 #include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerInteractionDomain.h"
 #include "MassCrowdWorkerMovementControlResource.h"
+#include "MassCrowdWorkerNavigationResource.h"
 #include "MassCrowdWorkerTargetDomain.h"
 #include "MassCrowdWorkerProjectileDomain.h"
 #include "Mass/CrowdDemoWorkerCombatExtension.h"
@@ -6777,8 +6778,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PreparePendingTargetResourcePlan()
   if (!SharedFlowRuntimeSubsystem) return false;
   const FCrowdMassSharedFlowResource& RuntimeSharedFlowResource =
     SharedFlowRuntimeSubsystem->GetSharedFlowResource();
-    FCrowdDemoPreparedRoundCommitPlan* Pending =
-      PeekPreparedRoundCommitPlan();
+  FCrowdDemoPreparedRoundCommitPlan* Pending =
+    PeekPreparedRoundCommitPlan();
   if (!Pending || !Pending->PreparedTargetResourcePlan.IsValid())
     return false;
   FCrowdDemoPreparedTargetResourcePlan& Prepared =
