@@ -22,12 +22,18 @@ jobs:
         shell: bash
         run: |
           set +e
-          python3 .github/scripts/apply_retire_bootstrap_second_pass.py > retire_bootstrap_second_pass_run.txt 2>&1
-          status=$?
+          python3 .github/scripts/fix_retire_bootstrap_patch.py > retire_bootstrap_second_pass_run.txt 2>&1
+          fix_status=$?
+          if [ "$fix_status" -eq 0 ]; then
+            python3 .github/scripts/apply_retire_bootstrap_second_pass.py >> retire_bootstrap_second_pass_run.txt 2>&1
+            status=$?
+          else
+            status=$fix_status
+          fi
           if [ "$status" -ne 0 ]; then
             echo >> retire_bootstrap_second_pass_run.txt
             echo "===== residual retired symbols =====" >> retire_bootstrap_second_pass_run.txt
-            grep -n -E 'PreparedTargetResource|PreparedMovementBoundary|PreparedParticleDiagnostic|ConsumeBoundary(Movement|Particle|Facing)|BoundaryOrchestrator|TryPrepareRoundApply|BeginBoundaryTransaction' \
+            grep -n -E 'PreparedTargetResource|PreparedMovementBoundary|PreparedParticleDiagnostic|ConsumeBoundary(Movement|Particle|Facing)|BoundaryOrchestrator|TryPrepareRoundApply|BeginBoundaryTransaction|CalculatePreparedTargetResourceHash' \
               Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h \
               Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp \
               Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp \
