@@ -1,0 +1,37 @@
+name: Apply production round cut
+
+on:
+  push:
+    branches:
+      - refactor/production-bypass-round-transaction
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/production-bypass-round-transaction
+          fetch-depth: 0
+      - name: Apply source refactor
+        run: python3 .github/scripts/apply_production_round_cut.py
+      - name: Commit source refactor
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h \
+            Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp \
+            Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp \
+            Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp \
+            Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp
+          if git diff --cached --quiet; then
+            echo "No source changes produced"
+            exit 1
+          fi
+          git commit -m "refactor: bypass round transaction in full worker production"
+          git push origin HEAD:refactor/production-bypass-round-transaction
