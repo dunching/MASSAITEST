@@ -760,176 +760,6 @@ bool FCrowdDemoCombatVatShowcaseMotionTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-  FCrowdDemoCombatRollbackCompletionGateTest,
-  "CrowdDemo.Combat.Rollback.CompletionGate",
-  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCrowdDemoCombatRollbackCompletionGateTest::RunTest(
-  const FString& Parameters)
-{
-  auto* Pipeline = NewObject<UCrowdDemoRoundSimPipelineSubsystem>();
-  FCrowdDemoRoundPlanPacket Plan;
-  Plan.bValid = 1;
-  Plan.RoundId = 1;
-  Plan.Revision = 1;
-  Plan.Rules.Scenario = ECrowdDemoScenario::SimRoundSoftPressure;
-  Plan.Rules.FixedStepSeconds = 1.0f / 30.0f;
-  Pipeline->ActivatePlan(Plan, 2, false);
-
-  FCrowdMassBoundarySnapshot Boundary;
-  Boundary.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-  Boundary.PlanRevision = Pipeline->GetCurrentPlanRevision();
-  Boundary.bValid = true;
-  TArray<FCrowdDemoRoundBoundaryFormationFact> FormationFacts;
-  TArray<FCrowdDemoRoundBoundaryFacingFact> FacingFacts;
-  for (const int32 AgentId : {10, 20})
-  {
-    FCrowdMassBoundaryAgentRecord& Agent = Boundary.Agents.AddDefaulted_GetRef();
-    Agent.Identity.AgentId = AgentId;
-    Agent.Identity.LifecycleSerial = 1;
-    FCrowdDemoRoundBoundaryFormationFact& Formation =
-      FormationFacts.AddDefaulted_GetRef();
-    Formation.AgentId = AgentId;
-    FCrowdDemoRoundBoundaryFacingFact& Facing =
-      FacingFacts.AddDefaulted_GetRef();
-    Facing.AgentId = AgentId;
-  }
-  TestTrue(TEXT("boundary snapshot accepted"),
-    Pipeline->PublishBoundarySnapshot(
-      MoveTemp(Boundary), MoveTemp(FormationFacts), MoveTemp(FacingFacts)));
-
-  TArray<FCrowdDemoSoftPressureRollbackAgentState> MovementFacts;
-  for (const int32 AgentId : {10, 20})
-  {
-    FCrowdDemoSoftPressureRollbackAgentState& Agent =
-      MovementFacts.AddDefaulted_GetRef();
-    Agent.AgentId = AgentId;
-    Agent.LifecycleSerial = 1;
-  }
-  const int32 Step = Pipeline->GetCurrentFixedStepIndex();
-  Pipeline->RecordSoftPressureRollbackSnapshot(Step, MoveTemp(MovementFacts));
-  const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
-    Pipeline->FindSoftPressureRollbackSnapshot(Step);
-  TestNotNull(TEXT("movement snapshot exists"), Snapshot);
-  TestTrue(TEXT("movement facts complete"),
-    Snapshot && Snapshot->bMovementFactsComplete);
-  TestFalse(TEXT("incomplete snapshot is not replayable"),
-    Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
-
-  TArray<FCrowdDemoPreparedCombatRollbackFact> MissingFacts;
-  MissingFacts.AddDefaulted_GetRef().AgentId = 10;
-  TestFalse(TEXT("missing combat fact rejected"),
-    Pipeline->CompleteSoftPressureRollbackCombatState(Step, MissingFacts));
-  TArray<FCrowdDemoPreparedCombatRollbackFact> DuplicateFacts;
-  DuplicateFacts.AddDefaulted_GetRef().AgentId = 10;
-  DuplicateFacts.AddDefaulted_GetRef().AgentId = 10;
-  TestFalse(TEXT("duplicate combat fact rejected"),
-    Pipeline->CompleteSoftPressureRollbackCombatState(Step, DuplicateFacts));
-  TArray<FCrowdDemoPreparedCombatRollbackFact> WrongFacts;
-  WrongFacts.AddDefaulted_GetRef().AgentId = 10;
-  WrongFacts.AddDefaulted_GetRef().AgentId = 30;
-  TestFalse(TEXT("wrong combat AgentId rejected"),
-    Pipeline->CompleteSoftPressureRollbackCombatState(Step, WrongFacts));
-
-  TArray<FCrowdDemoPreparedCombatRollbackFact> CombatFacts;
-  FCrowdDemoPreparedCombatRollbackFact& Agent20 = CombatFacts.AddDefaulted_GetRef();
-  Agent20.AgentId = 20;
-  Agent20.Combat.Health = 80.0f;
-  Agent20.Combat.VisualState = ECrowdDemoVisualState::HitReact;
-  FCrowdDemoPreparedCombatRollbackFact& Agent10 = CombatFacts.AddDefaulted_GetRef();
-  Agent10.AgentId = 10;
-  Agent10.Combat.Health = 90.0f;
-  Agent10.Combat.VisualState = ECrowdDemoVisualState::Attack;
-  TestTrue(TEXT("reverse-order final combat facts accepted"),
-    Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
-  TestTrue(TEXT("complete snapshot is replayable"),
-    Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
-  Snapshot = Pipeline->FindSoftPressureRollbackSnapshot(Step);
-  TestEqual(TEXT("Agent 10 final visual state stored"),
-    Snapshot->Agents[0].Combat.VisualState, ECrowdDemoVisualState::Attack);
-  TestEqual(TEXT("Agent 20 final health stored"),
-    Snapshot->Agents[1].Combat.Health, 80.0f);
-  TestFalse(TEXT("duplicate completion rejected"),
-    Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
-  return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-  FCrowdDemoSf1CorrectionHistorySnapshotTest,
-  "CrowdDemo.Networking.GenericCorrectionHistory.SF1Snapshot",
-  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
-bool FCrowdDemoSf1CorrectionHistorySnapshotTest::RunTest(
-  const FString& Parameters)
-{
-  auto* Pipeline = NewObject<UCrowdDemoRoundSimPipelineSubsystem>();
-  FCrowdDemoRoundPlanPacket Plan;
-  Plan.bValid = 1;
-  Plan.RoundId = 1;
-  Plan.Revision = 1;
-  Plan.Rules.Scenario = ECrowdDemoScenario::SimRoundObstacle;
-  Plan.Rules.FixedStepSeconds = 1.0f / 30.0f;
-  Pipeline->ActivatePlan(Plan, 1, false);
-
-  FCrowdMassBoundarySnapshot Boundary;
-  Boundary.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-  Boundary.PlanRevision = Pipeline->GetCurrentPlanRevision();
-  Boundary.bValid = true;
-  FCrowdMassBoundaryAgentRecord& BoundaryAgent =
-    Boundary.Agents.AddDefaulted_GetRef();
-  BoundaryAgent.Identity.AgentId = 7;
-  BoundaryAgent.Identity.LifecycleSerial = 3;
-  TArray<FCrowdDemoRoundBoundaryFormationFact> FormationFacts;
-  FCrowdDemoRoundBoundaryFormationFact& Formation =
-    FormationFacts.AddDefaulted_GetRef();
-  Formation.AgentId = 7;
-  Formation.RadiusCm = 42.0f;
-  TArray<FCrowdDemoRoundBoundaryFacingFact> FacingFacts;
-  FacingFacts.Add({7, 4});
-  TestTrue(TEXT("SF1 boundary snapshot accepted"),
-    Pipeline->PublishBoundarySnapshot(
-      MoveTemp(Boundary), MoveTemp(FormationFacts), MoveTemp(FacingFacts)));
-
-  TArray<FCrowdDemoSoftPressureRollbackAgentState> MovementFacts;
-  FCrowdDemoSoftPressureRollbackAgentState& Agent =
-    MovementFacts.AddDefaulted_GetRef();
-  Agent.AgentId = 7;
-  Agent.LifecycleSerial = 3;
-  Agent.Location = FVector(100.0f, 200.0f, 0.0f);
-  Agent.Velocity = FVector(300.0f, 0.0f, 0.0f);
-  Agent.RadiusCm = 42.0f;
-  const int32 Step = Pipeline->GetCurrentFixedStepIndex();
-  Pipeline->RecordSoftPressureRollbackSnapshot(Step, MoveTemp(MovementFacts));
-
-  TArray<FCrowdDemoPreparedCombatRollbackFact> CombatFacts;
-  FCrowdDemoPreparedCombatRollbackFact& Combat =
-    CombatFacts.AddDefaulted_GetRef();
-  Combat.AgentId = 7;
-  Combat.Combat.Health = 75.0f;
-  TestTrue(TEXT("SF1 combat completion accepted"),
-    Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
-  TestTrue(TEXT("SF1 correction history is replay-ready"),
-    Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
-  const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
-    Pipeline->FindSoftPressureRollbackSnapshot(Step);
-  TestNotNull(TEXT("SF1 correction history exists"), Snapshot);
-  if (Snapshot)
-  {
-    TestEqual(TEXT("SF1 historical location retained"),
-      Snapshot->Agents[0].Location, FVector(100.0f, 200.0f, 0.0f));
-    TestEqual(TEXT("SF1 final combat fact retained"),
-      Snapshot->Agents[0].Combat.Health, 75.0f);
-  }
-
-  Plan.RoundId = 2;
-  Plan.Revision = 2;
-  Pipeline->ActivatePlan(Plan, 1, false);
-  TestNull(TEXT("new SF1 round clears correction history"),
-    Pipeline->FindSoftPressureRollbackSnapshot(Step));
-  return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoCapabilityArchetypeCompositionTest,
   "CrowdDemo.Architecture.CapabilityArchetypeComposition",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -1602,9 +1432,11 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       FacingBlock.Contains(TEXT(
         "PreviousSettleStepsByAgentId.Add(\n        Identities[It].Id")));
   }
-  TestTrue(TEXT("post-finalize completes combat rollback facts"),
+  TestFalse(TEXT("post-finalize no longer builds full rollback history"),
     PostFinalizeBlock.Contains(TEXT(
-      "CompleteSoftPressureRollbackCombatState(")));
+      "CompleteSoftPressureRollbackCombatState("))
+      || PostFinalizeBlock.Contains(TEXT(
+        "RecordSoftPressureRollbackSnapshot(")));
 
   FString PipelineSource;
   const FString PipelinePath = FPaths::Combine(
@@ -1792,6 +1624,26 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
         "LastWorkerV2MovementControlPlanRevision"))
       && PipelineSource.Contains(TEXT(
         "!= GetCurrentPlanRevision()")));
+  TestTrue(TEXT("Full Production has a direct Worker intent path"),
+    ProcessorSource.Contains(TEXT(
+      "Pipeline->CanUseFullWorkerProductionFastPath()"))
+      && ProcessorSource.Contains(TEXT(
+        "Pipeline->TrySubmitFullWorkerProductionIntent()"))
+      && PipelineSource.Contains(TEXT(
+        "CrowdDemoFullWorkerProductionFastPathCheckpoint")));
+  const int32 ProductionFastPathCall = ProcessorSource.Find(TEXT(
+    "Pipeline->CanUseFullWorkerProductionFastPath()"));
+  const int32 LegacyBoundaryBeginCall = ProcessorSource.Find(TEXT(
+    "Pipeline->BeginBoundaryTransaction(SnapshotApplyMilliseconds)"),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    ProductionFastPathCall);
+  TestTrue(TEXT("Full Production bypass is decided before legacy transaction begin"),
+    ProductionFastPathCall != INDEX_NONE
+      && LegacyBoundaryBeginCall > ProductionFastPathCall);
+  TestFalse(TEXT("full rollback replay API is physically retired"),
+    PipelineSource.Contains(TEXT("SoftPressureRollbackHistory"))
+      || PipelineSource.Contains(TEXT("RestoreSoftPressureRuntime("))
+      || PipelineHeader.Contains(TEXT("FCrowdDemoSoftPressureRollbackSnapshot")));
   TestTrue(TEXT("early Clock intent is restricted to bootstrapped Production domains"),
     PipelineSource.Contains(TEXT(
       "ECrowdDemoSoftPressureTestCase::RangedProjectileCombat"))

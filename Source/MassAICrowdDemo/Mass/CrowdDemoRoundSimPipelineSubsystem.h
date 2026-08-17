@@ -262,28 +262,6 @@ enum class ECrowdDemoRoundPerformanceStage : uint8
 };
 
 
-struct FCrowdDemoSoftPressureRollbackAgentState
-{
-  int32 AgentId = INDEX_NONE;
-  int32 LifecycleSerial = 0;
-  FVector Location = FVector::ZeroVector;
-  FVector Velocity = FVector::ZeroVector;
-  float YawDegrees = 0.0f;
-  float RadiusCm = 42.0f;
-  float SimulatedServerTimeSeconds = 0.0f;
-  int32 PlanRevision = 0;
-  bool bInitialized = false;
-  FCrowdDemoRoundFlowSampleFragment FlowSample;
-  FCrowdMassFacingFragment Facing;
-  FCrowdDemoCombatNetState Combat;
-};
-
-struct FCrowdDemoPreparedCombatRollbackFact
-{
-  int32 AgentId = INDEX_NONE;
-  FCrowdDemoCombatNetState Combat;
-};
-
 struct FCrowdDemoPreparedReactiveMotionStep
 {
   int32 AgentId = INDEX_NONE;
@@ -462,122 +440,6 @@ struct FCrowdDemoPreparedTargetResourcePlan
 
   static bool ValidatePrepareInput(
     const FCrowdDemoTargetResourcePrepareValidationInput& Input);
-};
-
-struct FCrowdDemoTargetRegionCapabilityCohortRollbackState
-{
-  FCrowdDemoCapabilityCohort Cohort;
-  int32 DemandRegionPhaseOffset = 0;
-  uint64 PlanResourceKey = 0;
-  FCrowdDemoTargetRegionQuotaExecutionState QuotaExecution;
-  FCrowdDemoTargetRegionPlanReplacementSummary LastPlanReplacement;
-  FCrowdDemoTargetRegionPlanValidationResult Validation;
-  uint32 TopologyRoundHash = 2166136261u;
-  uint32 DemandRoundHash = 2166136261u;
-  uint32 TransportRoundHash = 2166136261u;
-  uint32 GuidanceRoundHash = 2166136261u;
-  uint32 ValidationRoundHash = 2166136261u;
-  int32 PlanRebuildCount = 0;
-  int32 InvalidStepCount = 0;
-  int32 ValidationFailureCount = 0;
-  int32 GuidanceUnroutedStepCount = 0;
-  int32 LastInvalidStep = INDEX_NONE;
-  int32 SolverMsSampleCount = 0;
-  FCrowdDemoTargetRegionPlanLifecycleRuntime PlanLifecycle;
-  TSet<int32> TargetEngagedHoldAgentIds;
-  int32 TargetEngagementAcquireCount = 0;
-  int32 TargetEngagementReleaseCount = 0;
-  int32 TargetEngagementSuppressedRetreatCount = 0;
-  bool bRoundValid = true;
-};
-
-struct FCrowdDemoSoftPressureRollbackSnapshot
-{
-  int32 FixedStepIndex = INDEX_NONE;
-  bool bMovementFactsComplete = false;
-  bool bCombatFactsComplete = false;
-  bool bSnapshotReadyForReplay = false;
-  TArray<FCrowdDemoSoftPressureRollbackAgentState> Agents;
-  TArray<FCrowdDemoLocalPredictiveResult> LocalPredictiveResults;
-  TArray<FCrowdDemoLocalPredictiveGrantState> LocalPredictiveGrantStates;
-  FCrowdDemoLocalPredictiveSummary LocalPredictiveSummary;
-  uint32 LocalPredictiveRoundHash = 2166136261u;
-  int32 LocalPredictiveSampleCount = 0;
-  uint32 GuidanceCandidateRoundHash = 2166136261u;
-  uint32 GuidanceComposeRoundHash = 2166136261u;
-  int32 GuidanceComposeSampleCount = 0;
-  int32 LocalPredictiveInvalidStepCount = 0;
-  FCrowdDemoParticleConstraintSummary ParticleCandidateSummary;
-  FCrowdDemoParticleConstraintSummary ParticleAppliedSummary;
-  int32 ParticleSolverMsSampleCount = 0;
-  uint32 ParticleCandidateStateHash = 2166136261u;
-  uint32 ParticleAppliedStateHash = 2166136261u;
-  int32 ParticleInvalidStepCount = 0;
-  int32 ParticleGlobalFallbackStepCount = 0;
-  int32 ParticleStepCount = 0;
-  int32 CrossProfileHardViolationCount = 0;
-  int32 CrossProfileSweptViolationCount = 0;
-  int32 ParticleSettlingWindowCount = 0;
-  int32 ParticleSettlingSteps = INDEX_NONE;
-  float ParticlePreviousSoftErrorP95 = -1.0f;
-  bool bParticleConstraintRunFailure = false;
-  FCrowdDemoParticleFailureFixture ParticleFailureFixture;
-  FCrowdDemoOpenSpawnRelaxationRuntime OpenSpawnRelaxationRuntime;
-  FCrowdDemoOpenCohortMovementProgress OpenCohortMovementProgress;
-  FCrowdDemoBidirectionalSwapProgress BidirectionalSwapProgress;
-  FCrowdDemoValidCorridorTransitProgress ValidCorridorTransitProgress;
-  FCrowdDemoSoftPressureRouteDiagnosticCheckpoint RouteDiagnosticCheckpoint;
-  FCrowdDemoTargetStabilityCheckpoint TargetStabilityCheckpoint;
-  FCrowdDemoTargetFact TargetFact;
-  int32 DynamicFlowAnchorCellKey = INDEX_NONE;
-  int32 DynamicFlowIntegrationRebuildCount = 0;
-  uint32 DynamicFlowRoundHash = 2166136261u;
-  int32 DynamicFlowRoundHashFixedStepIndex = INDEX_NONE;
-  uint64 TargetRegionPlanResourceKey = 0;
-  FCrowdDemoTargetRegionQuotaExecutionState TargetRegionQuotaExecution;
-  FCrowdDemoTargetRegionPlanValidationResult TargetRegionPlanValidation;
-  uint32 TargetRegionTopologyRoundHash = 2166136261u;
-  uint32 TargetRegionDemandRoundHash = 2166136261u;
-  uint32 TargetRegionTransportRoundHash = 2166136261u;
-  uint32 TargetRegionGuidanceRoundHash = 2166136261u;
-  int32 TargetRegionPlanRebuildCount = 0;
-  int32 TargetRegionLifetimeRebuildCount = 0;
-  int32 TargetRegionTargetRebuildCount = 0;
-  int32 TargetRegionEnvironmentRebuildCount = 0;
-  int32 TargetRegionMembershipRebuildCount = 0;
-  int32 TargetRegionDemandSatisfiedRebuildCount = 0;
-  int32 TargetRegionPathInvalidRebuildCount = 0;
-  int32 TargetRegionSolverMsSampleCount = 0;
-  bool bTargetRegionRoundValid = true;
-  int32 TargetRegionInvalidStepCount = 0;
-  int32 TargetRegionLastInvalidStep = INDEX_NONE;
-  int32 TargetRegionValidationFailureCount = 0;
-  uint32 TargetRegionValidationRoundHash = 2166136261u;
-  int32 TargetRegionGuidanceUnroutedStepCount = 0;
-  int32 TargetRegionGuidanceUnroutedAgentSampleCount = 0;
-  int32 TargetRegionGuidanceUnroutedAgentMax = 0;
-  int32 TargetRegionGuidanceFirstFailureStep = INDEX_NONE;
-  int32 TargetRegionGuidanceFirstFailureAgentId = INDEX_NONE;
-  bool bTargetRegionFailureFixtureValid = false;
-  int32 TargetRegionFailureFixtureStep = INDEX_NONE;
-  int32 TargetRegionFailureFixtureKind = 0;
-  int32 TargetRegionFailureFixtureAgentId = INDEX_NONE;
-  int32 TargetRegionFailureFixtureCellKey = INDEX_NONE;
-  uint32 TargetRegionFailureFixtureHash = 0;
-  TArray<FCrowdDemoTargetRegionCapabilityCohortRollbackState> TargetRegionCapabilityCohorts;
-  FCrowdDemoCapabilityProfileSummary CapabilityProfileSummary;
-  int32 CapabilityCohortRebuildCount = 0;
-  FCrowdDemoTargetRegionPlanLifecycleSummary TargetRegionPlanLifecycleSummary;
-  FCrowdDemoTargetRegionPlanLifecycleFixture TargetRegionPlanLifecycleFixture;
-  TSet<int32> FlowGoalReachedAgentIds;
-  TSet<int32> FlowWallPassAgentIds;
-  TSet<int32> FlowCorridorExitAgentIds;
-  TSet<int32> FlowTurnExitAgentIds;
-  TMap<int32, float> FlowLowSpeedSecondsByAgentId;
-  TSet<int32> FlowCorridorDeadlockAgentIds;
-  FCrowdDemoRoundCompareMetrics CompareMetrics;
-  TArray<FCrowdProjectileState> Projectiles;
-  FCrowdDemoProjectileMetrics ProjectileMetrics;
 };
 
 struct FCrowdDemoPreparedSteeringGuidance
@@ -989,6 +851,14 @@ public:
   // Returns false only when the specialized fast path was eligible but could
   // not submit safely. Ineligible frames retain the prepared-boundary path.
   bool TrySubmitWorkerV2ClockIntentEarly();
+  bool CanUseFullWorkerProductionFastPath() const;
+  bool TrySubmitFullWorkerProductionIntent();
+  bool IsCurrentStepFullWorkerProductionFastPath() const
+  { return bCurrentStepFullWorkerProductionFastPath; }
+  uint64 GetCurrentStepFullWorkerInputSequence() const
+  { return CurrentStepFullWorkerInputSequence; }
+  bool MarkFullWorkerProductionResultCommitted(
+    double CommitMilliseconds);
   ECrowdBoundaryPollResult TryPrepareRoundApply();
   int32 GetLastBoundaryPrepareCheckpoint() const
   { return LastBoundaryPrepareCheckpoint; }
@@ -1337,15 +1207,6 @@ public:
     int32 UnreachableSampleCount);
   FCrowdDemoSharedFlowMetrics BuildSharedFlowMetrics(TConstArrayView<FCrowdDemoRoundAgentState> States) const;
   int32 GetCurrentFixedStepIndex() const;
-  void RecordSoftPressureRollbackSnapshot(
-    int32 FixedStepIndex, TArray<FCrowdDemoSoftPressureRollbackAgentState>&& Agents);
-  bool CompleteSoftPressureRollbackCombatState(
-    int32 FixedStepIndex,
-    TConstArrayView<FCrowdDemoPreparedCombatRollbackFact> CombatStates);
-  const FCrowdDemoSoftPressureRollbackSnapshot* FindSoftPressureRollbackSnapshot(
-    int32 FixedStepIndex) const;
-  bool IsSoftPressureRollbackSnapshotReadyForReplay(int32 FixedStepIndex) const;
-  void RestoreSoftPressureRuntime(const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot);
   void RecordSoftPressureRollbackOutcome(bool bHit, bool bAgentMismatch, int32 ReplayedSteps);
   bool IsOpenSpawnRelaxation() const
   {
@@ -1524,6 +1385,9 @@ private:
   bool bCurrentStepWorkerDirtyMassApplied = false;
   uint64 CurrentStepWorkerDirtyMassPublishSequence = 0;
   int32 CurrentStepWorkerDirtyMassEntityCount = 0;
+  bool bCurrentStepFullWorkerProductionFastPath = false;
+  uint64 CurrentStepFullWorkerInputSequence = 0;
+  uint64 FullWorkerProductionFastPathStepCount = 0;
   bool bBootstrapBoundarySnapshotPending = false;
   int32 LastBootstrapMassReadPlanRevision = INDEX_NONE;
   uint64 BootstrapMassReadCount = 0;
@@ -1627,7 +1491,6 @@ private:
   int32 CapabilityCohortRebuildCount = 0;
   FCrowdDemoTargetRegionPlanLifecycleSummary TargetRegionPlanLifecycleSummary;
   FCrowdDemoTargetRegionPlanLifecycleFixture TargetRegionPlanLifecycleFixture;
-  TMap<int32, FCrowdDemoSoftPressureRollbackSnapshot> SoftPressureRollbackHistory;
   TMap<uint64, FCrowdDemoTargetRegionFlowPlan> TargetRegionPlanResources;
   int32 SoftPressureRollbackSnapshotHitCount = 0;
   int32 SoftPressureRollbackSnapshotMissCount = 0;
