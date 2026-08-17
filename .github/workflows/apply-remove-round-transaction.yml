@@ -23,13 +23,22 @@ jobs:
         run: |
           set +e
           python3 .github/scripts/apply_remove_round_transaction.py > remove_round_transaction_run.txt 2>&1
-          status=$?
+          first_status=$?
+          if [ "$first_status" -ne 0 ] && grep -q 'retired transaction symbol remains: BoundaryOrchestrator' remove_round_transaction_run.txt; then
+            echo >> remove_round_transaction_run.txt
+            echo "===== applying orphan validation cleanup =====" >> remove_round_transaction_run.txt
+            python3 .github/scripts/fix_remove_round_residuals.py >> remove_round_transaction_run.txt 2>&1
+            status=$?
+          else
+            status=$first_status
+          fi
           if [ "$status" -ne 0 ]; then
             echo >> remove_round_transaction_run.txt
             echo "===== residual transaction symbols after in-worktree patch =====" >> remove_round_transaction_run.txt
             grep -n -E 'BoundaryOrchestrator|ECrowdBoundaryTransactionState|TryPrepareRoundApply|BeginBoundaryTransaction|GetRoundWorkState' \
               Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h \
               Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp \
+              Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.h \
               Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp \
               >> remove_round_transaction_run.txt || true
           fi
@@ -52,6 +61,7 @@ jobs:
           git add \
             Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h \
             Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp \
+            Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.h \
             Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp
           if git diff --cached --quiet; then
             echo "No source changes produced"
