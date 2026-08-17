@@ -1,47 +1,16 @@
 retirement patch fixer applied
 Traceback (most recent call last):
-  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/apply_retire_bootstrap_second_pass.py", line 495, in <module>
-    if e < 0: raise RuntimeError("next test after old structure test missing")
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: next test after old structure test missing
+  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/apply_retire_bootstrap_second_pass.py", line 638, in <module>
+    raise RuntimeError(f"retired symbol remains {symbol}: {lines}")
+RuntimeError: retired symbol remains PreparedCombatBoundaryCommit: ['struct FCrowdDemoPreparedCombatBoundaryCommit', '  FCrowdDemoPreparedCombatBoundaryCommit Commit;']
 
 ===== residual retired symbols =====
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:980:    FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:992:      FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(Invalid);
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1106:  const int32 PreparedTargetResourcePlanBuildCount = 1;
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1107:  int32 PreparedTargetResourcePlanApplyCount = 0;
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1116:           && PreparedTargetResourcePlanBuildCount == 1;
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1123:         ++PreparedTargetResourcePlanApplyCount;
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1132:    PreparedTargetResourcePlanBuildCount, 1);
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1134:    PreparedTargetResourcePlanApplyCount, 1);
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1210:      "GetPreparedMovementBoundaryCommit()"))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1255:        "GetPreparedMovementBoundaryCommit()"))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1327:        "GetPreparedMovementBoundaryCommit()")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1428:      FacingBlock.Contains(TEXT("ConsumeBoundaryFacingWork(")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1637:    "Pipeline->BeginBoundaryTransaction(SnapshotApplyMilliseconds)"),
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1772:  const FString BoundaryOrchestratorHeaderPath = FPaths::Combine(
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1774:    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Public/MassCrowdBoundaryOrchestrator.h"));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1775:  const FString BoundaryOrchestratorSourcePath = FPaths::Combine(
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1777:    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Private/MassCrowdBoundaryOrchestrator.cpp"));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1778:  const FString BoundaryOrchestratorTestsPath = FPaths::Combine(
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1780:    TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdTests/Private/MassCrowdBoundaryOrchestratorTests.cpp"));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1782:    FPaths::FileExists(BoundaryOrchestratorHeaderPath));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1784:    FPaths::FileExists(BoundaryOrchestratorSourcePath));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1786:    FPaths::FileExists(BoundaryOrchestratorTestsPath));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1816:    PipelineHeader.Contains(TEXT("MassCrowdBoundaryOrchestrator.h"))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1817:      || PipelineSource.Contains(TEXT("MassCrowdBoundaryOrchestrator.h")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1987:        "PreparedTargetResourcePlan"))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1994:      "Pending.PreparedTargetResourcePlan ="))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1996:        "MakeShared<FCrowdDemoPreparedTargetResourcePlan>")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2002:        "FinalValidatePreparedTargetResourcePlan("))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2004:        "ApplyPreparedTargetResourcePlanNoFail(")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2035:      "FinalValidatePreparedTargetResourcePlan(")) != INDEX_NONE
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2037:        "FinalValidatePreparedTargetResourcePlan("))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2041:    OwnerBarrierBlock.Contains(TEXT("PreparedTargetResourceSlots"))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2050:        "CalculatePreparedTargetResourceHash(")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2061:    ProcessorSource.Contains(TEXT("Pipeline->TryPrepareRoundApply()"))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2062:      && PipelineHeader.Contains(TEXT("TryPrepareRoundApply()"))
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2063:      && PipelineSource.Contains(TEXT("TryPrepareRoundApply()")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2336:    "bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction("),
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2671:        TEXT("SetPreparedParticleDiagnosticCommit(")));
-Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2677:        TEXT("CommitPreparedParticleDiagnostics()")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1082:    TEXT("BeginBoundaryTransaction"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1083:    TEXT("TryPrepareRoundApply"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1084:    TEXT("BoundaryOrchestrator"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1086:    TEXT("FCrowdDemoPreparedMovementBoundaryCommit"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1087:    TEXT("FCrowdDemoPreparedTargetResourcePlan"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1088:    TEXT("FCrowdDemoPreparedParticleDiagnosticCommit"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1089:    TEXT("ConsumeBoundaryMovementWork"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1090:    TEXT("ConsumeBoundaryParticleWork"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1091:    TEXT("ConsumeBoundaryFacingWork"),
