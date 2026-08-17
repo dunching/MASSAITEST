@@ -2,20 +2,21 @@
 
 ## 1. 文档职责
 
-本文定义 MassCrowdSimulation 的局部粒子安全层：它负责实体之间以及实体与环境之间的最终 Soft / Hard / Swept / Obstacle / Bounds 安全约束。
+本文定义 MassCrowdSimulation 的局部粒子安全层：实体之间以及实体与环境之间的最终 Soft / Hard / Swept / Obstacle / Bounds 安全约束。
 
-本文不负责宏观导航、目标区域人口分布、攻击距离、Behavior Source 生命周期或业务优先级。
+本文不负责宏观导航、目标区域人口分布、攻击距离、Behavior 生命周期或业务优先级。
 
 相关文档：
 
-- `TargetRegionTransportFieldDesign.md`：目标附近的宏观区域运输与人口分布。
-- `LocalPredictiveInteractionDesign.md`：碰撞发生前的局部可执行速度选择与公平让行。
-- `CurrentArchitecture.md`：当前生产接入状态。
-- `PhasePlan.md` / `FeatureChecklist.md`：大型单 Interaction Island 等当前未关闭项。
+- `TargetRegionTransportFieldDesign.md` — 目标附近宏观区域运输。
+- `LocalPredictiveInteractionDesign.md` — 碰撞前局部可执行速度选择。
+- `CurrentArchitecture.md` — 当前接入与真实并行边界。
+- `LegacyCodeInventory.md` — Demo Particle 重复实现与迁移消费者。
+- `PhasePlan.md` / `FeatureChecklist.md` — 大型单 Island 等 OPEN 项。
 
 ---
 
-## 2. 在完整运动链中的位置
+## 2. 在运动链中的位置
 
 ```text
 Behavior / Objective
@@ -24,7 +25,7 @@ Macro Guidance
    ├── Shared Flow
    └── Target Region Transport
         ↓
-Preferred Movement
+Movement Planning
         ↓
 Local Predictive Interaction
         ↓
@@ -37,22 +38,24 @@ Facing / Finalize
 
 Particle 是最终 Safety Layer。
 
-它回答的是：
+它回答：
 
-> 在已经得到期望运动和局部协调结果之后，最终候选状态是否仍满足实体与环境的安全约束；若不满足，应该如何以确定性方式修正。
+> 上层已经给出候选运动以后，最终状态是否满足实体与环境安全；不满足时如何确定性修正。
 
-Particle 不回答：
+它不回答：
 
-- 目标应该是谁；
-- 应该去哪个 Region；
-- 哪个 Cell 缺人；
-- 哪个职业优先；
-- 当前是否应该攻击；
-- 某个测试场景应该如何特判。
+```text
+目标是谁
+去哪个 Region
+哪个 Cell 缺人
+哪个职业优先
+是否应该攻击
+某张测试地图应该如何特判
+```
 
 ---
 
-## 3. 统一实体输入
+## 3. 通用物理输入
 
 Particle 只消费通用物理事实：
 
@@ -65,31 +68,29 @@ PhysicalRadius
 HardSafetyGap
 SoftMargin
 Mobility
-InteractionLayer
+InteractionLayer / NavLayer relevant facts
 Environment facts
 ```
 
-异构实体继续使用同一个 kernel。
+不同体型/重量继续走同一个通用 kernel，差异来自真实物理参数，不通过 Melee/Ranged/职业/地图名选择另一套碰撞规则。
 
-Small / Standard / Large、Light / Heavy 的差异来自真实半径、HardGap、SoftMargin 和 Mobility，而不是职业专用碰撞规则。
-
-`Mobility` 表达修正责任权重，不得额外引入“靠墙者”“穿行者”“近战”“远程”“Slot owner”等第二套安全优先级。
+`Mobility` 表达修正责任权重，不等于业务优先级或穿透权限。
 
 ---
 
 ## 4. 距离合同
 
-实体对的核心距离定义：
+实体对：
 
 ```text
-PairHardDistance =
-    RadiusA + RadiusB + max(HardGapA, HardGapB)
+PairHardDistance
+= RadiusA + RadiusB + max(HardGapA, HardGapB)
 
-PairSoftDistance =
-    PairHardDistance + SoftMarginA + SoftMarginB
+PairSoftDistance
+= PairHardDistance + SoftMarginA + SoftMarginB
 ```
 
-环境边界：
+环境：
 
 ```text
 WallHardDistance = RadiusA + HardGapA
@@ -98,25 +99,21 @@ WallSoftDistance = WallHardDistance + SoftMarginA
 
 ### Hard
 
-Hard 是不可放宽的最终安全约束。
+不可放宽的最终安全边界。
 
-任何正常提交结果都不得以“为了通行”“为了达到目标”“为了追上队伍”为理由突破 Hard 安全距离。
+不能因为“赶路”“追目标”“抢位置”突破 Hard。
 
 ### Soft
 
-Soft 是可压缩的舒适间距和压力响应。
-
-SoftError 可以长期非零；系统不要求所有实体最终精确达到 SoftDistance。Soft 不得被误用成永久站位或目标环线。
+可压缩的舒适间距/压力层。允许 SoftError 非零；Soft 不是站位 Slot。
 
 ### Swept / Environment
 
-只验证终点距离不足以防止高速穿越，因此最终安全必须同时考虑运动过程中的 Swept 约束、障碍、Bounds 和环境几何。
+只看终点不足以防止高速交换/穿越，因此最终还要验证 swept pair、obstacle、bounds 和环境几何。
 
 ---
 
 ## 5. Fixed-Step 安全链
-
-统一流程：
 
 ```text
 Resolved / Preferred Velocity
@@ -138,46 +135,46 @@ Applied-State Validation
 Final Safe State
 ```
 
-Candidate 失败必须形成可诊断结果；不得静默把非法状态当成功提交。
+Candidate 失败必须形成可诊断结果。
 
-在无法找到合法移动时，可以产生保守的安全静止或受限运动，但必须把“没有进展”与“安全成立”区分开来。
+无法找到安全进展时可以安全静止，但必须区分：
+
+```text
+Safety valid
+vs
+Progress valid
+```
 
 ---
 
 ## 6. 与 Local Predictive 的边界
 
-Local Predictive 的职责是尽量在冲突真正发生之前找到可共同执行的速度。
-
-Particle 的职责是最终守住安全边界。
-
-因此：
-
 ```text
 Local Predictive
-= 尽量别撞上
+= 尽量在撞上前选择可共同执行速度
 
 Particle
 = 即使上层判断不完美，也不能真的穿透
 ```
 
-如果多个实体持续争抢同一个局部目标，出现：
+如果长期出现：
 
 ```text
 靠近
 → Particle 推开
-→ 上层再次要求靠近
+→ Guidance 再要求靠近
 → 再次推开
 ```
 
-这属于上层 Guidance / Local Predictive 合同问题，不能通过不断增强 Particle Soft 力、修改 Mobility 或放宽 HardDistance 来掩盖。
+优先检查 Guidance / Local Predictive 控制闭环，不应通过无限增强 Particle soft force 或放宽 HardDistance 掩盖。
 
 ---
 
-## 7. 与 Target Region Transport 的边界
+## 7. 与 Target Region 的边界
 
-Target Region Transport 只产生宏观区域运输需求和 Preferred Guidance。
+Target Region 只产生宏观区域运输与 Preferred Guidance。
 
-它可以基于实体的 `PhysicalRadius + HardSafetyGap` 构造保守可行的 Polar Cell / Edge，但最终实体对安全仍由 Particle 使用实时几何事实计算。
+它可以利用 PhysicalRadius / HardGap 判断 Polar Cell / Edge 的保守可行性，但实时 pair 安全仍由 Particle 计算。
 
 Transport 不得把：
 
@@ -191,31 +188,41 @@ Cell Owner
 
 转换成 Particle 特权。
 
-攻击距离决定 Target terminal band；物理尺寸和 Mobility 决定局部安全响应。两者必须分离。
-
 ---
 
-## 8. Interaction Pair 与稳定顺序
+## 8. Pair 与稳定顺序
 
-实体对使用稳定 Pair Key：
+逻辑 Pair 使用稳定身份规范化：
 
 ```text
 (min(StableRefA, StableRefB), max(StableRefA, StableRefB))
 ```
 
-同一个 pair 不能因为查询方向不同而出现两次不同语义。
+候选、Pair、Contact、Correction、merge 必须稳定排序，不依赖 TMap/TSet 迭代顺序产生模拟语义。
 
-邻域候选、Pair、Contact、Correction 和最终 merge 都必须使用稳定排序，禁止依赖 `TMap` / `TSet` 的非稳定迭代顺序决定结果。
-
-跨 `InteractionLayer` 的实体默认不形成普通地面 Pair；需要跨层交互时必须由显式能力/碰撞合同开启。
+跨 Interaction/Nav layer 的实体是否形成 pair 必须由显式通用碰撞/层合同决定，而不是 XY 重叠就默认交互。
 
 ---
 
-## 9. Interaction Island
+## 9. 当前 Interaction Island 实现
 
-Particle 的并行边界不是简单的固定 Entity ID 分片。
+当前 `FCrowdMassParticleWork::Solve()` 已实现**约束闭包分解**。
 
-如果约束图为：
+大致流程：
+
+```text
+Agent stable sort
+        ↓
+根据本 fixed-step 最大修正预算扩大 closure reach
+        ↓
+BuildCandidatePairs(ClosureAgents)
+        ↓
+Union-Find connected components
+        ↓
+Interaction Islands
+```
+
+例如：
 
 ```text
 A-B-C-D
@@ -225,29 +232,62 @@ E-F
 G-H-I
 ```
 
-且三组在当前安全闭包内互不影响，可以形成三个独立 Interaction Island，各自求解。
+可形成三个互不交换约束的闭合 Island。
+
+当前多 Island 路径会：
 
 ```text
-Island 1 → Solve
-Island 2 → Solve
-Island 3 → Solve
+for Island 1: Solve
+for Island 2: Solve
+for Island 3: Solve
         ↓
-Deterministic Merge
+stable Pair / Result merge
         ↓
 Global Applied-State Validation
 ```
 
-多个闭合 Island 可以独立执行，但最终仍必须通过全局 Applied-State Validation。
+必须强调：
 
-如果分解或局部求解无法证明最终状态安全，应 fail-closed；允许使用明确记录的 monolithic fallback，而不是提交无法证明正确的局部结果。
+> **当前这是 Island decomposition / independent sub-solve，不是 Island-level Task parallelism。**
+
+虽然源码指标名有 `bUsedIslandSharding`，当前 Island Solve 实际仍在一个 `FCrowdMassParticleWork::Solve()` 调用内顺序执行。
+
+Worker Particle Domain 当前也从一个 `MovementControl` Resource Work 进入，而不是“一个 Island 一个 WorkItem”。
+
+因此当前状态：
+
+```text
+Island decomposition             = DONE
+Independent sub-solve            = DONE
+Stable merge + global validation = DONE
+Island-level UE Task parallelism = OPEN
+```
 
 ---
 
-## 10. 大型单 Island 的最终并行方向
+## 10. Monolithic fallback
 
-当大量高密度实体形成一个巨大的闭合 Interaction Island 时，不能仅按 64 个 Entity 硬切 Shard，因为跨 Shard pair 会共享约束。
+多 Island 结果 merge 后必须重新执行 Applied-State Safety Validation。
 
-最终扩展方向是：
+若 decomposition 结果无法证明全局安全，当前实现允许明确记录并退回 monolithic solve。
+
+这属于 fail-closed safety fallback，不代表长期性能架构目标是永久依赖 monolithic。
+
+Trace capture 或只有一个 component 时当前也直接走 monolithic solve。
+
+---
+
+## 11. 大型单 Island 的最终扩展方向
+
+一个高密度大群可能形成：
+
+```text
+A-B-C-D-E-F-G-... 数千实体
+```
+
+这时 connected-component decomposition 无法拆开。
+
+最终并行方向：
 
 ```text
 Large Interaction Island
@@ -256,79 +296,119 @@ Stable Spatial Cells
         ↓
 Stable Cell-Pair Ownership
         ↓
-Per-round Local Work
+Per-round local work
         ↓
-Barrier Merge
+Deterministic barrier merge
         ↓
-下一传播轮
+下一轮约束传播
         ↓
-Global Safety Validation
+Global exact validation
 ```
 
-必须保证：
+关键点：
 
-1. 每个 pair 只有唯一 Owner；
-2. 同一传播轮的 shard 只写自己的局部输出；
-3. 轮间状态只能在 Barrier 后可见；
-4. Merge 顺序稳定；
-5. 不因线程完成顺序改变最终结果；
-6. 安全验证失败时整轮拒绝或进入明确 fallback。
-
-当前是否已经完成大型单 Island 分片，以 `FeatureChecklist.md` 和 `PhasePlan.md` 为准；本文只冻结设计原则。
+- 不能简单每 64 Agent 硬切；
+- 跨 Shard Pair 必须有唯一 owner；
+- round barrier 必须保证下一轮看到稳定上一轮结果；
+- merge 顺序不能由 Task completion 决定；
+- 最终 Applied-State safety 仍不可省略。
 
 ---
 
-## 11. Reactive Motion
+## 12. Island-level Task 并行与单 Island 分片是两个问题
 
-Knockback、Impulse 等水平受击运动不能在 Particle 之后直接修改 Transform。
+后续性能工作不要把两者混成一件事。
 
-正确链路是：
+### A. 多 Island 并行
+
+当前已经有安全 decomposition，下一步可以研究：
 
 ```text
-Hit / Reactive Fact
-      ↓
-Movement / Constraint Contribution
-      ↓
-Movement Predict
-      ↓
-Particle Safety
-      ↓
-Final Apply
+Island A → Task
+Island B → Task
+Island C → Task
+→ stable merge
 ```
 
-击飞的 Z 轴可使用独立确定性 ballistic 状态，但 XY footprint 仍需遵守统一安全链，除非未来显式引入真正的 3D 空中穿越能力。
+这是相对低风险的并行扩展，但仍需处理 bounded task/shard 数量和 deterministic merge。
+
+### B. 单大 Island 内并行
+
+这是更难的问题，需要 Cell-Pair Owner / per-round barrier。
+
+即使完成 A，也不能说明 10k 高密度单 Island 已解决。
 
 ---
 
-## 12. 确定性与 Fail-Closed
+## 13. Reactive Motion
 
-Particle 必须满足：
+Knockback / KnockUp 等 Reactive Motion 不能在 Particle 之后直接写 Transform 绕过 Safety。
 
-- StableEntityRef / Pair Key 稳定；
-- 输入物理顺序改变不影响结果；
-- Shard 完成顺序改变不影响结果；
-- hash 可用于 replay / correction / regression；
-- 缺失实体、重复 pair、非法半径、NaN、开放安全闭包、容量溢出或 applied-state 不合法时 fail-closed；
-- 不能通过静默丢 pair、静默截断实体或隐藏视觉实例制造“安全通过”。
-
----
-
-## 13. 验收边界
-
-Particle 能力验收至少需要覆盖：
+正确模型：
 
 ```text
-不同半径 pair
-不同 Mobility pair
-靠墙传播
-高速 swept crossing
-Obstacle / Bounds
-InteractionLayer
-多独立 Island
-单大型高密度 Island
-Knockback / Reactive Motion
-确定性 replay
-不同输入顺序
+Combat / Reactive state
+→ Movement Planning / Movement Predict
+→ Particle Safety
+→ Finalize
 ```
 
-Particle “零 Hard violation”只证明最终安全成立，不证明宏观 Target 分布合理、吞吐量足够或终态稳定；这些能力必须由对应 Target / Local Predictive / 场景验收分别证明。
+若安全层无法完全实现 requested impulse，应记录 requested / realized 差异，而不是突破 Hard safety。
+
+---
+
+## 14. Determinism / Rollback
+
+任何影响结果的下列事实都必须可确定性恢复：
+
+```text
+Particle settings
+输入 Agent 顺序规范化结果
+Environment revision
+Candidate/closure facts
+Applied result
+必要的 iterative state
+```
+
+故障诊断必须尽量重放同一个 immutable work input；不能稍后在 GT 重新 gather 一个已经变化的世界再声称复现同一步。
+
+---
+
+## 15. 禁止项
+
+生产 Particle 不允许：
+
+- 按 AgentId 写特殊分支；
+- 按地图名/TestCase 调另一套 solver；
+- 永久 Agent→Cell owner；
+- 为了通过 corridor 放宽 Hard safety；
+- 把 visual footprint 当碰撞半径；
+- 在 Particle 后直接应用未复验的位移；
+- 把 `bUsedIslandSharding` 当成“已经多线程并行”的证明。
+
+---
+
+## 16. 当前与最终边界
+
+当前已经成立：
+
+```text
+通用 Core Particle kernel
+Worker Particle domain
+conservative Interaction Island decomposition
+独立子 Solve
+stable merge
+Global Applied-State validation
+monolithic safety fallback
+```
+
+当前未完成：
+
+```text
+Island-level UE Task parallelism
+Large single-island internal parallelism
+Cell-Pair Owner / per-round barrier
+完整 10k high-density acceptance
+```
+
+当前阶段状态以 `FeatureChecklist.md` / `PhasePlan.md` 为准。

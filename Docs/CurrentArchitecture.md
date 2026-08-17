@@ -2,14 +2,16 @@
 
 ## 1. 文档职责
 
-本文只描述当前 `main` 分支已经存在的生产结构、模块边界、运行链和已知迁移债务。
+本文只描述当前 `main` 已经存在的结构、运行链、运行模式和已知迁移债务。
 
-本文不承担以下职责：
+本文不承担：
 
-- 不记录架构演进流水账；历史阶段进入 `Docs/History/`。
-- 不描述尚未实现的最终目标；最终目标由后续 `TargetArchitecture.md` 统一描述。
-- 不记录实施顺序；实施顺序由 `PhasePlan.md` 负责。
-- 不证明功能是否已经通过；完成状态与测试证据分别由 `FeatureChecklist.md` 和 `TestScenarioMatrix.md` 负责。
+- 架构演进历史；看 `History/`。
+- 最终目标；看 `TargetArchitecture.md`。
+- 实施顺序；看 `PhasePlan.md`。
+- 功能是否通过；看 `FeatureChecklist.md` / `TestScenarioMatrix.md`。
+- 源码从哪里读；看 `SourceReadingMap.md`。
+- 哪些旧代码能不能删；看 `LegacyCodeInventory.md`。
 
 ---
 
@@ -17,19 +19,26 @@
 
 MASSAITEST 是一个基于 Unreal Engine 5.7 + Mass 的大规模 Agent Simulation 验证工程。
 
-当前工程包含两个不同层次：
+当前仓库包含两个层次：
 
 ```text
 MassCrowdSimulation
-= 可复用的群体 Agent Simulation 插件
+= 可复用的大规模 Agent Simulation 插件
 
 MassAICrowdDemo
 = 插件的验证宿主 / 测试场
 ```
 
-Demo 使用虫群移动、通道、目标围攻、异构实体、战斗、Projectile、VAT、网络和视觉场景验证插件能力；Demo 本身不是最终可复用产品。
+Demo 使用虫群、目标围攻、异构实体、战斗、Projectile、VAT、网络和视觉等场景验证同一套 Runtime。Demo 不是最终产品本体。
 
-当前代码已经从“由大量 Round/Mass Processor 共同推进完整模拟”的结构，收敛到“Persistent Worker 持有模拟状态，Mass/Network/Presentation 负责输入、代理和结果应用”的结构。
+当前核心已经从“多个 Round/Mass Processor 共同推进完整模拟”迁移到：
+
+```text
+Persistent Worker 持有迁移后的模拟状态
+Mass / Network / Presentation 消费结果并提供代理/适配
+```
+
+但旧 Demo RoundSim shell 尚未完全退出资源、事务、诊断和测试链，因此当前仍是明显的迁移态。
 
 ---
 
@@ -45,21 +54,19 @@ Plugins/MassCrowdSimulation
 │   ├── Particle Constraint
 │   ├── Facing / Guidance
 │   ├── Behavior Source 基础数据模型
-│   └── 排序、量化、Stable Hash 等纯逻辑
-│
-├── MassCrowdRuntime
-│   ├── Persistent Worker Runtime
-│   ├── WorkRing
-│   ├── TimeWheel
-│   ├── DependencyIndex
-│   ├── EntityStateStore
-│   ├── ResourceStore
-│   ├── Worker Domain Registry / Executor
-│   ├── Worker Result Apply Proxy
-│   └── Runtime Owner Commit Barrier
+│   └── 排序 / 量化 / Stable Hash 等纯逻辑
 │
 ├── MassCrowdSpatial
 ├── MassCrowdCombat
+├── MassCrowdRuntime
+│   ├── Persistent Worker Runtime
+│   ├── WorkRing / TimeWheel / DependencyIndex
+│   ├── Entity / Resource / Dirty State Store
+│   ├── Domain Registry / Executor
+│   ├── Async Task dispatch / deterministic merge
+│   ├── Result Apply Proxy
+│   └── Runtime Owner Commit Barrier
+│
 ├── MassCrowdProjectiles
 ├── MassCrowdNetworking
 ├── MassCrowdPresentation
@@ -67,28 +74,27 @@ Plugins/MassCrowdSimulation
 └── MassCrowdTests
 
 Source/
-│
 ├── MassCrowdDemoBusiness
-│   └── Demo 专用 Planner / Provider / 业务解释
-│
+│   └── Demo Planner / Provider / Host Intent / 业务解释
 └── MassAICrowdDemo
-    └── Scenario / World Adapter / 测试与验收宿主
+    └── Scenario / World Adapter / 验收 / Legacy Round shell
 ```
 
-`MassCrowdCore` 只依赖 UE `Core`，通用 kernel 不直接依赖 UWorld、Actor、MassEntity 或 Demo 类型。
+`MassCrowdCore.Build.cs` 当前只依赖 UE `Core`。
 
-`MassCrowdDemoBusiness` 独立承载攻击、物流等 Demo 业务规划，通用 Runtime 不应解释敌我、攻击、取货、交付等产品语义。
+当前实际 Build.cs 主干以 `Reference/PluginModuleBoundary.md` 为准；不要从模块排列顺序猜依赖方向。
 
 ---
 
 ## 4. 当前主运行链
 
-当前生产链可以概括为：
+主链：
 
 ```text
-Unreal / Mass / Gameplay
+Unreal / Mass / Gameplay / Network
         │
-        │ Spawn / Despawn / Command / Resource / Correction
+        │ Spawn / Despawn / Command
+        │ Resource Revision / Correction
         ▼
 Worker Input Sync
         │
@@ -99,7 +105,7 @@ Persistent Worker Runtime
         ├── Behavior
         ├── Flow / Resource
         ├── Target / Cohort
-        ├── Combat / Projectile
+        ├── Combat / Reactive / Projectile
         ├── Movement Planning
         ├── Movement
         ├── Particle / Interaction
@@ -115,48 +121,87 @@ Worker Result Apply
         └── Presentation Proxy
 ```
 
-当前核心 Mass 模拟边界 Processor 已收敛为：
+当前 `UCrowdDemoMassSubsystem` 动态注册的核心 Simulation Processor 已收敛为：
 
 ```text
 UCrowdDemoWorkerInputSyncProcessor
 UCrowdDemoWorkerResultApplyProcessor
 ```
 
-客户端表现仍有自己的表现 Processor，但旧 Round 子阶段不再各自作为长期生产 Mass Processor 运行。
+客户端可额外注册视觉 Processor。
 
----
-
-## 5. 当前模拟权威
-
-当前架构遵循一个核心原则：
-
-> 同一个模拟字段在任意时刻只能有一个 Production Owner。
-
-已经迁移到 Worker 的字段，以 Persistent Worker 内部状态为模拟权威。
-
-例如：
+源码日志明确打印：
 
 ```text
-Worker Movement
-      │
-      ├── Mass Fragment
-      ├── Network State
-      └── Presentation State
+legacy_round_processors=0
 ```
 
-Mass 中已经应用的 Transform、Velocity、Facing、Combat 等数据，是最近一次已消费 Worker 结果的 Engine 代理，不是另一套可以独立继续推进模拟的权威状态。
-
-GT 不应把刚刚从 Worker 应用出来的位置或速度重新作为普通输入回灌 Worker；只有明确的外部事实或 Authority Correction 才能改变 Worker 权威状态。
-
-Worker 使用 `Generation`、`WorkerEpoch`、`InputSequence`、`CorrectionRevision`、`StateRevision`、`PublishSequence` 和 `LifecycleSerial` 等版本事实拒绝 stale 输入、旧生命周期和过期结果。
+这表示旧 Round Stage 不再作为独立动态 Mass Processor 注册；**不表示旧 Stage struct、Pipeline 数据源和 Round transaction 已经物理删除。**
 
 ---
 
-## 6. 多实体处理模型：Entity → Work → Shard → Task
+## 5. 当前运行模式：Production-capable，但默认仍是 Shadow
 
-当前 Worker 不是“一实体一个线程”，也不是“每个 Tick 完整遍历全部 Agent”。
+这是理解当前代码必须知道的事实。
 
-真正的调度结构是：
+当前代码已经有完整的 Worker Production Owner 实现和正式 Production runner 路径，但 Demo 普通无参数启动并不等于自动进入 Full Production Authority。
+
+`CrowdDemoWorkerInputSync.cpp` 中：
+
+```text
+WorkerV2 Runtime config
+Movement Authority
+Behavior Authority
+```
+
+在没有显式 Production 参数时默认使用 Shadow。
+
+Production 路径由命令行 / 正式 runner 显式开启，例如 Movement mode 的 Production 解析。
+
+因此当前应区分：
+
+```text
+Production-capable Worker architecture = 已存在
+Production runner/path                  = 已存在
+普通 no-flag Demo startup               = Shadow
+```
+
+后续排查“Worker 为什么没有真正接管某字段”时，先确认当前 Authority Mode，不要只看 Executor 是否注册。
+
+---
+
+## 6. 当前模拟权威
+
+核心原则：
+
+> 同一个模拟字段在同一运行模式下只能有一个 Production Owner。
+
+已经进入 Worker Production Owner 路径的主要字段包括：
+
+```text
+Lifecycle
+Behavior
+Resource
+Target / TargetCohort
+Combat / Projectile
+MovementPlan
+Movement
+Particle
+Facing
+Simulation timeline
+```
+
+Async Runtime 当前明确把 Worker Field 映射到 Owner Domain / Execution Rank。
+
+Mass Fragment、Actor、Network Cache、Presentation Slot 等是结果代理、宿主业务状态或表现状态，不应成为同一 Worker 字段的第二推进器。
+
+GT 不应把刚从 Worker Result Apply 消费出来的 Position / Velocity / Facing 再作为普通输入回灌 Worker；显式 Correction / Resnapshot / Resource Revision / Gameplay Command 除外。
+
+---
+
+## 7. 多实体处理：Entity → Work → Shard → Task
+
+当前 Worker 不是“一实体一个线程”，也不是每个 Tick 无条件扫完整 Agent 集合。
 
 ```text
 Entity
@@ -169,26 +214,22 @@ UE::Task
   ↓
 Shard-local Output
   ↓
-Deterministic Merge
+Deterministic Owner Merge
 ```
 
-### 6.1 Entity
+### 7.1 Entity
 
-Entity 使用：
+稳定身份：
 
 ```text
 ProviderId + StableEntityId + LifecycleSerial
 ```
 
-形成稳定身份。
+LifecycleSerial 用于拒绝槽位复用后的旧事实。
 
-`FCrowdWorkerEntityStateStore` 保存当前有效实体以及各 Worker Field。Lifecycle 槽位复用后，旧 Lifecycle 的 Spawn、State、Hit、Correction 等事实会被拒绝。
+### 7.2 Work
 
-### 6.2 Work
-
-Runtime 实际调度单位是 `FCrowdWorkerWorkItem`。
-
-当前 Work Kind 包括：
+`FCrowdWorkerWorkItem` 支持：
 
 ```text
 Entity
@@ -198,54 +239,36 @@ Cohort
 Timer
 ```
 
-因此 Work 可以表示：
+Work 表达“现在什么需要重新计算”，不是线程对象。
 
-```text
-重新计算 Agent 17 的 Movement
-重新处理 Agent A / B 的 Pair Interaction
-重新计算 Target Cohort 3
-处理 MovementControl Resource
-执行某个到期 Timer
-```
-
-这使系统不必把所有逻辑都退化成逐实体 Tick。
-
-### 6.3 WorkRing
+### 7.3 WorkRing
 
 WorkRing 维护：
 
 ```text
-Current Epoch Queue
-Next Epoch Queue
+Current Epoch
+Next Epoch
 ```
 
-相同 WorkKey 重复入队时，会合并 Priority、ReasonMask 和 Revision，而不是无限生成重复工作。
+相同 WorkKey 会合并 ReasonMask / Priority 等，而不是无限重复入队。
 
-因此 Runtime 更接近“变化传播系统”：
+当前 10k config：
 
 ```text
-某个事实改变
-    ↓
-唤醒相关 Work
-    ↓
-Work 产生新状态
-    ↓
-Dependency 传播
-    ↓
-产生下一批 Work
+MaxWorkItems          80000
+MaxWakeups            40000
+MaxDependencyEdges    320000
+MaxDirtyEntities      16000
+MaxOrderedEvents      64000
+MaxPropagationRounds  8
+ShardEntityCount      64
 ```
 
-而不是“任何东西发生变化都重新运行全部实体”。
+其中 `ShardEntityCount` 是历史命名；通用 Shard Planner 当前实际按 **WorkItem 数量**切片。
 
-当前 Production 10k 配置中，Work 上限为 80,000。
+### 7.4 Dependency / TimeWheel
 
----
-
-## 7. Dependency 与 TimeWheel
-
-### 7.1 DependencyIndex
-
-Dependency 可以以以下来源为键：
+DependencyIndex 支持：
 
 ```text
 Entity
@@ -253,131 +276,95 @@ Resource
 Cohort
 ```
 
-用来描述：
+TimeWheel 管理未来 Simulation Tick 才需要唤醒的工作。
+
+系统目标是变化传播：
 
 ```text
-某个实体 / Resource / Cohort 变化
-            ↓
-哪些 Work 应该被重新执行
+Fact changed
+→ dependent Work
+→ new state
+→ next dependent Work
 ```
 
-例如一个 Target Cohort 发生变化时，只需要唤醒该 Cohort 相关 Target / Guidance Work，而不是重新规划所有 Cohort。
-
-### 7.2 TimeWheel
-
-TimeWheel 负责未来 Simulation Tick 到期的工作，例如：
-
-```text
-Movement wakeup
-Projectile
-Cooldown
-恢复
-Timer
-```
-
-未到期的 Bucket 不参与当前 Tick 的普通扫描。
+而不是任何变化都重跑所有实体。
 
 ---
 
-## 8. Shard 与并行执行
+## 8. Shard 与真实异步执行
 
-同一 Domain 中的大量 Work 会先按稳定 Key 排序，然后由 `FCrowdWorkerDeterministicShardPlanner` 切成 Shard。
+`FCrowdWorkerDeterministicShardPlanner` 会按稳定 WorkKey 对同 Domain Work 分片。
 
-当前默认：
+例如 300 个普通 WorkItem，在 shard size 64 时大约形成 5 个 Shard。
+
+Async Runtime 中存在真实：
 
 ```text
-ShardEntityCount = 64
+UE::Tasks::Launch("CrowdWorkerV2DomainShard", ...)
+UE::Tasks::Launch("CrowdWorkerV2OwnerContinuation", ...)
 ```
 
-但当前通用 Planner 实际按 WorkItem 数量切片，因此更准确的含义是：
+Shard Task 读取冻结的 `FCrowdWorkerDomainContext`，只写自己的 `FCrowdWorkerDomainOutput`。
 
-> 每个普通 Shard 大约最多包含 64 个 WorkItem。
-
-这不等价于“一个 Shard 永远包含 64 个 Agent”，因为 Pair、Resource、Cohort Work 的语义都不同。
-
-例如 300 个 Movement Work 会被切成大约 5 个 Shard，再通过短生命周期 `UE::Tasks` 并行执行。
-
-Domain Executor 读取冻结的 `FCrowdWorkerDomainContext`，并把结果写入自己的 `FCrowdWorkerDomainOutput`。并行 Shard 不应直接竞争修改全局 Worker State。
+Task 完成顺序不是模拟顺序；Owner 在 merge 时使用稳定的 Domain / Shard / Entity / Pair / Event 规则。
 
 ---
 
-## 9. 确定性 Merge
+## 9. Execution Rank 与 Domain Dependency 的区别
 
-Task 实际完成顺序不能决定模拟结果。
+当前稳定 Domain ID 与执行顺序分离。
 
-例如线程完成顺序可能是：
-
-```text
-Shard 3
-Shard 0
-Shard 2
-Shard 1
-```
-
-Owner Merge 仍会按稳定的 Domain 和 ShardOrdinal 重新归并。
-
-Shard Output 可以包含：
-
-```text
-DirtyStates
-OrderedEvents
-NextWork
-Wakeups
-DeclaredDependencies
-ObservedDependencies
-ConsumedCommands
-```
-
-状态结果按 `StableEntityRef + Field` 合并。
-
-不能被 latest-wins 吞掉的 Gameplay Fact，例如 Damage、Death、Spawn、Despawn、Impact 等，通过 Ordered Event 保留，并在 Owner Merge 时分配连续的全局 EventSequence。
-
-因此并行 Task 的完成先后不应该改变最终 Stable Hash 和最终模拟状态。
-
----
-
-## 10. 当前 Worker Domain DAG
-
-当前主要 Domain 为：
+Canonical execution rank：
 
 ```text
 Lifecycle / Input
-        ↓
-Behavior
-        ↓
-Flow / Resource
-        ↓
-Target
-        ↓
-Combat / Reactive
-        ↓
-Movement Planning
-        ↓
-Movement
-        ↓
-Particle / Interaction
-        ↓
-Facing / Finalize
-        ↓
-Publish
+→ Behavior
+→ Flow / Resource
+→ Target
+→ Combat / Reactive
+→ Movement Planning
+→ Movement
+→ Particle / Interaction
+→ Facing / Finalize
+→ Publish
 ```
 
-Domain 的稳定公开 ID 与执行 Rank 分离，因此未来增加 Domain 时，不需要通过修改已有 Domain ID 来改变执行顺序。
+Async Runtime 从 pending work 中选择最早 Execution Rank 的 Domain 推进。
+
+每个 Executor 的 `GetDependencies()` **不是这张完整顺序图的逐边复制**，而是 Registry 冻结时验证的显式 prerequisite。
+
+例如：
+
+```text
+Behavior      depends Lifecycle
+Target        depends FlowResource
+Combat        depends Target
+MovementPlan  depends Behavior + FlowResource + Target + Combat
+Particle      depends Movement
+Facing        depends Particle
+```
+
+所以阅读源码时：
+
+```text
+Execution Rank = 全局 stage ordering
+GetDependencies = executor 声明的 prerequisite subset
+```
+
+不能把二者混为一谈。
 
 ---
 
-## 11. 当前群体移动架构
-
-当前移动链不是一个单独算法，而是分层结构：
+## 10. 当前群体运动链
 
 ```text
 Behavior / Objective
         ↓
 Macro Guidance
    ├── Shared Flow
-   └── Target Region Transport
+   └── Target Region Transport（需要时）
         ↓
-Preferred Movement
+Movement Planning
         ↓
 Local Predictive Interaction
         ↓
@@ -388,65 +375,33 @@ Particle / Environment Safety
 Facing / Finalize
 ```
 
-### Shared Flow
+Shared Flow 解决世界空间大尺度路线。
 
-负责大尺度导航：
+Target Region 解决目标附近宏观人口分布。
 
-```text
-怎么从当前位置绕过地图障碍，到达目标区域
-```
+Local Predictive 解决短时间尺度的速度可执行性。
 
-### Target Region Transport
-
-负责目标附近的大规模区域分布：
-
-```text
-大量 Agent 接近目标后，应该从哪些区域进入、哪些区域过密、哪些区域缺人、如何在目标周围重新分布
-```
-
-### Local Predictive Interaction
-
-负责短时间尺度的局部可执行速度选择：
-
-```text
-附近实体按照当前速度继续走马上会冲突，应该怎样提前协调
-```
-
-### Particle
-
-负责最终不可放宽的安全约束：
-
-```text
-Hard Separation
-Swept Safety
-Obstacle
-Bounds
-Environment Safety
-```
-
-Particle 是最终 Safety Layer，不承担高层目标选择和宏观导航职责。
+Particle 是最终 Hard / Swept / Obstacle / Bounds 安全层。
 
 ---
 
-## 12. Target Region Transport
+## 11. Target Region Transport
 
-Target Region 是可选的目标附近 Macro Guidance Provider，不是所有移动的固定必经层。
+Target Region 是可选的目标附近 Macro Guidance Provider。
 
-当前可以把它理解为：
+最简理解：
 
 > 以 Target 为原点建立 Target-relative Polar Transport Field。
 
-目标附近空间按照：
+空间通过：
 
 ```text
-Radial Band
-+
-Angular Sector
+Radial Band + Angular Sector
 ```
 
-组织为 Polar Navigation Cells。
+形成 Polar Navigation Cells。
 
-系统进一步维护 Demand Region 的：
+系统维护：
 
 ```text
 Current Population
@@ -455,342 +410,280 @@ Deficit
 Surplus
 ```
 
-然后在可行 Cell 图上建立 Transport Plan 和 Edge Quota，把过密区域的人口逐步引导到欠占用区域。
+并建立 Transport Plan / Edge Quota，引导过密区域向欠占用区域运输。
 
-它不是永久 Slot 系统，也不是“一 Cell 一实体”。
+它不是永久 Slot，不是一 Cell 一 Agent，也不拥有局部碰撞特权。
 
-它管理的是：
+当前 Runtime wrapper 已存在：
 
 ```text
-区域人口
-宏观流量
-Cell 间运输
-方向 Guidance
+BuildTopology
+BuildDemand / static population update
+SolvePlan
+ValidateExecution
+BuildGuidance
+BuildGuidanceSharded
 ```
 
-实体最终仍然必须经过 Local Predictive 和 Particle Safety。
-
-远离目标时通常由 Shared Flow 负责大范围引导；进入目标附近后，Target Region 才负责 Target-relative 的局部分布。
+Cohort 的 plan/execution 是 Worker simulation state；Topology 可作为由版本化资源重建的 deterministic cache。
 
 ---
 
-## 13. Particle / Interaction
+## 12. Particle / Interaction 当前真实并行边界
 
-Particle 不能简单按 Agent ID 每 64 个实体硬切，因为跨 Shard 的两个实体可能正在形成同一个约束。
+Particle 不能按 AgentId 每 64 个实体硬切，因为跨 Shard pair 可能共享约束。
 
-当前 Particle Work 会根据潜在约束关系建立闭合 Interaction Island。
-
-例如：
+当前 `FCrowdMassParticleWork::Solve()` 会：
 
 ```text
-A-B-C-D
-
-E-F
-
-G-H-I
+排序 Agent
+→ 构建 conservative closure graph
+→ connected components / Interaction Islands
+→ 每个 Island 独立求解
+→ stable merge
+→ Global Applied-State Validation
+→ 失败时 monolithic fallback
 ```
 
-如果三组之间互不可能在当前 fixed-step 交换约束，它们可以形成三个独立 Island，各自 Solve 后再按稳定 Agent / Pair 顺序归并。
+但必须明确：
 
-归并后系统还会进行全局 Applied-State Safety Validation。
+> **当前多个 Island 虽然被分解成独立子问题，实际是在一个 Particle Resource Work 内顺序循环求解；还没有做到 Island A/B/C 各自并行 UE Task。**
 
-如果 Island 分解后的最终状态无法通过全局验证，则允许 fail-closed 的 monolithic fallback。
+当前源码中的 `bUsedIslandSharding` 表达“Island decomposition / sub-solve”，不能直接理解成线程并行。
 
-当前已经解决“多个互不相关 Island 不必整世界共同求解”的问题。
-
----
-
-## 14. 当前 Particle 规模边界
-
-当前仍有一个明确未关闭的问题：
-
-> 单个超大型 Interaction Island 还没有完成真正的 Cell-Pair Owner / per-round Barrier 并行分片。
-
-因此很多独立小群可以自然拆分，但数千实体全部高密度连成一个巨大 Interaction Island 时，仍可能成为 Particle 的主要扩展性瓶颈。
-
----
-
-## 15. Result Apply 与原子提交
-
-Worker 不直接写 Mass。
-
-Published Result 在 GT Result Apply 中先完成全部可失败验证，再进入 no-fail commit 区。
-
-当前逻辑可以概括为：
+因此当前状态是：
 
 ```text
-Prepared Worker Result
+Independent island decomposition   = 已实现
+Independent island task parallelism= 未实现
+Large single-island internal shard = 未实现
+```
+
+单个大 Island 仍会走 monolithic solve，是当前明确的规模瓶颈候选。
+
+---
+
+## 13. Combat / Projectile
+
+Projectile 当前属于 `CombatReactive` Worker Domain。
+
+`FCrowdWorkerProjectileDomainExecutor` 内维护跨 tick 的 active Projectile simulation state，并产生：
+
+```text
+Projectile dirty state
+Combat dirty state
+Lifecycle ordered events
+Hit ordered events
+Wakeups
+```
+
+Worker-side Host Combat Extension 是纯 C++ adapter，不允许访问 UWorld / Mass Fragment / UObject 隐式状态。
+
+因此当前权威关系是：
+
+```text
+Worker Projectile Simulation Authority
         ↓
-Commit Token Match
+Mass / Network / Presentation proxy/events
         ↓
-Proxy Final Validate
-        ↓
-Generation / Publish / Input / Event Watermark
-        ↓
-Stable Entity View
-        ↓
-Lifecycle / Mass Handle / Fragment Collection
-        ↓
-Host Target / Resource / Behavior / Event Validate
-        ↓
+Host business resolve / visual consumption
+```
+
+Mass Projectile Entity 可以是 Engine proxy / integration target，但不是与 Worker 并行推进的第二套 projectile simulator。
+
+---
+
+## 14. Result Apply 与原子提交
+
+通用 Runtime 已拥有：
+
+```text
+FCrowdWorkerResultCommitToken
+FCrowdWorkerResultOwnerCommitBarrier
+FCrowdWorkerResultApplyProxy
+Dirty Batch / ACK
+```
+
+提交顺序：
+
+```text
+Prepared Result
+→ CommitToken Match
+→ Proxy.ValidatePreparedState
+→ HostFinalValidate
 ──────── 首次写入边界 ────────
-        ↓
-Mass Apply
-        ↓
-Proxy Commit
-        ↓
-Target / Resource / Behavior / Event
-Presentation / Network Side Effects
+→ HostApplyNoFail
+→ Proxy.CommitPreparedValidated
+→ HostCommitSideEffectsNoFail
+→ 后续 Dirty ACK
 ```
 
-通用 Commit Token 和 `FCrowdWorkerResultOwnerCommitBarrier` 已经位于 `MassCrowdRuntime`。
+正常可失败验证必须发生在首次写入之前。
 
-Demo 只保留 Host-specific Prepared Commit Plan 和 Host FinalValidate / Apply adapter。
-
-核心原则是：
-
-> 所有正常可失败检查必须发生在第一次状态写入之前。
-
-当前结构不再依赖“写了一半后再尝试补偿 rollback”来保证正常提交原子性。
+旧 Demo Round rollback 数据源仍存在，是 WA8 legacy；但它不应再被解释为当前 Result Apply 的正常原子性机制。
 
 ---
 
-## 16. 当前网络结构
+## 15. Networking
 
-当前网络方向不是简单高频同步所有 Agent Transform。
+当前网络不是“普通帧同步所有 Transform”。
 
-Worker 网络链已经区分：
+已有主要合同：
 
 ```text
 Checkpoint
 Intent
 Correction
+Digest
+Lifecycle / Relevant Snapshot
+Late Join
+Resync
 ```
 
-并通过 Generation、Sequence、StableHash、Chunk 等协议事实进行组装和验证。
+Worker 状态使用 Generation / Sequence / Revision / StableHash 等版本事实。
 
-客户端可以从 Worker Checkpoint 建立本地模拟状态，然后继续消费后续 Delta / Intent；普通误差恢复开始更多依赖 Digest 和稀疏 Authority Correction，而不是反复发送完整世界状态。
+网络是 Simulation Authority 的消费者和跨端事实传输层，不反向成为普通模拟 Owner。
 
 ---
 
-## 17. Presentation
+## 16. Presentation
 
-`MassCrowdPresentation` 已经从模拟权威中分离。
-
-表现层负责：
+`MassCrowdPresentation` 独立维护：
 
 ```text
-StableEntityRef
-Instance Slot
-Transform
-Presentation Profile
-Visual State
-VAT
-Custom Data
-Cargo Visual
+StableEntityRef → Instance Slot
 Spawn / Update / Despawn
+Transform / interpolation
+Visual State
+ISM / VAT
+Custom Data
 ```
 
-因此下面三者是不同职责：
-
-```text
-Simulation State
-Network State
-Presentation State
-```
-
-Presentation 不能反向决定 Worker Simulation Authority。
+Presentation State 与 Simulation State 是不同职责；视觉系统不能反向决定 Worker 的业务/运动权威。
 
 ---
 
-## 18. Demo 当前职责
+## 17. 当前最重要的 Legacy 耦合
 
-`MassAICrowdDemo` 当前主要承担：
+当前最大的误读风险不是“还有旧文件”，而是**部分新主链仍真实依赖旧壳**。
+
+### 17.1 WorkerInputSync 仍读取 RoundSimPipeline Shared Flow
+
+当前 `CrowdDemoWorkerInputSync.cpp` 构建 versioned resources 时仍访问：
 
 ```text
-Scenario
-测试地图
-Round / Test Director
-Demo Business Adapter
-Target Actor
-Combat 验收
-VAT 验收
-网络验收
-Golden Hash
-故障注入
-性能日志
-录像 / FFmpeg
-人工审片
+UCrowdDemoRoundSimPipelineSubsystem
+→ GetRuntimeSharedFlowField()
 ```
 
-Demo 应使用插件 Runtime、Networking 和 Presentation 的真实生产路径，再叠加测试设施，而不是长期维护第二套通用 Runtime。
+所以 `RoundSimPipelineSubsystem` 还不能被当成纯 Test Harness 删除。
+
+这属于：
+
+```text
+Authority 已迁移
+但部分 Input Resource Source 尚未迁移
+```
+
+是 WA8 需要优先断开的依赖。
+
+### 17.2 RoundSim Stage struct 仍大量存在
+
+`CrowdDemoRoundSimProcessors.h` 仍声明很多 Stage，但只有 InputSync / ResultApply 是当前注册的 UMassProcessor。
+
+这些 Stage 需要逐个按：
+
+```text
+production consumer
+host adapter
+metric/diagnostic
+test fixture
+no consumer
+```
+
+分类后才能安全删除。
+
+### 17.3 Demo generic kernel 重复实现
+
+Plugin Core 与 Demo 仍存在多套 LocalPredictive / Particle / SharedFlow / Target / Facing 等实现。
+
+当前已经确认 Demo Particle / SharedFlow 仍有诊断消费者，因此不能整组直接删除。
+
+详细分类看 `LegacyCodeInventory.md`。
 
 ---
 
-## 19. 当前仍存在的迁移态 Legacy
+## 18. 当前源码阅读入口
 
-虽然 Worker Authority 主体已经成立，Demo 层仍保留较重的旧 RoundSim 结构。
-
-当前仍可见的大型迁移壳包括：
+理解当前代码不要先从：
 
 ```text
-CrowdDemoRoundSimPipelineSubsystem
-CrowdDemoRoundSimProcessors
-CrowdDemoRoundSimCoordinator
-CrowdDemoMixedSandboxCoordinator
+CrowdDemoRoundSimProcessors.cpp
+CrowdDemoRoundSimPipelineSubsystem.cpp
+CrowdDemoMixedSandboxCoordinator.cpp
 ```
 
-同时部分 Demo 目录仍保留与插件 Core 中通用实现对应的历史 Kernel / Adapter 结构。
+开始。
 
-这些内容当前不能一次性全部删除，因为部分 rollback、Round Transaction、metrics、测试和 side effect 仍然依赖它们。
-
-当前 WA8 尚未关闭的主要结构债包括：
+推荐：
 
 ```text
-完整 rollback 旧数据源
-TryPrepareRoundApply
-Demo-local Round Transaction
-部分旧 Round Prepared facts / side effects
-```
-
----
-
-## 20. 当前已知 Blocker
-
-### WA8 Legacy 收敛
-
-Worker Authority 主体已经成立，但旧 Round Transaction、完整 rollback 数据源和部分 Demo-local side effect 仍未完全退出生产路径。
-
-### Target 长窗口
-
-T5 短窗口已经有稳定通过记录，但仍存在大约 step 886 的 Target Demand 长窗口失败。600 Tick 成功不能覆盖这个长期稳定性问题。
-
-### Large Particle Island
-
-多个闭合 Island 已经可以独立求解，但超大型单 Island 的内部 Cell-Pair / Barrier 并行仍未完成。
-
-### WA9
-
-当前已经有 1k/2k/5k/10k WorkRing、TimeWheel、Spatial 和 Target Cohort 等专项规模验证，但完整 10k Agent 的 Behavior + Target + Movement + Particle + Combat + Projectile + Networking + Presentation 端到端验收仍未关闭。
-
----
-
-## 21. 当前验证程度
-
-当前代码已经具备真实 Worker Task Shard、确定性 Merge、Persistent Entity State、增量 Spatial、Target Cohort 增量失效和 Runtime Owner Commit Barrier。
-
-当前记录中已有全 Production T8 server-only 运行：
-
-```text
-900 batches
-90940 patches
-150 Ordered Events
-
-Attack / Spawn / Impact / Damage
-50 / 50 / 50 / 50
-
-duplicate = 0
-fixed-step p95 = 18.579ms
-commit p95 = 0.281ms
-realtime = 0.999
-```
-
-同时已经存在 10k 级 Work / Timer / Spatial 微基准，以及 10k 双 Cohort Target 增量失效验证。
-
-这些结果证明当前架构已经具备明显的 10k 设计基础，但不等价于“完整 10k Production Ready”。
-
----
-
-## 22. 当前架构核心总结
-
-当前 MASSAITEST 最重要的结构不是某一个 Crowd 算法，而是：
-
-```text
-Persistent Worker Authority
-        +
-Work-driven Incremental Simulation
-        +
-Deterministic Sharding / Merge
-        +
-分层群体运动
-        +
-Atomic Result Apply
-```
-
-整体可以压缩成：
-
-```text
-                    External Facts
-                         │
-                         ▼
-                    Input Sync
-                         │
-                         ▼
-              Persistent Worker
-                         │
-      ┌──────────────────┼──────────────────┐
-      │                  │                  │
-   Behavior            Target             Combat
-      │                  │                  │
-      └────────────┬─────┴─────┬────────────┘
-                   ▼           ▼
-                Movement    Projectile
-                   │
-            Local Predictive
-                   │
-              Interaction
-                   │
-                Particle
-                   │
-                 Facing
-                   │
-                 Publish
-                   │
-                   ▼
-              Result Apply
-                   │
-         ┌─────────┼─────────┐
-         ▼         ▼         ▼
-       Mass     Network  Presentation
+SourceReadingMap.md
+→ MassCrowdWorkerRuntimeV2.h/.cpp
+→ MassCrowdAsyncSimulationRuntime.h/.cpp
+→ Worker Domain Executors
+→ MassCrowdWorkerResultApply.h/.cpp
+→ CrowdDemoWorkerInputSync.cpp
+→ Host Result Apply
+→ Core kernels
+→ 最后才读 RoundSim legacy shell
 ```
 
 ---
 
-## 23. 当前代码阅读顺序
+## 19. 当前主要 OPEN 项
 
-推荐按以下顺序理解当前代码：
+当前主要未关闭项：
 
 ```text
-CurrentArchitecture.md
+WA8 Legacy Removal
+  - RoundSim resource / transaction / rollback 依赖
+  - TryPrepareRoundApply
+  - Demo-local Round Transaction
+  - 失去消费者的旧 Stage / duplicate implementation
 
-↓
-MassCrowdWorkerRuntimeV2.h
+T5 Long-Window Correctness
+  - step ~886 feasible-region-insufficient
+  - Static / Moving 1000+ Tick
 
-↓
-MassCrowdAsyncSimulationRuntime.h/.cpp
+Large Particle Island Scaling
+  - 单大 Island Cell-Pair Owner / per-round barrier
+  - Island-level parallelism 也尚未实现
 
-↓
-MassCrowdWorkerResultApply.h/.cpp
-
-↓
-Worker Domains
-  Behavior
-  Target
-  Movement
-  Particle
-  Combat
-
-↓
-MassCrowdCore Kernels
-
-↓
-CrowdDemoWorkerInputSync.cpp
-
-↓
-MassCrowdNetworking / Presentation
-
-↓
-最后再阅读旧 Demo RoundSim
+WA9 Full-Scale Acceptance
+  - 1k → 2k → 5k → 10k
+  - Behavior / Target / Movement / Particle / Combat
+  - Projectile / Networking / Presentation
 ```
 
-不要再从巨大的 `CrowdDemoRoundSimProcessors.cpp` 开始理解项目；该区域仍包含较多迁移期 Legacy，容易把过渡壳误认为当前核心架构。
+当前已有 10k-aware scheduler / timer / spatial / target scoped 验证，不等于完整 10k gameplay production-ready。
+
+---
+
+## 20. 当前总体结论
+
+[INFERRED][HIGH] 当前架构最准确的描述是：
+
+> **Persistent Worker 已经成为第二代模拟架构的核心，Production Owner 实现和正式 Production 路径已存在；但 Demo 默认仍以 Shadow 方式启动，且旧 RoundSim shell 仍承担部分资源数据源、事务、诊断和测试职责。**
+
+因此现在的主要工程问题不再是“重新发明一套架构”，而是：
+
+```text
+断旧壳生产依赖
+→ 删除重复实现
+→ 拆巨型宿主文件
+→ 清理迁移命名/注释
+→ 再做完整规模验收
+```
+
+文档 ↔ 源码详细审计见 `SourceConsistencyAudit.md`。

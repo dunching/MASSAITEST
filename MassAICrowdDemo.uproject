@@ -2,7 +2,7 @@
   "FileVersion": 3,
   "EngineAssociation": "5.7",
   "Category": "Prototype",
-  "Description": "Isolated 500-entity MassAI crowd replication and movement demo.",
+  "Description": "Large-scale Mass agent simulation validation host for the reusable MassCrowdSimulation runtime.",
   "Modules": [
     {
       "Name": "MassCrowdDemoBusiness",
