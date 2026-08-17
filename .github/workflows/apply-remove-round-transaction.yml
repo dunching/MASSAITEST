@@ -24,6 +24,15 @@ jobs:
           set +e
           python3 .github/scripts/apply_remove_round_transaction.py > remove_round_transaction_run.txt 2>&1
           status=$?
+          if [ "$status" -ne 0 ]; then
+            echo >> remove_round_transaction_run.txt
+            echo "===== residual transaction symbols after in-worktree patch =====" >> remove_round_transaction_run.txt
+            grep -n -E 'BoundaryOrchestrator|ECrowdBoundaryTransactionState|TryPrepareRoundApply|BeginBoundaryTransaction|GetRoundWorkState' \
+              Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h \
+              Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp \
+              Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp \
+              >> remove_round_transaction_run.txt || true
+          fi
           cat remove_round_transaction_run.txt
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
