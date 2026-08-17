@@ -1,10 +1,7 @@
 Traceback (most recent call last):
-  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/apply_retire_bootstrap_second_pass.py", line 360, in <module>
-    facing = replace_once(facing, old_dispatch, new_dispatch, "facing dispatch collapse")
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/apply_retire_bootstrap_second_pass.py", line 78, in replace_once
-    raise RuntimeError(f"{label}: expected 1, found {count}")
-RuntimeError: facing dispatch collapse: expected 1, found 0
+  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/fix_retire_bootstrap_patch.py", line 49, in <module>
+    raise RuntimeError("retired gate insertion marker missing")
+RuntimeError: retired gate insertion marker missing
 
 ===== residual retired symbols =====
 Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:37:struct FCrowdDemoPreparedTargetResourcePlan;
