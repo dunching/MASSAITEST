@@ -22,6 +22,23 @@ jobs:
         shell: bash
         run: |
           set +e
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp")
+          text = path.read_text(encoding="utf-8-sig")
+          marker = "MatchesCorrectionState("
+          if text.count(marker) != 1:
+              raise RuntimeError(f"{marker} expected definition-only count 1, found {text.count(marker)}")
+          start = text.index("  bool MatchesCorrectionState(\n")
+          end = text.index("  FVector MakeCenteredFormationOffset(\n", start)
+          path.write_text(text[:start] + text[end:], encoding="utf-8")
+          PY
+          pre_status=$?
+          if [ "$pre_status" -ne 0 ]; then
+            echo "orphan rollback helper retirement failed" > production_round_cut_run.txt
+            echo "status=$pre_status" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           sed -i 's/all_source = header + pipeline + processors + combat + local_tests/all_source = header + pipeline + processors/' .github/scripts/apply_production_round_cut.py
           python3 .github/scripts/apply_production_round_cut.py > production_round_cut_run.txt 2>&1
           status=$?
