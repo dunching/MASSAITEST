@@ -1,258 +1,472 @@
-# Local Predictive Interaction 通用局部预测交互设计
+# Local Predictive Interaction 设计
 
-## 1. 文档职责与状态
+## 1. 文档职责
 
-[INFERRED][HIGH] 本文件是 Shared Guidance 与 Particle Safety 之间“通用局部预测交互”层的权威设计事实源；它定义目标职责、纯数据接口、确定性规则、代码结构和验收顺序。
+本文定义 Shared Guidance 与 Particle Safety 之间的通用局部预测交互层。
 
-[COMPUTED][HIGH] 本文件所述生产层已经实现并接入全部 `SimRoundSoftPressure` 运动边界。当前正式链为 `Guidance → LocalPredictiveInteraction → MovementPredict → ParticleConstraint`；新层不依赖旧 `FCrowdDemoOrcaAgent`、PortalAdmission、PassingBand 或 SF4 route 数据结构。
+它负责在真正发生接触之前，根据邻域位置、速度、实体尺寸和短期轨迹，选择尽量接近 Preferred Movement 的局部可执行速度。
 
-[INFERRED][HIGH] 本设计不是 T4 窄口专用调度，也不是 T5/T6 同目标专用逻辑。T3、T4、T5、T6 只是向同一个通用 kernel 提供不同空间事实的专项测试输入；生产代码不得读取 TestCase、地图名、“窄口”“同目标”或“Target场景”等语义来选择局部避让规则。
+完整链路：
+
+```text
+Shared Flow / Target Region / Other Guidance
+        ↓
+Preferred Velocity
+        ↓
+Local Predictive Interaction
+        ↓
+Locally Feasible Velocity
+        ↓
+Movement Predict
+        ↓
+Particle Safety
+```
+
+本文不负责宏观目标选择，也不替代 Particle 最终安全闭环。
+
+---
 
 ## 2. 要解决的问题
 
-[COMPUTED][HIGH] 8496 的 T6M 最后 90 个 fixed steps 中存在持续同 next-cell 请求、2 个实体连续低进展和 Particle 反向修正；Terminal chatter 为 0，Particle 安全违规为 0。
-
-[INFERRED][HIGH] 该证据说明当前宏观 guidance 可以持续给出几何上互相冲突的瞬时速度，而 Particle 只能在预测位置之后把实体推回安全范围，于是可能形成“再次靠近 → 被推开 → 再次靠近”的控制闭环。
-
-[INFERRED][HIGH] 解决方法不是给 Navigation Cell 增加永久 owner 或固定容量 1，而是在积分前让实体基于邻域位置、速度和短期轨迹共同选择局部可执行速度。若几何上允许多人并行，则全部通过；只有共同可行速度不存在时才使用通用、公平、有限期的让行规则。
-
-## 3. 三层职责
+如果只使用宏观 Guidance + Particle，可能形成：
 
 ```text
-Shared Guidance
-├── Shared Flow：世界空间宏观路线
-├── Target Region Transport：Region人口需求与宏观Cell Edge quota
-└── 输出每实体PreferredVelocity
-
-Local Predictive Interaction
-├── 预测邻域轨迹和最近接近
-├── 构建稳定pair约束与冲突component
-├── 求解满足局部碰撞约束且尽量接近Preferred的速度
-├── 仅在共同前进不可行时确定性让行
-└── 输出LocallyFeasibleVelocity
-
-Particle Safety Closure
-├── 处理Pair Soft压力
-├── 保证Hard/Swept/Obstacle/Bounds安全
-└── 作为最终位置级安全闭环
+A / B 都想进入同一局部区域
+        ↓
+Movement Predict
+        ↓
+马上冲突
+        ↓
+Particle 把双方推开
+        ↓
+下一步宏观 Guidance 又让双方靠近
+        ↓
+重复振荡
 ```
 
-[INFERRED][HIGH] Target Region Transport 只决定宏观人口应向哪些可行区域运输以及聚合 quota，不拥有每个实体的瞬时通行权，也不把 Cell anchor 当作唯一站位点。
+Local Predictive 的目标是把这类“马上会发生的局部冲突”提前处理。
 
-[INFERRED][HIGH] Local Predictive Interaction 只消费通用运动事实，不知道 Preferred 来自 Shared Flow、Transport、自由游荡还是动态目标追逐。
+它不是为了给 Cell 建立永久 Owner，也不是给窄口写 admission 特判。
 
-[INFERRED][HIGH] Particle 继续是不可删除的最终安全层；Local Predictive Interaction 减少未来冲突，但不得替代 Hard/Swept/Obstacle/Bounds 复验。
+---
 
-## 4. 通用性与禁止边界
+## 3. 通用性原则
 
-[INFERRED][HIGH] 生产 kernel 的输入不得包含 `TestCase`、MapName、PortalId、SlotId、PositionId、AttackType、Melee/Ranged 身份或“当前是否窄口”等业务标签。
-
-[INFERRED][HIGH] Navigation Cell、Target Region 和 Flow Cell 都是宏观空间事实，不是局部避让所有权；不得新增永久 `AgentId → Cell` 映射。
-
-[INFERRED][HIGH] 首版局部速度责任保持同级对称，不使用 PhysicalRadius、Mobility、职业或 CapabilityProfile 生成不可让行优先级。`Mobility` 继续只作为 Particle 位置修正的逆质量权重。
-
-[INFERRED][HIGH] 通用让行公平性只能来自可回滚的等待时间、当前量化进展和 AgentId 稳定决胜；它不表示赢家无碰撞权，也不能绕过环境或 Particle 安全。
-
-## 5. 目标数据接口
-
-[COMPUTED][HIGH] 当前已经落地以下纯 POD；所有数组在进入 kernel 前按稳定键排序，kernel 不依赖 `TMap/TSet` 迭代顺序。
-
-```cpp
-struct FCrowdDemoLocalPredictiveSettings
-{
-    float FixedStepSeconds;
-    float TimeHorizonSeconds;
-    float NeighborDistanceCm;
-    int32 MaxNeighbors;
-    float VelocityQuantizationCmps;
-    int32 GrantDurationSteps;
-};
-
-struct FCrowdDemoLocalPredictiveAgent
-{
-    int32 AgentId;
-    FVector2f Position;
-    FVector2f Velocity;
-    FVector2f PreferredVelocity;
-    float PhysicalRadius;
-    float HardSafetyGap;
-    float MaxSpeedCmps;
-    int32 BlockedAgeSteps;
-};
-
-struct FCrowdDemoLocalPredictiveEnvironment
-{
-    FCrowdDemoSharedFlowFieldConfig FlowConfig;
-    bool bConstrainToFlowBounds;
-};
-
-struct FCrowdDemoLocalPredictivePair
-{
-    int32 MinAgentId;
-    int32 MaxAgentId;
-    int32 DistanceBucket;
-    float ClosestTimeSeconds;
-    float PredictedSeparationCm;
-    float ResponsibilityA;
-    float ResponsibilityB;
-};
-
-struct FCrowdDemoLocalVelocityConstraint
-{
-    int32 AgentId;
-    int32 OtherAgentId;
-    int32 StableConstraintOrder;
-    FVector2f Point;
-    FVector2f Normal;
-};
-
-struct FCrowdDemoLocalConflictComponent
-{
-    uint32 ComponentKey;
-    TArray<int32> AgentIds;
-    int32 GrantEpoch;
-};
-
-struct FCrowdDemoLocalPredictiveResult
-{
-    int32 AgentId;
-    FVector2f Velocity;
-    int32 NeighborCount;
-    int32 ConstraintCount;
-    bool bYielding;
-    bool bValid;
-};
-```
-
-[COMPUTED][HIGH] 当前Mass processor从Runtime boundary snapshot与prepared composed guidance构造输入，不覆写宏观自主速度；Runtime local-velocity是Mass阶段权威结果，PipelineSubsystem保存同一结果的稳定prepared SoA供MovementPredict、诊断和rollback重放消费。旧Demo local-velocity兼容fragment已物理删除，最终Runtime movement commit已经启用。
-
-[INFERRED][HIGH] 跨 step 最小状态只保存在 PipelineSubsystem 的 prepared SoA/rollback 中，包括每实体 `BlockedAgeSteps`、最近有效 grant epoch 和必要的短期 component key；不得制造永久业务 owner fragment。
-
-## 6. 确定性求解规则
-
-### 6.1 邻域与轨迹冲突
-
-[INFERRED][HIGH] 使用稳定 swept spatial grid 生成候选邻居；cell 内按 AgentId 排序，pair 最终按 `(MinAgentId, MaxAgentId)` 排序，并以 brute-force fixture 证明不漏掉高速交换 pair。
-
-[INFERRED][HIGH] 每个 pair 使用当前位置、当前速度、PreferredVelocity、双方真实半径与 HardGap，在固定 time horizon 内计算量化最近接近；只有存在预测冲突的 pair 才进入约束图。
-
-[INFERRED][HIGH] 同一阶段还必须从排序后的ObstacleSpecs与FlowBounds构建环境速度约束，保证预测endpoint与swept segment可行；否则局部层可能选择指向墙体的侧移速度，再被Particle推回而形成新的振荡。
-
-[INFERRED][HIGH] 冲突 component 由当前有效 pair 图按 AgentId 稳定 BFS 构建；它是瞬时求解范围，不是场景、cohort、Cell 或 Portal。
-
-### 6.2 连续速度可行域
-
-[INFERRED][HIGH] 每个实体的约束统一表达为 `dot(v - Point, Normal) >= 0`，并与 `|v| <= MaxSpeed` 共同形成二维凸可行域。
-
-[INFERRED][HIGH] 求解目标是从速度圆内选择满足全部约束且最接近 PreferredVelocity 的速度；连续解完成后在 1cm/s 量化邻域中稳定选择仍满足全部约束的候选。
-
-[INFERRED][HIGH] component 内可按 AgentId 稳定顺序调用单实体二维half-plane LP，但必须在全部实体得到量化速度后联合复验每个pair的相对轨迹与每个实体的环境轨迹。任一局部结果只在整个component联合复验通过后发布。
-
-[INFERRED][HIGH] 无冲突实体必须精确保留其限速后的 PreferredVelocity；局部层不得在没有约束时主动恢复历史队形、Cell中心或旧位置。
-
-### 6.3 几何容量与通用让行
-
-[INFERRED][HIGH] “容量”由当前 component 中可同时成立的速度集合自然产生：若多个实体均有可行正向速度，则无需 admission，全部可以并行移动。
-
-[INFERRED][HIGH] 若所有实体同时保持期望进展不可行，则按 `BlockedAgeSteps降序 → 量化前向进展缺口降序 → AgentId升序` 选择有限期 grant；非 grant 实体仍求解安全让行速度，不默认归零。
-
-[INFERRED][HIGH] grant 通过稳定调整冲突pair的回避责任，使获准实体承担较少速度变化、让行实体承担较多速度变化；双方责任之和保持1，pair约束不会被删除。责任上下限必须由纯fixture在生产接入前冻结，不能根据场景调参。
-
-[INFERRED][HIGH] 冲突消失、参与者改变、固定租期到期或目标/计划 revision 失效时，在 fixed-step boundary 重新选择。winner仍必须满足全部pair/environment约束，不获得穿透、穿墙或无敌权。
-
-[INFERRED][HIGH] `BlockedAgeSteps` 只在实体有正向请求但局部实际进展不足时增长；恢复有效进展后确定性衰减或清零。该状态必须进入 correction rollback，防止 replay 改变公平顺序。
-
-### 6.4 失败语义
-
-[INFERRED][HIGH] 连续可行域、量化修复或数值验证失败必须输出明确 invalid、固定最小 fixture 并使能力运行失败；不得静默恢复旧 ORCA fallback、直接使用 Preferred 或把失败统计成正常 Particle 刹车。
-
-[INFERRED][HIGH] 紧急 applied 输出可以保持安全静止，但 candidate hash 与 applied hash 必须分开，且 validation run 必须把该 fixed step 计为失败。
-
-## 7. 目标 Processor 顺序
+生产 Kernel 不得依赖：
 
 ```text
-RoundPlanApply
-→ TargetFactApply（需要时）
-→ SharedFlowFieldBuild / DynamicIntegrationUpdate
-→ FlowPreferredVelocity
-→ TargetRegionTransport（需要时，只生成宏观Preferred）
-→ LocalPredictiveInteraction
-→ MovementPredict
-→ ParticleConstraintSolve
-→ MovementFinalize
-→ AuthorityCommit / ClientPredictionCommit
+TestCase
+MapName
+PortalId
+Target 场景标签
+Melee / Ranged
+Faction
+PositionId
+永久 SlotId
 ```
 
-[COMPUTED][HIGH] `LocalPredictiveInteraction` 对所有 `SimRoundSoftPressure` 运动场景使用同一 kernel 和规则；processor 不按 T3/T4/T5/T6 或地图分支启停算法。
+它只消费通用运动与环境事实。
 
-[INFERRED][HIGH] `MovementPredict` 在局部结果有效时只积分 `LocalVelocity`；`MovementFinalize` 继续是 `FCrowdDemoRoundSimStateFragment` 唯一写入点。
+因此相同规则必须同时适用于：
 
-## 8. 代码复用与替换边界
+```text
+开放交叉
+双向交换
+窄通道
+目标附近拥挤
+移动目标
+自由游荡
+```
 
-[COMPUTED][HIGH] `CrowdDemoVelocityHalfPlaneKernel.*` 已从旧 ORCA 数值实现中提取二维半平面、速度圆裁剪、连续精确求解、验证与 1cm/s 量化修复；`HalfPlaneParity` 自动化证明代表性 fixture 与旧数值结果等价。
+不同场景只是输入几何和 Preferred 不同，不应切换另一套局部避让算法。
 
-[COMPUTED][HIGH] 新生产 kernel 只依赖通用 half-plane POD，不依赖旧 `FCrowdDemoOrcaAgent`、旧 fallback 或旧 processor。
+---
 
-[COMPUTED][HIGH] `CrowdDemoLocalPredictiveInteractionKernel.*` 负责稳定 swept pair、component、有限期 grant、环境可行性、联合结果复验和结果 hash；旧 Portal/Admission/SF4 fallback 未迁移。
+## 4. 输入数据
 
-[COMPUTED][HIGH] 现有 `CrowdDemoParticleConstraintKernel` 保持独立，不合并到速度求解器；它继续消费预测位置并执行位置级安全闭环。
+每个参与实体至少提供：
 
-## 9. Pipeline、Hash、Rollback 与指标
+```text
+StableEntityRef / AgentId
+Position
+Velocity
+PreferredVelocity
+PhysicalRadius
+HardSafetyGap
+MaxSpeed
+InteractionLayer
+BlockedAge / short fairness state
+```
 
-[COMPUTED][HIGH] PipelineSubsystem保存排序后的results、grant state、round hash、样本与invalid计数；processor只准备Mass数据、调用纯kernel，并一次发布Runtime local-velocity fragment与同源prepared SoA，不再发布第二份Demo兼容fragment。
+环境提供：
 
-[COMPUTED][HIGH] SoftPressure rollback snapshot 已原子保存局部结果、grant state、summary、round hash、样本与 invalid 计数，并按既有 correction boundary 语义恢复后重放。
+```text
+Obstacle / Bounds facts
+Navigation / Interaction layer
+Version / Revision
+```
 
-[INFERRED][HIGH] step hash 应折叠 settings、排序输入、pair/constraint稳定键、component决策、连续/量化结果和公平状态；round hash 按 `(FixedStepIndex, StepHash)` 折叠并由 Server/Client 比较。
+所有输入数组在进入 Kernel 前必须按稳定 Key 排序。
 
-[COMPUTED][HIGH] RoundResult 已增加 LocalPredictive valid/hash/sample、pair/component、adjusted/granted/yielding、infeasible、quantization、joint validation、joint resolution、environment constraint、grant switch、blocked age 与 invalid step 紧凑字段；不复制逐实体轨迹。
+---
 
-## 10. 失败优先自动化
+## 5. 邻域与 Pair
 
-[INFERRED][HIGH] 纯测试至少覆盖：无冲突精确保留Preferred、两实体迎面、交叉、追赶、两实体同点接近、三/四向交叉、靠墙让行、墙角共同可行域、无标签窄通道、异构半径、高速交换、移动参考系、输入全反序、grid/brute-force一致及两轮hash一致。
+使用稳定空间索引生成邻域候选。
 
-[INFERRED][HIGH] 公平测试至少覆盖：几何允许多人并行时不错误串行、不可同时前进时稳定grant、非grant仍有安全可行速度、BlockedAge防饥饿、component成员变化、租期释放及rollback replay不改变决策。
+Pair Key 固定为：
 
-[INFERRED][HIGH] Processor测试必须证明没有 TestCase/地图/Portal分支、诊断关闭不改变结果、宏观Desired不被覆写、MovementPredict只消费有效LocalVelocity、invalid不会伪装为正常Applied。
+```text
+(min(A, B), max(A, B))
+```
 
-[INFERRED][HIGH] 生产接入后必须用同一规则依次复验 T3 双向交换、T4 通道、T5 静态目标和 T6M 异构移动目标；专项地图用于暴露不同几何，不授权不同算法。
+对每个 Pair，根据：
 
-## 11. 当前实现与验证停止点
+```text
+当前位置
+当前速度
+PreferredVelocity
+双方半径
+HardGap
+Time Horizon
+```
 
-[COMPUTED][HIGH] 已新增并保留Velocity Half-Plane/Local Predictive纯内核、Mass processor、Runtime local-velocity fragment、prepared SoA、RoundResult hash/metrics和correction rollback；迁移期间的`FCrowdDemoRoundLocalVelocityFragment`已在Runtime生产切换后物理删除。
+计算最近接近时间与预测最小间距。
 
-[COMPUTED][HIGH] 插件阶段2已将Velocity Half-Plane与Local Predictive机械提取为无Demo命名的`MassCrowdCore`原生纯内核；阶段3已将正式processor切换到`FCrowdMassLocalPredictiveWork`调用Core。Demo旧kernel只保留等价与历史fixture测试，8518六实体fixture验证旧/Core/Runtime WORK的pair、grant、result、summary和hash一致。
+只有真正存在短期预测冲突的 Pair 才进入约束图。
 
-[COMPUTED][HIGH] 联合求解使用固定 64 次稳定 component sweep，并对独立候选与共同可行基线做确定性最大安全 Q15 插值；新增跨 component 冲突会单调加入 pair 集并触发重新合并，直到固定点或明确 invalid。1cm/s 量化安全裕量进入 pair 几何与最终联合复验。
+高速交换场景必须使用 swept / trajectory-aware 候选生成，不能只按当前点距离判断邻居。
 
-[COMPUTED][HIGH] 最新迁移验证为Development、DebugGame、`CrowdDemo` 102/102、`MassCrowd` 11/11及LocalPredictive定向7/7通过；尚未以迁移后版本重跑地图或人工审片。
+---
 
-[COMPUTED][HIGH] T3运行8507达到两侧center/completed=`10/10,10/10`、deadlock=0、LocalPredictive samples=`901/901`、invalid=`0/0`、hash=`1161166200`双端一致，Particle四类安全违规为0。
+## 6. Conflict Component
 
-[COMPUTED][HIGH] T4运行8509达到wall/corridor/completed=`20/20/20`、deadlock=0、LocalPredictive samples=`901/901`、invalid=`0/0`、hash=`3029136817`双端一致，Particle四类安全违规为0。
+当前冲突 Pair 形成无向图。
 
-[COMPUTED][HIGH] T5 Static运行8515保持LocalPredictive samples=`901/901`、invalid=`0/0`和Particle四类安全违规为0；20/20实体进入有效距离带、Transport Demand与完整Edge quota路径有效，但可行Region覆盖仍为`14/16`。
+对 Pair 图按 StableEntityRef / AgentId 稳定 BFS 构造 Conflict Component。
 
-[COMPUTED][HIGH] 最后90步的Region诊断确认Region 4/5持续为空：Demand gap=`0`、Plan gap=`0`、Guidance执行gap=`90`、Terminal retention gap=`0`。供给Agent 8/16均获得约300cm/s宏观Guidance及首段quota，LocalPredictive分别输出约13.45/9.06cm/s，MovementPredict保持该速度，Particle应用速度为0。
+例如：
 
-[COMPUTED][HIGH] 在30Hz与1cm位置量化下，非零位移的最小速度阈值为`0.5cm / (1/30s) = 15cm/s`；8515双端均报告`sub_quantum_supply=2`、首个Agent=`8`、阈值=`15cm/s`，诊断hash=`2690604116`一致。
+```text
+A-B-C-D
 
-[COMPUTED][HIGH] 8517把最终冲突图完整闭包为8实体、8条pair；fixture hash=`2500233546`且双端一致。诊断证明8515的低速没有经过`CommonVelocity` fallback：Agent 8在独立half-plane阶段已经为`(-10,9)cm/s`，Agent 16从初始独立解`(-44,45)`在补全跨component pair后变为`(-9,1)`，随后因为结果已安全而停止联合目标优化。
+E-F
+```
 
-[COMPUTED][HIGH] 同一8517 fixture存在保持全部pair相对速度不变的共同平移可行方向；对完整component增加约`(-61,13)cm/s`的相同速度偏移，可保持全部pair/environment安全，并把两个供给实体的flow-forward速度提高到60cm/s以上，同时降低整体相对Preferred的平方误差。
+形成两个局部求解范围。
 
-[COMPUTED][HIGH] 生产kernel现增加无场景语义的`CoherentTranslation`步骤：它只在独立结果已经安全时，对最终pair连通分量求平均残差方向；所有成员增加完全相同且量化一致的速度偏移，因此不改变相对速度。速度圆、Bounds、Obstacle和完整candidate pair复验失败时不应用；它不同于把所有成员收缩成同一速度。
+Component 是当前 fixed-step 的瞬时求解边界，不是：
 
-[COMPUTED][HIGH] 8518原P0复测保持Particle Hard/Swept/Obstacle/Bounds、invalid/fallback均为0，LocalPredictive hash=`620827148`双端一致，20/20实体显示和checkpoint/interval误差p95=0。可行Region覆盖由8515的14/16提高到15/16，sub-quantum supply由2降到1，但仍有Agent 5得到约9.22cm/s Local速度并在1cm位置量化后Applied=0。
+```text
+Cohort
+Faction
+Target Region
+Portal
+永久业务组
+```
 
-[COMPUTED][HIGH] 8518六实体fixture证明存在明显优于共同平移的联合安全解：在94cm硬门、1cm/s量化和同一环境合同下，Agent 5/19的前向速度均可超过200cm/s。原9.22cm/s不是几何容量下界，而是独立half-plane针对冻结邻居求解后形成的局部最优。
+冲突消失后 Component 自然消失。
 
-[COMPUTED][HIGH] 生产kernel已增加无场景语义的`JointPreferredRecovery`：以完整component的Preferred速度为目标，按稳定candidate pair顺序对时间域最近距离约束做固定64轮联合投影，每轮同时执行速度圆和环境投影；最终量化结果只有在完整Pair/Obstacle/Bounds复验安全、component总平方目标误差下降且grant实体进展不回退时才原子替换旧安全解。它不设置最低速度、不绕过位置量化，也不读取T5、Region或Agent身份。
+---
 
-[COMPUTED][HIGH] 当前生产调度不再为Compose、Local Predictive和MovementPredict分别创建ThreadPool任务。`FCrowdMassMovementPipelineWork`在一个不可变POD任务内先得到Composed自主速度，再以它构造Local Predictive输入，最后把Local结果交给MovementPredict；三个算法及其hash未合并为单一黑盒，只有任务调度和GT发布边界被合并。
+## 7. 速度约束
 
-[COMPUTED][HIGH] 8521原P0 Static单轮达到inside-band=`20/20`、Region coverage=`16/16`、sub-quantum supply=`0`；最终90步Target-relative speed与position peak-to-peak p95/max均为0，terminal chatter、merge blocked和Particle安全违规均为0。LocalPredictive samples=`901/901`、invalid=`0/0`且双端hash一致。
+局部约束统一表示为二维速度半平面，例如：
 
-[INFERRED][HIGH] T5 Static的自动化、双端技术门和稳定性V1能力门已通过；人工审片仍未执行。本轮停止，不自动进入T5 Moving或T6M。
+```text
+dot(v - Point, Normal) >= 0
+```
 
-[RULES I BROKE]：[COMPUTED][HIGH] 无。
+再与：
+
+```text
+|v| <= MaxSpeed
+```
+
+共同形成可行速度域。
+
+求解目标是：
+
+> 在满足全部局部 Pair / Environment 约束的前提下，找到最接近 PreferredVelocity 的速度。
+
+无冲突实体应尽量精确保留限速后的 PreferredVelocity；局部层不能无理由恢复旧位置、旧阵型或 Cell center。
+
+---
+
+## 8. 连续求解与量化
+
+先求连续速度解，再进行稳定量化。
+
+量化后必须重新验证全部约束。
+
+正确顺序：
+
+```text
+Continuous feasible velocity
+        ↓
+Quantize
+        ↓
+Local repair / stable candidate selection
+        ↓
+Pair validation
+        ↓
+Environment validation
+        ↓
+Publish
+```
+
+不能出现：
+
+```text
+连续解合法
+→ 量化后非法
+→ 仍然提交
+```
+
+数值失败必须显式 invalid。
+
+---
+
+## 9. 几何容量不是固定 Cell 容量
+
+Local Predictive 不使用固定：
+
+```text
+Cell capacity = 1
+```
+
+所谓“当前能通过多少实体”，应该由真实可行速度集合自然决定。
+
+如果三个人可以在当前几何下同时安全前进，就都应该前进。
+
+只有在共同保持期望进展确实不可行时，才需要临时让行。
+
+---
+
+## 10. 有限期公平让行
+
+当 Component 内所有实体无法同时保持合理进展时，可以使用短期、可回滚的公平状态选择临时 grant / yield。
+
+公平排序可以基于：
+
+```text
+BlockedAge descending
+→ quantized progress deficit descending
+→ StableEntityRef / AgentId ascending
+```
+
+核心原则：
+
+1. 等得越久的人更有机会获得进展；
+2. 决胜稳定；
+3. grant 有固定租期；
+4. 参与者或 revision 变化时重新计算；
+5. grant 只调整避让责任，不删除 Pair safety constraint；
+6. winner 仍然不能穿人、穿墙。
+
+让行状态必须能进入 rollback / correction，避免 replay 后公平顺序变化。
+
+---
+
+## 11. BlockedAge
+
+`BlockedAge` 只在实体确实具有正向请求、但局部实际进展长期不足时增长。
+
+有正常进展后应确定性衰减或清零。
+
+BlockedAge 不是业务优先级，也不能由职业、Faction 或 Agent class 直接覆盖。
+
+---
+
+## 12. Environment Constraint
+
+Local Predictive 不能只处理 Agent-Agent Pair。
+
+如果它选择一个侧移速度直接指向墙体，下一层 Particle 又会把实体推回，从而制造新的振荡。
+
+因此局部速度还应考虑：
+
+```text
+Obstacle
+Flow / World Bounds
+Interaction Layer
+短期 swept endpoint
+```
+
+环境约束仍然只是局部速度可行性判断；最终位置级安全由 Particle Safety 再次验证。
+
+---
+
+## 13. 与 Target Region Transport 的边界
+
+Target Region 产生：
+
+```text
+Region population demand
+Transport Plan
+Cell Edge Quota
+Preferred Guidance
+```
+
+Local Predictive 不读取 Region 业务语义，只看到最终 Preferred。
+
+多个实体请求同一 NextCell 时：
+
+```text
+Transport
+= 宏观上这些人口应该往那边走
+
+Local Predictive
+= 这一小段时间内大家怎么走才互不冲突
+```
+
+不得把局部 grant 变成永久 Region / Cell Owner。
+
+如果长期 actual progress 接近零，应把该事实反馈给宏观层，而不是无限重复同一 Preferred。
+
+---
+
+## 14. 与 Particle Safety 的边界
+
+```text
+Local Predictive
+= 预测并减少未来冲突
+
+Particle Safety
+= 最终保证 Hard / Swept / Obstacle / Bounds
+```
+
+Local Predictive 结果仍然必须进入 Particle Safety。
+
+它没有权力绕过：
+
+```text
+HardDistance
+Swept collision
+Environment
+Bounds
+```
+
+Particle 也不应承担公平调度或 Target 宏观人口分布。
+
+---
+
+## 15. Mobility 边界
+
+`Mobility` 主要属于 Particle 修正责任权重。
+
+Local Predictive 的公平让行不应该因为 Heavy / Light、Melee / Ranged 等职业身份直接产生“不可让行特权”。
+
+如果未来确需不同局部责任模型，也必须通过明确、通用、可验证的物理 / movement profile 合同引入，而不是测试场景特判。
+
+---
+
+## 16. Deterministic Merge
+
+不同 Conflict Component 可以并行求解，但最终输出必须按稳定顺序合并。
+
+Task 完成先后不能决定：
+
+```text
+谁获得 grant
+谁 yield
+最终 Velocity
+Stable Hash
+```
+
+所有 Pair、Constraint、Component、Result 和 fairness state 都必须使用稳定 Key。
+
+---
+
+## 17. Failure 语义
+
+以下情况必须 fail-closed：
+
+```text
+非法输入 / NaN
+重复 Pair
+开放或不完整 Component
+连续可行域求解失败
+量化后无法修复
+Environment validation 失败
+Joint pair validation 失败
+容量溢出
+```
+
+紧急情况下可以输出安全静止，但“安全静止”不能被统计为“局部求解成功”。
+
+Candidate Result 与 Applied Result / validation status 必须分开记录。
+
+不得静默恢复旧 ORCA / Portal / Admission fallback。
+
+---
+
+## 18. 状态与 Hash
+
+需要跨 fixed-step 保存的状态应保持最小化，例如：
+
+```text
+BlockedAge
+Grant expiry / epoch
+必要的短期 component fairness state
+```
+
+不建立永久业务 Owner Fragment。
+
+Step Hash 至少覆盖：
+
+```text
+Settings
+Stable inputs
+Pair / Constraint keys
+Component membership
+Grant decisions
+Continuous result
+Quantized result
+Fairness state
+```
+
+同样输入和同样历史状态必须产生同样结果。
+
+---
+
+## 19. 验收边界
+
+Local Predictive 的专项验收至少覆盖：
+
+```text
+无冲突 Preferred 精确保留
+双向交换
+多人交叉
+窄通道
+同目标接近
+移动目标
+高速交换 Pair
+Environment side-step
+InteractionLayer
+BlockedAge fairness
+Grant expiry / switch
+输入反序等价
+rollback / replay
+不同 Task 完成顺序
+```
+
+“Particle violation = 0”不能替代 Local Predictive 验收，因为 Particle 可以在最后强行保证安全，但仍可能存在长期振荡和零进展。
+
+---
+
+## 20. 当前状态不属于本文
+
+本文只定义长期 Local Predictive 设计。
+
+旧 ORCA、PortalAdmission、具体端口、T6M 历史运行号、processor 迁移阶段和历史 Hash 不再保存在正文。
+
+当前实现状态与证据统一查看：
+
+```text
+CurrentArchitecture.md
+FeatureChecklist.md
+TestScenarioMatrix.md
+```
+
+历史过程使用 Git 历史追溯。
