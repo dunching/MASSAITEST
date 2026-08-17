@@ -1,4 +1,4 @@
-name: Apply production round cut
+name: Finalize production round cut
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  patch:
+  finalize:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -17,56 +17,112 @@ jobs:
         with:
           ref: refactor/production-bypass-round-transaction
           fetch-depth: 0
-      - name: Apply source refactor
-        id: patch
-        shell: bash
+      - name: Apply fail-closed sequence fix and verify structure
         run: |
-          set +e
           python3 - <<'PY'
           from pathlib import Path
-          path = Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp")
-          text = path.read_text(encoding="utf-8-sig")
-          marker = "MatchesCorrectionState("
-          if text.count(marker) != 1:
-              raise RuntimeError(f"{marker} expected definition-only count 1, found {text.count(marker)}")
-          start = text.index("  bool MatchesCorrectionState(\n")
-          end = text.index("  FVector MakeCenteredFormationOffset(\n", start)
-          path.write_text(text[:start] + text[end:], encoding="utf-8")
+
+          header_path = Path('Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h')
+          pipeline_path = Path('Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp')
+          processors_path = Path('Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp')
+
+          header = header_path.read_text(encoding='utf-8-sig')
+          pipeline = pipeline_path.read_text(encoding='utf-8-sig')
+          processors = processors_path.read_text(encoding='utf-8-sig')
+
+          old = '''      if (AppliedInputSequence < ExpectedInputSequence)\n      {\n        Pipeline->RecordPipelineFramePerformance(\n          0, GetRoundPipelineServerTime(*World), false, false);\n        return ECrowdDemoRoundFrameStageResult::Pending;\n      }'''
+          new = '''      if (AppliedInputSequence < ExpectedInputSequence)\n      {\n        UE_LOG(LogTemp, Error,\n          TEXT(\"VIOLATION CrowdDemoFullWorkerProductionStaleResult step=%d expected=%llu actual=%llu\"),\n          Pipeline->GetCurrentFixedStepIndex(), ExpectedInputSequence,\n          AppliedInputSequence);\n        Pipeline->FailFixedStep();\n        return ECrowdDemoRoundFrameStageResult::Failed;\n      }'''
+          if processors.count(old) != 1:
+              raise RuntimeError(f'stale-result branch exact match count={processors.count(old)}')
+          processors = processors.replace(old, new)
+          processors_path.write_text(processors, encoding='utf-8')
+
+          production = header + pipeline + processors
+          retired = [
+              'SoftPressureRollbackHistory',
+              'FCrowdDemoSoftPressureRollbackSnapshot',
+              'FCrowdDemoSoftPressureRollbackAgentState',
+              'FCrowdDemoPreparedCombatRollbackFact',
+              'RecordSoftPressureRollbackSnapshot(',
+              'CompleteSoftPressureRollbackCombatState(',
+              'FindSoftPressureRollbackSnapshot(',
+              'IsSoftPressureRollbackSnapshotReadyForReplay(',
+              'RestoreSoftPressureRuntime(',
+          ]
+          for symbol in retired:
+              if symbol in production:
+                  raise RuntimeError(f'retired production symbol remains: {symbol}')
+
+          required = [
+              'CanUseFullWorkerProductionFastPath()',
+              'TrySubmitFullWorkerProductionIntent()',
+              'MarkFullWorkerProductionResultCommitted(',
+              'FCrowdWorkerResultOwnerCommitBarrier::Commit(',
+              'ApplyValidatedWorkerMassDirtyPlan(',
+              'CrowdDemoFullWorkerProductionStaleResult',
+          ]
+          for symbol in required:
+              if symbol not in production:
+                  raise RuntimeError(f'required symbol missing: {symbol}')
+
+          start = processors.index('bool AdvanceRoundWorkerFrame(')
+          end = processors.index('UCrowdDemoWorkerInputSyncProcessor::', start)
+          advance = processors[start:end]
+          fast = advance.index('Pipeline->CanUseFullWorkerProductionFastPath()')
+          legacy_begin = advance.index('Pipeline->BeginBoundaryTransaction(SnapshotApplyMilliseconds)')
+          if fast >= legacy_begin:
+              raise RuntimeError('Production decision is not before BeginBoundaryTransaction')
+          if 'if (!bFullProductionFastPath)\n    {\n      const ECrowdBoundaryPollResult' not in advance:
+              raise RuntimeError('TryPrepareRoundApply is not isolated behind legacy path')
+          if 'MarkFullWorkerProductionResultCommitted' not in advance:
+              raise RuntimeError('fast result is not closed through explicit commit marker')
+          if 'FCrowdDemoRoundCheckpointPublisherStage CheckpointPublisher;' not in advance:
+              raise RuntimeError('checkpoint publisher lost from committed path')
+
+          # Cheap structural sanity check for this edited translation unit.
+          def brace_balance(text):
+              balance = 0
+              in_string = False
+              escaped = False
+              in_line = False
+              in_block = False
+              i = 0
+              while i < len(text):
+                  c = text[i]
+                  n = text[i+1] if i + 1 < len(text) else ''
+                  if in_line:
+                      if c == '\n': in_line = False
+                  elif in_block:
+                      if c == '*' and n == '/':
+                          in_block = False; i += 1
+                  elif in_string:
+                      if escaped: escaped = False
+                      elif c == '\\': escaped = True
+                      elif c == '"': in_string = False
+                  else:
+                      if c == '/' and n == '/': in_line = True; i += 1
+                      elif c == '/' and n == '*': in_block = True; i += 1
+                      elif c == '"': in_string = True
+                      elif c == '{': balance += 1
+                      elif c == '}': balance -= 1
+                      if balance < 0: return balance
+                  i += 1
+              return balance
+          if brace_balance(processors) != 0:
+              raise RuntimeError('processor brace balance failed')
+          if brace_balance(pipeline) != 0:
+              raise RuntimeError('pipeline brace balance failed')
+
+          print('final production round cut static gates passed')
           PY
-          pre_status=$?
-          if [ "$pre_status" -ne 0 ]; then
-            echo "orphan rollback helper retirement failed" > production_round_cut_run.txt
-            echo "status=$pre_status" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          sed -i 's/all_source = header + pipeline + processors + combat + local_tests/all_source = header + pipeline + processors/' .github/scripts/apply_production_round_cut.py
-          python3 .github/scripts/apply_production_round_cut.py > production_round_cut_run.txt 2>&1
-          status=$?
-          cat production_round_cut_run.txt
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Commit patch diagnostic
-        if: steps.patch.outputs.status != '0'
+      - name: Commit final source fix
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add production_round_cut_run.txt
-          git commit -m "chore: capture production round cut patch failure"
-          git push origin HEAD:refactor/production-bypass-round-transaction
-      - name: Commit source refactor
-        if: steps.patch.outputs.status == '0'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h \
-            Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp \
-            Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp \
-            Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp \
-            Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp
+          git add Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp
           if git diff --cached --quiet; then
-            echo "No source changes produced"
+            echo "Expected fail-closed source change was not produced"
             exit 1
           fi
-          git commit -m "refactor: bypass round transaction in full worker production"
+          git commit -m "refactor: fail closed on stale production worker results"
           git push origin HEAD:refactor/production-bypass-round-transaction
