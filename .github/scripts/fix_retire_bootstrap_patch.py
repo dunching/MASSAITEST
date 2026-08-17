@@ -29,8 +29,6 @@ dispatch_pos = facing.find(dispatch_token)
 if dispatch_pos < 0:
     raise RuntimeError("facing legacy dispatch branch missing")
 dispatch_start = facing.rfind("\n", 0, dispatch_pos) + 1
-# `facing` has already been reduced to first-pass content plus the function
-# closing brace, so replacing from the legacy branch to EOF is deterministic.
 facing = facing[:dispatch_start] + new_dispatch + "}\n"
 '''
 text = text[:start] + new + text[end:]
@@ -43,8 +41,7 @@ text = text.replace(
     'c = remove_block(c, "  uint64 CalculatePreparedTargetResourceHash(")\n'
     'for prefix in [\n',
     1)
-# Ensure the obsolete helper itself is part of the final zero-symbol gate.
-gate = '    "PreparedTargetResourcePlan",\n'
+gate = '    "FCrowdDemoPreparedTargetResourcePlan",\n'
 if gate not in text:
     raise RuntimeError("retired gate insertion marker missing")
 text = text.replace(
