@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 ROOTS = [Path("Source"), Path("Plugins")]
 REPORT = Path("round_transaction_audit.txt")
@@ -24,6 +23,12 @@ SYMBOLS = [
     "TrySubmitWorkerV2ClockIntentEarly",
     "IsFullWorkerProductionMode",
     "AdvanceRoundWorkerFrame",
+    "FCrowdDemoRoundTargetFactApplyStage::Execute",
+    "BuildReflectedLinearMotionFact",
+    "bWorkerV2TargetStateBootstrapped",
+    "bWorkerV2ProjectileStateBootstrapped",
+    "TryBeginFixedStep",
+    "MarkRoundApplyCommitted",
 ]
 
 TEXT_SUFFIXES = {".h", ".hpp", ".cpp", ".inl", ".cs", ".md", ".py", ".yml", ".yaml"}
@@ -32,8 +37,7 @@ for root in ROOTS:
     if root.exists():
         files.extend(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_SUFFIXES)
 
-lines = []
-lines.append("ROUND TRANSACTION CUT AUDIT\n")
+lines = ["ROUND TRANSACTION CUT AUDIT\n"]
 for symbol in SYMBOLS:
     matches = []
     for path in files:
@@ -47,12 +51,14 @@ for symbol in SYMBOLS:
     lines.append(f"\n## {symbol} ({len(matches)})\n")
     lines.extend(m + "\n" for m in matches)
 
-# Emit bounded contexts for critical control-flow anchors.
 contexts = [
-    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp"), "bool AdvanceRoundWorkerFrame", 260),
-    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::TryPrepareRoundApply", 220),
+    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp"), "bool AdvanceRoundWorkerFrame", 300),
+    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp"), "void FCrowdDemoRoundTargetFactApplyStage::Execute", 140),
+    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::TryPrepareRoundApply", 260),
     (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction", 80),
-    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::TrySubmitWorkerV2ClockIntentEarly", 180),
+    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::TrySubmitWorkerV2ClockIntentEarly", 200),
+    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::TryBeginFixedStep", 120),
+    (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::MarkRoundApplyCommitted", 100),
     (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot", 220),
     (Path("Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp"), "UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime", 220),
 ]
