@@ -6,6 +6,11 @@ public class MassAICrowdDemo : ModuleRules
   {
     PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
     CppStandard = CppStandardVersion.Cpp20;
+    // This module contains many legacy translation-unit-local helpers with the
+    // same names. Unity amalgamation merges their anonymous namespaces and can
+    // produce false redefinition/overload errors on an otherwise valid clean
+    // build, so keep each source file as its intended translation unit.
+    bUseUnity = false;
 
     PublicIncludePaths.Add(ModuleDirectory);
 
@@ -18,6 +23,14 @@ public class MassAICrowdDemo : ModuleRules
       "MassEntity",
       "MassLOD",
       "MassMovement",
+      "MassCrowdCore",
+      "MassCrowdSpatial",
+      "MassCrowdCombat",
+      "MassCrowdProjectiles",
+      "MassCrowdNetworking",
+      "MassCrowdPresentation",
+      "MassCrowdStandardSources",
+      "MassCrowdDemoBusiness",
       "MassReplication",
       "MassSpawner",
       "NetCore"
@@ -26,10 +39,22 @@ public class MassAICrowdDemo : ModuleRules
     PrivateDependencyModuleNames.AddRange(new[]
     {
       "MassAIBehavior",
+      "MassCrowdRuntime",
       "MassNavigation",
       "MassReplication",
       "MassSimulation",
-      "NavigationSystem"
+      "NavigationSystem",
+      "RenderCore",
+      "RHI"
     });
+
+    if (Target.bBuildEditor)
+    {
+      PrivateDependencyModuleNames.AddRange(new[]
+      {
+        "LevelEditor",
+        "UnrealEd"
+      });
+    }
   }
 }

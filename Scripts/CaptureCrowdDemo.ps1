@@ -1,6 +1,6 @@
 param(
   [string]$EditorPath = "D:\UE\UE_5.7\Engine\Binaries\Win64\UnrealEditor.exe",
-  [string]$FfmpegPath = "E:\Projects\SuperInvincibleTank_BugFix\Tools\FFmpeg\Win64\bin\ffmpeg.exe",
+  [string]$FfmpegPath = "",
   [string]$ProjectPath = "",
   [string]$Map = "/Engine/Maps/Templates/OpenWorld",
   [int]$Port = 7951,
@@ -24,7 +24,11 @@ param(
   [string]$VideoEncoder = "auto",
   [string]$Preset = "veryfast",
   [switch]$KeepClientTopMost,
-  [switch]$NoMinimizeDesktop
+  [switch]$NoMinimizeDesktop,
+  [switch]$T7StateAcceptance,
+  [double]$EventSliceLeadSeconds = 1.0,
+  [double]$EventSliceTailSeconds = 3.0,
+  [string]$CommonExtraArgs = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -97,6 +101,15 @@ using System.Runtime.InteropServices;
 
 public static class CrowdDemoWin32WindowTools
 {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT
+  {
+    public int Left;
+    public int Top;
+    public int Right;
+    public int Bottom;
+  }
+
   [DllImport("user32.dll")]
   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
@@ -105,6 +118,9 @@ public static class CrowdDemoWin32WindowTools
 
   [DllImport("user32.dll")]
   public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, UInt32 uFlags);
+
+  [DllImport("user32.dll")]
+  public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 }
 "@
 }
@@ -202,8 +218,18 @@ function Get-ImageMeanLuma {
 }
 
 $Root = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($FfmpegPath)) {
+  $FfmpegPath = Join-Path $Root "Tools\FFmpeg\Win64\bin\ffmpeg.exe"
+}
 if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
   $ProjectPath = Join-Path $Root "MassAICrowdDemo.uproject"
+}
+
+if ($T7StateAcceptance) {
+  $Map = "/Game/Maps/CrowdDemo_MultiStateVatHitResponseSmall"
+  $EntityCount = 20
+  $Scenario = "SimRoundSoftPressure"
+  $RequireClientReady = $true
 }
 
 if (!(Test-Path -LiteralPath $EditorPath)) {
@@ -225,7 +251,12 @@ $ServerLog = Join-Path $LogDir "server.log"
 $ClientLog = Join-Path $LogDir "client.log"
 $FfmpegLog = Join-Path $LogDir "ffmpeg.log"
 $VideoPath = Join-Path $LogDir "crowd_demo_phase_f.mp4"
+$StateSidecarPath = Join-Path $LogDir "scenario_state_events.jsonl"
+$AcceptanceManifestPath = Join-Path $LogDir "acceptance_manifest.json"
 $CommonArgs = "-CrowdDemoEntityCount=$EntityCount -CrowdDemoScenario=$Scenario -CrowdDemoDurationSeconds=$DurationSeconds -unattended -NoSound"
+if (![string]::IsNullOrWhiteSpace($CommonExtraArgs)) {
+  $CommonArgs = "$CommonArgs $CommonExtraArgs"
+}
 if ($RequireClientReady) {
   $CommonArgs = "$CommonArgs -CrowdDemoRequireClientReady -CrowdDemoReadyLeadSeconds=3 -CrowdDemoReadyTimeoutSeconds=60"
 }
@@ -240,9 +271,13 @@ $ServerProcess = $null
 $ClientProcess = $null
 $FfmpegProcess = $null
 $ShellApplication = $null
+$CaptureStartUtcTicks = 0L
 
 $ServerArgs = "`"$ProjectPath`" $Map -server -port=$Port -NullRHI -log -AbsLog=`"$ServerLog`" $CommonArgs"
 $ClientArgs = "`"$ProjectPath`" 127.0.0.1:$Port -game -windowed -ResX=$ResX -ResY=$ResY -WinX=$WindowX -WinY=$WindowY -AbsLog=`"$ClientLog`" $CommonArgs"
+if ($T7StateAcceptance) {
+  $ClientArgs = "$ClientArgs -CrowdDemoDrawScenarioStateLabels -CrowdDemoScenarioStateSidecar=`"$StateSidecarPath`""
+}
 
 $EncoderArgs = Resolve-VideoEncoderArgs -FfmpegPath $FfmpegPath -RequestedEncoder $VideoEncoder -Crf $Crf -Mpeg4Quality $Mpeg4Quality -Preset $Preset
 
@@ -263,7 +298,7 @@ try {
   Write-Host "[CrowdDemoCapture] Starting visible client: $ClientArgs"
   $ClientProcess = Start-Process -FilePath $EditorPath -ArgumentList $ClientArgs -PassThru
 
-  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost ([bool]$KeepClientTopMost)
+  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost $true
   if ($ClientWindowHandle -eq [IntPtr]::Zero) {
     throw "Client window handle is unavailable; refusing desktop fallback capture."
   }
@@ -274,9 +309,18 @@ try {
   }
   # Network travel can recreate the native client window. Reacquire the handle
   # after readiness so gdigrab never receives a stale pre-travel HWND.
-  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost ([bool]$KeepClientTopMost)
+  $ClientWindowHandle = Place-CaptureWindow -Process $ClientProcess -X $WindowX -Y $WindowY -Width $ResX -Height $ResY -TopMost $true
   if ($ClientWindowHandle -eq [IntPtr]::Zero) {
     throw "Post-travel client window handle is unavailable."
+  }
+  $CaptureRect = New-Object CrowdDemoWin32WindowTools+RECT
+  if (![CrowdDemoWin32WindowTools]::GetWindowRect($ClientWindowHandle, [ref]$CaptureRect)) {
+    throw "Failed to query the post-travel client window rectangle."
+  }
+  $CaptureWidth = $CaptureRect.Right - $CaptureRect.Left
+  $CaptureHeight = $CaptureRect.Bottom - $CaptureRect.Top
+  if ($CaptureWidth -le 0 -or $CaptureHeight -le 0) {
+    throw "Invalid post-travel client window rectangle."
   }
   $FfmpegArgs = @(
     "-y",
@@ -286,9 +330,9 @@ try {
     "-f", "gdigrab",
     "-draw_mouse", "0",
     "-framerate", "$FrameRate",
-    "-offset_x", "$WindowX",
-    "-offset_y", "$WindowY",
-    "-video_size", "${ResX}x${ResY}",
+    "-offset_x", "$($CaptureRect.Left)",
+    "-offset_y", "$($CaptureRect.Top)",
+    "-video_size", "${CaptureWidth}x${CaptureHeight}",
     "-i", "desktop",
     "-vf", "scale=${ResX}:${ResY}:force_original_aspect_ratio=decrease,pad=${ResX}:${ResY}:(ow-iw)/2:(oh-ih)/2"
   ) + $EncoderArgs + @(
@@ -308,6 +352,7 @@ try {
 
   $FfmpegProcess = New-Object System.Diagnostics.Process
   $FfmpegProcess.StartInfo = $FfmpegStartInfo
+  $CaptureStartUtcTicks = [DateTime]::UtcNow.Ticks
   [void]$FfmpegProcess.Start()
 
   Start-Sleep -Seconds $CaptureSeconds
@@ -354,4 +399,199 @@ if (Test-Path -LiteralPath $VideoPath) {
 }
 else {
   Write-Warning "[CrowdDemoCapture] Video was not created. Check $FfmpegLog"
+}
+
+if ($T7StateAcceptance) {
+  if (!(Test-Path -LiteralPath $VideoPath)) {
+    throw "T7 acceptance video was not created."
+  }
+  if (!(Test-Path -LiteralPath $StateSidecarPath)) {
+    throw "T7 authoritative state sidecar was not created: $StateSidecarPath"
+  }
+  if ($CaptureStartUtcTicks -le 0) {
+    throw "T7 capture start timestamp was not recorded."
+  }
+
+  $SidecarRows = @()
+  foreach ($Line in Get-Content -LiteralPath $StateSidecarPath -Encoding utf8) {
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+      continue
+    }
+    try {
+      $SidecarRows += $Line | ConvertFrom-Json
+    }
+    catch {
+      throw "Invalid JSONL row in T7 sidecar: $Line"
+    }
+  }
+  $MetadataRows = @($SidecarRows | Where-Object { $_.kind -eq "metadata" })
+  $StateRows = @($SidecarRows | Where-Object { $_.kind -eq "state" })
+  if ($MetadataRows.Count -lt 1 -or $StateRows.Count -lt 20) {
+    throw "T7 sidecar is incomplete. metadata=$($MetadataRows.Count) state_rows=$($StateRows.Count)"
+  }
+  $ObservedFormationCount = @(
+    $StateRows |
+      Select-Object -ExpandProperty formation_index -Unique |
+      Where-Object { $_ -ge 0 -and $_ -lt 20 }
+  ).Count
+  if ($ObservedFormationCount -ne 20) {
+    throw "T7 sidecar did not observe all 20 formation indices. observed=$ObservedFormationCount"
+  }
+
+  $EventSpecifications = @(
+    [pscustomobject]@{
+      Step = 30
+      Name = "knockback"
+      Candidates = @($StateRows | Where-Object {
+        $_.formation_index -ge 12 -and $_.formation_index -lt 14 -and
+        $_.reactive -eq 1 -and $_.business -eq 3 -and $_.visual -eq 3
+      })
+    },
+    [pscustomobject]@{
+      Step = 60
+      Name = "knockup"
+      Candidates = @($StateRows | Where-Object {
+        $_.formation_index -ge 14 -and $_.formation_index -lt 16 -and
+        $_.reactive -eq 2 -and $_.business -eq 3 -and $_.visual -eq 3
+      })
+    },
+    [pscustomobject]@{
+      Step = 90
+      Name = "death"
+      Candidates = @($StateRows | Where-Object {
+        $_.formation_index -ge 16 -and $_.formation_index -lt 20 -and
+        $_.alive -eq 0 -and $_.business -eq 4 -and $_.visual -eq 4
+      })
+    }
+  )
+
+  $SliceManifests = @()
+  foreach ($Specification in $EventSpecifications) {
+    $Event = $Specification.Candidates |
+      Sort-Object -Property utc_ticks |
+      Select-Object -First 1
+    if (!$Event) {
+      throw "T7 sidecar did not contain the expected actual event for step $($Specification.Step) ($($Specification.Name))."
+    }
+
+    $EventOffsetSeconds =
+      ([int64]$Event.utc_ticks - $CaptureStartUtcTicks) / 10000000.0
+    if ($EventOffsetSeconds -lt 0.0 -or
+        $EventOffsetSeconds -gt $CaptureSeconds) {
+      throw "T7 event $($Specification.Name) falls outside the recorded video. offset=$EventOffsetSeconds"
+    }
+    $SliceStartSeconds = [Math]::Max(
+      0.0, $EventOffsetSeconds - $EventSliceLeadSeconds)
+    $SliceDurationSeconds = [Math]::Min(
+      $EventSliceLeadSeconds + $EventSliceTailSeconds,
+      $CaptureSeconds - $SliceStartSeconds)
+    $SliceStartText = [string]::Format(
+      [Globalization.CultureInfo]::InvariantCulture,
+      "{0:0.000}", $SliceStartSeconds)
+    $SliceDurationText = [string]::Format(
+      [Globalization.CultureInfo]::InvariantCulture,
+      "{0:0.000}", $SliceDurationSeconds)
+    $SliceBaseName = "step_{0:D3}_{1}" -f
+      $Specification.Step, $Specification.Name
+    $SlicePath = Join-Path $LogDir "$SliceBaseName.mp4"
+    $SliceContactSheetPath = Join-Path $LogDir "$SliceBaseName.jpg"
+    $SliceArgs = @(
+      "-y", "-hide_banner", "-loglevel", "error",
+      "-ss", $SliceStartText,
+      "-i", $VideoPath,
+      "-t", $SliceDurationText
+    ) + $EncoderArgs + @($SlicePath)
+    & $FfmpegPath @SliceArgs
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $SlicePath)) {
+      throw "Failed to create T7 event slice: $SlicePath"
+    }
+    & $FfmpegPath -y -hide_banner -loglevel error `
+      -i $SlicePath `
+      -vf "fps=4,scale=400:-1,tile=4x4" `
+      -frames:v 1 $SliceContactSheetPath
+    if ($LASTEXITCODE -ne 0 -or
+        !(Test-Path -LiteralPath $SliceContactSheetPath)) {
+      throw "Failed to create T7 event contact sheet: $SliceContactSheetPath"
+    }
+    $SliceManifests += [ordered]@{
+      expected_step = $Specification.Step
+      event_name = $Specification.Name
+      authority_sample_step = [int]$Event.fixed_step
+      observation_fixed_step = [int]$Event.observation_fixed_step
+      event_offset_seconds = [Math]::Round($EventOffsetSeconds, 4)
+      slice_start_seconds = [Math]::Round($SliceStartSeconds, 4)
+      slice_duration_seconds = [Math]::Round($SliceDurationSeconds, 4)
+      agent_id = [int]$Event.agent_id
+      formation_index = [int]$Event.formation_index
+      video = $SlicePath
+      contact_sheet = $SliceContactSheetPath
+    }
+  }
+
+  $PreviousErrorActionPreference = $ErrorActionPreference
+  try {
+    # Windows PowerShell promotes native stderr to ErrorRecord when the global
+    # preference is Stop. ffmpeg writes probe/filter diagnostics to stderr even
+    # on success, so collect it under Continue and validate the native exit code.
+    $ErrorActionPreference = "Continue"
+    $FreezeOutput = (
+      & $FfmpegPath -hide_banner -loglevel info -i $VideoPath `
+        -vf "freezedetect=n=0.003:d=2.0" -an -f null NUL 2>&1 |
+        Out-String)
+    $FreezeExitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $PreviousErrorActionPreference
+  }
+  if ($FreezeExitCode -ne 0) {
+    throw "T7 ffmpeg freeze diagnostic failed. exit_code=$FreezeExitCode"
+  }
+  $FreezeDurations = @(
+    [regex]::Matches($FreezeOutput, "freeze_duration:\s*([0-9.]+)") |
+      ForEach-Object {
+        [double]::Parse(
+          $_.Groups[1].Value,
+          [Globalization.CultureInfo]::InvariantCulture)
+      }
+  )
+  $MaxFreezeDurationSeconds = 0.0
+  if ($FreezeDurations.Count -gt 0) {
+    $MaxFreezeDurationSeconds = (
+      $FreezeDurations | Measure-Object -Maximum).Maximum
+  }
+  if ($MaxFreezeDurationSeconds -ge 5.0) {
+    throw "T7 video contains a gross freeze of $MaxFreezeDurationSeconds seconds."
+  }
+
+  $PreRoundRows = @($StateRows | Where-Object {
+    $_.pre_round_sample -eq 1
+  })
+  $SampleEdgeRows = @($StateRows | Where-Object {
+    $_.sample_edge_tolerance -eq 1
+  })
+  $MismatchRows = @($StateRows | Where-Object {
+    $_.match -eq 0 -and $_.pre_round_sample -ne 1
+  })
+  $AcceptanceManifest = [ordered]@{
+    version = 1
+    scenario = "T7"
+    capture_start_utc_ticks = $CaptureStartUtcTicks
+    video = $VideoPath
+    state_sidecar = $StateSidecarPath
+    observed_formation_count = $ObservedFormationCount
+    state_event_count = $StateRows.Count
+    pre_round_transition_count = $PreRoundRows.Count
+    sample_edge_transition_count = $SampleEdgeRows.Count
+    mismatch_transition_count = $MismatchRows.Count
+    freeze_event_count = $FreezeDurations.Count
+    max_freeze_duration_seconds =
+      [Math]::Round([double]$MaxFreezeDurationSeconds, 4)
+    slices = $SliceManifests
+  }
+  $AcceptanceManifest |
+    ConvertTo-Json -Depth 8 |
+    Set-Content -LiteralPath $AcceptanceManifestPath -Encoding utf8
+  Write-Host "[CrowdDemoCapture] T7 sidecar=$StateSidecarPath"
+  Write-Host "[CrowdDemoCapture] T7 manifest=$AcceptanceManifestPath"
+  Write-Host "[CrowdDemoCapture] T7 slices=3 max_freeze_seconds=$MaxFreezeDurationSeconds mismatches=$($MismatchRows.Count)"
 }

@@ -1,0 +1,65 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Mass Crowd Simulation",
+  "Description": "Deterministic reusable Mass crowd simulation runtime.",
+  "Category": "AI",
+  "CreatedBy": "Mass Crowd Simulation",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Plugins": [
+    {
+      "Name": "MassGameplay",
+      "Enabled": true
+    }
+  ],
+  "Modules": [
+    {
+      "Name": "MassCrowdCore",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
+      "Name": "MassCrowdSpatial",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
+      "Name": "MassCrowdCombat",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
+      "Name": "MassCrowdRuntime",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "MassCrowdProjectiles",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "MassCrowdStandardSources",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
+      "Name": "MassCrowdNetworking",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "MassCrowdPresentation",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    },
+    {
+      "Name": "MassCrowdTests",
+      "Type": "DeveloperTool",
+      "LoadingPhase": "PreDefault"
+    }
+  ]
+}

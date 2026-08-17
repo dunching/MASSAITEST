@@ -4,14 +4,19 @@
 #include "CrowdDemoRoundSimCoordinator.h"
 #include "Mass/CrowdDemoMassReplication.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
+#include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DynamicRHI.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Net/UnrealNetwork.h"
+#include "RenderTimer.h"
+#include "ShaderCompiler.h"
+#include "UObject/UObjectGlobals.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -38,6 +43,22 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   CrowdInstances->SetMobility(EComponentMobility::Movable);
   CrowdInstances->NumCustomDataFloats = 3;
 
+  CargoInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(
+    TEXT("CargoInstances"));
+  CargoInstances->SetupAttachment(SceneRoot);
+  CargoInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  CargoInstances->SetMobility(EComponentMobility::Movable);
+
+  ProjectileInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ProjectileInstances"));
+  ProjectileInstances->SetupAttachment(SceneRoot);
+  ProjectileInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  ProjectileInstances->SetMobility(EComponentMobility::Movable);
+
+  ProjectileImpactInstances = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("ProjectileImpactInstances"));
+  ProjectileImpactInstances->SetupAttachment(SceneRoot);
+  ProjectileImpactInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  ProjectileImpactInstances->SetMobility(EComponentMobility::Movable);
+
   PreviewFloor = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PreviewFloor"));
   PreviewFloor->SetupAttachment(SceneRoot);
   PreviewFloor->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -48,29 +69,82 @@ ACrowdDemoReplicator::ACrowdDemoReplicator()
   static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
   if (CubeMesh.Succeeded())
   {
-    CrowdInstances->SetStaticMesh(CubeMesh.Object);
     PreviewFloor->SetStaticMesh(CubeMesh.Object);
+    CargoInstances->SetStaticMesh(CubeMesh.Object);
+  }
+
+  static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+  if (SphereMesh.Succeeded())
+  {
+    ProjectileInstances->SetStaticMesh(SphereMesh.Object);
+    ProjectileImpactInstances->SetStaticMesh(SphereMesh.Object);
+  }
+
+  static ConstructorHelpers::FObjectFinder<UStaticMesh> VatMesh(
+    TEXT("/Game/CrowdDemo/VAT/T7/Meshes/SM_CrowdDemoBug_Source.SM_CrowdDemoBug_Source"));
+  if (VatMesh.Succeeded())
+  {
+    CrowdInstances->SetStaticMesh(VatMesh.Object);
+    bVatRuntimeMeshLoaded = true;
   }
 
   static ConstructorHelpers::FObjectFinder<UMaterialInterface> BasicShapeMaterial(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
   if (BasicShapeMaterial.Succeeded())
   {
-    CrowdInstances->SetMaterial(0, BasicShapeMaterial.Object);
     PreviewFloor->SetMaterial(0, BasicShapeMaterial.Object);
+    CargoInstances->SetMaterial(0, BasicShapeMaterial.Object);
+    ProjectileInstances->SetMaterial(0, BasicShapeMaterial.Object);
+    ProjectileImpactInstances->SetMaterial(0, BasicShapeMaterial.Object);
+  }
+
+  static ConstructorHelpers::FObjectFinder<UMaterialInterface> VatRuntimeMaterial(
+    TEXT("/Game/CrowdDemo/VAT/T7/Materials/MI_CrowdDemoBug_Runtime_VAT.MI_CrowdDemoBug_Runtime_VAT"));
+  if (VatRuntimeMaterial.Succeeded())
+  {
+    CrowdInstances->SetMaterial(0, VatRuntimeMaterial.Object);
     bVisualMaterialLoaded = true;
   }
+
 }
 
 void ACrowdDemoReplicator::BeginPlay()
 {
   Super::BeginPlay();
 
-  if (CrowdInstances && CrowdInstances->GetMaterial(0))
+  if (FParse::Param(
+      FCommandLine::Get(), TEXT("CrowdDemoFriendlyLogisticsSmall"))
+    && GetNetMode() != NM_DedicatedServer)
   {
-    UMaterialInstanceDynamic* CohortAMaterial = UMaterialInstanceDynamic::Create(CrowdInstances->GetMaterial(0), this);
-    CohortAMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.08f, 0.42f, 1.0f, 1.0f));
-    CrowdInstances->SetMaterial(0, CohortAMaterial);
+    UStaticMesh* CarrierMesh = LoadObject<UStaticMesh>(
+      nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+    UMaterialInterface* CarrierMaterial = LoadObject<UMaterialInterface>(
+      nullptr,
+      TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+    if (CarrierMesh && CrowdInstances)
+    {
+      CrowdInstances->SetStaticMesh(CarrierMesh);
+    }
+    if (CarrierMaterial && CrowdInstances)
+    {
+      CrowdInstances->SetMaterial(0, CarrierMaterial);
+      if (UMaterialInstanceDynamic* DynamicCarrier =
+        CrowdInstances->CreateDynamicMaterialInstance(0))
+      {
+        DynamicCarrier->SetVectorParameterValue(
+          TEXT("Color"), FLinearColor(0.02f, 0.16f, 0.8f, 1.0f));
+      }
+    }
   }
+  if (CargoInstances && GetNetMode() != NM_DedicatedServer)
+  {
+    if (UMaterialInstanceDynamic* CargoMaterial =
+      CargoInstances->CreateDynamicMaterialInstance(0))
+    {
+      CargoMaterial->SetVectorParameterValue(
+        TEXT("Color"), FLinearColor(1.0f, 0.12f, 0.01f, 1.0f));
+    }
+  }
+
   EntityCount = ResolveEntityCount();
   DurationSeconds = ResolveDurationSeconds();
   StartedSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -78,16 +152,16 @@ void ACrowdDemoReplicator::BeginPlay()
 
   if (bLocalVisualHostOnly)
   {
-    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client_visual_host duration=%.2f visual_material=%s source=MassClientBubble"), DurationSeconds, bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
+    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client_visual_host duration=%.2f vat_mesh=%s vat_material=%s source=MassClientBubble"), DurationSeconds, bVatRuntimeMeshLoaded ? TEXT("loaded") : TEXT("missing"), bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
   }
   else if (HasAuthority())
   {
     RefreshServerSummaryState();
-    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=server entity_count=%d duration=%.2f visual_material=%s source=MassClientBubble"), EntityStates.Num(), DurationSeconds, bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
+    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=server entity_count=%d duration=%.2f vat_mesh=%s vat_material=%s source=MassClientBubble"), EntityStates.Num(), DurationSeconds, bVatRuntimeMeshLoaded ? TEXT("loaded") : TEXT("missing"), bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
   }
   else
   {
-    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client duration=%.2f visual_material=%s source=MassClientBubble"), DurationSeconds, bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
+    UE_LOG(LogTemp, Display, TEXT("CrowdDemo: START role=client duration=%.2f vat_mesh=%s vat_material=%s source=MassClientBubble"), DurationSeconds, bVatRuntimeMeshLoaded ? TEXT("loaded") : TEXT("missing"), bVisualMaterialLoaded ? TEXT("loaded") : TEXT("missing"));
   }
 }
 
@@ -100,8 +174,123 @@ void ACrowdDemoReplicator::Tick(const float DeltaSeconds)
     ServerFrameMsSamples.Add(DeltaSeconds * 1000.0f);
     RefreshServerSummaryState();
   }
+  else if (GetWorld() && GetWorld()->GetNetMode() != NM_DedicatedServer)
+  {
+    UpdateClientPerformanceWindow(DeltaSeconds);
+  }
+
+  if (GetWorld() && GetWorld()->GetNetMode() != NM_DedicatedServer)
+  {
+    UpdateProjectileVisuals();
+  }
 
   LogSummaryIfReady();
+}
+
+void ACrowdDemoReplicator::UpdateClientPerformanceWindow(const float DeltaSeconds)
+{
+  UWorld* World = GetWorld();
+  if (!World || World->GetNetMode() == NM_DedicatedServer)
+  {
+    return;
+  }
+  UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
+    World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>();
+  const int32 ActiveRoundId = Pipeline ? Pipeline->GetCurrentRoundId() : 0;
+  if (!bClientPerformanceWindowStarted && ActiveRoundId <= 0)
+  {
+    RecordClientFramePhaseSample(DeltaSeconds, true);
+    return;
+  }
+  if (!bClientPerformanceWindowStarted)
+  {
+    bClientPerformanceWindowStarted = true;
+    ClientPerformanceRoundId = ActiveRoundId;
+    ClientPerformanceRoundStartWorldSeconds = World->GetTimeSeconds();
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoClientPerformanceWindow role=client stage=begin round_id=%d warmup_seconds=%.3f warmup_frame_ms_p95=%.3f warmup_frame_ms_max=%.3f shader_frames=%d shader_jobs_max=%d async_loading_frames=%d visual_asset_compiling_frames=%d pso_precache_frames=%d source=MassClientBubble"),
+      ClientPerformanceRoundId,
+      static_cast<float>(ClientPerformanceRoundStartWorldSeconds - StartedSeconds),
+      ComputeP95(ClientWarmupFrameMsSamples),
+      ComputeMax(ClientWarmupFrameMsSamples),
+      ClientWarmupShaderCompilingFrameCount,
+      ClientWarmupShaderJobsMax,
+      ClientWarmupAsyncLoadingFrameCount,
+      ClientWarmupVisualAssetCompilingFrameCount,
+      ClientWarmupVisualPsoPrecacheFrameCount);
+  }
+  if (!bClientSummaryLogged && ActiveRoundId == ClientPerformanceRoundId)
+  {
+    RecordClientFramePhaseSample(DeltaSeconds, false);
+  }
+}
+
+void ACrowdDemoReplicator::RecordClientFramePhaseSample(
+  const float DeltaSeconds, const bool bWarmup)
+{
+  const float FrameMilliseconds = FMath::Max(0.0f, DeltaSeconds * 1000.0f);
+  const int32 ShaderJobs = GShaderCompilingManager
+    ? GShaderCompilingManager->GetNumRemainingJobs()
+    : 0;
+  const bool bShaderCompiling = ShaderJobs > 0;
+  const bool bAsyncLoading = IsAsyncLoading() || GetNumAsyncPackages() > 0;
+  const bool bVisualAssetCompiling =
+    (CrowdInstances && CrowdInstances->IsCompiling())
+    || (ProjectileInstances && ProjectileInstances->IsCompiling())
+    || (ProjectileImpactInstances && ProjectileImpactInstances->IsCompiling());
+  const bool bVisualPsoPrecaching =
+    (CrowdInstances && CrowdInstances->IsPSOPrecaching())
+    || (ProjectileInstances && ProjectileInstances->IsPSOPrecaching())
+    || (ProjectileImpactInstances && ProjectileImpactInstances->IsPSOPrecaching());
+  if (bWarmup)
+  {
+    ClientWarmupFrameMsSamples.Add(FrameMilliseconds);
+    ClientWarmupShaderCompilingFrameCount += bShaderCompiling ? 1 : 0;
+    ClientWarmupShaderJobsMax = FMath::Max(ClientWarmupShaderJobsMax, ShaderJobs);
+    ClientWarmupAsyncLoadingFrameCount += bAsyncLoading ? 1 : 0;
+    ClientWarmupVisualAssetCompilingFrameCount += bVisualAssetCompiling ? 1 : 0;
+    ClientWarmupVisualPsoPrecacheFrameCount += bVisualPsoPrecaching ? 1 : 0;
+    return;
+  }
+
+  const float GameThreadMilliseconds = FPlatformTime::ToMilliseconds(GGameThreadTime);
+  const float RenderThreadMilliseconds = FPlatformTime::ToMilliseconds(GRenderThreadTime);
+  const float GpuFrameMilliseconds = FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles());
+  ClientFrameMsSamples.Add(FrameMilliseconds);
+  ClientGameThreadMsSamples.Add(GameThreadMilliseconds);
+  ClientRenderThreadMsSamples.Add(RenderThreadMilliseconds);
+  ClientGpuFrameMsSamples.Add(GpuFrameMilliseconds);
+  ClientGameThreadWaitMsSamples.Add(FPlatformTime::ToMilliseconds(GGameThreadWaitTime));
+  ClientRhiThreadMsSamples.Add(FPlatformTime::ToMilliseconds(GRHIThreadTime));
+  ClientSwapBufferMsSamples.Add(FPlatformTime::ToMilliseconds(GSwapBufferTime));
+  ClientShaderCompilingFrameCount += bShaderCompiling ? 1 : 0;
+  ClientShaderJobsMax = FMath::Max(ClientShaderJobsMax, ShaderJobs);
+  ClientAsyncLoadingFrameCount += bAsyncLoading ? 1 : 0;
+  ClientVisualAssetCompilingFrameCount += bVisualAssetCompiling ? 1 : 0;
+  ClientVisualPsoPrecacheFrameCount += bVisualPsoPrecaching ? 1 : 0;
+
+  if (FrameMilliseconds > 33.333f)
+  {
+    const float LargestMeasuredPhase = FMath::Max3(
+      GameThreadMilliseconds, RenderThreadMilliseconds, GpuFrameMilliseconds);
+    if (LargestMeasuredPhase < FrameMilliseconds * 0.5f)
+    {
+      ++ClientUnattributedHitchCount;
+    }
+    else if (GpuFrameMilliseconds >= GameThreadMilliseconds
+      && GpuFrameMilliseconds >= RenderThreadMilliseconds)
+    {
+      ++ClientGpuBoundHitchCount;
+    }
+    else if (RenderThreadMilliseconds >= GameThreadMilliseconds)
+    {
+      ++ClientRenderBoundHitchCount;
+    }
+    else
+    {
+      ++ClientGameBoundHitchCount;
+    }
+  }
 }
 
 void ACrowdDemoReplicator::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -113,6 +302,12 @@ void ACrowdDemoReplicator::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 UInstancedStaticMeshComponent* ACrowdDemoReplicator::GetCrowdInstancesForClientVisuals() const
 {
   return CrowdInstances;
+}
+
+UInstancedStaticMeshComponent*
+ACrowdDemoReplicator::GetCargoInstancesForClientVisuals() const
+{
+  return CargoInstances;
 }
 
 void ACrowdDemoReplicator::ClearCrowdVisualInstances()
@@ -161,6 +356,69 @@ void ACrowdDemoReplicator::RecordRoundSimVisualSmoothing(
   }
 }
 
+void ACrowdDemoReplicator::RecordRoundSimVisualContinuity(
+  const int32 AgentId,
+  const float SubmitIntervalMs,
+  const float SimDeltaCm,
+  const float DisplayDeltaCm,
+  const float ExpectedDisplayDeltaCm,
+  const int32 CollapsedSimSteps,
+  const bool bCorrectionBoundary,
+  const bool bPlanChanged,
+  const bool bTestBoundaryReset,
+  const bool bDiscontinuity,
+  const int32 PreviousPlanRevision,
+  const int32 CurrentPlanRevision,
+  const float PreviousSimServerTimeSeconds,
+  const float CurrentSimServerTimeSeconds,
+  const FVector& PreviousDisplayLocation,
+  const FVector& CurrentDisplayLocation)
+{
+  if (SubmitIntervalMs >= 0.0f) VisualSubmitIntervalMsSamples.Add(SubmitIntervalMs);
+  if (SimDeltaCm >= 0.0f) VisualSimDeltaCmSamples.Add(SimDeltaCm);
+  if (DisplayDeltaCm >= 0.0f) VisualDisplayDeltaCmSamples.Add(DisplayDeltaCm);
+  VisualCollapsedSimStepSamples.Add(static_cast<float>(FMath::Max(0, CollapsedSimSteps)));
+  if (CollapsedSimSteps > 1) ++VisualCatchupSubmitCount;
+  if (bDiscontinuity && !bCorrectionBoundary && !bPlanChanged
+    && !bTestBoundaryReset
+    && CollapsedSimSteps > 1)
+    ++VisualCatchupDiscontinuityCount;
+  if (bDiscontinuity && !bCorrectionBoundary && !bPlanChanged
+    && !bTestBoundaryReset
+    && CollapsedSimSteps <= 1)
+  {
+    ++NonCorrectionVisualDiscontinuityCount;
+    if (NonCorrectionVisualDiscontinuityCount == 1)
+    {
+      UE_LOG(LogTemp, Warning,
+        TEXT("CrowdDemoVisualDiscontinuityWitness agent=%d display_delta_cm=%.3f expected_cm=%.3f sim_delta_cm=%.3f collapsed_steps=%d submit_interval_ms=%.3f correction=0 plan_changed=0 previous_plan=%d current_plan=%d previous_sim_time=%.3f current_sim_time=%.3f previous_display=(%.3f,%.3f) current_display=(%.3f,%.3f) source=MassClientVisual"),
+        AgentId, DisplayDeltaCm, ExpectedDisplayDeltaCm, SimDeltaCm,
+        CollapsedSimSteps, SubmitIntervalMs, PreviousPlanRevision,
+        CurrentPlanRevision, PreviousSimServerTimeSeconds,
+        CurrentSimServerTimeSeconds, PreviousDisplayLocation.X,
+        PreviousDisplayLocation.Y, CurrentDisplayLocation.X,
+        CurrentDisplayLocation.Y);
+    }
+  }
+  if (bDiscontinuity && bPlanChanged)
+    ++RoundResetVisualJumpCount;
+  if (bDiscontinuity && bTestBoundaryReset)
+    ++TestBoundaryResetVisualJumpCount;
+}
+
+void ACrowdDemoReplicator::RecordVisualInstanceRebuild()
+{
+  ++VisualIsmRebuildCount;
+}
+
+void ACrowdDemoReplicator::RecordVisualProcessorPerformance(const float Milliseconds)
+{
+  if (Milliseconds >= 0.0f)
+  {
+    VisualProcessorMsSamples.Add(Milliseconds);
+  }
+}
+
 void ACrowdDemoReplicator::ResetClientMassEntityStates()
 {
   if (!HasAuthority() || bLocalVisualHostOnly)
@@ -178,6 +436,121 @@ void ACrowdDemoReplicator::UpsertClientMassEntityState(const FCrowdDemoEntitySta
 void ACrowdDemoReplicator::SetLocalVisualHostOnly(const bool bInLocalVisualHostOnly)
 {
   bLocalVisualHostOnly = bInLocalVisualHostOnly;
+}
+
+void ACrowdDemoReplicator::ApplyProjectileVisualEvents(
+  const TConstArrayView<FCrowdDemoProjectileVisualEvent> Events)
+{
+  TArray<FCrowdDemoProjectileVisualEvent> Sorted(Events);
+  Sorted.Sort([](const auto& A, const auto& B)
+  {
+    if (A.FixedStepIndex != B.FixedStepIndex) return A.FixedStepIndex < B.FixedStepIndex;
+    if (A.ProjectileId != B.ProjectileId) return A.ProjectileId < B.ProjectileId;
+    return static_cast<uint8>(A.Kind) < static_cast<uint8>(B.Kind);
+  });
+
+  for (const FCrowdDemoProjectileVisualEvent& Event : Sorted)
+  {
+    const FCrowdDemoProjectileVisualEventKey EventKey{
+      Event.ProjectileId, static_cast<uint8>(Event.Kind)};
+    if (SeenProjectileVisualEvents.Contains(EventKey))
+    {
+      continue;
+    }
+    SeenProjectileVisualEvents.Add(EventKey);
+    const int32 RoundId = static_cast<int32>((Event.ProjectileId >> 48) & 0xffffu);
+    FCrowdDemoProjectileVisualRoundCounts& Counts = ProjectileVisualRoundCounts.FindOrAdd(RoundId);
+    if (Event.Kind == ECrowdDemoProjectileVisualEventKind::Spawn)
+    {
+      FCrowdDemoProjectileVisualRuntime& Runtime = ActiveProjectileVisuals.FindOrAdd(Event.ProjectileId);
+      Runtime.Position = FVector(Event.Position);
+      Runtime.Velocity = FVector(Event.Velocity);
+      Runtime.ServerTimeSeconds = Event.ServerTimeSeconds;
+      Runtime.RadiusCm = Event.RadiusCm;
+      ++Counts.Spawn;
+    }
+    else if (Event.Kind == ECrowdDemoProjectileVisualEventKind::Impact)
+    {
+      ActiveProjectileVisuals.Remove(Event.ProjectileId);
+      ++Counts.Impact;
+      if (ProjectileImpactInstances)
+      {
+        const float Scale = FMath::Max(Event.RadiusCm * 2.0f / 100.0f, 0.01f) * 2.5f;
+        ProjectileImpactInstances->AddInstance(
+          FTransform(FRotator::ZeroRotator, FVector(Event.Position), FVector(Scale)), true);
+        ProjectileImpactExpireWorldSeconds.Add(
+          (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0) + 0.18);
+      }
+    }
+    else if (Event.Kind == ECrowdDemoProjectileVisualEventKind::Expire)
+    {
+      ActiveProjectileVisuals.Remove(Event.ProjectileId);
+      ++Counts.Expire;
+    }
+  }
+}
+
+bool ACrowdDemoReplicator::GetProjectileVisualEventCounts(
+  const int32 RoundId,
+  int32& OutSpawn,
+  int32& OutImpact,
+  int32& OutExpire,
+  int32& OutActive) const
+{
+  const FCrowdDemoProjectileVisualRoundCounts* Counts = ProjectileVisualRoundCounts.Find(RoundId);
+  OutSpawn = Counts ? Counts->Spawn : 0;
+  OutImpact = Counts ? Counts->Impact : 0;
+  OutExpire = Counts ? Counts->Expire : 0;
+  OutActive = 0;
+  for (const auto& Pair : ActiveProjectileVisuals)
+  {
+    if (static_cast<int32>((Pair.Key >> 48) & 0xffffu) == RoundId)
+    {
+      ++OutActive;
+    }
+  }
+  return Counts != nullptr;
+}
+
+void ACrowdDemoReplicator::UpdateProjectileVisuals()
+{
+  if (!ProjectileInstances || !ProjectileImpactInstances)
+  {
+    return;
+  }
+  const AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+  const float ServerSeconds = GameState
+    ? GameState->GetServerWorldTimeSeconds()
+    : (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f);
+  TArray<uint64> ProjectileIds;
+  ActiveProjectileVisuals.GetKeys(ProjectileIds);
+  ProjectileIds.Sort();
+  ProjectileInstances->ClearInstances();
+  for (const uint64 ProjectileId : ProjectileIds)
+  {
+    const FCrowdDemoProjectileVisualRuntime* Runtime = ActiveProjectileVisuals.Find(ProjectileId);
+    if (!Runtime)
+    {
+      continue;
+    }
+    const float Elapsed = FMath::Max(0.0f, ServerSeconds - Runtime->ServerTimeSeconds);
+    const FVector DisplayPosition = Runtime->Position + Runtime->Velocity * Elapsed;
+    const float Scale = FMath::Max(Runtime->RadiusCm * 2.0f / 100.0f, 0.01f);
+    ProjectileInstances->AddInstance(
+      FTransform(Runtime->Velocity.Rotation(), DisplayPosition, FVector(Scale)), true);
+  }
+  ProjectileInstances->MarkRenderStateDirty();
+
+  const double NowSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+  for (int32 Index = ProjectileImpactExpireWorldSeconds.Num() - 1; Index >= 0; --Index)
+  {
+    if (NowSeconds >= ProjectileImpactExpireWorldSeconds[Index])
+    {
+      ProjectileImpactInstances->RemoveInstance(Index);
+      ProjectileImpactExpireWorldSeconds.RemoveAt(Index);
+    }
+  }
+  ProjectileImpactInstances->MarkRenderStateDirty();
 }
 
 void ACrowdDemoReplicator::RefreshServerSummaryState()
@@ -226,12 +599,24 @@ FCrowdDemoEntityState& ACrowdDemoReplicator::FindOrAddEntityState(const int32 Id
 void ACrowdDemoReplicator::LogSummaryIfReady()
 {
   const UWorld* World = GetWorld();
-  if (!World || World->GetTimeSeconds() - StartedSeconds < DurationSeconds)
+  if (!World)
   {
     return;
   }
 
   const bool bServer = HasAuthority() && !bLocalVisualHostOnly;
+  if (bServer)
+  {
+    if (World->GetTimeSeconds() - StartedSeconds < DurationSeconds)
+    {
+      return;
+    }
+  }
+  else if (!bClientPerformanceWindowStarted
+    || World->GetTimeSeconds() - ClientPerformanceRoundStartWorldSeconds < DurationSeconds)
+  {
+    return;
+  }
   if ((bServer && bServerSummaryLogged) || (!bServer && bClientSummaryLogged))
   {
     return;
@@ -248,7 +633,7 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
   UE_LOG(
     LogTemp,
     Display,
-    TEXT("CrowdDemoSummary role=%s agents=%d visible_instances=%d server_frame_ms_p95=%.3f crowd_solver_ms_p95=%.3f replication_sample_age_ms_p95=%.3f display_to_sim_cm_p95=%.3f current_round_id=%d completed_round_count=%d correction_frame_applied_count=%d sim_position_error_cm_p95=%.3f source=MassClientBubble"),
+    TEXT("CrowdDemoSummary role=%s agents=%d visible_instances=%d server_frame_ms_p95=%.3f snapshot_build_ms_p95=%.3f replication_sample_age_ms_p95=%.3f display_to_sim_cm_p95=%.3f current_round_id=%d completed_round_count=%d correction_frame_applied_count=%d sim_position_error_cm_p95=%.3f source=MassClientBubble"),
     SummaryRole,
     Metrics.Agents,
     Metrics.VisibleInstances,
@@ -260,6 +645,42 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
     Metrics.SimCompletedRoundCount,
     Metrics.CorrectionFrameAppliedCount,
     Metrics.SimPositionErrorCmP95);
+  if (!bServer)
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoVisualPerformance role=client client_frame_ms_p95=%.3f client_frame_ms_max=%.3f visual_processor_ms_p95=%.3f visual_processor_ms_max=%.3f submit_interval_ms_p95=%.3f submit_interval_ms_max=%.3f sim_delta_cm_p95=%.3f sim_delta_cm_max=%.3f display_delta_cm_p95=%.3f display_delta_cm_max=%.3f collapsed_steps_p95=%.3f collapsed_steps_max=%d catchup_submit_count=%d catchup_discontinuity_count=%d non_correction_discontinuity_count=%d round_reset_jump_count=%d test_boundary_reset_jump_count=%d ism_rebuild_count=%d source=MassClientVisual"),
+      Metrics.ClientFrameMsP95, Metrics.ClientFrameMsMax,
+      Metrics.VisualProcessorMsP95, Metrics.VisualProcessorMsMax,
+      Metrics.VisualSubmitIntervalMsP95, Metrics.VisualSubmitIntervalMsMax,
+      Metrics.VisualSimDeltaCmP95, Metrics.VisualSimDeltaCmMax,
+      Metrics.VisualDisplayDeltaCmP95, Metrics.VisualDisplayDeltaCmMax,
+      Metrics.VisualCollapsedSimStepsP95, Metrics.VisualCollapsedSimStepsMax,
+      Metrics.VisualCatchupSubmitCount, Metrics.VisualCatchupDiscontinuityCount,
+      Metrics.NonCorrectionVisualDiscontinuityCount,
+      Metrics.RoundResetVisualJumpCount, Metrics.TestBoundaryResetVisualJumpCount,
+      Metrics.VisualIsmRebuildCount);
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoClientFramePhases role=client round_id=%d game_ms_p95=%.3f game_ms_max=%.3f render_ms_p95=%.3f render_ms_max=%.3f gpu_ms_p95=%.3f gpu_ms_max=%.3f game_wait_ms_p95=%.3f rhi_ms_p95=%.3f swap_ms_p95=%.3f game_bound_hitches=%d render_bound_hitches=%d gpu_bound_hitches=%d unattributed_hitches=%d shader_frames=%d shader_jobs_max=%d async_loading_frames=%d visual_asset_compiling_frames=%d pso_precache_frames=%d warmup_seconds=%.3f warmup_frame_ms_p95=%.3f warmup_frame_ms_max=%.3f warmup_shader_frames=%d warmup_shader_jobs_max=%d warmup_async_loading_frames=%d warmup_visual_asset_compiling_frames=%d warmup_pso_precache_frames=%d source=MassClientBubble"),
+      ClientPerformanceRoundId,
+      Metrics.ClientGameThreadMsP95, Metrics.ClientGameThreadMsMax,
+      Metrics.ClientRenderThreadMsP95, Metrics.ClientRenderThreadMsMax,
+      Metrics.ClientGpuFrameMsP95, Metrics.ClientGpuFrameMsMax,
+      Metrics.ClientGameThreadWaitMsP95, Metrics.ClientRhiThreadMsP95,
+      Metrics.ClientSwapBufferMsP95,
+      Metrics.ClientGameBoundHitchCount, Metrics.ClientRenderBoundHitchCount,
+      Metrics.ClientGpuBoundHitchCount, Metrics.ClientUnattributedHitchCount,
+      Metrics.ClientShaderCompilingFrameCount, Metrics.ClientShaderJobsMax,
+      Metrics.ClientAsyncLoadingFrameCount,
+      Metrics.ClientVisualAssetCompilingFrameCount,
+      Metrics.ClientVisualPsoPrecacheFrameCount,
+      Metrics.ClientWarmupSeconds, Metrics.ClientWarmupFrameMsP95,
+      Metrics.ClientWarmupFrameMsMax,
+      Metrics.ClientWarmupShaderCompilingFrameCount,
+      Metrics.ClientWarmupShaderJobsMax,
+      Metrics.ClientWarmupAsyncLoadingFrameCount,
+      Metrics.ClientWarmupVisualAssetCompilingFrameCount,
+      Metrics.ClientWarmupVisualPsoPrecacheFrameCount);
+  }
 
   if (Metrics.FlowFieldRevision > 0)
   {
@@ -284,38 +705,6 @@ void ACrowdDemoReplicator::LogSummaryIfReady()
       Metrics.SimPositionErrorCmP95,
       Metrics.CorrectionFrameAppliedCount);
   }
-  if (Metrics.PbdSolverMsP95 >= 0.0f)
-  {
-    UE_LOG(
-      LogTemp,
-      Display,
-      TEXT("CrowdDemoSf2Summary role=%s agents=%d visible_instances=%d initial_overlap_pair_count=%d overlap_pair_count_p50=%.3f overlap_pair_count_p95=%.3f overlap_pair_count_max=%d severe_overlap_pair_count_p50=%.3f severe_overlap_pair_count_p95=%.3f severe_overlap_pair_count_max=%d soft_separation_applied_agent_count=%d pbd_corrected_agent_count=%d pbd_corrected_pair_count=%d pbd_max_pair_correction_cm=%.3f pbd_max_agent_total_correction_cm=%.3f pbd_max_obstacle_reproject_delta_cm=%.3f pbd_max_final_safety_delta_cm=%.3f pbd_solver_ms_p95=%.3f flow_goal_reached_count=%d flow_corridor_exit_count=%d corridor_deadlock_agent_count=%d server_obstacle_penetration_count=%d client_sim_obstacle_penetration_count=%d sim_position_error_cm_p95=%.3f correction_frame_applied_count=%d source=MassPipeline"),
-      SummaryRole,
-      Metrics.Agents,
-      Metrics.VisibleInstances,
-      Metrics.InitialOverlapPairCount,
-      Metrics.OverlapPairCountP50,
-      Metrics.OverlapPairCountP95,
-      Metrics.OverlapPairCountMax,
-      Metrics.SevereOverlapPairCountP50,
-      Metrics.SevereOverlapPairCountP95,
-      Metrics.SevereOverlapPairCountMax,
-      Metrics.SoftSeparationAppliedAgentCount,
-      Metrics.PbdCorrectedAgentCount,
-      Metrics.PbdCorrectedPairCount,
-      Metrics.PbdMaxPairCorrectionCm,
-      Metrics.PbdMaxAgentTotalCorrectionCm,
-      Metrics.PbdMaxObstacleReprojectDeltaCm,
-      Metrics.PbdMaxFinalSafetyDeltaCm,
-      Metrics.PbdSolverMsP95,
-      Metrics.FlowGoalReachedCount,
-      Metrics.FlowCorridorExitCount,
-      Metrics.CorridorDeadlockAgentCount,
-      Metrics.ServerObstaclePenetrationCount,
-      Metrics.ClientSimObstaclePenetrationCount,
-      Metrics.SimPositionErrorCmP95,
-      Metrics.CorrectionFrameAppliedCount);
-  }
 }
 
 FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
@@ -325,6 +714,56 @@ FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
   Metrics.VisibleInstances = GetNetMode() != NM_DedicatedServer ? GetCrowdVisualInstanceCount() : 0;
   Metrics.ServerFrameMsP95 = ComputeP95(ServerFrameMsSamples);
   Metrics.CrowdSolverMsP95 = ComputeP95(SolverMsSamples);
+  Metrics.SnapshotBuildMsP95 = Metrics.CrowdSolverMsP95;
+  Metrics.ClientFrameMsP95 = ComputeP95(ClientFrameMsSamples);
+  Metrics.ClientFrameMsMax = ComputeMax(ClientFrameMsSamples);
+  Metrics.ClientGameThreadMsP95 = ComputeP95(ClientGameThreadMsSamples);
+  Metrics.ClientGameThreadMsMax = ComputeMax(ClientGameThreadMsSamples);
+  Metrics.ClientRenderThreadMsP95 = ComputeP95(ClientRenderThreadMsSamples);
+  Metrics.ClientRenderThreadMsMax = ComputeMax(ClientRenderThreadMsSamples);
+  Metrics.ClientGpuFrameMsP95 = ComputeP95(ClientGpuFrameMsSamples);
+  Metrics.ClientGpuFrameMsMax = ComputeMax(ClientGpuFrameMsSamples);
+  Metrics.ClientGameThreadWaitMsP95 = ComputeP95(ClientGameThreadWaitMsSamples);
+  Metrics.ClientRhiThreadMsP95 = ComputeP95(ClientRhiThreadMsSamples);
+  Metrics.ClientSwapBufferMsP95 = ComputeP95(ClientSwapBufferMsSamples);
+  Metrics.ClientGameBoundHitchCount = ClientGameBoundHitchCount;
+  Metrics.ClientRenderBoundHitchCount = ClientRenderBoundHitchCount;
+  Metrics.ClientGpuBoundHitchCount = ClientGpuBoundHitchCount;
+  Metrics.ClientUnattributedHitchCount = ClientUnattributedHitchCount;
+  Metrics.ClientShaderCompilingFrameCount = ClientShaderCompilingFrameCount;
+  Metrics.ClientShaderJobsMax = ClientShaderJobsMax;
+  Metrics.ClientAsyncLoadingFrameCount = ClientAsyncLoadingFrameCount;
+  Metrics.ClientVisualAssetCompilingFrameCount = ClientVisualAssetCompilingFrameCount;
+  Metrics.ClientVisualPsoPrecacheFrameCount = ClientVisualPsoPrecacheFrameCount;
+  Metrics.ClientWarmupSeconds = bClientPerformanceWindowStarted
+    ? static_cast<float>(ClientPerformanceRoundStartWorldSeconds - StartedSeconds)
+    : 0.0f;
+  Metrics.ClientWarmupFrameMsP95 = ComputeP95(ClientWarmupFrameMsSamples);
+  Metrics.ClientWarmupFrameMsMax = ComputeMax(ClientWarmupFrameMsSamples);
+  Metrics.ClientWarmupShaderCompilingFrameCount = ClientWarmupShaderCompilingFrameCount;
+  Metrics.ClientWarmupShaderJobsMax = ClientWarmupShaderJobsMax;
+  Metrics.ClientWarmupAsyncLoadingFrameCount = ClientWarmupAsyncLoadingFrameCount;
+  Metrics.ClientWarmupVisualAssetCompilingFrameCount =
+    ClientWarmupVisualAssetCompilingFrameCount;
+  Metrics.ClientWarmupVisualPsoPrecacheFrameCount =
+    ClientWarmupVisualPsoPrecacheFrameCount;
+  Metrics.VisualProcessorMsP95 = ComputeP95(VisualProcessorMsSamples);
+  Metrics.VisualProcessorMsMax = ComputeMax(VisualProcessorMsSamples);
+  Metrics.VisualSubmitIntervalMsP95 = ComputeP95(VisualSubmitIntervalMsSamples);
+  Metrics.VisualSubmitIntervalMsMax = ComputeMax(VisualSubmitIntervalMsSamples);
+  Metrics.VisualSimDeltaCmP95 = ComputeP95(VisualSimDeltaCmSamples);
+  Metrics.VisualSimDeltaCmMax = ComputeMax(VisualSimDeltaCmSamples);
+  Metrics.VisualDisplayDeltaCmP95 = ComputeP95(VisualDisplayDeltaCmSamples);
+  Metrics.VisualDisplayDeltaCmMax = ComputeMax(VisualDisplayDeltaCmSamples);
+  Metrics.VisualCollapsedSimStepsP95 = ComputeP95(VisualCollapsedSimStepSamples);
+  Metrics.VisualCollapsedSimStepsMax = FMath::Max(
+    0, FMath::RoundToInt(ComputeMax(VisualCollapsedSimStepSamples)));
+  Metrics.VisualCatchupSubmitCount = VisualCatchupSubmitCount;
+  Metrics.VisualCatchupDiscontinuityCount = VisualCatchupDiscontinuityCount;
+  Metrics.NonCorrectionVisualDiscontinuityCount = NonCorrectionVisualDiscontinuityCount;
+  Metrics.RoundResetVisualJumpCount = RoundResetVisualJumpCount;
+  Metrics.TestBoundaryResetVisualJumpCount = TestBoundaryResetVisualJumpCount;
+  Metrics.VisualIsmRebuildCount = VisualIsmRebuildCount;
   Metrics.ReplicationSampleAgeMsP95 = ComputeP95(ReplicationSampleAgeMsSamples);
   Metrics.DisplayToAuthoritativeCmP95 = ComputeP95(DisplayToAuthoritativeCmSamples);
   Metrics.RoundVisualCorrectionOffsetCmP95 = ComputeP95(RoundVisualCorrectionOffsetCmSamples);
@@ -380,20 +819,12 @@ FCrowdDemoSummaryMetrics ACrowdDemoReplicator::BuildSummaryMetrics() const
       Metrics.FlowTurnExitCount = CompareMetrics.FlowTurnExitCount;
       Metrics.ServerObstaclePenetrationCount = CompareMetrics.ServerObstaclePenetrationCount;
       Metrics.ClientSimObstaclePenetrationCount = CompareMetrics.ClientSimObstaclePenetrationCount;
-      Metrics.SoftSeparationAppliedAgentCount = CompareMetrics.SoftSeparationAppliedAgentCount;
-      Metrics.PbdCorrectedAgentCount = CompareMetrics.PbdCorrectedAgentCount;
-      Metrics.PbdCorrectedPairCount = CompareMetrics.PbdCorrectedPairCount;
-      Metrics.PbdMaxPairCorrectionCm = CompareMetrics.PbdMaxPairCorrectionCm;
-      Metrics.PbdMaxAgentTotalCorrectionCm = CompareMetrics.PbdMaxAgentTotalCorrectionCm;
-      Metrics.PbdMaxObstacleReprojectDeltaCm = CompareMetrics.PbdMaxObstacleReprojectDeltaCm;
-      Metrics.PbdMaxFinalSafetyDeltaCm = CompareMetrics.PbdMaxFinalSafetyDeltaCm;
-      Metrics.PbdSolverMsP95 = CompareMetrics.PbdSolverMsP95;
-      Metrics.TrafficMetrics = CompareMetrics.TrafficMetrics;
+      Metrics.SharedFlowMetrics = CompareMetrics.SharedFlowMetrics;
       Metrics.CorridorDeadlockAgentCount = CompareMetrics.CorridorDeadlockAgentCount;
-      const FCrowdDemoCorrectionFrameMetrics& CorrectionMetrics = It->GetLastCorrectionFrameMetrics();
+      const FCrowdDemoRoundCheckpointFrameMetrics& CorrectionMetrics = It->GetLastCorrectionFrameMetrics();
       Metrics.CorrectionFrameRevision = CorrectionMetrics.CorrectionFrameRevision;
       Metrics.CorrectionFrameAppliedCount = CorrectionMetrics.CorrectionFrameAppliedCount;
-      Metrics.CorrectionFrameHeaderReceivedCount = CorrectionMetrics.CorrectionFrameHeaderReceivedCount;
+      Metrics.CorrectionFrameHeaderReceivedCount = CorrectionMetrics.RoundCheckpointHeaderReceivedCount;
       Metrics.CorrectionFrameChunkReceivedCount = CorrectionMetrics.CorrectionFrameChunkReceivedCount;
       Metrics.LatestChunkRevisionSeen = CorrectionMetrics.LatestChunkRevisionSeen;
       Metrics.CorrectionChunkReceivedCount = CorrectionMetrics.CorrectionChunkReceivedCount;
@@ -457,11 +888,21 @@ float ACrowdDemoReplicator::ComputeP95(TArray<float> Samples)
   return Samples[Index];
 }
 
+float ACrowdDemoReplicator::ComputeMax(const TConstArrayView<float> Samples)
+{
+  float MaxValue = -1.0f;
+  for (const float Value : Samples)
+  {
+    MaxValue = FMath::Max(MaxValue, Value);
+  }
+  return MaxValue;
+}
+
 int32 ACrowdDemoReplicator::ResolveEntityCount()
 {
   int32 Count = 500;
   FParse::Value(FCommandLine::Get(), TEXT("CrowdDemoEntityCount="), Count);
-  return FMath::Clamp(Count, 1, 2000);
+  return FMath::Clamp(Count, 1, 10000);
 }
 
 float ACrowdDemoReplicator::ResolveDurationSeconds()

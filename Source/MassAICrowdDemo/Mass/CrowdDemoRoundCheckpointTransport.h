@@ -6,14 +6,14 @@
 class MASSAICROWDDEMO_API FCrowdDemoRoundCheckpointTransport
 {
 public:
-  static void BuildChunks(
-    const FCrowdDemoCorrectionFrame& Frame,
+  static bool BuildChunks(
+    const FCrowdDemoRoundCheckpointFrame& Frame,
     int32 ChunkSize,
-    FCrowdDemoCorrectionFrameHeader& OutHeader,
-    TArray<FCrowdDemoCorrectionFrameChunk>& OutChunks);
+    FCrowdDemoRoundCheckpointHeader& OutHeader,
+    TArray<FCrowdDemoRoundCheckpointChunk>& OutChunks);
 
   static bool TryAssemble(
-    const FCrowdDemoCorrectionFrameHeader& Header,
-    TConstArrayView<FCrowdDemoCorrectionFrameChunk> Chunks,
+    const FCrowdDemoRoundCheckpointHeader& Header,
+    TConstArrayView<FCrowdDemoRoundCheckpointChunk> Chunks,
     TArray<FCrowdDemoRoundAgentState>& OutAgents);
 };

@@ -2,4 +2,7 @@
 
 #include "Modules/ModuleManager.h"
 
-IMPLEMENT_PRIMARY_GAME_MODULE(FDefaultGameModuleImpl, MassAICrowdDemo, "MassAICrowdDemo");
+IMPLEMENT_PRIMARY_GAME_MODULE(
+  FDefaultGameModuleImpl,
+  MassAICrowdDemo,
+  "MassAICrowdDemo");

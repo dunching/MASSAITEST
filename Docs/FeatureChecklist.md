@@ -1,635 +1,381 @@
-# MassAI Crowd Demo Feature Checklist
-
-## 当前方向：统一Soft-Pair Pressure（8368已修复，Small在step 155停止）
-
-- [x] [COMPUTED][HIGH] 8368 Agent 4/12完整20实体fixture已固化；环境容量转移与量化感知分配使endpoint/swept达到`94.493cm`，四类安全violation为0。
-- [x] [COMPUTED][HIGH] 独立SoftPressure rollback已接入正式correction链；8371连续10次hit、10个replayed step、miss/mismatch=`0/0`，误差p95=`0cm`。
-- [x] [COMPUTED][HIGH] candidate/applied hash v2覆盖完整输入合同与MovementFinalize实际RoundSim状态；8371双端hash=`2203959078/1256482314`，fixture hash=`4227770936`，全部匹配。
-- [x] [COMPUTED][HIGH] Particle 17/17、完整`CrowdDemo.SF` 42/42、Development与DebugGame Editor通过。
-- [ ] [COMPUTED][HIGH] Small在fixed-step 155出现candidate Hard/Swept=`2/2`并停止；首fixture Agent 5/13 endpoint/swept=`93.021cm`，因此20实体能力门未通过。
-- [ ] [COMPUTED][HIGH] 因Small安全门失败，连续两轮、独立Round 1、录像、人工审片和SF3/SF4删除均未执行。
-
-- [x] [COMPUTED][HIGH] 参考视频和自然压力传播目标已经登记，且没有把视频效果反推为具体算法。
-- [x] [INFERRED][HIGH] 当前数据合同已明确为PhysicalRadius、HardSafetyGap、SoftMargin和Mobility/InverseMass。
-- [x] [INFERRED][HIGH] 当前语义明确取消Transit Source、专用穿行状态、Formation Recovery和Shadow/Baseline双路线。
-- [x] [INFERRED][HIGH] 概念设计已明确采用少量通用局部规则产生群体现象：共享Flow只提供DesiredVelocity，局部solver统一处理质量响应、粒子/环境Soft压力和Hard安全；靠墙、窄口及穿群只作为fixture，不作为生产分支。
-- [x] [INFERRED][HIGH] 环境距离合同已明确为`WallHardDistance=PhysicalRadius+HardSafetyGap`和`WallSoftDistance=WallHardDistance+SoftMargin`；静态环境Mobility为0，法向禁止、切向保留。
-- [x] [INFERRED][HIGH] 盒体移除后形成新平衡与开放空间不保证回位的边界已经明确。
-- [x] [COMPUTED][HIGH] 粒子pair Particle Constraint Kernel已经实现，P0为30Hz、42cm半径、10cm HardGap、每侧17cm SoftMargin、Mobility=1、主求解8轮、安全闭环8轮、Soft response=`8/s`、soft/hard cap=`8/24cm`、最终1cm/1cm/s量化。
-- [x] [COMPUTED][HIGH] Soft按显式fixed-step response施加有限比例压力，允许长期非零且不影响valid；量化后Hard/Swept/Obstacle/Bounds固定闭环不再处理Soft。
-- [ ] [COMPUTED][HIGH] SoftMargin尚未作用于Obstacle和FlowBounds；当前环境膨胀仅为`PhysicalRadius+HardSafetyGap`，距墙52–69cm的P0实体没有环境Soft压力。
-- [ ] [COMPUTED][HIGH] 正式实体Mobility仍全部为1；1:3质量、零Mobility环境及异构质量压力传播尚未通过真实RoundSim能力门。
-- [ ] [COMPUTED][HIGH] Hard pair与环境仍是顺序投影，轴对齐Obstacle只选择SlideX/SlideY；一般二维切向自由度和多pair/环境共同可行闭环尚未实现。
-- [ ] [INFERRED][HIGH] 单侧垂直墙、单侧斜墙、双侧墙、窄口和8371完整fixture尚未作为统一粒子—环境合同的失败优先自动化完成。
-- [x] [COMPUTED][HIGH] 17项Particle自动化通过，明确包含`Box100InsertRemove`、`OpenInsertRemove`、`RingEntryRollout`、`RingExitRollout`、8368完整`ObstaclePairConflict`、`PostQuantizationSafety`、`InvalidCandidateDoesNotMasqueradeAsApplied`、`HashContract`、`CorrectionReplay`、`SettlingTracker`和95cm Stress Gate。
-- [x] [COMPUTED][HIGH] candidate/applied hash、invalid/fallback计数、首失败fixture、连续settling窗口及particle correction rollback已经接入；实际能力指标描述MovementFinalize提交状态，失败candidate只进入诊断。
-- [x] [COMPUTED][HIGH] invalid候选会立即发布失败RoundResult并停止本轮；全体Start fallback仅为紧急安全输出，不再继续跑完整30秒。
-- [x] [COMPUTED][HIGH] `first_influenced_iteration_max`已替换把solver iteration误称为空间传播层的旧字段；当前不声称已经实现BFS空间传播层。
-- [x] [COMPUTED][HIGH] `SimRoundSoftPressure=1`双端生产链与Flow preferred接线正确；Development与完整`CrowdDemo.SF` 42/42通过。
-- [x] [COMPUTED][HIGH] Small/Medium/Cohort三张真实地图已生成，实体数为20/100/500，且均包含约定的完整Lighting与预览组件。
-- [x] [COMPUTED][HIGH] 正式基础阵型改为128cm附近；95cm初始间距只作为高压Stress Gate，不作为第一能力门。
-- [x] [COMPUTED][HIGH] 8368历史失败已由完整20实体fixture复现并关闭；Agent 4/12最终endpoint/swept=`94.493cm`。
-- [x] [COMPUTED][HIGH] 8371实际应用fallback状态Hard/Swept/Obstacle/Bounds=`0/0/0/0`；candidate/applied/fixture hash=`2203959078/1256482314/4227770936`且双端一致，checkpoint与correction interval p95=`0cm`、revision gap=`0`、agents=visible=`20/20`。
-- [x] [COMPUTED][HIGH] SoftPressure correction rollback同步门通过：hit/replayed=`10/10`、miss/mismatch=`0/0`。
-- [ ] [COMPUTED][HIGH] 新首失败pair Agent 5/13在安全闭环后只剩`93.021cm`；沿分离法线的环境容量不足，Small安全门仍失败。
-- [ ] [COMPUTED][HIGH] 当前Source仍包含Elastic Transit、Elastic Shadow、Joint Velocity、Priority ORCA和SF4 Position/Holding等重叠路径。
-- [ ] [INFERRED][HIGH] 旧兼容路径、metrics、rollback字段、JSON、CLI、自动化和历史场景尚未完成依赖清点与物理删除。
-- [x] [COMPUTED][HIGH] DebugGame Editor已通过。
-- [ ] [COMPUTED][HIGH] 因Small门失败，100/500、正式两轮、独立Round 1、录像和人工审片未执行；不允许用纯fixture替代真实RoundSim能力证据。
-
-[COMPUTED][HIGH] 下方SF4、Priority ORCA、Joint、Capacity和Elastic项目只保存历史实现与验证事实；其中旧的“当前方向”“下一步”和兼容要求不覆盖本节。
-
-## SF4 Generic Priority ORCA / Yieldable Commit（2026-07-13）
-
-- [x] [COMPUTED][HIGH] PortalPriority 与 LocalPriority 按字典序组合；SF4 Commit/Normal/Yielding 映射已接入 ORCA prepared agents，SF3 LocalPriority 固定为 Normal。
-- [x] [COMPUTED][HIGH] 相同优先级 50%/50%，高低优先级 25%/75%；双方 constraint 均保留，历史 route 0%/100% policy 不再进入生产 BuildPair。
-- [x] [COMPUTED][HIGH] Stable-only 与 Reserve-only blocker fixture 均 Grant 并写入独立 yieldable mask；Target/Flow/Obstacle、Active/selected Commit 和 joint residual 仍为 hard gate。
-- [x] [COMPUTED][HIGH] Priority hash、summary 与物理位移指标支持 rollback，并在 SF4 checkpoint 前执行双端比较。
-- [x] [COMPUTED][HIGH] Development、Priority 定向测试、`CrowdDemo.SF4.Positioning` 3/3、完整 `CrowdDemo.SF` 33/33 通过；`git diff --check` 通过。
-- [x] [COMPUTED][HIGH] Static 单轮真实产生 asymmetric pairs=`19247`，25%/75% 两侧计数相等，responsibility sum violation=`0`，Priority hash=`617370832` 且双端一致。
-- [x] [COMPUTED][HIGH] corridor=`20`、deadlock=`0`、Target crossing=`0`、双端 penetration=`0`、client agents=visible=`20/20`、revision gap=`0`、checkpoint/interval p95=`0.059/0.064cm`。
-- [ ] [COMPUTED][HIGH] ORCA safety hard gate 未通过：`stop_violates=427`；最终 PBD/obstacle penetration 为0不能替代 ORCA constraint safety 验收。
-- [ ] [COMPUTED][HIGH] 物理能力门未通过：状态及物理满足均为`19/20`，唯一未完成 Agent 6 在 ORCA 后仍有78cm/s速度、final却为0。
-- [ ] [COMPUTED][HIGH] live yieldable Stable/Reserve 冲突未触发，计数=`0/0`；当前只能声明 fixture 语义通过，不能声明真实场景已验证该冲突交接。
-- [ ] [COMPUTED][HIGH] DebugGame、正式两轮、录像与 contact sheet 未执行；准确原因是 ORCA safety 和物理20/20双门失败。
-- [ ] [COMPUTED][HIGH] Agent 6 的 handoff/后处理未修，ORCA 参数、Commit容差、地图和网络设置均未修改。
-
-## SF4未完成实体最终边界诊断（2026-07-13）
-
-- [x] [COMPUTED][HIGH] 只在RoundResult最终boundary捕获未完成实体；不重求ORCA、不写回Mass fragment。
-- [x] [COMPUTED][HIGH] 输出AgentId、状态、目标距离、preferred/ORCA/final二维速度、六状态约束来源、Commit拒绝位掩码和no-progress steps。
-- [x] [COMPUTED][HIGH] 输入反序hash、厘米量化、完成态排除、per-agent拒绝原因和rollback恢复自动化通过。
-- [x] [COMPUTED][HIGH] Development、Positioning 3/3、完整`CrowdDemo.SF`33/33通过。
-- [x] [COMPUTED][HIGH] 正式fixture恰为8个Agent，server/client hash=`1989554829`，RoundResult总hash match=1。
-- [x] [COMPUTED][HIGH] 归因分组为CommitGate blocker 4、ORCA压速3、Pursuit handoff/guidance dead zone 1。
-- [ ] [INFERRED][HIGH] 尚未证明4个CommitGate blocker可安全并发；不得仅凭聚合数量放宽Admission。
-- [ ] [COMPUTED][HIGH] 本轮未修改Admission、ORCA优先级、handoff或容差，未运行DebugGame、录像或更大规模。
-
-## Joint Position/Holding生产接入（2026-07-13）
-
-- [x] [COMPUTED][HIGH] 联合求解结果在一个fixed-step boundary原子替换完整Position/Holding prepared SoA；无效结果保留上一份，不部分发布。
-- [x] [COMPUTED][HIGH] rollback覆盖完整双assignment、联合结果、Commit residual结果和输入hash；自动化验证correction replay恢复一致。
-- [x] [COMPUTED][HIGH] Commit Gate逐候选加入未来Stable blocker并检查剩余联合最大基数；同一boundary后续候选可见此前已接受Grant。
-- [x] [COMPUTED][HIGH] Development、联合规划1/1、Positioning 3/3、完整`CrowdDemo.SF`33/33通过。
-- [x] [COMPUTED][HIGH] Static Round 1正式assignment=20/20、unmatched=0、Reacquire=0、重复Holding/Position=0；双端joint/residual hash一致。
-- [x] [COMPUTED][HIGH] corridor=20、deadlock=0、Target exclusion crossing=0、双端penetration=0、revision gap=0、checkpoint/interval p95最大=0.047/0.066cm、agents=visible=20、ghost owner=0、坏日志=0。
-- [ ] [COMPUTED][HIGH] 最终StableOccupied+ReserveHold仅9/20；状态末态为Pursuit/Holding/Commit/Stable/Reserve/Reacquire=`1/6/1/3/9/0`，SF4能力门未通过。
-- [ ] [COMPUTED][HIGH] DebugGame、正式两轮、录像和人工审片未运行；按停止门不得在本轮顺手修改ORCA或Commit行为。
-
-## Hall Geometry与Joint Planner（2026-07-13）
-
-- [x] [COMPUTED][HIGH] 正式量化segment-circle fixture覆盖安全、相交、相切、两端点、self、duplicate、stale、反序hash及正式分类一致性。
-- [x] [COMPUTED][HIGH] Agent 5/P2834最佳H2150、blocker Agent 6/P2835、required=94cm、actual=58.078cm、margin=-35.922cm；150个Holding均无非负worst-margin。
-- [x] [COMPUTED][HIGH] OwnerRelease Stable/Reserve/Commit=`18/18/18`；Physical Stable/Reserve removal=`20/18`；完整Hall deficiency=2。
-- [x] [COMPUTED][HIGH] 分支B Joint Planner纯fixture达到20/20，hard locked=15、reused=18、Holding/Position重复=0，Agent 5改配H2843/P2886。
-- [x] [COMPUTED][HIGH] Commit residual纯fixture：5个候选全部remaining/residual=4/4，双端hash一致。
-- [x] [COMPUTED][HIGH] Development与完整`CrowdDemo.SF`33/33通过；只读Static保持corridor=20、deadlock=0、双端penetration=0、checkpoint/interval p95=0.054/0.064cm、agents=visible=20、坏日志=0。
-- [ ] [COMPUTED][HIGH] Joint Planner和Commit residual尚未接入生产；正式能力仍为14/20，不能标记SF4完成。
-- [ ] [COMPUTED][HIGH] DebugGame、生产修复后Static、正式两轮、录像和人工审片未运行；停止原因是分支B本轮只允许纯fixture。
-
-## Holding Hall-deficiency 诊断（2026-07-13）
-
-- [x] [COMPUTED][HIGH] 精确最小Hall集合、完整邻接Holding、逐边拒绝原因和稳定hash纯kernel已实现；输入反序与Stable/Reserve/Commit释放反事实测试通过。
-- [x] [COMPUTED][HIGH] 诊断只在RoundResult最终boundary运行，completed-round fixture独立快照并落盘JSON；不写回生产assignment或Steering状态。
-- [x] [COMPUTED][HIGH] Development、HoldingHall 1/1、Positioning 3/3、完整SF 31/31通过。
-- [x] [COMPUTED][HIGH] Static Round 1安全事实：corridor=20、deadlock=0、双端penetration=0、hash match=1、checkpoint/interval p95=0.054/0.065cm、agents=visible=20，未发现Fatal/Assertion/Ensure/LogWindows Error或独立VIOLATION日志。
-- [x] [COMPUTED][HIGH] 最小证书为Agent 5、Position 2834、available Holding=0、deficiency=1、hash=4262261310；释放Stable/Reserve/Commit得到15/18/18，均未恢复20。
-- [ ] [COMPUTED][HIGH] 生产修复未授权且未实施；当前仅能确定固定Position compatibility为空，尚未证明应修改过滤规则还是进行Position+Holding联合设计。
-
-## SF4 Steering-first Holding/Commit纯内核（2026-07-12）
-
-- [x] [COMPUTED][HIGH] 新增Pursuit/Holding/Commit/StableOccupied/ReserveHold/Reacquire纯状态合同，未改Mass fragment。
-- [x] [COMPUTED][HIGH] Holding candidates来自真实Small Flow raster、clearance、Target revision和Position candidates；数量不少于20。
-- [x] [COMPUTED][HIGH] Holding候选free/reachable/clearance、Target exclusion、Position安全圆和pair spacing门通过。
-- [x] [COMPUTED][HIGH] HoldingId、candidate顺序和hash对Position输入反序稳定。
-- [x] [COMPUTED][HIGH] 20个Position均存在合法Holding→Position compatibility，20个Agent获得唯一Holding owner。
-- [x] [COMPUTED][HIGH] compatibility拒绝Target crossing、障碍/不可达和Stable/Reserve blocker。
-- [x] [COMPUTED][HIGH] existing assignment重复调用20/20复用；Agent/Holding/compatibility倒序不改变assignment hash。
-- [x] [COMPUTED][HIGH] Commit短segment两两无冲突；未ready Waiting未来路径不占资源。
-- [x] [COMPUTED][HIGH] WaitEpoch稳定优先，输入倒序不改变Commit decision hash。
-- [x] [COMPUTED][HIGH] Holding与Commit owner removal释放ownership且无ghost；Position失效和Target revision变化进入Reacquire。
-- [x] [COMPUTED][HIGH] Holding guidance不继续指向goal Flow、到位停速；Commit只指向Assigned Position并限制MaxSpeed。
-- [x] [COMPUTED][HIGH] Development、3项SF4 Positioning测试、独立Holding/Commit测试和diff门通过。
-- [ ] [COMPUTED][HIGH] Mass processor integration、prepared SoA、rollback和双端hash未实现。
-- [ ] [COMPUTED][HIGH] Static 20/20未验证；当前正式旧pipeline仍为1/20。
-- [ ] [COMPUTED][HIGH] 旧Phase Reservation尚未删除或禁用。
-
-## Steering-first Holding/Commit架构修订（2026-07-12，文档阶段）
-
-- [x] [COMPUTED][HIGH] 最终目标重新确认为随机/非规则地形中的“共享Navigation/Flow＋连续Steering/ORCA＋最小Position容量调度”，而不是人工道路网络或逐实体完整路径规划。
-- [x] [COMPUTED][HIGH] 保留边界：Shared Flow、Candidate/Assignment、Deterministic ORCA、Obstacle Constraint、Hard PBD、prepared SoA、fixed-step rollback、双端hash和Client Visual只读消费。
-- [x] [COMPUTED][HIGH] 停止扩展边界：Polar Approach、current/requested polyline reservation、Wait-For生产调度和更多Route-Aware ORCA责任特例。
-- [x] [COMPUTED][HIGH] Portal已重新定义为证据门控的可选硬瓶颈增强；普通随机障碍和同向追逐不要求人工Opened/Closed通路。
-- [x] [INFERRED][HIGH] 目标状态机修订为`Pursuit → Holding → Commit → StableOccupied/ReserveHold → Reacquire`，Waiting必须有明确Holding Position。
-- [x] [INFERRED][HIGH] UE官方MassNavMesh/ZoneGraph/MassCrowd只作为MoveTarget、ShortPath、Waiting Slot和Acquire/Release参考，不直接替换双端30Hz正式pipeline。
-- [ ] [COMPUTED][HIGH] Holding Candidate/Assignment纯kernel尚未实现。
-- [ ] [COMPUTED][HIGH] Commit Gate纯kernel、稳定排序和冲突集合尚未实现。
-- [ ] [COMPUTED][HIGH] Holding/Commit prepared SoA、fragment、rollback和双端hash尚未实现。
-- [ ] [COMPUTED][HIGH] Static Small `StableOccupied+ReserveHold=20/20`尚未通过；当前代码能力仍为`1/20`。
-- [ ] [COMPUTED][HIGH] membership失效、Portal token/Position/Holding释放、survivor preservation和Reserve promotion生产链尚未实现。
-
-## 当前代码保留事实
-
-- [x] [COMPUTED][HIGH] 两阶段Phase Reservation生产接入、安全门、Wait-For Graph和Reservation-Aware ORCA fixture基础设施仍存在于工作区，作为失败基线与诊断证据。
-- [x] [COMPUTED][HIGH] 当前文档没有把Steering-first修订写成已实现代码，也没有把Phase Reservation失败结果改写为通过。
-- [ ] [INFERRED][HIGH] 代码迁移前必须先冻结可复现基线并保护用户已有SF3 Lighting地图及其他未提交文件。
-
-## SF4 Reservation-Aware ORCA归因（2026-07-12）
-
-- [x] [COMPUTED][HIGH] fixture约束按稳定order/AgentId/量化point-normal排序并生成输入反序一致hash。
-- [x] [COMPUTED][HIGH] 实现30cm/s正向half-plane及确定性不可再缩减约束核心。
-- [x] [COMPUTED][HIGH] 实现ActiveRouteConflict、ActiveRouteDisjointContained、ActiveRouteDisjointOutsideCorridor分类。
-- [x] [COMPUTED][HIGH] 实现1/30秒、4cm corridor、1cm pair安全余量和Target exclusion单步验证。
-- [x] [COMPUTED][HIGH] RoundResult边界诊断只执行一次；完整fixture仅计划写入Saved，不复制timeline或20实体全集。
-- [x] [COMPUTED][HIGH] Development、两项`CrowdDemo.SF4.Positioning`与`git diff --check`通过。
-- [ ] [COMPUTED][HIGH] 正式捕获无合法fixture：`valid=0, too_large=0, primary=-1, agents=0, core=0`，JSON未生成并触发VIOLATION。
-- [ ] [COMPUTED][HIGH] 无唯一证据选择分支A/B/C，故三项生产分支均未实施。
-- [ ] [COMPUTED][HIGH] 本次诊断安全门因fixture VIOLATION失败，未运行后续Static能力门、DebugGame、完整SF、两轮或录像。
-
-## SF4 Reservation Wait-For Graph诊断（2026-07-12）
-
-- [x] [COMPUTED][HIGH] 精确记录scheduler blocker pair，按AgentId稳定构建wait edge、SCC、reciprocal edge、stalled/progressing/stale分类和最小fixture。
-- [x] [COMPUTED][HIGH] wait graph在当前步ORCA telemetry完成后分析，server/client hash一致；correction rollback不重复累计。
-- [x] [COMPUTED][HIGH] 自动化覆盖输入反序hash、cycle/SCC、reciprocal、phase计数、stalled/progressing、missing owner、重复分析不累积和atomic-safe集合。
-- [x] [COMPUTED][HIGH] 纯ORCA route-forward fixture覆盖连续/量化可行性及Active/Waiting/Stable/Other来源移除归因。
-- [x] [COMPUTED][HIGH] 分支A排除：3个cycle中atomic-safe cycle=0；分支B排除：stale owner=0；分支D排除：cycle=3且stalled blocker=11；选择C。
-- [x] [COMPUTED][HIGH] 生产态C采样因correction interval缺失/revision gap违反安全门，相关runtime调用、metrics、rollback字段和双端hash字段已撤销；纯fixture保留。
-- [x] [COMPUTED][HIGH] Development、两项`CrowdDemo.SF4.Positioning`和`git diff --check`通过。
-- [x] [COMPUTED][HIGH] 最终单轮安全门通过：Target crossing=0、双端penetration=0、六类hash match、checkpoint/interval p95=`0.058/0.064cm`、revision gap=0、agents=visible=20、坏日志=0。
-- [ ] [COMPUTED][HIGH] Static能力门失败：StableOccupied+ReserveHold=`1/20`、arrival p95=`1165.730cm`。
-- [ ] [COMPUTED][HIGH] DebugGame、完整SF、正式两轮和录像未执行；原因是20/20硬门失败。
-- [ ] [INFERRED][HIGH] membership lifecycle仅记录未来边界，尚未实现Portal/Phase释放、assignment失效、survivor保留、promotion、ghost cleanup和双端membership hash。
-
-## SF4 两阶段Phase Reservation生产接入（2026-07-12）
-
-- [x] [COMPUTED][HIGH] request-build、admission eligibility、schedule、boundary apply职责分离；request-build不提前写正式phase。
-- [x] [COMPUTED][HIGH] 首次RadialStage及后续AngularAlign/RadialCommit只有Granted后提交；Held/Invalid不进入requested segment。
-- [x] [COMPUTED][HIGH] Guidance和ORCA Active route只消费committed phase/current reservation。
-- [x] [COMPUTED][HIGH] prepared request/result/decision、fragment最小状态、rollback、累计器与phase decision round hash已接入。
-- [x] [COMPUTED][HIGH] Development、两项`CrowdDemo.SF4.Positioning`和diff门通过。
-- [x] [COMPUTED][HIGH] Static单轮安全门通过：crossing/双端penetration=0、五类hash match、checkpoint/interval p95<1cm、agents=visible=20、坏日志=0。
-- [ ] [COMPUTED][HIGH] Static能力门失败：StableOccupied+ReserveHold=`1/20`、arrival p95=`1165.730cm`。
-- [ ] [COMPUTED][HIGH] phase request/granted/held/invalid=`4163/39/4027/117`，route conflict=4027，held steps p95=170，未形成足够phase吞吐。
-- [ ] [COMPUTED][HIGH] DebugGame、完整SF、正式两轮和录像未执行；原因是Static 20/20硬门已失败。
-- [ ] [COMPUTED][HIGH] Moving Target、攻击、多profile、P1、100/500未开始。
-
-## SF4 两阶段Phase Reservation纯内核（2026-07-12）
-
-- [x] [COMPUTED][HIGH] request同时保存current与requested phase/path；current reservation在整个boundary内先作为不可抢占占用。
-- [x] [COMPUTED][HIGH] grant稳定顺序为requested phase降序、commit step升序、AgentId升序；非冲突request可并发grant。
-- [x] [COMPUTED][HIGH] held request保留旧占用并继续阻止后续冲突请求；Target exclusion失败进入invalid。
-- [x] [COMPUTED][HIGH] Decision hash覆盖全部决策输入与1cm量化路径；输入反序不改变结果或hash。
-- [x] [COMPUTED][HIGH] Development、两项`CrowdDemo.SF4.Positioning`和`git diff --check`通过。
-- [x] [COMPUTED][HIGH] Mass prepared SoA、fragment状态、boundary apply、rollback与紧凑指标已在后续生产接入完成。
-- [x] [COMPUTED][HIGH] Static Small已重跑并通过安全门；能力为1/20，仍未通过。
-
-## SF4 Phase-Local Reservation反证（2026-07-12）
-
-- [x] [COMPUTED][HIGH] phase-local requeue版证明grant可从5提升到13，但requeue=10且完成仍为0。
-- [x] [COMPUTED][HIGH] reservation-held版证明简单暂停不安全：Target crossing=1、constraint p95=12。
-- [x] [COMPUTED][HIGH] phase-local、held fragment及其fixture已撤销，恢复full-route安全版本。
-- [x] [COMPUTED][HIGH] 显式next-phase reservation纯scheduler已实现；生产状态机尚未接入。
-
-## SF4 ORCA来源诊断与动态预测反证（2026-07-12）
-
-- [x] [COMPUTED][HIGH] Radial constraint p95及active/waiting/reserve/stable/other来源已进入紧凑日志。
-- [x] [COMPUTED][HIGH] 保留版来源为active=1、reserve-commit=1，其余=0。
-- [x] [COMPUTED][HIGH] 动态yielding预测与非冲突active约束省略已完成反证并撤销；原因是infeasible=`410→952`、grants=`5→3`。
-- [x] [COMPUTED][HIGH] phase-local两阶段纯scheduler已设计并通过测试；当前full-route生产reservation吞吐仍不足，正式接入尚未实施。
-
-## SF4 Route-Aware ORCA实验（2026-07-12）
-
-- [x] [COMPUTED][HIGH] Active route polyline与yielding安全圆真实相交时，active省略该pair约束、yielding承担100%责任；非冲突pair与SF1/SF2/SF3不变。
-- [x] [COMPUTED][HIGH] FrontAssignedWaiting与被Front门阻塞的ReserveCommit均进入yielding分类；Portal ownership仍优先。
-- [x] [COMPUTED][HIGH] phase变化重置不可比较的progress bucket；Radial进入阈值为Tolerance+SafetyGap，AngularAlign继续径向纠偏。
-- [x] [COMPUTED][HIGH] Radial ORCA/final forward投影已加入紧凑聚合，不输出per-agent日志。
-- [x] [COMPUTED][HIGH] 最新单轮corridor/turn=20、deadlock=0、crossing=0、penetration=0、hash match、checkpoint/interval p95=`0.050/0.064cm`。
-- [ ] [COMPUTED][HIGH] Static能力仍失败：完成0/20、arrival p95=`1531.321cm`、Radial forward仅83.6cm/s。
-- [ ] [COMPUTED][HIGH] 正式两轮、完整SF、DebugGame、录像和提交未执行；原因是单轮硬门失败。
-
-## SF4 Approach entry/phase-lock与ORCA停点（2026-07-12）
-
-- [x] [COMPUTED][HIGH] waiting仅在assigned-position 1200cm entry envelope内可grant；active Approach phase越界后仍锁定compose，Portal ownership优先。
-- [x] [COMPUTED][HIGH] no-progress把1cm RouteError bucket下降计为进展；1201/1200边界和五种compose ownership自动化通过。
-- [x] [COMPUTED][HIGH] 保留版本corridor/turn=20、deadlock=0、penetration=0、hash match、checkpoint/interval p95=`0.066/0.059cm`。
-- [ ] [COMPUTED][HIGH] 完成仍为0/20；Radial preferred/ORCA/final=`800/65.765/65.765cm/s`，radial error p95=`927cm`。
-- [x] [COMPUTED][HIGH] 失败的Portal priority复用实验已撤销；其ORCA/final=0且target crossing=1，不进入当前架构。
-- [ ] [INFERRED][HIGH] route-aware ORCA冲突/让行契约尚未设计；正式两轮、完整SF、DebugGame、录像和提交继续停止。
-
-## SF4 Admission并发与RadialStage诊断（2026-07-12）
-
-- [x] [COMPUTED][HIGH] active route作为占用路径参与冲突检查，不再全局禁止新grant；waiting route按稳定顺序形成确定性贪心极大无冲突集合。
-- [x] [COMPUTED][HIGH] 自动化覆盖active/无冲突waiting并发、active/冲突waiting阻止和输入反序hash；Development与两项`CrowdDemo.SF4.Positioning`通过。
-- [x] [COMPUTED][HIGH] RadialStage新增preferred/ORCA/final speed、radial error、真实改善、量化stall和compose boundary switch聚合诊断。
-- [x] [COMPUTED][HIGH] 单轮安全与基础路线保持：flow hash=`267519150`、unreachable=0、corridor=20、deadlock=0、双端penetration=0、agents=20。
-- [ ] [COMPUTED][HIGH] 能力门失败：StableOccupied+ReserveHold=`0/20`，waiting/RadialStage=`14/2`，arrival p95=`1199.163cm`，compose boundary switches=`295`。
-- [ ] [COMPUTED][HIGH] 正式两轮、完整SF、DebugGame、录像和提交均未执行；原因是单轮结果低于既有16/20基线。
-
-## SF4 Target-Aware Approach Gate单轮门（2026-07-12）
-
-- [x] [COMPUTED][HIGH] Target exclusion、OuterGate确定性派生、Gate bounds/reachable/clearance、polar arc、radial commit blocker检查已进入纯kernel。
-- [x] [COMPUTED][HIGH] Route失效明确输出None，不回退direct-to-slot；blocker输入乱序与route hash稳定。
-- [x] [COMPUTED][HIGH] Processor区分FrontAssignedWaiting、RadialStage、AngularAlign、RadialCommit、SlotCommit和StableOccupied；progress按量化RouteError更新，不再使用绝对180-step timeout。
-- [x] [COMPUTED][HIGH] 单轮Target crossing=0、Stable blocked radial commit=0、order inversion=0、corridor=20、deadlock=0、penetration=0、agents=visible=20、坏日志=0。
-- [ ] [COMPUTED][HIGH] 单轮StableOccupied+ReserveHold=`0/20`，waiting/radial/angular/radial-commit=`13/2/0/1`，arrival p95=`1197.644cm`，能力门显著回退。
-- [ ] [COMPUTED][HIGH] 单轮回退后按规则停止；未运行正式两轮、完整SF、DebugGame或录像，未提交为通过。
-
-## SF4 Static Front Ingress诊断与分支A（2026-07-12）
-
-- [x] [COMPUTED][HIGH] 默认关闭的Ingress diagnostic、量化segment-circle、Target exclusion、Stable/Reserve/Commit blocker分类、alternative Front、ORCA来源与最小fixture已实现。
-- [x] [COMPUTED][HIGH] 纯测试覆盖输入乱序、fixture hash、远侧优先、wave稳定、交叉路径拆wave与timeout/requeue。
-- [x] [COMPUTED][HIGH] 原行为两轮诊断稳定：Stable阻断4/4、blocker pairs=14、order inversion=3、ORCA来源Stable/Reserve/Commit=`48/9/12`、fixture=`44101239/2`。
-- [x] [INFERRED][HIGH] 依据覆盖率选择分支A；B仅1/4、C不满足无几何阻挡、D无局部不可达证据。
-- [x] [COMPUTED][HIGH] Front assignment与commit admission已分离为`FrontAssignedWaiting → FrontCommitGranted → SlotCommit → StableOccupied`；固定wave=2并按远侧优先。
-- [x] [COMPUTED][HIGH] promotion改为真实Reserve→Front边沿计数；本轮transition/agent=`0/0`，旧7216重复累计已消失。
-- [ ] [COMPUTED][HIGH] 分支A正式两轮仅StableOccupied/ReserveHold=`4/3`，SlotCommit=2、ReserveCommit=1，arrival p95=`1196.852cm`，Static能力硬门失败。
-- [x] [COMPUTED][HIGH] 双端/两轮AgentState hash=`1583783642`，checkpoint/interval p95=`0.056/0.061cm`，corridor=20、deadlock=0、penetration=0、agents=visible=20、坏日志=0。
-- [ ] [COMPUTED][HIGH] 硬门失败后按规则停止；失败分支后未运行完整SF/DebugGame、未录像、未进入Moving/P1/100/500。
-
-## SF4 单Front带/外层Reserve验证（2026-07-12）
-
-- [x] [COMPUTED][HIGH] 失败优先fixture在旧实现上精确失败：Front跨radial band 1–4，且存在Front内侧Reserve。
-- [x] [COMPUTED][HIGH] Candidate纯kernel现只把最内侧有效Preferred radial band标为Front，外侧合法带标为Reserve；单项与完整25项`CrowdDemo.SF`通过。
-- [x] [COMPUTED][HIGH] Development与DebugGame Editor编译通过，`git diff --check`通过。
-- [x] [COMPUTED][HIGH] 两轮candidates/front/reserve=`150/16/134`、assigned=20、candidate overlap/unreachable=0，Candidate/Assignment hash稳定。
-- [x] [COMPUTED][HIGH] 两轮双端四类hash一致，checkpoint/interval p95=`0.063/0.066cm`，cross-round growth=0，corridor=20、deadlock=0、penetration=0、agents=visible=20。
-- [ ] [COMPUTED][HIGH] StableOccupied+ReserveHold=`12+4=16/20`，剩余4个SlotCommit，arrival error p95=`488.945cm`；Static硬门失败。
-- [ ] [COMPUTED][HIGH] 按停止条件未进入Moving Target，未运行P1/100/500，未录像，Stage B未提交为通过。
-
-## SF4 Static Small首次集成失败（2026-07-12）
-
-- [x] [COMPUTED][HIGH] 只在SF4保留PBD后连续reproject位置，关闭低速0.348cm/step被旧整厘米路径清零；SF1/SF2/SF3行为分支未改。
-- [x] [COMPUTED][HIGH] 修复后双端hash继续match=1，sim/checkpoint/interval error p95=`0.049/0.049/0.063cm`且不跨轮扩散。
-- [ ] [COMPUTED][HIGH] StableOccupied+ReserveHold仍为13/20；7个SlotCommit的ORCA constraint p95=19、速度p95=2.828cm/s，arrival error p95=199.057cm。
-- [ ] [INFERRED][HIGH] Front capacity=56且ReserveHold=0，下一步需要单Front带/外层Reserve的纯kernel失败优先设计；尚未实施。
-
-- [x] [COMPUTED][HIGH] SF4 correction rollback已覆盖Portal/Admission/Band/FlowSample、PositionAssignment/PursuitGuidance、TargetFact、prepared SoA与revision；两轮Traffic/Portal/ORCA/AgentState hash一致。
-- [x] [COMPUTED][HIGH] correction interval p95从173.220/173.072cm降为0/0cm，checkpoint/cross-round error=0且无VIOLATION。
-- [ ] [COMPUTED][HIGH] 连续reproject修复后StableOccupied+ReserveHold仍为13/20，arrival error p95为199.057cm；Static能力门继续失败。
-
-- [x] [COMPUTED][HIGH] scenario=3、最小position fragments、prepared Candidate/Assignment SoA和五个显式processor已形成首版并通过Development/DebugGame编译。
-- [x] [COMPUTED][HIGH] Static真实package由非NullRHI Unreal Python创建，六类用户指定Lighting、SkySphere、PreviewFloor和相机均存在。
-- [x] [COMPUTED][HIGH] 完整25项`CrowdDemo.SF`通过；SF1/SF2/SF3自动化没有测试失败。
-- [x] [COMPUTED][HIGH] 两轮corridor=20、deadlock=0、assigned=20、candidate overlap/unreachable=0、双端penetration=0、agents=visible=20、AgentState跨轮hash一致。
-- [ ] [COMPUTED][HIGH] StableOccupied+ReserveHold=`13+0`，未达到20；连续reproject修复后的arrival error p95=199.057cm。
-- [x] [COMPUTED][HIGH] 原Traffic/Portal/ORCA双端hash与correction rollback失败已关闭。
-- [ ] [COMPUTED][HIGH] Static硬门失败，未录像、未进入Moving、未提交阶段B为通过。
-
-## SF4 Pursuit Positioning 阶段A（2026-07-12）
-
-- [x] [COMPUTED][HIGH] 纯C++ TargetFact、Settings、Candidate、PositioningAgent、Assignment与Summary数据边界已建立。
-- [x] [COMPUTED][HIGH] Candidate按Flow raster稳定生成，过滤bounds/blocked/unreachable/clearance，capacity=1，PositionId不依赖输入顺序。
-- [x] [COMPUTED][HIGH] 输出Candidate最小中心间距为实体直径+SafetyGap，自动化验证无重叠和PositionId唯一。
-- [x] [COMPUTED][HIGH] 固定轮数deferred acceptance使用量化cost与`Cost→ExistingOwner→AgentId→PositionId`决胜，最终按AgentId排序。
-- [x] [COMPUTED][HIGH] 20实体获得20个唯一assignment；Front不足转Reserve、20/20 reuse、ReserveHold vacancy promotion和candidate失效release通过。
-- [x] [COMPUTED][HIGH] Agent/Candidate输入倒序、同分决胜及两轮Candidate/Assignment hash测试通过。
-- [x] [COMPUTED][HIGH] Development、DebugGame Editor、完整25项`CrowdDemo.SF`与`git diff --check`通过；阶段A提交为`bac361f7`。
-- [ ] [COMPUTED][HIGH] Static Target Small、scenario=3、processors、fragments、地图、双端metrics和人工审片尚未实施。
-- [ ] [COMPUTED][HIGH] Moving Target尚未实施；攻击、NavMesh Bake、P1与100/500不属于当前已通过范围。
-
-## SF3 ORCA/LP Closeout（2026-07-12）
-
-- [x] [COMPUTED][HIGH] 建立统一continuous solve输入、统一half-plane不等式和共享连续结果验证；constraint builder仍只生成一次稳定约束。
-- [x] [COMPUTED][HIGH] 固定官方RVO2 commit `b577921d2bc1281a6b721c2d4778f397d37da97d`，Apache-2.0 LICENSE、来源、SPDX和改写边界随测试专用adapter入库。
-- [x] [COMPUTED][HIGH] reference adapter仅包含LP1/LP2语义，不引入Simulator、Agent/KdTree、OpenMP或时间推进，不参与正式AgentState输出。
-- [x] [COMPUTED][HIGH] 单约束方向、epsilon窄条、平行/近平行、微小残差、真矛盾、速度圆切线、1–24约束矩阵、输入乱序和continuous-only quantization failure差分测试通过。
-- [x] [COMPUTED][HIGH] Small差分1052样本：current/reference exact=637/637，双向miss=0，both miss/oracle hit=0；选择保留当前continuous solver。
-- [x] [COMPUTED][HIGH] 正式Solve已完全移除Oracle调用与witness写回；自动化断言Oracle invocation=0、witness used=0，reference diagnostic默认关闭。
-- [x] [COMPUTED][HIGH] Exact、3×3 quantized recovery、best-effort、StopFeasible和StopViolation口径分离；3×3恢复每轮8962，continuous可行但quantized empty=19。
-- [x] [COMPUTED][HIGH] Development、DebugGame Editor、完整24项`CrowdDemo.SF`通过，`git diff --check`通过。
-- [x] [COMPUTED][HIGH] 正式Small P0三轮flow unreachable=0、corridor=20、deadlock=0、双端penetration=0、agents=visible=20、11-stage mismatch=0、三轮AgentState hash=`1121342212`、误差与跨轮增长=0。
-- [x] [COMPUTED][HIGH] 三轮正式路径Oracle invocation/witness used=0，日志无Fatal/Assertion/Ensure/`LogWindows: Error`/精确VIOLATION。
-- [ ] [COMPUTED][HIGH] goal仅10/20；每轮exact无严格可行输出=742、StopViolation=742、target-near non-reached=10。LP收尾技术门通过，但最终目标区群体效果未通过。
-- [ ] [INFERRED][HIGH] 下一阶段稳定站位/目标容量仅完成设计登记，尚未实现或验收。
-- [ ] [INFERRED][HIGH] 后续离线Crowd Navigation Field仅完成架构登记，尚未执行NavMesh查询、Bake或地图迁移。
-
-## SF3 Flow Reachability Boundary Diagnosis and Recovery（2026-07-12）
-
-- [x] [COMPUTED][HIGH] Flow sample已区分Reachable、OutOfBounds、BlockedRasterCell、UnreachableFreeCell，并携带cell index/stable key/blocked/unreachable/cost/direction。
-- [x] [COMPUTED][HIGH] 默认关闭的六阶段reachability诊断、三类有界witness、continuous-legal分类、invalid preferred/final/deadlock和correction rollback已接入；不输出AgentId或per-agent timeline。
-- [x] [COMPUTED][HIGH] 纯测试覆盖continuous合法但raster blocked、PBD进入blocked cell、OutOfBounds、free-cell island、nearest reachable稳定选择和SF1 golden hash。
-- [x] [COMPUTED][HIGH] 正式修复前两轮均证明7 deadlock=7 final invalid=7 OutOfBounds；7次首次失效全部发生在MovementPredict，blocked/unreachable-free/PBD/reproject均为0。
-- [x] [COMPUTED][HIGH] 只采用分支B：SF3 bounds clamp阻止越界分量并保留切向移动；最大navigation-domain reproject=23.267cm，不snap到cell center。
-- [x] [COMPUTED][HIGH] 修复后两轮final Reachable=20、invalid=0、flow unreachable=0、corridor=20、deadlock=0、wall/turn=20、双端obstacle penetration=0。
-- [x] [COMPUTED][HIGH] Flow build hash=267519150、Portal count=3、Portal geometry regression、全部ORCA/Portal/Holding/Band与完整23项SF自动化通过；Development/DebugGame Editor通过。
-- [x] [COMPUTED][HIGH] ORCA口径拆为continuous failure=415、quantization failure=637、Oracle witness used=607、3×3 recovery=8538、Oracle no witness=422；true-no-witness reachable/invalid Flow=`445/0`。
-- [x] [COMPUTED][HIGH] 双端Traffic/Portal/ORCA/AgentState hash=`1032547618/2199333646/2957536827/2466489683`，两轮一致；checkpoint/interval/cross-round error=0，agents=visible=20，坏日志模式=0。
-- [ ] [COMPUTED][HIGH] goal仍为13/20；7个尾部已集中到目标141.662–286.575cm，当前只具备进入稳定攻击位置独立设计阶段的条件，尚未验收目标容量。
-- [ ] [COMPUTED][HIGH] ORCA infeasible/stop violation=445、Oracle quantized witness used=607、reservation timeout=1，均未关闭。
-- [x] [COMPUTED][HIGH] diagnostic-only录像/contact sheet生成于`Saved/CrowdDemoCapture/CrowdDemoCapture_8291_20260712_010614`；用户Lighting使亮度正常，可见原Corridor滞留消失且未见穿墙/snap，但目标区构图不完整，不计为站位人工验收。
-- [x] [COMPUTED][HIGH] 未修改或提交四张用户光照地图；未修改Flow bounds/build输入、ORCA pair/LP、Portal/Holding/Band、goal/reached、PBD参数、网络、NavMesh或站位系统，未运行P1/Medium/Cohort/Crossing。
-
-## SF3 Half-Plane LP Parallel Numerical Stability Repair（2026-07-12）
-
-- [x] [COMPUTED][HIGH] `36d7dbbc` 中 failure-first 回归在旧 strict-parallel 实现上准确失败；生产精确 fixture 与显式 `+1.82e-7cm/s` 残差均已保留。
-- [x] [COMPUTED][HIGH] BehaviorEpsilon=0.1cm/s 未改；Angular（无量纲）、Residual（cm/s）和 Parameter（line parameter）容差已独立定义并由 float epsilon 与速度尺度推导。
-- [x] [COMPUTED][HIGH] dot、判别式、Numerator/Denominator 和 interval bound 使用 double 中间值；1cm/s速度量化、Q15 normal、pair几何、最终hash输入未改。
-- [x] [COMPUTED][HIGH] 正负微残差、2x/10x容差外冲突、0.01/0.1cm/s真实冲突、近平行角度、输入反序和1–24 constraint Formal-vs-Oracle矩阵通过。
-- [x] [COMPUTED][HIGH] Development、DebugGame Editor、ORCA 9/9、完整 `CrowdDemo.SF` 22/22 与 git diff check通过；Portal/Holding/Band自动化未回退，Small Portal count=3。
-- [x] [COMPUTED][HIGH] P0 Small两轮 Formal missed→Zero=0、missed→Oracle=0、continuous-only quantized empty=0；parallel 导致的 Formal 连续漏解 recovery 已清零。
-- [ ] [COMPUTED][HIGH] Oracle invocation=915；现有 `FormalLpQuantizedRecovered` 聚合没有区分固定3×3恢复与 Oracle quantized witness，且代码仍存在采用后者的路径，因此不能声称正式速度完全不依赖 Oracle。
-- [ ] [COMPUTED][HIGH] Formal整体硬门失败：true-no-witness=380、stop-violation=380、ORCA infeasible=380，目标均为0。
-- [ ] [COMPUTED][HIGH] 路线门失败：goal=12/20、corridor=12/20、deadlock=7、flow unreachable=7；8个实体位于Corridor/goal 1200cm以上。
-- [x] [COMPUTED][HIGH] 两轮及双端Traffic/Portal/ORCA/AgentState/diagnostic hash一致，11-stage mismatch=0，checkpoint/interval/cross-round error=0，overlap/severe p95=0，双端penetration=0，agents=visible=20，坏日志模式=0。
-- [x] [COMPUTED][HIGH] diagnostic-only录像/contact sheet已生成于 `Saved/CrowdDemoCapture/CrowdDemoCapture_8291_20260712_002822`；可见Corridor长期停滞，未见穿墙或隐藏实例，不计为人工验收通过。
-- [ ] [COMPUTED][HIGH] 不具备进入稳定攻击位置阶段的条件；按门控未运行P1/Medium/Cohort/Crossing，未实现站位。
-- [x] [COMPUTED][HIGH] 未修改ORCA行为epsilon、pair几何、责任比例、Portal/Holding/Band/density、goal/reached、参数、地图、网络、NavMesh、PBD或顶层pipeline。
-
-## SF3 Half-Plane LP Missed-Feasible Repair Attempt（2026-07-11）
-
-- [x] [COMPUTED][HIGH] 旧Formal LP失败优先fixture已在修改前失败并独立提交。
-- [x] [COMPUTED][HIGH] active boundary epsilon一致性、line-circle interval、line-half-plane clipping、parallel/contradictory和每次更新后的全约束复验已实现。
-- [x] [COMPUTED][HIGH] 1cm/s中心量化、固定3×3恢复、连续可行但网格空条带测试通过；未增加epsilon。
-- [x] [COMPUTED][HIGH] recovery分类、oracle invocation/耗时、solver p50/p95/max和六种admission state统一agent-step口径已输出。
-- [x] [COMPUTED][HIGH] Development、DebugGame Editor和完整19项`CrowdDemo.SF`通过；Portal/Holding/Band回归未在自动化中失败。
-- [ ] [COMPUTED][HIGH] Formal LP硬门失败：missed-zero=4087、missed-oracle=3791，目标均为0。
-- [ ] [COMPUTED][HIGH] true-no-witness/stop-violation/infeasible=380，目标均为0。
-- [ ] [COMPUTED][HIGH] Small能力门失败：goal=12、corridor=12、deadlock=7、flow unreachable=7。
-- [x] [COMPUTED][HIGH] 两轮server/client hash、AgentState replay、checkpoint/interval p95=0cm、agents=visible=20、penetration=0、日志坏模式=0。
-- [ ] [COMPUTED][HIGH] 情况D停止：Formal LP仍需zero/oracle recovery，不能宣称修复完成，不能进入稳定站位阶段。
-- [x] [COMPUTED][HIGH] diagnostic-only录像/contact sheet已生成；约12个实体到达goal approach，仍有8个实体在Corridor停滞，不计为人工验收通过。
-- [x] [COMPUTED][HIGH] 未修改goal、Portal/Holding/Band、参数、地图、网络、NavMesh或顶层pipeline，未运行P1/Medium/Cohort/Crossing。
-
-## SF3 Small Goal Congestion / ORCA Feasibility Diagnosis（2026-07-11）
-
-- [x] [COMPUTED][HIGH] goal reached精确事实已审计：二维中心距离<=140cm、轮内sticky；reached实体继续参与TrafficField/ORCA/PBD。
-- [x] [COMPUTED][HIGH] 默认关闭`-CrowdDemoSf3GoalCongestionDiagnostic`；flag关闭时完整SF hash/determinism回归通过，flag开启不写回模拟状态。
-- [x] [COMPUTED][HIGH] reference oracle覆盖zero、preferred、line projection、line-line与line-circle候选，且不参与正式速度输出。
-- [x] [COMPUTED][HIGH] distance bucket、Flow region、zero-feasible、intersection witness、矛盾half-plane、输入乱序和reached仍在ORCA grid测试通过。
-- [x] [COMPUTED][HIGH] P0 Small两轮diagnostic hash=`1767999127`；server/client结果一致，原四类hash、AgentState hash和0cm correction不变。
-- [x] [COMPUTED][HIGH] 15个non-reached最终为100–200cm:1、200–400cm:6、400–800cm:8、800cm外:0；GoalNear 7、PostCorridor 8。
-- [x] [COMPUTED][HIGH] reached仍在ORCA=5，non-reached具有reached neighbor=14/15，reached→non-reached constraints=27430。
-- [ ] [COMPUTED][HIGH] 正式LP正确性未通过：zero feasible=7206、oracle feasible=1068、no witness=205；旧multi-empty分类包含大量假空集。
-- [ ] [COMPUTED][HIGH] quantization诊断仍有continuous-feasible/quantized-failure=80；本轮未修改量化恢复。
-- [ ] [COMPUTED][HIGH] 严格goal容量根因C未成立：只有7/15 non-reached在400cm内，non-reached相互约束占主导。
-- [x] [COMPUTED][HIGH] diagnostic-only录像和agent-boost contact sheet已生成；不计为SF3人工验收通过。
-- [x] [COMPUTED][HIGH] 本轮未修改行为、参数、地图、网络、Portal/Holding/Band或goal规则，未运行P1/Medium/Cohort/Crossing。
-
-## SF3 Deterministic ORCA Constraint Correctness Repair（2026-07-11）
-
-- [x] [COMPUTED][HIGH] 失败优先 `PairConstraintGeometry` 在旧径向实现上准确失败，随后由标准 cutoff-circle/left-leg/right-leg/penetration 构造修复。
-- [x] [COMPUTED][HIGH] pair 坐标、统一 half-plane 方向、50/50 与 25/75 reciprocal responsibility、同位 pair 稳定反向法线和 penetration correction cap 已由纯 kernel 测试覆盖。
-- [x] [COMPUTED][HIGH] LP 速度圆、矛盾半平面、单约束排除速度圆、量化后全约束复验、input-order/hash determinism 与既有 canonical scenarios 通过。
-- [x] [COMPUTED][HIGH] ORCA constraint kinds、LP 根因、fallback/stop 和 admission-state infeasible 已加入每轮聚合指标；无 per-agent 日志。
-- [x] [COMPUTED][HIGH] Development、DebugGame Editor、完整 16 项 `CrowdDemo.SF` 与全部 `CrowdDemo.SF3` 通过；SF1 hash=`267519150`，Portal count=3，geometry hash=`1962319733`。
-- [x] [COMPUTED][HIGH] 正式 Small 两轮四类 hash 与 AgentState hash完全一致；checkpoint/interval p95=0cm，cross-round growth=0，双端 penetration=0，agents=visible=20，精确 `VIOLATION`=0。
-- [ ] [COMPUTED][HIGH] Small goal 硬门失败：5/20，目标 20/20；corridor=20/20、deadlock=0。
-- [ ] [COMPUTED][HIGH] ORCA 能力硬门失败：multi-empty=8479、quantization-destroyed=80、infeasible=8559、fallback-stop=8480、stop-violation=1273。
-- [ ] [COMPUTED][HIGH] 人工录像/审片未执行；原因是 Small 自动化能力硬门失败。
-- [ ] [COMPUTED][HIGH] P1、Medium、Cohort、Crossing 未运行；按预声明停止条件禁止继续。
-- [x] [COMPUTED][HIGH] 本轮未修改 Portal extraction/binding、Holding、PassingBand、density、PBD、ObstacleConstraint、fixed-step、网络参数、地图、NavMesh 或顶层 pipeline 架构。
-
-[INFERRED][HIGH] 最终目的和目标效果见 `DemoPurposeAndTargetEffect.md`；本清单中的 `[x]` 只表示对应代码/测试项通过，不自动表示最终群体效果完成。
-
-## SF3 Portal、Holding 与 ORCA LP Repair
-
-- [x] [COMPUTED][HIGH] Small Portal 从23收敛为3；geometry hash=`1962319733`，合成/真实几何 regression 通过。
-- [x] [COMPUTED][HIGH] stable binding、entry-side/span 检查、上游 holding overflow、中心 transit lane、target 无重叠与输入乱序测试通过。
-- [x] [COMPUTED][HIGH] PassingBand lateral error feedback、中心零横速、Reserved/Inside 50% clearing minimum 测试通过。
-- [x] [COMPUTED][HIGH] ORCA incremental half-plane LP、速度圆、量化格点验证、矛盾约束、grid/brute-force 与场景测试通过。
-- [x] [COMPUTED][HIGH] Development、DebugGame Editor、`CrowdDemo.SF` 前缀14项和 `CrowdDemo.SF3` 9项通过。
-- [x] [COMPUTED][HIGH] P0 Small 两轮 server/client 四类 hash、AgentState replay、checkpoint/interval p95=0cm、penetration=0、agents=visible=20。
-- [x] [COMPUTED][HIGH] corridor=20、deadlock=0、severe p95=0、rebind=0、reservation/transit timeout=0、capacity violation=0。
-- [ ] [COMPUTED][HIGH] Holding 最终可见效果未验收：Small 能力门失败后没有录像，不能仅凭target生成单元测试判定完成。
-- [ ] [COMPUTED][HIGH] Small goal 门失败：18/20，目标为20/20。
-- [ ] [COMPUTED][HIGH] ORCA 能力门失败：infeasible=6017、fallback stop=5904、stop constraint violation=5666。
-- [ ] [COMPUTED][HIGH] 人工录像未执行；Small 自动化能力硬门未完全通过。
-- [ ] [COMPUTED][HIGH] Medium/Cohort/Crossing/P1 未运行；按停止条件禁止继续。
-- [ ] [COMPUTED][HIGH] NavMesh offline Crowd Navigation Field Asset 仅记录为后续架构，本轮未实现。
-
-## SF3 Determinism and Portal Repair 历史基线
-
-- [x] [COMPUTED][HIGH] 11-stage FNV-1a32 diagnostic，默认关闭，只在 correction boundary 输出。
-- [x] [COMPUTED][HIGH] correction rollback 恢复 raw state、PortalAdmission、Band、FlowSample、Portal runtime 和 round hash accumulator。
-- [x] [COMPUTED][HIGH] persistent token、capacity、60/120-step timeout、清空后换向、DirectionEpoch 与 band 稳定性自动化通过。
-- [x] [COMPUTED][HIGH] overlap grid 与 brute-force pair set 一致，输入乱序不改变 pair 顺序。
-- [x] [COMPUTED][HIGH] `CrowdDemo.SF` 11/11、`CrowdDemo.SF3` 6/6、Development、DebugGame Editor 通过。
-- [x] [COMPUTED][HIGH] P0 Small 两轮 server/client stage hashes、Traffic/Portal/ORCA/AgentState hashes 全部一致。
-- [x] [COMPUTED][HIGH] Round 1/2 AgentState hash 都为 `327320670`；checkpoint/interval p95=0cm；penetration=0；agents=visible instances=20。
-- [x] [COMPUTED][HIGH] initial overlap=0、overlap p95=1/max=3、severe p95=0/max=0、residual PBD penetration pairs max=10、final obstacle penetration=0。
-- [ ] [COMPUTED][HIGH] Small 能力门失败：goal=9/20、corridor=11/20、deadlock=13、ORCA infeasible=5344、fallback stop=4821。
-- [ ] [COMPUTED][HIGH] starvation 没有在能力门失败前形成独立有效验收值；不得把默认 0 当作通过。
-- [ ] [COMPUTED][HIGH] Medium/Cohort/Crossing 与 SF3 视频未运行；Small 硬门已触发停止。
-
-## SF3 Shared Crowd Traffic Scheduling 基础集成历史记录
-
-- [x] [COMPUTED][HIGH] 独立 `SimRoundCrowdTraffic=2`、parser 0/1/2、SF1/SF2 分支隔离。
-- [x] [COMPUTED][HIGH] TrafficField、Portal、PassingBand、ORCA 纯 kernels 与双端 Mass pipeline 已接入；Hard PBD 与 obstacle reproject 复用 SF2。
-- [x] [COMPUTED][HIGH] SF3 内核与既有 SF 自动化已扩展为当前的 `CrowdDemo.SF` 11/11 和 `CrowdDemo.SF3` 6/6。
-- [x] [COMPUTED][HIGH] 四张 SF3 地图由独立 Unreal Python 脚本创建为真实 package。
-- [ ] [COMPUTED][HIGH] Medium、Cohort、Crossing 未运行；原因是 Small 硬门控已失败。
-- [ ] [COMPUTED][HIGH] SF3 人工录像未生成；原因是只有四档全通过才允许录像。
-
-## SF1 Shared FlowField
-
-- [x] [COMPUTED][HIGH] `SimRoundObstacle=0`，双端同 processors/kernels。
-- [x] [COMPUTED][HIGH] flow hash `267519150`、rebuild 1、整数 Dijkstra、障碍膨胀和 swept constraint 保持不变。
-- [x] [COMPUTED][HIGH] 本轮未修改 SF1 算法、correction 频率、复制预算或 NetUpdateFrequency。
-
-## SF2 Separation + Hard PBD
-
-- [x] [COMPUTED][HIGH] 独立 `SimRoundFlowSeparation=1`。
-- [x] [COMPUTED][HIGH] SoftSeparation、稳定 PBD pair、3 次迭代、24cm cap、equal-mass half correction、PBD 后 obstacle reproject。
-- [x] [COMPUTED][HIGH] spatial-grid pair set 与 brute-force 一致，输入乱序不改变结果。
-- [x] [COMPUTED][HIGH] 20/100/500 第一轮 initial overlap 均为 0，双端 obstacle penetration 均为 0。
-- [x] [COMPUTED][HIGH] 20 severe p95=0，checkpoint p95=0，不跨轮扩散。
-- [ ] [COMPUTED][HIGH] 100 容量未完全通过：severe p95=33，goal=93/96，corridor=98，deadlock=1。
-- [ ] [COMPUTED][HIGH] 500 容量失败：severe p95=186/103，goal=305/198，corridor=351，deadlock=93。
-
-## RoundResult 传输
-
-- [x] [COMPUTED][HIGH] RoundResultHeader 不含 AgentState；round end 只采集一份 checkpoint AgentState。
-- [x] [COMPUTED][HIGH] checkpoint 复用 correction chunks，chunk size=100；500 每轮 5/5。
-- [x] [COMPUTED][HIGH] 支持 header-first、chunks-first、交错乱序与重复 chunk；revision mismatch/missing chunk 自动化覆盖。
-- [x] [COMPUTED][HIGH] checkpoint 不作为普通 correction 提前应用，boundary 顺序为 compare→apply→next plan。
-- [x] [COMPUTED][HIGH] 三档连续两轮 header/chunks/assembly/queued/applied 完整，无 timeout、mismatch、revision gap 或 VIOLATION。
-- [x] [COMPUTED][HIGH] checkpoint 前真实误差不再固定为 0；应用后 p95=0 且不跨轮扩散。
-
-## Readiness、视觉与录像
-
-- [x] [COMPUTED][HIGH] readiness 要求 agents=visible instances=expected 连续稳定 0.5 秒，并检查 Arena/Coordinator/visual owner。
-- [x] [COMPUTED][HIGH] ready 后 3 秒开始 round 1；60 秒 timeout 输出 VIOLATION；无 flag 时保持默认行为。
-- [x] [COMPUTED][HIGH] client visual 只读取 RoundSim state；pre-plan 只显示静止 bootstrap，不计算 gameplay movement。
-- [x] [COMPUTED][HIGH] future plan 不提前占用静止 boundary；Small/Medium 第一轮立即开始运动。
-- [x] [COMPUTED][HIGH] 五张地图保留用户放置的照明，固定俯视相机覆盖完整 FlowField 与 500 初始阵型。
-- [x] [COMPUTED][HIGH] SF1 500、SF2 20/100/500 最终录像均通过亮度/contact-sheet QA，并覆盖第一轮前和第一轮运动。
-- [ ] [COMPUTED][HIGH] FFmpeg 未直接使用 `hwnd=` 输入：该路径捕获 Unreal swapchain 为空白；当前通过 MainWindowHandle 固定窗口后捕获对应 desktop region。
-
-## 构建与仓库边界
-
-- [x] [COMPUTED][HIGH] Development 与 DebugGame Editor 编译通过。
-- [x] [COMPUTED][HIGH] 5 项 `CrowdDemo.SF` 自动化通过。
-- [x] [COMPUTED][HIGH] SF3 的 ORCA、density speed scaling 与 approach/passing band 保持在隔离场景内；未引入 slot、攻击、timeline trace 或 A/B 框架。
-
-## 长期目标缺口
-
-- [ ] [COMPUTED][HIGH] 自由游荡尚未实现。
-- [ ] [COMPUTED][HIGH] 动态目标追逐尚未实现。
-- [ ] [COMPUTED][HIGH] 真实 off-thread WORK processor、预算 continuation 与 GT apply/commit 验收尚未完成。
-- [ ] [COMPUTED][HIGH] 静态目标附近不聚向单一 goal cell 的最终群体效果尚未完成。
-- [ ] [COMPUTED][HIGH] 100/500容量和完整显示的最终联合验收尚未完成。
-
-## SF4 Steering-first Mass Integration（2026-07-12）
-
-- [x] [COMPUTED][HIGH] Steering-first Holding/Commit 纯 kernel 与真实 Small flow fixture 通过。
-- [x] [COMPUTED][HIGH] SF4 正式 pipeline 已旁路旧 Approach/Admission/PhaseReservation/WaitGraph 与旧 route-aware ORCA ownership。
-- [x] [COMPUTED][HIGH] Steering state、Holding/Commit prepared SoA、四类 hash 与聚合指标已纳入 rollback/结果比较。
-- [x] [COMPUTED][HIGH] Development、SF4 integration contract 与完整 `CrowdDemo.SF` 28/28 通过。
-- [x] [COMPUTED][HIGH] 单轮双端 hash match=1、checkpoint p95=0.055cm、interval p95=0.063cm、revision gap=0、penetration=0、client agents=visible=20。
-- [ ] [COMPUTED][HIGH] 技术安全门失败：corridor=10/20；这是本轮第一硬失败。
-- [ ] [COMPUTED][HIGH] 能力门失败：StableOccupied+ReserveHold=0/20，Holding=10，Reacquire=10，commit_invalid=9010。
-- [ ] [COMPUTED][HIGH] DebugGame、正式两轮与录像未执行；原因是单轮技术门失败。
-
-### Compatibility proof 后续结果
-
-- [x] [COMPUTED][HIGH] Commit invalid 已从9010降为0；selected compatibility proof valid/invalid=20/0。
-- [ ] [COMPUTED][HIGH] Holding identity 未通过唯一性检查：22500条边中存在8100个重复 `(HoldingId,PositionId)` 键。
-- [ ] [COMPUTED][HIGH] Flow→Holding handoff 未成立：末态Holding=20，Commit=0，全部18020次请求Held。
-- [ ] [COMPUTED][HIGH] 技术门进一步失败为corridor=0/20、goal=0/20；不得将Invalid清零写成Static能力通过。
-
-### Stable identity与handoff gate
-
-- [x] [COMPUTED][HIGH] HoldingId/PositionId唯一性回归通过；正式duplicate compatibility keys=0。
-- [x] [COMPUTED][HIGH] 远距离Pursuit继续使用Shared Flow，corridor恢复20/20，deadlock=0。
-- [x] [COMPUTED][HIGH] 双端hash、checkpoint/interval误差、penetration、agents/visible技术项通过。
-- [ ] [COMPUTED][HIGH] Static能力仅11/20：Pursuit=5、Holding=4、StableOccupied=9、ReserveHold=2。
-- [ ] [COMPUTED][HIGH] 分状态route-forward speed、Holding readiness和Held冲突来源尚未形成可信聚合，不能继续调handoff或ORCA。
-
-### Steering终态归因
-
-- [x] [COMPUTED][HIGH] 六种SteeringState的distance与preferred/ORCA/final forward p50/p95已进入RoundResult紧凑指标。
-- [x] [COMPUTED][HIGH] Pursuit 5个均Flow有效，preferred forward约800cm/s但ORCA/final为0。
-- [x] [COMPUTED][HIGH] Holding 4个均在30cm tolerance内且速度ready，但全部因Commit冲突Held。
-- [ ] [COMPUTED][HIGH] Pursuit ORCA约束的对方状态来源尚未细分。
-- [ ] [COMPUTED][HIGH] Commit conflict尚未拆分为几何拒绝、Stable blocker、Active Commit和同boundary Selected冲突。
-
-### Stable blocker compatibility 缓存分支
-
-- [x] [COMPUTED][HIGH] Commit Gate已拆分target/flow/obstacle/Stable blocker/Active Commit/Selected冲突，ORCA约束已按双方SteeringState聚合。
-- [x] [COMPUTED][HIGH] compatibility输入hash包含Stable/Reserve blocker事实；变化时重建graph，已完成实体保留自身Holding ownership。
-- [x] [COMPUTED][HIGH] Stable blocker使旧边失效并选择alternate Holding的纯测试通过；Development、Positioning 3/3、完整`CrowdDemo.SF` 28/28通过。
-- [x] [COMPUTED][HIGH] Static两轮安全门通过：corridor=20、deadlock=0、penetration=0、双端/跨轮hash一致、checkpoint/interval p95=0.054/0.064cm、revision gap=0、agents=visible=20、坏日志=0。
-- [ ] [COMPUTED][HIGH] Static能力门仍失败：StableOccupied+ReserveHold=14/20；剩余Pursuit=1、Holding=2、Commit=1、Reacquire=2。
-- [ ] [COMPUTED][HIGH] DebugGame与录像未执行；原因是能力门未达到20/20。未进入另一生产修复分支。
-
-### Residual Capacity + State Tail Diagnosis
-
-- [x] [COMPUTED][HIGH] 确定性Residual maximum matching、输入倒序hash、Stable关键blocker与非关键blocker测试通过。
-- [x] [COMPUTED][HIGH] 诊断仅在RoundResult最终boundary运行，不写运动状态；ResidualCapacityHash进入server/client比较与rollback。
-- [x] [COMPUTED][HIGH] Static结果：unfinished=6、remaining positions=136、compatible edges=61410、matching/no-stable/no-reserve=6/6/6、best single gain=0、critical blockers=0。
-- [x] [COMPUTED][HIGH] 分支A已排除：已完成实体没有降低Residual maximum matching。
-- [x] [COMPUTED][HIGH] Reacquire=2均归因为HoldingInvalid；Commit arrival=92.326cm、no-progress=4 steps、Obstacle/PBD correction=0。
-- [ ] [COMPUTED][HIGH] B/C/D/E无法唯一选择：Pursuit ORCA压零、Holding远目标、Commit低速推进、Holding assignment 18/20同时存在。
-- [ ] [COMPUTED][HIGH] 未实施生产修复；能力仍为StableOccupied+ReserveHold=14/20。
-- [x] [COMPUTED][HIGH] Development、Residual 1/1、Positioning 3/3、完整SF 29/29通过；单轮安全与双端hash门通过。
-- [ ] [COMPUTED][HIGH] DebugGame、修复后单轮、正式两轮和录像未运行；原因是唯一归因门失败。
-
-### Deterministic Holding Matching
-
-- [x] [COMPUTED][HIGH] 整数min-cost max-flow纯kernel通过A/B贪心失败、输入反序和稳定hash测试。
-- [x] [COMPUTED][HIGH] Stable/Reserve/Commit硬owner、Holding软复用、WaitEpoch、revision失效与membership释放测试通过。
-- [x] [COMPUTED][HIGH] matcher只在RoundResult最终boundary旁路执行；rollback与ResidualHoldingMatchingHash已接入。
-- [x] [COMPUTED][HIGH] 新Residual语义拆为PositionValid、HoldingMatching、JointFeasible、Greedy和MatchingHash。
-- [ ] [COMPUTED][HIGH] 真实生产替换门失败：greedy/matching/joint=`18/18/18`，没有证明新solver可恢复20个Holding owner。
-- [ ] [COMPUTED][HIGH] 未替换正式`AssignHoldingPositions()`，能力基线仍为14/20。
-- [ ] [COMPUTED][HIGH] 量化完整JSON fixture未生成；本轮有效证据保存在8307双端日志和RoundResult指标中。
-- [ ] [COMPUTED][HIGH] DebugGame、正式两轮与录像未运行；生产接入前置门失败。
-
-### Crowd Transit + Adaptive Spacing
-
-- [x] [COMPUTED][HIGH] 四层距离语义已拆分为PhysicalRadius、HardSafetyGap、PreferredSpacingGap、AssignedSpacing与量化ContextScale；Preferred不得低于Hard。
-- [x] [COMPUTED][HIGH] Joint component内pair由JointSolver唯一拥有spacing，component外才允许SoftSeparation；double owner测试拒绝并计数。
-- [x] [COMPUTED][HIGH] canonical pair geometry是Priority ORCA与Joint relative constraint的唯一几何来源；point/normal/kind/量化重构测试通过。
-- [x] [COMPUTED][HIGH] AdaptiveSpacing 1/1、JointVelocity 1/1、SF4 Positioning 3/3、完整SF 35/35和Development通过。
-- [x] [COMPUTED][HIGH] 纯fixture覆盖追赶、五实体环进入/离开、外部固定速度、大半径、多人协同、合并component、oversize、退化normal、反序、量化修复/失败和Assigned恢复。
-- [x] [COMPUTED][HIGH] Agent 6最终boundary速度链已定位：ORCA/Predict=78/78cm/s，Obstacle/PBD/Reproject/Final=0/0/0/0cm/s，首次归零为ObstacleConstraint。
-- [x] [COMPUTED][HIGH] 诊断双端hash一致：`3427263131`；JSON紧凑summary已生成，未截断11实体闭包。
-- [x] [COMPUTED][HIGH] 8331语义复测将oversize明确报告为`OversizeFallback(5)`，但该运行有`revision_gap_total=1`和计划内oversize VIOLATION，只作为归因证据。
-- [ ] [COMPUTED][HIGH] Local component门失败：真实闭包=`11 agents/27 pairs`，超过第一版最大8；未求真实Joint velocity。
-- [ ] [COMPUTED][HIGH] Shadow未运行；原因是oversize且下游ObstacleConstraint归零，前置门不成立。
-- [x] [COMPUTED][HIGH] 默认关闭的SF4 ObstacleConstraint最终boundary诊断记录ObstacleId、Start/Proposed、inflated bounds、entry/exit t、端点inside、SlideX/SlideY、FlowBounds delta和稳定hash。
-- [x] [COMPUTED][HIGH] 8332双端确认Agent 6当前段与完整Holding段命中Obstacle 109，fixture hash=`3799203711`，排除FlowBounds归零。
-- [x] [COMPUTED][HIGH] Pursuit→Holding现要求reachable、handoff range、swept-clear和endpoint-clear；Holding路径失效时退回Pursuit，未放宽ObstacleConstraint。
-- [x] [COMPUTED][HIGH] 8334安全门通过：target crossing=0、双端penetration=0、severe p95=0、corridor=20、deadlock=0、revision gap=0、误差<1cm、agents=visible=20、双端hash一致。
-- [ ] [COMPUTED][HIGH] Static能力仍失败：physically satisfied=`16/20`，状态顺序`Pursuit/Holding/Commit/Stable/Reserve/Reacquire=0/2/1/6/11/0`，完整未满足Agent为5、8、14、15；旧三实体列表已废止。
-- [ ] [COMPUTED][HIGH] Production JointApply未接入；正式processor顺序与运动行为保持不变。
-- [ ] [COMPUTED][HIGH] Static能力仍为physically satisfied=19/20、goal=4、corridor=20、deadlock=0；穿行能力未通过。
-- [ ] [COMPUTED][HIGH] DebugGame、正式两轮、录像、100/500、Moving Target、玩家、攻击和死亡均未执行。
-
-### Capacity-by-Construction与Joint Clearance Shadow
-
-- [x] [COMPUTED][HIGH] 最终boundary物理未满足fixture覆盖全部20实体，得到satisfied/unsatisfied=`16/4`、count closed=`1`、hash=`1861497071`，包含displaced Reserve Agent 14。
-- [x] [COMPUTED][HIGH] P0 Hard/Required/Baseline/PreferredGap=`94/188/128/34cm`，公式、不同半径、不同transit radius、yield不足与输入反序测试通过。
-- [x] [COMPUTED][HIGH] 扩展纯fixture按128cm结构间距得到Position/Holding理论构造容量=`97/61`、hash=`4238641562`；该数字不是正式Static Small的实际候选数。
-- [x] [COMPUTED][HIGH] Transit swept capsule、component 2/5/8/12/20、二维让行、Obstacle/FlowBounds/Target复验、量化与反序纯测试通过。
-- [x] [COMPUTED][HIGH] 默认关闭的`-CrowdDemoTransitCapacityShadow`已接入，且不消费Joint结果；rollback覆盖prepared SoA、summary、hash和solver样本长度。
-- [x] [COMPUTED][HIGH] Development、Transit 2/2、Positioning 3/3、完整SF 35/35通过；默认关闭路径未发生自动化回退。
-- [x] [COMPUTED][HIGH] 8338的混合violation与revision gap只保留为历史诊断；8344已拆分candidate/baseline、恢复双端总hash一致并达到revision gap=`0`。
-- [x] [COMPUTED][HIGH] max yield=`26.669cm`未超过30cm；oversize、numerical、quantized、flow-bounds与double-owner failure均为0。
-- [ ] [COMPUTED][HIGH] Production JointApply未实现、未暴露运行脚本入口、未改变正式processor输出；当前阻塞项已推进为8347七实体clearance可行性，而不是旧ring-entry固定点。
-- [ ] [COMPUTED][HIGH] DebugGame、正式两轮、录像、100/500、Moving Target、玩家、攻击和死亡未执行，符合失败即停规则。
-
-### Capacity正式候选与time-aligned Shadow复审（2026-07-13）
-
-- [x] [COMPUTED][HIGH] 正式顺序已调整为`PositionBuild → HoldingBuild/CapacitySelection → PositionAssign → Compatibility → JointAssign`；Static Small原始`150/150`候选被稳定selected IDs过滤为`71/75`，deficit=`0/0`、hash=`1316163284`、applied=`1`。
-- [x] [COMPUTED][HIGH] selection、过滤后的prepared SoA、summary和hash已纳入correction snapshot/rollback；正式Position/Holding assignment得到`20/20`。
-- [x] [COMPUTED][HIGH] local component只沿time-aligned transit relevance和下一fixed-step可达的hard-safety closure扩展，不再沿全部600cm ORCA邻居图传递闭包。
-- [x] [COMPUTED][HIGH] seed与yielding实体统一使用0.75秒相对轨迹最短距离；`Solved`现在要求clearance deficit不超过1cm且transit forward总量严格高于baseline。
-- [x] [COMPUTED][HIGH] 8344 Shadow共1780个component-step：solved=`529`、IterationLimit=`720`、ClearanceNotAchieved=`228`、NoForwardGain=`303`、HardInfeasible=`0`；最大component=`13`。
-- [x] [COMPUTED][HIGH] 8344正式结果保持`StableOccupied+ReserveHold=17/20`，server/client总hash一致、revision gap=`0`、selection hash一致；Shadow未写入MovementPredict或Mass movement fragment。
-- [x] [COMPUTED][HIGH] ring-entry、ring-exit和external fixture均为`Solved`且time-aligned clearance=`0cm`；clearance完整投影不再被Preferred回拉稳定在20cm残差。
-- [ ] [COMPUTED][HIGH] `PreferredSpacingGapCm=34`仍只由Shadow消费；PriorityQ8多seed仲裁、环境可行域内求解和Production JointApply均未实现。
-
-### Hard clearance与canonical polish复审（2026-07-13）
-
-- [x] [COMPUTED][HIGH] clearance修正量不再乘以`Relaxation×Weight`；MotionWeight只分配seed/yielding双方责任，连续与量化候选均复验time-aligned clearance。
-- [x] [COMPUTED][HIGH] 新增32次hard feasibility polish，不执行Desired回拉或soft spacing；8346三实体fixture的2cm/s canonical残差已由紧凑回归覆盖并消失。
-- [x] [COMPUTED][HIGH] Development Editor、`CrowdDemo.SF4.Transit` 2/2、完整`CrowdDemo.SF` 35/35通过。
-- [x] [COMPUTED][HIGH] 8347双端Shadow hash一致、revision gap=`0`，正式末态仍为17/20，确认Shadow没有改变正式运动。
-- [ ] [COMPUTED][HIGH] 8347仍有794个失败component-step；新最小fixture为7 agents/21 pairs、clearance deficit=`8cm`、hash=`1810564063`，其硬可行性尚未证明。
-- [ ] [COMPUTED][HIGH] 因七实体fixture未归因，不运行DebugGame、正式两轮、录像、多seed、Production Apply、100/500或Moving Target。
-## SF4 Elastic Crowd Shadow科学复审（2026-07-13）
-
-- [x] [COMPUTED][HIGH] 8351已标记为历史无效实验：它没有从每步同一snapshot执行同一安全链，且比较了不同stage；旧forward/hard/recovery数字不再作为能力门。
-- [x] [COMPUTED][HIGH] 新纯Shadow helper统一执行八阶段`Preferred/ORCA/Predict/Obstacle/PBD1/PBD2/PBD3/Reproject`，Baseline与Elastic唯一差异是ORCA前的非Source Preferred调整。
-- [x] [COMPUTED][HIGH] PBD可选三轮诊断与无诊断结果完全等价；Obstacle诊断、统一Target/HardPair半径、八阶段hash和同阶段指标已接入。
-- [x] [COMPUTED][HIGH] Twin-Step不跨正式步携带Shadow位置/速度；Parallel Rollout冻结正式输入后维护两个独立世界180步，前90步启用Transit Influence，恢复窗口为90–179。
-- [x] [COMPUTED][HIGH] 初始约`90cm`间距低于`94cm` HardPairDistance形成的step 0 overlap已归类为`InheritedAtStepStart/SharedByBoth`，不会抢占后续Elastic因果首失败。
-- [x] [COMPUTED][HIGH] rollback恢复累计指标、zero-progress、首失败pin、fixture hash/样本长度及Parallel世界，避免correction replay重复累计。
-- [x] [COMPUTED][HIGH] Development Editor、Shadow定向自动化4/4、完整`CrowdDemo.SF` 40/40通过。
-- [x] [COMPUTED][HIGH] 8352双端stage/rollout/fixture比较match，agents=visible=`20`、obstacle penetration=`0`、revision gap=`0`、correction p95约`0.06cm`，无Demo运行期坏日志或VIOLATION。
-- [x] [COMPUTED][HIGH] 首失败fixture有效：step=`29`、stage=`ORCA`、kind=`OrcaStopViolation`、attribution=`ElasticWorsened`、closure=`20`、hash=`4215325188`；JSON包含八阶段、ORCA constraints、Obstacle/Reproject和三轮PBD诊断。
-- [ ] [COMPUTED][HIGH] ORCA安全门失败：Agent 1 Baseline ORCA=`(643,462)cm/s`可行，Elastic Preferred从`(595,535)`变为`(593,517)cm/s`后，Elastic ORCA=`(0,0)`且infeasible。
-- [ ] [COMPUTED][HIGH] Parallel安全门失败：Baseline/Elastic HardPair=`2/4`、Target=`358/365`、ORCA stop violation=`147/109`；不得用completed=`5/6`和end-error p95=`116.013/29.706cm`宣称Elastic通过。
-- [ ] [COMPUTED][HIGH] Production Elastic、DebugGame正式两轮、录像/contact sheet、Moving Target、100/500、攻击和死亡未运行；原因是首失败已在ORCA阶段成立，任务按计划停止。
-- [x] [COMPUTED][HIGH] 正式SF4 processor输出、ORCA/PBD参数、地图/Lighting、网络和实体数均未改变；Joint Velocity继续只读诊断。
-
-### Step 29 ORCA量化重放
-
-- [x] [COMPUTED][HIGH] hash=`4215325188`重捕获后保持不变，fixture新增MaxSpeed、epsilon、quantum、Q15法线和分阶段replay诊断。
-- [x] [COMPUTED][HIGH] Baseline/Elastic 14条constraint逐项完全相同；Baseline `(643,462)cm/s`满足Elastic全部constraint和800cm/s速度圆。
-- [x] [COMPUTED][HIGH] Elastic连续LP为`ExactFeasible`，约`(632,455)cm/s`；第一失败为连续解附近3×3量化`NoSolution`，不是continuous LP或speed-circle失败。
-- [x] [COMPUTED][HIGH] 新确定性几何量化恢复覆盖half-plane投影、half-plane交点、line-circle交点及其3×3格点，单独计为`FormalLpQuantizedGeometryRecovered`。
-- [x] [COMPUTED][HIGH] constraint反序和Preferred三组微扰均返回相同非零可行结果，不再坍缩为stop violation。
-- [x] [COMPUTED][HIGH] 真正无1cm/s格点的sub-centimeter strip继续为`NoSolution`；没有降低epsilon或安全距离。
-- [x] [COMPUTED][HIGH] Development、ORCA 10/10、完整SF 41/41及`git diff --check`通过。
-- [ ] [COMPUTED][HIGH] 修复后原P0 Static Small真实单轮尚未运行；未评价新的首失败、Parallel Rollout或Production Elastic。
-
-### 几何量化恢复后P0复跑
-
-- [x] [COMPUTED][HIGH] 使用完全相同P0、Static Small 20、30Hz/30秒和readiness完成单轮复跑。
-- [x] [COMPUTED][HIGH] 旧step29 ORCA stop首失败消失；新首失败为step40 Reproject HardPair，Agent 8–18，fixture hash=`410502020`。
-- [ ] [COMPUTED][HIGH] HardPair仍失败：step40 Baseline/Elastic penetration=`3.523/4.189cm`；Twin最终累计=`189/191`。
-- [x] [COMPUTED][HIGH] Twin最终Source Q15绝对值由旧`12515/12538`升至`18108/18131`，Elastic同轮领先23。
-- [ ] [COMPUTED][HIGH] Parallel Source未改善为Elastic优势：Baseline/Elastic=`17857/13205`。
-- [x] [COMPUTED][HIGH] Parallel ORCA stop由`147/109`降至`126/93`；Elastic和Baseline均下降。
-- [ ] [COMPUTED][HIGH] Parallel HardPair=`3/3`仍非零；Target=`541/431`较旧`358/365`绝对恶化。
-- [x] [COMPUTED][HIGH] 技术安全门通过：agents=visible=`20`、corridor=`20`、deadlock=`0`、双端penetration=`0`、revision gap=`0`、checkpoint/interval p95=`0.057/0.063cm`、hash match、坏日志=0。
-- [ ] [COMPUTED][HIGH] 正式goal=`5`，低于旧运行`6`；SF4 Static与Elastic能力均未通过，Production继续禁止。
-- [x] [COMPUTED][HIGH] step40 `410502020` Reproject residual已固化为20实体量化fixture；障碍可实现的稳定单侧修正使量化HardPair违规2→0，且Obstacle penetration保持0。
-- [x] [COMPUTED][HIGH] Shadow Baseline/Elastic共用相同Reproject safety polish；正式SF4运动链和Mass fragments未消费该结果。
-- [x] [COMPUTED][HIGH] Development Editor、Elastic 7/7与完整SF 42/42通过。
-- [x] [COMPUTED][HIGH] 相同P0单轮完成RoundResult与客户端boundary apply：stage/fixture/rollout hash双端一致，agents=visible=20，双端penetration=0，revision gap=0，checkpoint/interval p95=`0.057/0.065cm`，坏日志=0。
-- [x] [COMPUTED][HIGH] 旧step40首失败消失；新首witness为step81 Obstacle Agent 1–3，hash=`3917118627`，且该步PBD1至Reproject均已清零。
-- [ ] [COMPUTED][HIGH] Twin终态仍有Baseline/Elastic Reproject HardPair=`7/6`；Parallel Elastic HardPair=`3`，Target=`431`，ORCA stop violation=`93`，安全门未通过。
-- [ ] [COMPUTED][HIGH] Production Elastic、DebugGame、正式两轮与录像未执行。
+# MassAI Crowd Demo 功能检查表
+
+## 2026-08-15 Demo/Runtime 边界纠偏
+
+- [x] [COMPUTED][HIGH] 产品原则已澄清：Demo 是目标架构快速验证宿主，不承担 Legacy 框架或 API 的兼容责任；保留的是业务能力和验收证据，不是旧实现结构。
+- [x] [COMPUTED][HIGH] 通用 Barrier/Token/拒绝分类已迁入 `MassCrowdRuntime`；Demo 只保留 `FCrowdDemoPreparedRoundCommitPlan` 与 Host FinalValidate/NoFailApply adapter。
+- [x] [COMPUTED][HIGH] 旧 Demo Barrier 文件、类型、include、注册和测试消费者已物理删除；无 typedef、wrapper、shim、fallback 或双 Barrier。
+- [x] [COMPUTED][HIGH] Runtime 原子故障门、插件依赖边界门、Legacy 零符号门、既有 Target/Resource 故障门和最小 Production T8 Golden 全部通过。
+- [ ] [INFERRED][HIGH] 后续 rollback 与 Round Transaction 切片同样执行“替换即删除”：不保留完整 rollback 兼容数据源，不保留 `TryPrepareRoundApply` 包装或 Demo-local Transaction fallback。
+
+[COMPUTED][HIGH] WA8 未关闭；下一切片处理完整 rollback 数组并删除旧数据源，之后才删除 `TryPrepareRoundApply` 与 Demo-local Round Transaction。
+
+## 2026-08-04 WA8-R Result Apply 原子 Barrier
+
+- [x] [COMPUTED][HIGH] Pending Finalize 同时持有 Prepared Proxy、一次构建的 Prepared Mass Plan 与 Commit Token。
+- [x] [COMPUTED][HIGH] Result Apply Stage 不提前 Commit Proxy；`AdvanceRoundWorkerFrame` 不重建 Dirty Mass Plan。
+- [x] [COMPUTED][HIGH] Final Validate 在首次写入前覆盖 token、水位、Generation、Stable View、Lifecycle、Mass Handle、字段 Owner、Fragment 与 Query collection。
+- [x] [COMPUTED][HIGH] Ordered Event/Behavior 在写前使用 Proxy/Authority 副本完整预演；成功提交顺序为 Mass Apply → Proxy Commit → no-fail 资源/表现/Behavior/Event 安装，Dirty ACK 仅在之后执行；Barrier 后可失败 finalize 已删除。
+- [x] [COMPUTED][HIGH] 定向门通过：DisableUnity、Architecture 2/2、WorkerResultApply 2/2、RuntimeV2 33/33。
+- [ ] [COMPUTED][HIGH] 完整双端 T8 runner 未通过：server/client RoundResult、client visual 与服务端 Golden/事件/性能日志均正确存在，但脚本仍误判这些完成日志缺失并超时。
+- [ ] [COMPUTED][HIGH] WA8 未关闭；`PreparedTargetResourceSlots`、完整 rollback 数组和 Demo-local Round Transaction 仍保留。
+- [x] [COMPUTED][HIGH] `PreparedTargetResourceSlots` 生产副作用已于 2026-08-15 迁入一次构建的 Prepared Target/Resource Plan；下一优先级已修正为 Runtime Barrier 所有权纠偏，再处理完整 rollback 数组与 Demo-local Round Transaction。
+
+## 2026-08-03 当前状态
+
+- [x] [COMPUTED][HIGH] 每 Tick Commit 已收敛为唯一 Movement Boundary Commit；重复 CommitPlan、PostFinalize State 和常驻 Checkpoint State 数组已物理删除。
+- [x] [COMPUTED][HIGH] Final Business 只为 Dirty Ref 构造；Checkpoint State 只在发布门之后临时构造；DisableUnity、17 项自动化、9785 T5/600 与 9786 T8/900 Golden 通过。
+- [x] [COMPUTED][HIGH] Legacy Round 普通 Correction 已默认关闭；只有 `-CrowdDemoLegacyFullCorrectionDiagnostic` 可显式开启。默认双 PIE 的旧 server full frame/client header 均为 0，WA7-R 稀疏 Scope Correction 门通过。
+- [x] [COMPUTED][HIGH] WA7-R Digest 已改为 Unreliable 自覆盖传输；丢失、乱序、重复、更新覆盖和 resync reset 单元门通过。
+- [x] [COMPUTED][HIGH] Worker Result Apply Proxy 已提供稳定实体视图、Stable Slot、Published Dirty Batch 与 ACK；普通 Intent/Proxy refresh 无完整 membership copy/sort/map。
+- [x] [COMPUTED][HIGH] `FCrowdDemoRoundBoundaryGatherStage`、`RequestSubmitQuery`、公共 Runner/Orchestrator/WorkGraph、Round 四阶段和 Poll shell 已物理删除；完整 Snapshot Mass 读取只允许 Input Sync bootstrap/Plan Revision。
+- [x] [COMPUTED][HIGH] 9779 T8/900 Golden 与 9781 T5/600 通过；step 600 均为 full-publish/hash/token=`1/3/598`，零 stale lifecycle。
+- [x] [COMPUTED][HIGH] 最终 Mass Result Apply 已使用持久 StableEntityRef→Handle 索引和 Dirty EntityCollection；写入前验证完整成员/Lifecycle/Fragment 集合，正常帧无无界完整 Query traversal。
+- [x] [COMPUTED][HIGH] 9782 T5/600 与 9784 T8/900 Golden 通过；Dirty Mass 遥测在 T8 动态场景为每批 20/20。
+- [x] [COMPUTED][HIGH] 9790 全 Production T5/600 与 9791 T8/900 通过；T8 只保留 1 个 `plan_phase=1.000` RoundResult Checkpoint，普通完整 Correction 为 0。
+- [x] [COMPUTED][HIGH] Target 已按 Cohort scope 增量失效；10k 双 Cohort 回归中仅受影响的 5000 实体执行 40 个 128 Guidance shard，未受影响 Cohort 无 Dirty/Topology rebuild。
+- [x] [COMPUTED][HIGH] Particle 多闭合 Interaction Island 已独立 Solve 并稳定归并，且有全局 exact Applied-State 验证与单体 fail-closed fallback。
+- [ ] [INFERRED][HIGH] Particle 大型单 Island 的 Cell-Pair Owner/逐轮 Barrier 分片仍 OPEN；当前 Cell 遥测不等于 Cell Solver 完成。
+- [ ] [COMPUTED][HIGH] 9780 T5 step 886 Target Demand 可行区不足仍 OPEN；不得用 9781 的 600 Tick 门覆盖该长窗口缺陷。
+- [ ] [INFERRED][HIGH] WA8 下一项是把 RoundResult/Late Join 迁到专用 Checkpoint 载荷，再物理删除 Legacy Correction producer/consumer/RPC；随后关闭 Target 长窗口缺陷，WA8.5/WA9 继续后置。
+
+## 历史切片记录（不覆盖上方当前状态）
+
+- [x] [COMPUTED][HIGH] Round 公共 Boundary Runner/commit envelope 依赖已移除，插件 Runner 文件与 Legacy Runner 测试已物理删除。
+- [x] [COMPUTED][HIGH] Round 直接 Apply Plan 验证与原子提交已通过 DisableUnity、结构自动化和真实 T8 step 300 门。
+- [ ] [COMPUTED][HIGH] 完整 T8 回归仍 OPEN：9724 step 415 Particle failure-trace replay hash mismatch。
+- [ ] [INFERRED][HIGH] 下一项是修复 Particle replay 后删除 Round 四阶段/Poll shell；WorkGraph/Orchestrator 类型仍有 Round 消费者，当前不得删除。
+
+- [x] [COMPUTED][HIGH] WA8 Demo transaction shell 脱钩：Friendly/Mixed Coordinator 均不再引用 Runner，Mixed 不再引用 WorkGraph；fallback 改为纯 Kernel plan，GT 仍以完整验证后的原子 Apply 为唯一写入边界。
+- [x] [COMPUTED][HIGH] 本切片构建/结构/功能回归：Development Editor DisableUnity、Mixed/Friendly Architecture、9706 fallback、9707 Friendly Production、9709 Mixed 六 Domain Production 通过。
+- [x] [COMPUTED][HIGH] Behavior Shadow 自主预测合同：bootstrap 严格状态 parity，普通 Intent 严格控制/命令 parity；9714 完成 600/600 expectation、双端业务 PASS、零 violation。
+- [ ] [INFERRED][HIGH] WA8 下一结构项：迁移 Round 的最后一个生产 Runner/WorkGraph 消费者，再物理删除公共 API/Legacy 测试并执行 AST/注册审计。
+- [ ] [COMPUTED][HIGH] WA9 性能仍 OPEN：9709 客户端 frame p95=`35.949ms`，高于 `33.333ms`，且该运行只有 20 实体。
+
+- [x] [COMPUTED][HIGH] WA8 Friendly Production 直接 Apply：Movement+Behavior Production 不创建 Runner，bootstrap 仅发布空全局 MovementControl 与静态实体 Profile，普通帧只发 Intent 增量；9703 完成全部 Friendly 业务/生命周期门，`direct_worker_apply=1`、双端 hash=`3180435972084878253`、硬失败 0。
+- [ ] [INFERRED][HIGH] WA8 下一结构项：让 Mixed/Friendly Shadow/Canary parity 脱离 Runner/WorkGraph transaction shell，删除失去消费者的公共 Legacy API 和测试，再删除 Round 四阶段/Poll shell。
+
+[COMPUTED][HIGH] 9701 更新：full-Worker Mixed Production 已绕过 Legacy Runner/WorkGraph，使用 sparse MovementControl v8 + per-entity profile 和 Worker dirty Facing 原子 Apply；600 Tick PASS，Impact/Damage/Death=`66/66/13`、duplicate/stale=`0/0`、min separation=`70.04cm`、p95=`17.641ms`。
+
+[COMPUTED][HIGH] Mixed 当前没有 TargetControl cohort/flow，因此 LocalPredictive 在该 sparse control 中保持关闭；Worker Movement/Particle 与 GT safety commit 仍启用。WA8 仍因 Friendly Runner、Round 四阶段 shell 与 fallback/public Legacy API 存在而不勾选。
+
+[COMPUTED][HIGH] WA8 增量更新：full-Worker Mixed 9689 已在 Movement/Behavior/Target/Particle/Projectile/Combat 全 Production 下完成 600 Tick，业务计数、projectile 守恒、零 duplicate、零 stale reject 和 p95 门均通过；Production combat/projectile apply 不再被 Legacy parity 否决，指标也改由 Worker output 累计。
+
+[INFERRED][HIGH] WA8 仍不得勾选完成：Mixed Production 尚会执行 Legacy combat/projectile prepare，Friendly/Mixed Legacy Runner 与 Round Boundary shell 尚未物理删除。
+
+[COMPUTED][HIGH] 9690 更新：Mixed Production 的 Legacy projectile/impact/health prepare 已删除，600 Tick 回归 PASS；尚存 GT Attack Planner（Behavior MovementLock/标签消费者）、Friendly/Mixed Legacy Runner 与 Round Boundary shell，因此 WA8 仍不勾选。
+
+[COMPUTED][HIGH] 9691 更新：Combat state v2 已承载 Commit movement lock，Mixed Production GT Attack Planner 已从热路径删除，600 Tick 再次 PASS。WA8 仍因 Friendly/Mixed Boundary Runner/WorkGraph 与 Round transaction shell 存在而不勾选。
+
+## 2026-08-02 WA8 T8 realtime closure
+
+- [x] [COMPUTED][HIGH] Production Movement/Particle/Facing tail直接从完整验证后的Worker输出构造原子Commit Plan；Shadow/Canary对照路径不变。
+- [x] [COMPUTED][HIGH] 普通全Worker T8的Clock Intent在Legacy domain staging前提交；同Generation、同Plan、bootstrap完成、无Target且五域Production门均有结构断言。
+- [x] [COMPUTED][HIGH] 9687 Round 1/2性能通过：p95=`33.999/33.981ms`、realtime=`0.998/1.000`、pending=`902/901`。
+- [x] [COMPUTED][HIGH] 两轮900 Tick业务闭合；Round 1为50次spawn/impact/damage、duplicate=0、hash=`439379904/1411313634/6141440`，零Violation/Rejected。
+- [x] [COMPUTED][HIGH] Development Editor DisableUnity与`CrowdDemo.Architecture.PostFinalizeMinimalQuery`通过。
+- [ ] [INFERRED][HIGH] 下一门：全Worker Mixed 600 Tick完整业务覆盖；WA8 Legacy shell仍不得标记删除完成。
+
+## 2026-08-02 WA8 Round transition closure
+
+- [x] [COMPUTED][HIGH] ProjectileControl fresh Revision 可显式替换状态并从 FixedStep 0 开始新 Round；同 Revision CombatClock 仍只做 autonomous continuation。
+- [x] [COMPUTED][HIGH] MovementControl 完整 Resource replan 稳定覆盖同轮 anchored TimeWheel continuation，不重复规划。
+- [x] [COMPUTED][HIGH] PlanRevision 变化发送一次 input-owned InputSnapshot baseline；普通 Tick 不发送实体状态。
+- [x] [COMPUTED][HIGH] 9685 在同一 Generation、`resnapshots=1` 下从 Round 1 的 900 Tick 进入 Round 2，并继续到 step 300，无 Domain failure。
+- [x] [COMPUTED][HIGH] 该历史性能缺口已由9686/9687关闭；最新Round 1 p95=`33.999ms`、realtime=`0.998`、boundary pending=`902`。
+- [ ] [INFERRED][HIGH] WA8仍不得关闭；下一项是Mixed完整业务门，不是直接宣告Legacy删除完成。
+
+## 2026-08-02 WA8 T8 closure update
+
+- [x] [COMPUTED][HIGH] Round autonomous Behavior expectation 不再为无消费者路径累计 MatchedEventBatch；容量专项通过。
+- [x] [COMPUTED][HIGH] Combat/HitFlash 使用 canonical SimulationTick 时钟，900 Tick Worker/Legacy Combat payload 一致。
+- [x] [COMPUTED][HIGH] Round 末尾不再提交重复 Clock Tick；9680 终局 50/50/50、duplicate=0，ProjectileControl `published=1/reused=899`。
+- [ ] [COMPUTED][HIGH] 性能未通过：fixed-step p95=`67.871ms`、realtime=`0.500`。
+- [x] [COMPUTED][HIGH] 该9680历史失败已由9685关闭：同 World Round 2 已继续到step 300。
+- [ ] [INFERRED][HIGH] WA8 不得关闭，Legacy shell 不得删除。
+
+## 2026-08-02 WA8 Projectile clock slice
+
+- [COMPUTED][HIGH] PASS：不更新 ProjectileControl revision 的 CombatClock 可连续推进 Projectile/Combat executor。
+- [COMPUTED][HIGH] PASS：Projectile 语义 hash 排除 tick/time、动态 position/velocity/health/attack state 与当前 projectile mirror。
+- [COMPUTED][HIGH] PASS：Mixed 等待/校验区分 Worker StateRevision 与配置 ControlRevision。
+- [COMPUTED][HIGH] PASS：Shadow/Canary 保留逐 Tick HostInput；9664 Mixed Behavior+Combat Production 兼容门在 step 600 PASS。
+- [x] [COMPUTED][HIGH] RESOLVED：全 Worker T8 step 9 Behavior Authority event-batch容量问题已修复；9680完成900 Tick业务终局。
+- [COMPUTED][HIGH] BLOCKED：全 Worker Mixed 到 step 2106 仍未满足 death/target-switch/impact 业务覆盖。
+- [INFERRED][HIGH] WA8 不得关闭，Legacy Runner/四阶段不得开始删除。
+
+## WA8 Mixed ordinary intent checkpoint (2026-08-02)
+
+- [x] [COMPUTED][HIGH] Mixed bootstrap保留一次完整`BoundarySnapshot`；普通Worker帧改用`SubmitIntentBatch`，不把普通帧Snapshot传入Worker输入合同。
+- [x] [COMPUTED][HIGH] Mixed生产生命周期操作通过有界Coordinator journal提交显式Despawn、Spawn与Movement Profile Revision；Runtime接受后才清空journal。
+- [x] [COMPUTED][HIGH] Worker Despawn `ReasonId`与零基业务枚举解耦并映射为1-based非零值；9651在step 226接受首次Despawn、step 271接受Spawn/Profile Revision。
+- [x] [COMPUTED][HIGH] Mixed Production提交Worker-owned Behavior输出，不要求异步Worker运动学或Source输出Hash等于GT Prepared镜像；生命周期、输入水位、fixed step、事件和事务token仍fail-closed验证。
+- [x] [COMPUTED][HIGH] 9651真实Production服务端运行到step 600 PASS，spawn/despawn=`1/1`、stale reject=`0`、Worker普通Intent submitted=`600`且零`VIOLATION`；Development Editor DisableUnity、Architecture 1/1与`WorkerAuthoritativeSparse` 1/1通过。
+
+## WA8 Friendly Behavior incremental checkpoint (2026-08-02)
+
+- [x] [COMPUTED][HIGH] Added ordered Spawn, Despawn, and typed Movement Profile Revision input adapters with stable sequence assignment.
+- [x] [COMPUTED][HIGH] Added per-entity MovementProfile codec/store field and shared live-profile resolution for MovementPlanning, Movement, and Particle.
+- [x] [COMPUTED][HIGH] Round bootstrap publishes profiles once; ordinary intent frames do not encode the complete MovementControl profile.
+- [x] [COMPUTED][HIGH] Same-batch LifecycleSerial reuse plus Profile Revision is covered by RuntimeV2 automation.
+- [x] [COMPUTED][HIGH] Sparse Movement correction invalidates derived continuation and passes the formal dual-PIE recovery gate.
+- [x] [COMPUTED][HIGH] Friendly Logistics real Mass recycle now appends a bounded Despawn -> Spawn -> Movement Profile Revision journal from the production entity-replacement site; Worker Input Sync drains and acknowledges it only after Runtime accepts the intent batch.
+- [x] [COMPUTED][HIGH] Friendly Worker bootstrap uses one BoundarySnapshot, while ordinary Worker frames use the intent-only entry and publish an ordered reliable lifecycle Spawn before records for the replacement lifecycle.
+- [x] [COMPUTED][HIGH] Friendly ordinary intents no longer carry complete per-entity Behavior contexts. Clock intents schedule local Behavior evaluation from Worker Movement; only contexts containing typed external records enter the intent batch, and sparse parity validates only the affected entities.
+- [x] [COMPUTED][HIGH] Friendly Production commits Worker-owned Source/Resolved/Business output after validating lifecycle, input sequence, fixed step, ordered events, and the unchanged GT transaction token. The dedicated `WorkerAuthoritativeSparse` test locks sparse matching and rejects duplicate authoritative commits.
+- [x] [COMPUTED][HIGH] Friendly server run 9644 and real server+client run 9645 passed the 40-second Claim/Pickup/recycle/Fallback/Deliver gate. Run 9645 closed the previous external-client backlog failure.
+- [ ] [INFERRED][HIGH] Delete the Legacy Round BoundarySnapshot/four-stage transaction only after the remaining Target/Projectile inputs are independent deltas and Friendly/Mixed no longer consume the Legacy Runner.
+
+[INFERRED][HIGH] 本表只在生产调用链和对应专项门同时满足时勾选。接口、Codec或测试夹具存在但未接入生产，不得标为完整通过；Behavior Source现行状态以`EntityBehaviorSourceArchitecture.md`为准。
+
+[COMPUTED][HIGH] T9 Mixed Combat Integration、DP0–DP6、PJ0–PJ6、S0–S6和R0–R7均已关闭。pre-T9提交`5b947389`只作为历史恢复基线；当前未关闭的游戏循环阶段是T10，另有独立性能架构阶段AB1–AB6尚未关闭。
+
+## WA0–WA9 全面Worker权威检查表
+
+- [x] [COMPUTED][HIGH] WA0：全面Worker终态、Domain DAG、插件/项目边界、逐字段Ownership Matrix、Legacy四节点迁移地位和WA0–WA9顺序已冻结。
+- [x] [COMPUTED][HIGH] WA1：Work Ring、Time Wheel、Dependency Index、Dirty/Resource/Ordered Event Store、Checkpoint、Domain Registry、非阻塞短任务Shard Host、跨Poll续跑、固定Domain屏障、稳定Merge、Dependency漏标审计、Correction/Generation失效、in-flight teardown及传播预算延期已实现；四构建、RuntimeV2 11/11、MassCrowd 96/96通过，并修复ForceUnity私有辅助符号冲突。Synthetic Shadow默认关闭，未改变Production Writer。
+- [x] [COMPUTED][HIGH] WA2：版本化Nav/Flow/Environment与MovementControl Resource、Epoch边界交换、Time Wheel自主Movement、Worker Local Predictive/静态环境约束、稳定Domain执行Rank、Planning覆盖到期Movement去重、Shadow→封闭Canary→Production Writer切换均已实现。Development Editor `-DisableUnity`、RuntimeV2 19/19、20实体Obstacle Canary、Obstacle Production和SoftPressure Production通过；Production Movement状态从Worker Store读取，GT只提供版本化Guidance/Resource和迁移期代理应用。
+- [x] [COMPUTED][HIGH] WA3：Worker执行完整闭合Particle集合、唯一Pair审计、稳定双向约束、字段级NeedsRecompute传播与OutputDirty发布；Particle后最终状态成为下一Epoch Movement基线。独立Shadow/封闭Canary/Production Writer门已接入，Legacy Particle仅保留诊断/Canary对照，不再决定Production提交。Development Editor `-DisableUnity`、RuntimeV2 19/19、20实体SoftPressure Canary与Production均无硬失败。
+- [x] [COMPUTED][HIGH] WA4：Worker Target Executor持有Cohort Membership、Demand、Plan、Quota execution、Target Revision与Flow/Target资源订阅；Topology/Plan按Revision缓存，OutputDirty只发布变化代理。Shadow/封闭Canary/Production门已接入，Production停止Legacy Target资源发布并以Worker Target proxy驱动Guidance，同时保持BusinessOverride优先级。RuntimeV2 20/20、Development Editor DisableUnity、9424/9425/9431通过；9431到step 300为20/20 verified且无Violation。
+- [x] [COMPUTED][HIGH] WA5：Projectile/CombatReactive Domain与全局闭合集Writer、终态不回灌、ordered lifecycle/hit event已实现；Round T8及Mixed T9的Attack/Cooldown、Damage/Death/Hit React和同Epoch Combat→Movement均已切为Worker Commit Writer。9451/9452/9453完成T8 Shadow/闭合Canary/Production到step 300；9467/9468/9469完成T9 Shadow/闭合Canary/Production到step 600，三次业务计数和entity/membership/commit hash一致。Demo Combat状态、active Projectile checkpoint和event baseline已通过新Executor下一步逐字重放；Codec专项与RuntimeV2 21/21通过。
+- [x] [COMPUTED][HIGH] WA6：Lifecycle与Behavior Worker权威已关闭；覆盖同批StableEntityRef复用、LifecycleSerial失效、Capability Binding、Source/Command幂等、Business Commit Ledger、Worker prepared commit及Behavior→Movement同Epoch消费。RuntimeV2 24/24，T6M 9531、Friendly 9532、Mixed 9533 Production正式门通过。
+- [x] [COMPUTED][HIGH] WA7-R：有序Intent、Digest、稀疏Correction、Checkpoint、Late Join顺序门和300 Tick双PIE无纠错/单Scope恢复门已通过。
+- [ ] [COMPUTED][HIGH] WA8：Round、Friendly与Mixed普通Worker帧均已切到Intent入口；完整MovementControl Profile已冻结，同Plan Mass与Mixed Coordinator的Spawn/Despawn/Profile journal已接通，Friendly/Mixed Behavior提交均消费Worker-owned输出。仍待Target/Projectile增量化、完整Legacy Mass Snapshot/Runner及四节点Boundary/旧Mailbox物理删除。
+- [ ] [INFERRED][HIGH] WA9：完整自动化、构建、场景、规模、网络、视觉与性能关闭门。
+
+## PW0–PW8 持久Worker Simulation Runtime检查表
+
+- [x] [INFERRED][HIGH] PW0：目标设计已冻结Worker权威镜像、单向输入/输出、可变Published Batch、Processor边界、Simulation Time、混合Consistency Domain和实施顺序；生产代码尚未迁移。
+- [x] [COMPUTED][HIGH] PW1：通用Schema Input/Result合同、Generation/Sequence门、显式Limits、Building/Published/Consuming三缓冲、State latest-wins、有界有序Event和GT单帧一次交换已实现；未接入Demo生产。Development/DebugGame Editor `-DisableUnity`、定向7/7、MassCrowd 72/72与CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW2：每World唯一Worker Runtime宿主、SoA Mirror、固定Simulation Clock、单Owner短Pump、显式队列边界、Invalidate/Stop/Resnapshot已实现；不访问Mass/World/UObject且不写生产结果。Development/DebugGame Editor `-DisableUnity`、定向10/10、MassCrowd 75/75与CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW3：Round/Mixed/Friendly已接入首次全量、后续Lifecycle/Dirty State/Resource/已提交Command增量；按Input Sequence比较Entity/Lifecycle、State与源Snapshot元数据Hash且不写Mass。Mixed实际300批含165条Command，Mixed/Friendly各连续600批保持`pending=0`、`superseded=0`、无Violation；Development/DebugGame `-DisableUnity`、定向2/2、MassCrowd 77/77与CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW4：SharedFlow/Facing/Business短Task Shard、每World Runtime异步Shadow Scheduler和生产逐批比较已接入；Task可乱序完成但结果按全局提交序交付，Shard大小1–64轮换且正反派发交替。9111 step 300累计900/900完成、in-flight=0、mismatch=0；Development/DebugGame `-DisableUnity`、MassCrowd 78/78、CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW5：Worker Owner可发布空或可变State Batch；GT Result Apply Processor每帧一次交换并只写Presentation/诊断代理，验证Owner Mask、Lifecycle、Publish/Event Sequence和Hash。0/1/10/9999及Exchange并发门、ResultApply 2/2、9112生产20 Patch零stale通过；Development/DebugGame `-DisableUnity`、MassCrowd 80/80、CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW6：Movement Position/Velocity/Facing字段Owner、普通输入Echo拒绝、Correction Revision、Client插值及Shadow→Canary→Production切换已关闭；Production最终Mass代理Writer消费Runtime尾链而非旧Boundary尾链。9118/9116/9117/9119覆盖Shadow、5实体Canary、Obstacle/SoftPressure Production；Development/DebugGame `-DisableUnity`、Movement 2/2、MassCrowd 82/82、CrowdDemo 134/134通过。
+- [x] [COMPUTED][HIGH] PW7：Particle/Target/Combat强一致Domain已接入显式Evidence与fail-closed迁移判定；定向自动化1/1及9121真实Round检查点通过，当前三类Domain均因缺少专项证明继续保留Boundary。
+- [x] [COMPUTED][HIGH] PW8：Production Movement单Owner、跨Round绝对Simulation Time、rollback-safe Dynamic Flow Hash、1k/2k/5k/10k持续扫描、单进程双PIE、Correction/teardown、T1–T9、Mixed/Friendly/Continuous及T7录屏/FFmpeg连续性门已关闭。最终规模step 300的接受状态数为`301000/602000/1505000/3010000`且队列均为0；10k Worker lag=`9.677ms`，但完整强一致Demo Boundary约145ms/step，不标记为10k实时游戏门。Development/DebugGame `-DisableUnity`、MassCrowd 83/83与CrowdDemo 135/135通过。
+
+- [ ] [COMPUTED][HIGH] 2026-07-30单主体ISM受击闪色：实现与主体表现门已完成。项目VAT父材质读取PICD slot 2，旧HitFlash MI/ISM和双份Add/Update/Remove已删除；0/1/10/9999与SwapRemove自动化、Development/DebugGame `-DisableUnity`、MassCrowd 83/83、CrowdDemo 137/137、T8、Continuous、Friendly、T7逐帧白闪及1k/2k/5k/10k服务端吞吐门通过。最终关闭仍被Mixed 500现有PW输入序列问题阻塞：9207与9213都在fixed-step 93收到`ECrowdWorkerShadowSubmitResult::RequiresResnapshot`，本切片按边界不修改PW Runtime。
+
+## AB0–AB6 异步Fixed-Step Boundary检查表
+
+- [x] [INFERRED][HIGH] AB0：详细架构文档已区分GT Processor、非GT Mass Work Processor与Boundary Work Stage，并冻结Thread Pool DAG、Mailbox、Request/Result、事务身份和完成定义。
+- [x] [COMPUTED][HIGH] AB1：Runtime阻塞等待接口已删除；`PollAndDrain()`、Task queue/run/critical-path和`ordinary_block_wait_count`已接入。
+- [x] [COMPUTED][HIGH] AB2：Runner即每World深度1 Mailbox，事务身份与Generation失效合同已实现。
+- [x] [COMPUTED][HIGH] AB3：跨Game Frame Result消费和Request生产代码已接入；8822 T5S功能、稳定性和性能门通过。
+- [x] [COMPUTED][HIGH] AB4：T5M/T6A/T6S/T6M推广、Worker Topology缓存与共享Flow lookup已完成；四图独立双端门通过。
+- [ ] [INFERRED][HIGH] AB5：已重新定义为全面Worker权威门；四节点与1/0/1 Boundary证据降为Legacy基线。只有WA8删除Legacy Boundary且WA9新证据通过后关闭。
+- [ ] [INFERRED][HIGH] AB6：必须在全面Worker新路径上重跑双PIE、强制Correction、teardown/地图切换、完成顺序、全场景和FFmpeg；不复用PW8/四节点旧日志。
+
+## T9 Mixed Combat Integration检查表
+
+- [x] [COMPUTED][HIGH] 公共业务合同包含MixedCombat Scenario/Planner/Attack Action、Melee/MidRange/Ranged Payload与Profile稳定ID，以及统一五阶段攻击状态机。
+- [x] [COMPUTED][HIGH] `AttackTarget`生产Source已删除；三类攻击由Intent驱动，Commit步MovementLock只持续一帧。
+- [x] [COMPUTED][HIGH] Melee Moving Sphere、MidRange Capsule等价Sweep和Ranged Mass Projectile共享Spatial索引、通用Impact/Hit与Combat Resolver出口。
+- [x] [COMPUTED][HIGH] 死亡、目标失效、下一Boundary重选、TargetRegion/Flow缓存重建和死亡实体不再被引用/即时Sweep命中均已接入。
+- [x] [COMPUTED][HIGH] v2 Mixed Agent可靠Payload包含Profile、Target、Phase、PhaseEnter、CooldownEnd和FireSequence；旧Payload精确拒绝，late join恢复攻击状态。
+- [x] [COMPUTED][HIGH] 8517双端20实体门通过三类攻击、9次死亡、227次目标切换/区域计划重建、零死亡引用、零重复Projectile、Hash一致和`2.910ms` p95。
+- [x] [COMPUTED][HIGH] 完整自动化为MassCrowd 64/64、CrowdDemo 133/133；Registry黄金值为`11335697795273479593`。
+- [x] [COMPUTED][HIGH] T8双端版本化黄金门与Development/DebugGame × ForceUnity/DisableUnity四构建均通过。
+
+## DP0–DP6 Demo业务规划检查表
+
+- [x] [COMPUTED][HIGH] DP0：冻结`07359ed`代码、ID、角色比例、业务Hash、65/65、125/125、四构建及20/100/500基线。
+- [x] [COMPUTED][HIGH] DP1：独立`MassCrowdDemoBusiness`模块、Planner Registry/Snapshot/Decision/Writer/Runner和结构边界已实现。
+- [x] [COMPUTED][HIGH] DP2：Logistics/PursueAttack/GuardFlee/Roam/Escort及Reaction Planner、稳定角色分配和反序等价已实现。
+- [x] [COMPUTED][HIGH] DP3：Provider、Diff、Ledger、Combat/RangedAttack规划和Prepared Adapter已迁移，Runtime领域API已删除。
+- [x] [COMPUTED][HIGH] DP4：Mixed/Friendly/T7/T8生产迁移完成，T1–T6/Continuous使用NoBusiness，旧双路径已删除。
+- [x] [COMPUTED][HIGH] DP5：共享Planning Host、Source状态发布、零写入与模块依赖结构门已通过。
+- [x] [COMPUTED][HIGH] DP6：MassCrowd 64/64、CrowdDemo 131/131、四构建、全部真实入口及Mixed 20/100/500规模门通过。
+
+## PJ0–PJ6 Projectile模块化关闭检查表
+
+- [x] [COMPUTED][HIGH] PJ0：当前文档与历史快照已分离，Projectile当前数组事务、模块所有权和最新测试数据无冲突描述。
+- [x] [COMPUTED][HIGH] PJ1：`MassCrowdSpatial`、`MassCrowdCombat`、`MassCrowdProjectiles`模块和单向依赖已建立；公共模块无Demo引用，Runtime不反向依赖Projectiles。
+- [x] [COMPUTED][HIGH] PJ2：Movement SpatialSafety与Projectile稳定Body/Grid/相对Sweep/环境Sweep已统一迁入Spatial模块；候选NavLayer随安全结果原子提交。
+- [x] [COMPUTED][HIGH] PJ3：Impact/Hit、Effect Profile、纯Resolver及Prepared Host Commit已迁入Combat模块。
+- [x] [COMPUTED][HIGH] PJ4：Projectile Mass Fragment/Trait、动态Mass实体池、Boundary WORK与Prepared Patch已迁入Projectiles模块；Mass Fragment保持唯一持久权威。
+- [x] [COMPUTED][HIGH] PJ5：Demo只保留攻击业务、伤害/VAT/视觉映射和清晰Adapter；旧Demo Kernel/Fragment/Store及重复Round入口已删除。
+- [x] [COMPUTED][HIGH] PJ6：三模块专项、结构门、T8/R7、`MassCrowd 65/65`、`CrowdDemo 125/125`、四构建及20/100/500并发4/20/100 Projectile双端门通过；服务端p95=`2.152/9.675/30.016ms`，最小间距=`70.11/70.03/70.00cm`。
+
+## S0–S6 Standard Sources当前检查表
+
+- [x] [COMPUTED][HIGH] S0：RootMotionSource式扩展类比、StandardSources模块边界、通用/产品Source归属、Context/State、组合和验收边界已经写入事实源。
+- [x] [COMPUTED][HIGH] S1：Mixed已消费Resolved Movement/Facing/Constraint并执行Movement Pipeline、Particle与Facing Finalize；Business与Movement不再隐式耦合，InteractionLayer隔离跨层邻居，Prepared Final Apply保持失败零写入。Development `-DisableUnity`、Core 13/13、Mixed定向3/3及20实体服务端/双端真实门通过。
+- [x] [COMPUTED][HIGH] S2：`MassCrowdStandardSources`模块、稳定Provider/TypeId、公共TargetKinematics/FormationAnchor Context、Registry Hash和单向模块边界已实现。
+- [x] [COMPUTED][HIGH] S3：MoveTo/Arrive/Follow/Pursue/Flee/MaintainDistance/Facing/Constraint第一批自主Evaluator及Payload/Context/State专项已实现。
+- [x] [COMPUTED][HIGH] S4：Demo已迁移为五Controller直接维护稳定Source集合Diff；产品Provider只保留SharedFlow、Cargo、Pickup/Deliver/Attack，生产Movement/Facing不扫描SourceSet或TypeId。
+- [x] [COMPUTED][HIGH] S5：确定性Wander、FormationOffset、TimedImpulse、Escort、Pursue+Attack、一帧显式Lock和HitReaction精确恢复门已实现。
+- [x] [COMPUTED][HIGH] S6：StandardSources 8/8、Mixed组合5/5、第三方Fixture与20/100/500同路径双端late join继续保持关闭；PJ6最终完整回归更新为MassCrowd 65/65、CrowdDemo 125/125和四构建全通过。
+
+## R0–R7 基础框架历史关闭表
+
+- [x] [COMPUTED][HIGH] R0：旧B0–B7降级为历史证据，现行事实源、阶段顺序和验收口径已对齐。
+- [x] [COMPUTED][HIGH] R1：公共Provider/Context/State/Registry Hash与独立第三方Fixture插件已通过Public API、冻结冲突、持久状态、六通道和网络回放专项。
+- [x] [COMPUTED][HIGH] R2：领域Source已迁到Demo Provider，控制器使用持久集合Diff，Mixed生产移动消费Resolved Movement；该历史框架门不证明完整Movement Pipeline或通用Source库。
+- [x] [COMPUTED][HIGH] R3：通用Task DAG、稳定Patch Adapter和Round/Mixed预验证后不可失败Final Apply已实现，失败零写入有自动化证据。
+- [x] [COMPUTED][HIGH] R4：Behavior网络v3已接入生产可靠状态、late join与resync，Registry/Schema/State进入校验。
+- [x] [COMPUTED][HIGH] R5：Mass Fragment已成为Projectile唯一权威；网格Broadphase、相对/环境Sweep、通用Impact/Hit、阵营/NavLayer、Pierce及旧数组路径删除已完成。
+- [x] [COMPUTED][HIGH] R6：StateTree Adapter已拆为默认禁用兄弟插件；主插件无StateTree依赖构建与独立Smoke通过。
+- [x] [COMPUTED][HIGH] R7：同路径20/100/500、20实体第三方Fixture + 持久Movement/Cargo/Business Source + 临时HitReaction压制/恢复 + 移动安全阶段 + 10发并发Mass Projectile组合门、Development/DebugGame、Unity/DisableUnity及完整自动化均已通过；组合门验证Mass Fragment权威、Broadphase/Sweep 10/10精确命中和恢复后持久Source 20/20不丢失。
+
+## 核心模拟与架构
+
+- [x] [COMPUTED][HIGH] `MassCrowdSimulation`插件阶段1骨架与五模块单向依赖建立。
+- [x] [COMPUTED][HIGH] Core公共API无`CrowdDemo`命名，插件边界源码扫描1/1通过。
+- [x] [COMPUTED][HIGH] Shared Flow已提取到Core并接入Runtime生产WORK；Runtime定义的权威resource覆盖静态场、动态anchor和T3双cohort，当前由Demo Pipeline托管，Demo field/sample仅为迁移期镜像。SF1 golden hash=`267519150`。
+- [x] [COMPUTED][HIGH] Target Region Transport已提取到Core并接入Runtime生产WORK，旧/Core/Runtime全链fixture覆盖Topology、Demand、Plan、quota execution、Guidance与claim replacement。
+- [x] [COMPUTED][HIGH] Guidance Compose已提取到Core，旧/Core fixture覆盖provider优先级、乱序、stale revision、Stop fallback、量化与hash。
+- [x] [COMPUTED][HIGH] Local Predictive及Velocity Half-Plane已提取到Core，旧/Core fixture覆盖真实8518六实体联合恢复、pair、grant、result与component hash。
+- [x] [COMPUTED][HIGH] Particle Safety已提取到Core，8372完整20实体fixture覆盖Soft、Environment、UnifiedHard、Quantized、FinalSafety、candidate及applied几何hash。
+- [x] [COMPUTED][HIGH] Facing已提取到Core，旧/Core fixture覆盖自主朝向、最终落位后朝目标、转速限制、保持Yaw、角度跨界、输入乱序及稳定hash。
+- [x] [COMPUTED][HIGH] Runtime Base Movement trait及identity/state/properties/facing/output持久 fragments 已建立；Guidance、local velocity 与 Particle 中间结果使用 prepared POD。Gather按Capability稳定分批，Merge按AgentId唯一化，Commit先全量验证Lifecycle再允许写回。
+- [x] [COMPUTED][HIGH] Demo template只保留Runtime Base Movement fragments作为中间运动权威；正式Guidance Compose由Runtime WORK执行Core kernel并写Runtime composed，旧Demo MoveIntent/GuidanceCandidates/ComposedGuidance fragments已删除。
+- [x] [COMPUTED][HIGH] 正式Local Predictive由Runtime WORK消费prepared composed并执行Core kernel；Runtime local-velocity与同源prepared SoA一次发布，旧Demo local-velocity fragment及Demo kernel生产调用均已删除。
+- [x] [COMPUTED][HIGH] 正式Particle Safety由Runtime WORK执行Core Solve及applied-state安全复验；Runtime particle结果与同源prepared SoA一次发布，旧Demo particle fragment已删除，MovementFinalize仍是RoundSim唯一写入点。
+- [x] [COMPUTED][HIGH] 正式Facing由Runtime WORK调用Core kernel；完整AgentId/result集合校验后发布Runtime Facing及精确rollback fact，旧Demo facing fragment已删除，MovementFinalize只消费Runtime Facing。
+- [x] [COMPUTED][HIGH] 最终Movement由Runtime WORK生成并经稳定Merge形成唯一Commit plan；完整AgentId/Lifecycle集合通过后才同步写Runtime/Demo状态，Authority/Client Commit只消费Runtime MovementOutput。
+
+- [x] [COMPUTED][HIGH] 顶层parser只接受0/1及`SimRoundObstacle/SimRoundSoftPressure`。
+- [x] [COMPUTED][HIGH] TargetApproach、TargetSlotLayout和旧Polar Density生产引用已删除。
+- [x] [COMPUTED][HIGH] Flow、Target Region和Business输出独立candidate；唯一Guidance Compose写自主速度。
+- [x] [COMPUTED][HIGH] Local Predictive与Particle不反向改写自主向量或Facing。
+- [x] [COMPUTED][HIGH] Rollback使用不可变资源引用与可变执行态，correction仍只在fixed boundary应用。
+- [x] [COMPUTED][HIGH] Compose、Local Predictive、MovementPredict、Particle和Facing已接入统一snapshot/prepared POD WORK输入链。
+- [x] [COMPUTED][HIGH] P1生产代码已收敛为一次gather/dispatch/wait/writer，Business/Combat、按Cohort Target、SharedFlow、Obstacle、Movement、Particle与Facing均由typed Worker DAG输出；8132/8137/8138/8139当前版本T2/T6/T7/T8双端复测通过。
+- [x] [COMPUTED][HIGH] Authority Mass archetype已按Base/Target/Combat bitset拆成四种精确template，Projectile继续使用独立archetype；Round与Replication Query对Combat bundle采用Optional并生成确定性默认事实。capability结构3/3和Base+Target真实功能已通过；其backlog性能回退归AB5继续处理。
+
+## 生产运行与复制（与 Demo 验收分开）
+
+- [x] [COMPUTED][HIGH] 通用运行、行为组合、持续生命周期和生产复制合同已冻结在`MassCrowdUnifiedRuntimeAndReplicationContract.md`。
+- [x] [COMPUTED][HIGH] `FCrowdStableEntityRef`、Capability Profile/Modifier、Source Handle/Spec/Command/Instance、六通道 Contribution 与组合式 AgentFacts POD 已在`MassCrowdCore`实现；Fragment不再保存权威ActiveBehavior，Faction不决定Capability。
+- [x] [COMPUTED][HIGH] `MassCrowdNetworking`已实现通用 Relevant Snapshot、lifecycle batches、owner-only replication actor、late-join baseline、可靠状态序列、latest-wins correction、空间RelevantSet与resync重建。
+- [x] [COMPUTED][HIGH] `MassCrowdPresentation`已实现按StableEntityRef管理的slot table、swap-remove反向表、幂等spawn/update/despawn、stale tombstone、Profile与可选Cargo引用；J和ContinuousLifecycle已通过Demo ISM sink消费该公共层。
+- [x] [COMPUTED][HIGH] 阶段F已在插件最小World实现真实Mass entity创建/销毁、boundary apply、LifecycleSerial槽位复用、membership迁移与stale correction/despawn拒绝。
+- [x] [COMPUTED][HIGH] Demo continuous lifecycle 与J均使用公共owner-only replication channel和Presentation subsystem；Continuous 7975延迟加入追平可靠生命周期序列，J 7977 step600双端hash与active/visible通过。
+- [x] [COMPUTED][HIGH] Runtime Behavior Source六通道、开放Provider、持久状态和Resolver已实现；Provider选择API与中心`CanActivate`已删除，Mixed Movement/Facing消费Resolved Channels。
+- [x] [COMPUTED][HIGH] Commit Envelope与Snapshot/Lifecycle/Apply协议、旧版拒绝和网络单字节Behavior删除已完成；Source Command/SourceSet Codec v3接入生产发送/接收、late join与resync。
+- [x] [COMPUTED][HIGH] `MassCrowdStateTreeAdapter`已拆为默认禁用兄弟插件，只依赖Runtime并提交Source Command；真实业务Task不属于现行框架验收。
+- [x] [COMPUTED][HIGH] Core稳定分层Surface Graph与Runtime静态Recast提取器已实现；Shared Flow按NavLayer构建integration/direction，支持动态目标重新attachment而不改变拓扑，真实高低差地图已验证坡道、桥上桥下、高台、多路线、窄桥与不可通行落差。
+- [x] [COMPUTED][HIGH] Mixed Sandbox在独立非Round入口组合continuous lifecycle、Source World Store、Cargo、Combat、Recast Shared Flow和增量ISM；Movement/Facing消费Resolver结果，且同一路径20/100/500通过。
+- [x] [COMPUTED][HIGH] Demo固定Round初态已通过显式版本化adapter进入通用Relevant Snapshot；完整`RoundBootstrapPacket.Agents`不再作为复制属性，本地packet只作为既有Pipeline消费对象。
+- [ ] [COMPUTED][HIGH] T1 OpenSpawn 只切换既存实体的 Particle 参与状态和 staging 布局，不创建或销毁 Mass Agent，不能计为生产 spawn/despawn 通过。
+- [x] [COMPUTED][HIGH] 插件 Source 当前未检出 Enemy/Friendly/Faction 运动或复制特判；provider-neutral 边界保持。
+
+## Behavior Source B0–B7 历史执行快照（不表示当前状态）
+
+[COMPUTED][HIGH] 下列勾选状态冻结自R0重构前的旧B0–B7审计，用来保留“当时为何废止旧计划”的证据；它们不与顶部S0–S6及R0–R7当前关闭表合并，也不得被解释为当前缺口。
+
+- [COMPUTED][HIGH] 旧B0快照：可恢复检查点当时已完成。
+- [COMPUTED][HIGH] 旧B1快照：Core稳定ID、Capability Profile/Modifier、Source POD、容量、命令状态机和Stable Hash主体当时已完成。
+- [COMPUTED][HIGH] 旧B1快照：Fragment收口在该时点未完成；该断言不描述当前S0–S6状态。
+- [COMPUTED][HIGH] 旧B2快照：Presentation Additive及完整Blend专项在该时点缺失；后续由R/S阶段替代验收。
+- [COMPUTED][HIGH] 旧B3快照：Mixed在该时点尚未消费Resolved Movement/Facing；后续由S1/S4替代验收。
+- [COMPUTED][HIGH] 旧B4快照：Mixed在该时点仍使用补偿回滚；后续由R3/S1替代验收。
+- [COMPUTED][HIGH] 旧B5快照：生产迁移在该时点未完成；后续由S1–S6替代验收。
+- [COMPUTED][HIGH] 旧B6快照：真实StateTree业务Task未执行；该项目后来明确移出当前框架验收门。
+- [COMPUTED][HIGH] 旧B7快照：网络与规模门在该时点未完成；后续由R4/R7/S6替代验收。单进程DebugGame PIE和人工审片没有被冒充为本轮门。
+
+## P0–P5 产品化闭环
+
+- [x] [COMPUTED][HIGH] P0已关闭“A–J历史完成”与“J尚未组合”的文档冲突，并冻结GT/WORK、静态Recast Nav V1、物流混合边界、late join/relevancy和模块依赖方向；P0未修改源码、配置、地图或资产。
+- [x] [COMPUTED][HIGH] P1公共Orchestrator与完整Worker DAG已接入Round；T6首次门发现并修复旧同步验证在Wait前读取空集合的问题，随后T2/T6/T7/T8全部通过。
+- [x] [COMPUTED][HIGH] P2 Runtime Nav provider、Graph resource、revision/hash、Flow handle/refcount/有界LRU及`NavFlowProductSmall`已通过真实20实体垂直Recast双端门。
+- [x] [COMPUTED][HIGH] P3 owner-only channel、late-join baseline、可靠state、latest-wins correction、空间相关集、resync与Presentation实例生命周期已实现并通过低层及真实双端验证。
+- [x] [COMPUTED][HIGH] P4公共事务Store与专用`CrowdDemo_FriendlyLogisticsSmall`地图真实通过20实体、late join、竞争、守恒、幂等、死亡恢复、fallback、退避和取消；8154客户端Cargo attach/detach=`2/2`、实例=`20`，携货/交付近景证据已保存。
+- [x] [COMPUTED][HIGH] P5已移除J私有Graph/Flow cache、完整MixedState multicast、直接ISM表与O(N)安全检查；旧Round bootstrap/correction/ResultHeader/projectile及实体视觉已迁移到公共Networking/Presentation。8151/8153/8157分别关闭Round、J和双客户端late join门。
+
+## 自动化与构建
+
+- [x] [COMPUTED][HIGH] Development Editor使用`-DisableUnity`通过。
+- [x] [COMPUTED][HIGH] DebugGame Editor使用`-DisableUnity`通过。
+- [x] [COMPUTED][HIGH] B7已消除插件旧`.cpp`匿名命名空间辅助函数重名，Development `-ForceUnity`最终构建通过。
+- [x] [COMPUTED][HIGH] 阶段H收口时`CrowdDemo` 111/111与`MassCrowd` 25/25自动化通过；RuntimeBehavior与BehaviorAdapters定向2/2通过。
+- [x] [COMPUTED][HIGH] 阶段I收口时Development/DebugGame `-DisableUnity`、NavSurfaceGraph定向3/3、`MassCrowd` 27/27与`CrowdDemo` 112/112通过；8800真实Recast probe的8/8可达marker与不可达drop门通过，并保留视觉截图。
+- [x] [COMPUTED][HIGH] 阶段J收口时Development/DebugGame `-DisableUnity`、MixedSandbox定向2/2、`MassCrowd` 27/27与`CrowdDemo` 114/114通过；8804双端20实体业务、安全、同步和视觉门通过。
+- [x] [COMPUTED][HIGH] P0–P5最终Development/DebugGame `-DisableUnity`通过；累计`MassCrowd` 40/40与`CrowdDemo` 115/115通过。8156 NavFlow、8154 Friendly Logistics、8153 J、8151 Round及8157双客户端late join均无Fatal、Assertion、Ensure、`LogWindows: Error`或VIOLATION。
+- [x] [COMPUTED][HIGH] B0–B7代码增量后的完整自动化日志为`MassCrowd 50/50`与`CrowdDemo 115/115`、失败数0；该结果证明现有测试通过，不代表上述缺失专项已被覆盖。
+
+## 2026-07-28 回归增量
+
+- [x] [COMPUTED][HIGH] P3可靠记录支持有界batch和ACK后分批追赶；空ApplyFrame队列不再误报stale，未放宽缓存或网络预算。
+- [x] [COMPUTED][HIGH] P4 7953通过20实体真实运输、守恒、竞争、死亡恢复、fallback、不可达退避、late join及Cargo attach/detach；EmptyHand/Pickup/Carrying/Delivered四类近景文件已生成。
+- [x] [COMPUTED][HIGH] P5 7939 J、7946 Continuous和7948–7951 Round T2/T6/T7/T8通过，硬错误扫描为0。
+- [x] [COMPUTED][HIGH] 最新Development/DebugGame `-DisableUnity`、MassCrowd 43/43、CrowdDemo 115/115、反向依赖扫描与`git diff --check`通过。
+- [ ] [COMPUTED][HIGH] J隐藏客户端Actor Tick p95=`400ms`不是有效渲染帧性能证据；正式客户端帧性能仍须由前台/非节流采样门证明，不能用该数字标记通过。
+- [x] [COMPUTED][HIGH] 8663 T2生产回归通过Runtime Finalize/Commit链，fixed-step/Commit p95=`3.529/0.021ms`；8664 SF1 Single authority短运行无VIOLATION。
+- [x] [COMPUTED][HIGH] Facing迁移后8665 T2维持20/20 terminal、16/16 coverage和双端Yaw误差0，fixed-step/Commit p95=`3.638/0.020ms`；8666 SF1无Particle路径无VIOLATION。
+- [x] [COMPUTED][HIGH] Shared Flow迁移后8667 T2维持20/20 terminal、16/16 coverage、安全和双端hash通过，fixed-step/Flow p95=`3.166/0.264ms`；8668 SF1确认hash=`267519150`、rebuild=1且无硬错误。
+- [x] [COMPUTED][HIGH] Target Region迁移后8669 T2维持20/20 terminal、16/16 coverage、五类hash与性能门；8671异构T6 Static维持inside-band/coverage=`20/20`、unrouted/invalid/validation failure=0，安全、同步及性能门通过。
+- [x] [COMPUTED][HIGH] Runtime单boundary基础snapshot通过乱序、重复Agent拒绝和完整字段hash测试；Flow与Target Demand已复用该snapshot和prepared Flow SoA。8672 T2为20/20 terminal、16/16 coverage、fixed-step p95=`3.599ms`；8673异构T6为20/20 inside/coverage、fixed-step p95=`4.844ms`，两者安全与双端hash通过。
+- [x] [COMPUTED][HIGH] Flow/Target/Business Guidance overlay已与boundary snapshot稳定合并；Compose和Local Predictive不再为WORK输入重复读取基础Mass fragments。8677 T2、8678异构T6保持能力、安全、双端hash及性能门。
+- [x] [COMPUTED][HIGH] MovementPredict、Particle与Facing的基础WORK输入已从统一snapshot/prepared链消费；8681 T2、8682异构T6及8683 SF1 smoke无行为、安全或hash回退。
+- [x] [COMPUTED][HIGH] MovementFinalize从snapshot与prepared kinematics/facing组装Commit输入；旧第一遍全实体Gather已删除，完整镜像原子预验证保留。8684 T2、8685异构T6及8686 SF1 smoke通过。
+- [x] [COMPUTED][HIGH] MovementFinalize的原子镜像验证与提交后业务/指标采集已拆为最小查询；ApplyMetrics不再读取MoveIntent、Runtime properties、Runtime Particle/Facing。8687 T2、8688异构T6及8689 SF1 smoke通过。
+- [x] [COMPUTED][HIGH] Finalize状态写入与post-finalize业务/诊断采集已成为独立processor；每boundary Finalize成功标记同时保护post-finalize及Authority/Client Commit。8693 T2、8694异构T6和8695 SF1 smoke通过。
+- [x] [COMPUTED][HIGH] Post-finalize不再读取Formation、Composed Guidance、Particle Properties或未使用Particle Constraint fragment；精确Formation Radius由boundary fact保存。8698异构T6 rollback=`80/0/0`，8699 T2 rollback=`54/0/0`，8702 SF1 hash=`267519150`。
+- [x] [COMPUTED][HIGH] Post-finalize不再读取FlowSample与ObstacleConstraint fragment；prepared Flow恢复rollback事实，snapshot+final state复验penetration。8703异构T6 rollback=`80/0/0`、fixed-step p95=`4.595ms`，8704 SF1 hash=`267519150`。
+- [x] [COMPUTED][HIGH] Post-finalize不再读取GuidanceCandidates与Facing fragment；Guidance由snapshot+prepared overlays重建，Facing rollback fact由Facing阶段精确发布。8705异构T6 rollback=`80/0/0`、inside/coverage=`20/20`、fixed-step p95=`4.551ms`，8706 SF1 hash=`267519150`。
+- [x] [COMPUTED][HIGH] T1 OpenSpawn唯一runtime生成稳定prepared boundary facts；per-agent OpenSpawn fragment已物理删除，pending reset完整验证后原子消费。
+- [x] [COMPUTED][HIGH] 第十切片当时由VisualStateResolve完成Combat/Visual rollback事实；第二十一切片已把同一职责并入FacingFinalize原子写回。movement/combat双完成门继续阻止不完整snapshot replay或checkpoint。
+- [x] [COMPUTED][HIGH] 8707 T1、8708 T7、8709异构T6及8710 T8双端回归通过安全、同步、snapshot完整性及性能门；8714 SF1 smoke保持hash=`267519150`、rebuild=1。
+- [x] [COMPUTED][HIGH] 六个Demo迁移运动镜像及其模板/processor/rollback/适配入口已物理删除；结构自动化阻止类型和Mass模板注册回流。
+- [x] [COMPUTED][HIGH] 第十二切片Development、DebugGame、`CrowdDemo` 105/105、`MassCrowd` 13/13通过；8723/8724/8725/8726分别覆盖T2、异构T6、T1和T8，四次双端运行无安全、同步、性能或业务hash回退。
+- [x] [COMPUTED][HIGH] Compose→Local Predictive→MovementPredict已合并为一次GT准备、一次ThreadPool dispatch和一次原子发布；旧三个processor实现引用为0，阶段结果/hash等价测试通过。
+- [x] [COMPUTED][HIGH] Facing与MovementFinalize已合并为一次Runtime WORK和一次GT原子提交；组合/旧链stage hash等价、反序稳定及revision mismatch整批拒绝测试通过，8727/8728无能力、安全、同步或性能回退。
+- [x] [COMPUTED][HIGH] Particle通用结果发布已由Runtime publish plan统一：active/inactive/fallback/external结果、最终kinematics与稳定hash一次生成；Demo不再从ProposedMovement/FlowSample Mass fragments重建诊断输入。8729/8730保持T2/T6能力、安全、同步和性能门。
+- [ ] [COMPUTED][HIGH] Particle后的Demo专用诊断/累计器组装与按能力archetype尚未完成；完整boundary单次Mass读取仍未关闭。
+- [x] [COMPUTED][HIGH] RoundResultHeader contract v2的高熵自动化为1566字节，8790真实异构T6M为1970字节；均低于2048字节且无Native NetSerialize Warning。
+
+## 20实体能力与性能
+
+- [x] [COMPUTED][HIGH] T1六阶段/传播/settling通过；普通视觉不连续=0，测试reset单列。
+- [x] [COMPUTED][HIGH] T2 handoff/band/settled=`20/20/20`，coverage=`16/16`。
+- [x] [COMPUTED][HIGH] T3双cohort=`10/10`、deadlock=0。
+- [x] [COMPUTED][HIGH] T4 wall/corridor/completed/settled=`20/20/20/20`。
+- [x] [COMPUTED][HIGH] T5S inside=`20/20`、coverage=`16/16`；当前版性能门通过。
+- [x] [COMPUTED][HIGH] T6A corridor/completed/inside/coverage=`20/20/20/20`；T6S七类profile技术门通过。
+- [x] [COMPUTED][HIGH] T7新增阶段证据后的普通运行8781/8783连续通过；Round内shader/loading/PSO帧为0。历史8777冷运行112.235ms仍保留为未唯一归因证据。
+- [x] [COMPUTED][HIGH] 2026-07-29 T7可解释验收首切片完成：六类代表实体的expected/actual引线标签区分authority sample step、client observation step、pre-Round WAIT与±1 step EDGE；全部20实体状态变化写入JSONL sidecar；`CaptureCrowdDemo.ps1 -T7StateAcceptance`按实际Knockback/KnockUp/Death事件生成step 30/60/90短片、contact sheet和manifest。7971原始帧确认3×2标签布局可读；最终7972端到端短录制观察20/20 Formation、60条状态事件、WAIT/EDGE/mismatch=`20/4/0`、事件sample/observation=`30/31、63/63、91/94`、长冻结0；Development `-DisableUnity`与`CrowdDemo.Acceptance.T7.StateOracle` 1/1通过。
+- [x] [COMPUTED][HIGH] T5M 8785技术、性能与稳定诊断通过；无merge block/chatter。
+- [x] [COMPUTED][HIGH] T6M 8790的Round末inside/coverage=`20/20`且安全、同步、性能通过；AcquireThenHold资格有效期间不要求持续重排Region，最后90步18/17保留为过程诊断。
+- [ ] [COMPUTED][HIGH] 单进程DebugGame PIE和当前版人工审片未完成。
+- [x] [COMPUTED][HIGH] 8210/8215仅保留为S6之前的旧Round历史基线；当前同一Behavior Source生产路径的100/500已由8384/8379双端PASS替代，不再以8215作为当前关闭证据。
+
+- [x] [COMPUTED][HIGH] 临时`FCrowdMassParticleConstraintFragment`已物理删除；Particle processor无Mass query，FacingFinalize从prepared final kinematics验证并提交最终运动事实。
+- [x] [COMPUTED][HIGH] 第十五切片Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8731 T2为20/20 settled、16/16 coverage，8732异构T6为20/20 completed/settled/inside/coverage，双端安全、同步与性能门通过。
+- [x] [COMPUTED][HIGH] Particle持久诊断已改为Finalize成功后的单次延迟提交；失败的FacingFinalize boundary不会累计候选Summary、route/stability、OpenSpawn或fixture事实。8733/8734保持原能力、candidate hash、安全、同步和性能门。
+- [x] [COMPUTED][HIGH] PostFinalize已删除最后的Identity/RoundSim Mass查询；FacingFinalize写回时捕获稳定最终记录，PostFinalize仅消费prepared事实。结构测试同时要求这些记录在每个BoundarySnapshot发布时清空。
+- [x] [COMPUTED][HIGH] 第十七切片Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8737 T2为20/20 terminal、16/16 coverage、fixed-step p95=`4.067ms`，8738异构T6为20/20 completed/settled/inside/coverage、fixed-step p95=`4.716ms`，双端同步与性能门通过。
+- [x] [COMPUTED][HIGH] Transform、Velocity与Demo Movement已并入FacingFinalize的全量预验证后单次原子写回；Authority/Client Commit无Mass query，旧`ConfigureCommitQuery/CommitRoundState`重复两遍遍历已物理删除。
+- [x] [COMPUTED][HIGH] 第十八切片Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8739 T2 fixed-step p95=`3.638ms`，8740异构T6=`5.003ms`，能力、安全、同步、可见实例与性能门均通过。
+- [x] [COMPUTED][HIGH] 第十九切片删除CheckpointPublisher九类fragment查询，prepared checkpoint states在Visual/Combat决议后整批发布并按最终记录校验；Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过，8741 T2与8742异构T6的能力、安全、同步、correction和性能门通过。
+- [x] [COMPUTED][HIGH] 第二十切片删除VisualStateResolve的Formation/RoundSim query requirements，并用最终记录与boundary formation facts重建相同状态；8743 T2 fixed-step p95=`3.137ms`，8744异构T6=`4.023ms`，能力、安全、同步、可见实例与性能门通过。
+- [x] [COMPUTED][HIGH] 第二十一切片删除独立VisualStateResolve query；FacingFinalize单次原子写回同时提交运动与Demo Combat/Visual，PostFinalize保持rollback双完成门。Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8745–8748覆盖T2/T6/T7/T8且无能力、安全、同步或业务hash回退。
+- [x] [COMPUTED][HIGH] 第二十二切片删除三个无fragment消费者的Runtime Movement中间fragments，MovementWork不再逐步回写持久Runtime identity/state/properties；双端Plan边界初始化合同已补齐。Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8753 T2 terminal/inside=`20/20`、coverage=`16/16`、fixed-step p95=`4.021ms`，8754异构T6 completed/settled/inside/coverage=`20/20`、fixed-step p95=`4.920ms`，两次运行硬错误与correction误差均为0。
+- [x] [COMPUTED][HIGH] 第二十三切片已将RangedCombat、HitResponse、ReactiveMotion收敛为单一宿主Combat boundary transaction；旧三个processor与Pending HitFact桥已删除，T7/T8分别只保留一次gather和一次原子apply。Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8755 T7 fixed-step p95=`2.452ms`，8756 T8 spawn/impact/damage=`50/50/50`、duplicate fire/hit=`0/0`且三类业务hash双端一致；8757 T2 terminal/coverage=`20/20、16/16`，8758异构T6 completed/settled/inside/coverage=`20/20`，fixed-step p95=`4.263/5.230ms`。
+- [x] [COMPUTED][HIGH] 第二十四切片完成剩余查询/写入接缝矩阵：删除ReactiveMotionStep与TargetCapability两个无持久所有权fragment；TargetRegionGuidance改读boundary snapshot且零Mass遍历；FlowPreferred只保留一次FlowSample持久写回；SoftPressure MovementWork不再写SF1 ProposedMovement桥。Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105通过；8759–8762覆盖T7/T8/T2/T6，能力、安全、同步、可见实例及性能门均通过。
+- [x] [COMPUTED][HIGH] 第二十五切片已删除SF1 ProposedMovement/ObstacleConstraint两个中间fragment；MovementWork与ObstacleConstraint均为零Mass遍历并通过prepared POD交换，8763 SF1 Single保持golden Flow与障碍安全，8765/8766 T2/T6无回退。
+- [x] [COMPUTED][HIGH] 8763曾出现correction interval位置误差p95=`26.745cm`；第二十七切片已由8770修复到`0.064cm`，该项不再是开放失败。
+- [x] [COMPUTED][HIGH] 历史8764的500实体单属性bunch失败已由紧凑Agent NetSerialize、128项渐进FastArray和有界correction可靠批次关闭；8215客户端完成500实体基线、5块连续correction与5轮Checkpoint，未出现bunch过大或revision gap。
+- [x] [COMPUTED][HIGH] 第二十六切片把Facing历史settle事实并入BoundaryGather，FacingFinalize由3次Mass遍历降为2次；全量预验证与唯一原子提交仍独立。Development、DebugGame、MassCrowd 15/15、CrowdDemo 105/105及8767–8769 SF1/T2/T6回归通过。
+- [x] [COMPUTED][HIGH] 第二十七切片已把fixed-step correction history/replay扩展到SF1。8770 snapshot hit/miss/mismatch=`36/0/0`，correction interval位置误差p95=`0.064cm`、checkpoint p95=`0.008cm`，Flow golden hash与路线/障碍结果不变；Development、DebugGame、MassCrowd 15/15、CrowdDemo 106/106通过。
+- [x] [COMPUTED][HIGH] 阶段 B 通过 Development Editor `-DisableUnity`、`MassCrowd` 17/17与完整`CrowdDemo` 106/106自动化；新增 Core POD/capability/lifecycle fixture 与 Runtime AgentFacts 映射测试。
+- [x] [COMPUTED][HIGH] 阶段 C 通过 Development Editor `-DisableUnity`、Relevant Snapshot定向3/3、`MassCrowd` 20/20与`CrowdDemo` 106/106；插件Networking Source未检出Demo/Round/Scenario/Combat依赖。
+- [x] [COMPUTED][HIGH] 阶段 D 已删除完整`RoundBootstrapPacket.Agents`复制路径；版本化字段往返、合成500实体transport、逆序/重复/缺块/超时及源码架构定向3/3通过。Development/DebugGame、MassCrowd 20/20、CrowdDemo 109/109与8773真实20实体双端bootstrap通过；正式500产品运行仍待K。
+- [x] [COMPUTED][HIGH] 阶段 E 的trivially-copyable batch header/entries、四类Despawn原因、严格排序、bounds、Snapshot→Delta连续性、重复/乱序/缺序列、原子拒绝、槽位复用及路径无关membership hash已通过定向3/3；Development/DebugGame、MassCrowd 23/23、CrowdDemo 109/109通过。
+- [x] [COMPUTED][HIGH] 阶段 F 的最小Mass World定向1/1验证snapshot初始化、不同fixed-step spawn、真实destroy、Mass handle serial变化、StableEntityRef高serial复用、membership原子迁移、stale correction/despawn拒绝及完整entity-set hash；Development/DebugGame、MassCrowd 24/24与CrowdDemo 109/109通过。
+- [x] [COMPUTED][HIGH] 8771 T2 rollback hit/miss/mismatch=`54/0/0`、terminal/inside/coverage=`20/20、20/20、16/16`；8772异构T6 rollback=`80/0/0`、completed/settled/inside=`20/20`、coverage=`20`，通用历史没有造成SoftPressure能力、安全、同步或性能回退。
+- [ ] [INFERRED][HIGH] 整个fixed-step尚未达到一次Mass读取；该长期优化不再阻塞Behavior Source。Resolver权威化、Final Apply原子性、行为网络和同路径20/100/500已由S0–S6关闭；真实StateTree业务Task不属于当前验收门。
+
+## 2026-08-15 WA8-R Owner Barrier 功能检查
+
+- [x] [COMPUTED][HIGH] Prepared Target/Resource plan 在 Prepare 构建一次，并由单槽 Pending Finalize 持有。
+- [x] [COMPUTED][HIGH] Final Validate 复核 Generation、OwnerRevision、PlanRevision、FixedStepIndex、TargetRevision、base-state hash、cohort destination/key 和资源引用准备结果。
+- [x] [COMPUTED][HIGH] Target/Resource revision 或 Owner 失效时，Mass、Proxy、水位、Target/Resource、Dirty Batch、表现/网络和 Ordered Event 均不改变。
+- [x] [COMPUTED][HIGH] 非法资源引用、缺失 Owner、重复 Slot、重复实体和重复字段在 Prepare 被拒，Final Barrier 不执行。
+- [x] [COMPUTED][HIGH] Final Barrier、AdvanceRoundWorkerFrame 与 PostFinalize 不重建或重新解析 Target/Resource plan；旧 late apply 入口已删除。
+- [x] [COMPUTED][HIGH] 成功路径的 Prepared Mass、Prepared Target/Resource、Proxy、Target/Resource side effect、Ordered Event 与 Dirty ACK 各一次测试通过；20 实体全 Production T8 Golden 与事件计数不变。
+- [ ] [COMPUTED][HIGH] WA8 未关闭；通用 Barrier/Token 仍位于 Demo，完整 rollback 数组、`TryPrepareRoundApply` 与 Demo-local Round Transaction 仍保留。下一切片先完成 Runtime Barrier 所有权纠偏并删除 Demo Barrier，之后依次删除完整 rollback 数据源和 Demo-local Round Transaction。
+
+[RULES I BROKE]：[COMPUTED][HIGH] 无。

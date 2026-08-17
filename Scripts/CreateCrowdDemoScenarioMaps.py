@@ -3,18 +3,7 @@ import unreal
 MAPS = [
     ("CrowdDemo_SimRoundFlowSingle", 0, "SimRoundObstacle", 1),
     ("CrowdDemo_SimRoundFlowCohort", 0, "SimRoundObstacle", 500),
-    ("CrowdDemo_SimRoundFlowSeparationSmall", 1, "SimRoundFlowSeparation", 20),
-    ("CrowdDemo_SimRoundFlowSeparationMedium", 1, "SimRoundFlowSeparation", 100),
-    ("CrowdDemo_SimRoundFlowSeparationCohort", 1, "SimRoundFlowSeparation", 500),
 ]
-
-LEGACY_MAPS = [
-    "CrowdDemo_ApproachBand", "CrowdDemo_CohortDensity", "CrowdDemo_CohortFlowObstacle",
-    "CrowdDemo_CohortMove", "CrowdDemo_PredictiveHeadOn", "CrowdDemo_PredictivePair",
-    "CrowdDemo_PredictiveSmall", "CrowdDemo_SimRoundHeadOn", "CrowdDemo_SimRoundMove",
-    "CrowdDemo_SimRoundSeparation",
-]
-
 
 def _package(map_name):
     return "/Game/Maps/{}".format(map_name)
@@ -82,10 +71,6 @@ def _create_map(map_name, scenario_value, scenario_name, entity_count):
 
 def main():
     unreal.EditorAssetLibrary.make_directory("/Game/Maps")
-    for map_name in LEGACY_MAPS:
-        package_path = _package(map_name)
-        if unreal.EditorAssetLibrary.does_asset_exist(package_path):
-            unreal.EditorAssetLibrary.delete_asset(package_path)
     for row in MAPS:
         _create_map(*row)
 

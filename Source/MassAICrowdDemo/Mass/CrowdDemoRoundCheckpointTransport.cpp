@@ -1,20 +1,28 @@
 #include "Mass/CrowdDemoRoundCheckpointTransport.h"
 
-void FCrowdDemoRoundCheckpointTransport::BuildChunks(
-  const FCrowdDemoCorrectionFrame& Frame,
+bool FCrowdDemoRoundCheckpointTransport::BuildChunks(
+  const FCrowdDemoRoundCheckpointFrame& Frame,
   const int32 ChunkSize,
-  FCrowdDemoCorrectionFrameHeader& OutHeader,
-  TArray<FCrowdDemoCorrectionFrameChunk>& OutChunks)
+  FCrowdDemoRoundCheckpointHeader& OutHeader,
+  TArray<FCrowdDemoRoundCheckpointChunk>& OutChunks)
 {
+  OutHeader = FCrowdDemoRoundCheckpointHeader();
+  OutChunks.Reset();
+  if (Frame.bValid == 0
+    || Frame.StateFrameRevision <= 0
+    || Frame.CheckpointRevision <= 0
+    || Frame.AgentCount != Frame.AgentStates.Num())
+  {
+    return false;
+  }
+
   const int32 SafeChunkSize = FMath::Max(1, ChunkSize);
   const int32 ChunkCount = FMath::DivideAndRoundUp(Frame.AgentStates.Num(), SafeChunkSize);
-  OutHeader = FCrowdDemoCorrectionFrameHeader();
   OutHeader.bValid = Frame.bValid;
-  OutHeader.FrameKind = Frame.FrameKind;
-  OutHeader.CorrectionRevision = Frame.CorrectionRevision;
+  OutHeader.StateFrameRevision = Frame.StateFrameRevision;
   OutHeader.RoundId = Frame.RoundId;
   OutHeader.RoundRevision = Frame.RoundRevision;
-  OutHeader.SourceCheckpointRevision = Frame.SourceCheckpointRevision;
+  OutHeader.CheckpointRevision = Frame.CheckpointRevision;
   OutHeader.ServerTimeSeconds = Frame.ServerTimeSeconds;
   OutHeader.AgentCount = Frame.AgentStates.Num();
   OutHeader.ChunkCount = ChunkCount;
@@ -26,10 +34,10 @@ void FCrowdDemoRoundCheckpointTransport::BuildChunks(
   {
     const int32 StartAgentIndex = ChunkIndex * SafeChunkSize;
     const int32 AgentCountInChunk = FMath::Min(SafeChunkSize, Frame.AgentStates.Num() - StartAgentIndex);
-    FCrowdDemoCorrectionFrameChunk& Chunk = OutChunks.AddDefaulted_GetRef();
+    FCrowdDemoRoundCheckpointChunk& Chunk = OutChunks.AddDefaulted_GetRef();
     Chunk.bValid = 1;
-    Chunk.StableKey = Frame.CorrectionRevision * 1000 + ChunkIndex;
-    Chunk.CorrectionRevision = Frame.CorrectionRevision;
+    Chunk.StableKey = Frame.StateFrameRevision * 1000 + ChunkIndex;
+    Chunk.StateFrameRevision = Frame.StateFrameRevision;
     Chunk.RoundId = Frame.RoundId;
     Chunk.RoundRevision = Frame.RoundRevision;
     Chunk.ChunkIndex = ChunkIndex;
@@ -38,26 +46,26 @@ void FCrowdDemoRoundCheckpointTransport::BuildChunks(
     Chunk.Header = OutHeader;
     Chunk.Agents.Append(Frame.AgentStates.GetData() + StartAgentIndex, AgentCountInChunk);
   }
+  return true;
 }
 
 bool FCrowdDemoRoundCheckpointTransport::TryAssemble(
-  const FCrowdDemoCorrectionFrameHeader& Header,
-  const TConstArrayView<FCrowdDemoCorrectionFrameChunk> Chunks,
+  const FCrowdDemoRoundCheckpointHeader& Header,
+  const TConstArrayView<FCrowdDemoRoundCheckpointChunk> Chunks,
   TArray<FCrowdDemoRoundAgentState>& OutAgents)
 {
   if (Header.bValid == 0 || Header.AgentCount < 0 || Header.ChunkCount < 0)
   {
     return false;
   }
-  TArray<const FCrowdDemoCorrectionFrameChunk*> ByIndex;
+  TArray<const FCrowdDemoRoundCheckpointChunk*> ByIndex;
   ByIndex.SetNumZeroed(Header.ChunkCount);
-  for (const FCrowdDemoCorrectionFrameChunk& Chunk : Chunks)
+  for (const FCrowdDemoRoundCheckpointChunk& Chunk : Chunks)
   {
     if (Chunk.bValid == 0
-      || Chunk.CorrectionRevision != Header.CorrectionRevision
+      || Chunk.StateFrameRevision != Header.StateFrameRevision
       || Chunk.RoundId != Header.RoundId
       || Chunk.RoundRevision != Header.RoundRevision
-      || Chunk.Header.FrameKind != Header.FrameKind
       || !ByIndex.IsValidIndex(Chunk.ChunkIndex)
       || Chunk.Agents.Num() != Chunk.AgentCountInChunk)
     {
@@ -72,7 +80,7 @@ bool FCrowdDemoRoundCheckpointTransport::TryAssemble(
   int32 ReceivedAgents = 0;
   for (int32 ChunkIndex = 0; ChunkIndex < Header.ChunkCount; ++ChunkIndex)
   {
-    const FCrowdDemoCorrectionFrameChunk* Chunk = ByIndex[ChunkIndex];
+    const FCrowdDemoRoundCheckpointChunk* Chunk = ByIndex[ChunkIndex];
     if (!Chunk || Chunk->StartAgentIndex != ReceivedAgents
       || ReceivedAgents + Chunk->AgentCountInChunk > Header.AgentCount)
     {

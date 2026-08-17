@@ -51,6 +51,111 @@ namespace
     if (OutPairs) *OutPairs = MoveTemp(LocalPairs);
     return Summary;
   }
+
+  TArray<FCrowdDemoParticleConstraintAgent> Make8372FixtureAgents()
+  {
+    TArray<FCrowdDemoParticleConstraintAgent> Agents;
+    const auto AddAgent = [&Agents](const int32 AgentId, const FVector& Start, const FVector& Predict)
+    {
+      auto Agent = MakeAgent(AgentId, Start, Predict);
+      Agent.PhysicalRadiusCm = 42.0f;
+      Agent.HardSafetyGapCm = 10.0f;
+      Agent.SoftMarginCm = 17.0f;
+      Agent.Mobility = 1.0f;
+      Agents.Add(Agent);
+    };
+    AddAgent(0, FVector(1874, -961, 60), FVector(1900.392f, -957.180f, 60));
+    AddAgent(1, FVector(2065, -959, 60), FVector(2091.518f, -956.192f, 60));
+    AddAgent(2, FVector(2254, -953, 60), FVector(2280.654f, -952.167f, 60));
+    AddAgent(3, FVector(2275, -1049, 60), FVector(2291.103f, -1027.744f, 60));
+    AddAgent(4, FVector(2399, -1044, 60), FVector(2411.717f, -1020.561f, 60));
+    AddAgent(5, FVector(2463, -820, 60), FVector(2458.131f, -793.782f, 60));
+    AddAgent(6, FVector(2538, -968, 60), FVector(2522.058f, -946.623f, 60));
+    AddAgent(7, FVector(2356, -549, 60), FVector(2336.511f, -530.798f, 60));
+    AddAgent(8, FVector(2204, -393, 60), FVector(2194.579f, -368.053f, 60));
+    AddAgent(9, FVector(2037, -252, 60), FVector(2019.695f, -231.711f, 60));
+    AddAgent(10, FVector(1969, -960, 60), FVector(1995.466f, -956.733f, 60));
+    AddAgent(11, FVector(2160, -966, 60), FVector(2186.255f, -961.332f, 60));
+    AddAgent(12, FVector(2349, -957, 60), FVector(2375.603f, -955.156f, 60));
+    AddAgent(13, FVector(2444, -953, 60), FVector(2445.551f, -926.378f, 60));
+    AddAgent(14, FVector(2462, -719, 60), FVector(2457.431f, -692.728f, 60));
+    AddAgent(15, FVector(2436, -625, 60), FVector(2415.902f, -607.473f, 60));
+    AddAgent(16, FVector(2276, -475, 60), FVector(2257.069f, -456.219f, 60));
+    AddAgent(17, FVector(2148, -297, 60), FVector(2133.208f, -274.812f, 60));
+    AddAgent(18, FVector(1998, -129, 60), FVector(1974.475f, -116.443f, 60));
+    AddAgent(19, FVector(1875, -73, 60), FVector(1855.992f, -54.296f, 60));
+    return Agents;
+  }
+
+  TArray<FCrowdDemoParticleConstraintAgent> Make8379Step272FixtureAgents()
+  {
+    TArray<FCrowdDemoParticleConstraintAgent> Agents;
+    const auto AddAgent = [&Agents](const int32 AgentId, const FVector& Start, const FVector& Predict)
+    {
+      auto Agent = MakeAgent(AgentId, Start, Predict);
+      Agent.PhysicalRadiusCm = 42.0f;
+      Agent.HardSafetyGapCm = 10.0f;
+      Agent.SoftMarginCm = 17.0f;
+      Agent.Mobility = 1.0f;
+      Agents.Add(Agent);
+    };
+    AddAgent(0, FVector(1199, 751, 60), FVector(1180.144f, 769.856f, 60));
+    AddAgent(1, FVector(944, 1006, 60), FVector(925.144f, 1024.856f, 60));
+    AddAgent(2, FVector(1026, 924, 60), FVector(1007.144f, 942.856f, 60));
+    AddAgent(3, FVector(726, 1224, 60), FVector(707.144f, 1242.856f, 60));
+    AddAgent(4, FVector(525, 1425, 60), FVector(506.144f, 1443.856f, 60));
+    AddAgent(5, FVector(391, 1559, 60), FVector(372.144f, 1577.856f, 60));
+    AddAgent(6, FVector(324, 1626, 60), FVector(305.144f, 1644.856f, 60));
+    AddAgent(7, FVector(122, 1828, 60), FVector(103.144f, 1846.856f, 60));
+    AddAgent(8, FVector(55, 1895, 60), FVector(55, 1895, 60));
+    AddAgent(9, FVector(-80, 2030, 60), FVector(-61.144f, 2011.144f, 60));
+    AddAgent(10, FVector(1111, 839, 60), FVector(1092.144f, 857.856f, 60));
+    AddAgent(11, FVector(864, 1086, 60), FVector(845.144f, 1104.856f, 60));
+    AddAgent(12, FVector(794, 1156, 60), FVector(775.144f, 1174.856f, 60));
+    AddAgent(13, FVector(592, 1358, 60), FVector(573.144f, 1376.856f, 60));
+    AddAgent(14, FVector(659, 1291, 60), FVector(640.144f, 1309.856f, 60));
+    AddAgent(15, FVector(458, 1492, 60), FVector(439.144f, 1510.856f, 60));
+    AddAgent(16, FVector(257, 1693, 60), FVector(238.144f, 1711.856f, 60));
+    AddAgent(17, FVector(190, 1760, 60), FVector(171.144f, 1778.856f, 60));
+    AddAgent(18, FVector(-12, 1962, 60), FVector(-12, 1962, 60));
+    AddAgent(19, FVector(-147, 2097, 60), FVector(-128.144f, 2078.144f, 60));
+    return Agents;
+  }
+
+  TArray<FCrowdDemoParticleConstraintAgent> Make8379Step273FixtureAgents()
+  {
+    TArray<FCrowdDemoParticleConstraintAgent> Agents;
+    const auto AddAgent = [&Agents](const int32 AgentId, const FVector& Start, const FVector& Predict)
+    {
+      auto Agent = MakeAgent(AgentId, Start, Predict);
+      Agent.PhysicalRadiusCm = 42.0f;
+      Agent.HardSafetyGapCm = 10.0f;
+      Agent.SoftMarginCm = 17.0f;
+      Agent.Mobility = 1.0f;
+      Agents.Add(Agent);
+    };
+    AddAgent(0, FVector(1171, 779, 60), FVector(1152.144f, 797.856f, 60));
+    AddAgent(1, FVector(915, 1035, 60), FVector(896.144f, 1053.856f, 60));
+    AddAgent(2, FVector(776, 1174, 60), FVector(757.144f, 1192.856f, 60));
+    AddAgent(3, FVector(709, 1241, 60), FVector(690.144f, 1259.856f, 60));
+    AddAgent(4, FVector(507, 1443, 60), FVector(488.144f, 1461.856f, 60));
+    AddAgent(5, FVector(373, 1577, 60), FVector(354.144f, 1595.856f, 60));
+    AddAgent(6, FVector(306, 1644, 60), FVector(287.144f, 1662.856f, 60));
+    AddAgent(7, FVector(171, 1779, 60), FVector(152.144f, 1797.856f, 60));
+    AddAgent(8, FVector(37, 1913, 60), FVector(37, 1913, 60));
+    AddAgent(9, FVector(-97, 2047, 60), FVector(-78.144f, 2028.144f, 60));
+    AddAgent(10, FVector(1083, 867, 60), FVector(1064.144f, 885.856f, 60));
+    AddAgent(11, FVector(843, 1107, 60), FVector(824.144f, 1125.856f, 60));
+    AddAgent(12, FVector(998, 952, 60), FVector(979.144f, 970.856f, 60));
+    AddAgent(13, FVector(642, 1308, 60), FVector(623.144f, 1326.856f, 60));
+    AddAgent(14, FVector(574, 1376, 60), FVector(555.144f, 1394.856f, 60));
+    AddAgent(15, FVector(440, 1510, 60), FVector(421.144f, 1528.856f, 60));
+    AddAgent(16, FVector(238, 1712, 60), FVector(219.144f, 1730.856f, 60));
+    AddAgent(17, FVector(104, 1846, 60), FVector(104, 1846, 60));
+    AddAgent(18, FVector(-30, 1980, 60), FVector(-30, 1980, 60));
+    AddAgent(19, FVector(-165, 2115, 60), FVector(-146.144f, 2096.144f, 60));
+    return Agents;
+  }
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -342,7 +447,11 @@ bool FCrowdDemoParticleSoftResponseComplianceTest::RunTest(const FString& Parame
   Agents.Add(MakeAgent(1, FVector(-50.0f, 0.0f, 60.0f), FVector(-50.0f, 0.0f, 60.0f)));
   Agents.Add(MakeAgent(2, FVector(50.0f, 0.0f, 60.0f), FVector(50.0f, 0.0f, 60.0f)));
   TArray<FCrowdDemoParticleConstraintResult> Results;
-  const FCrowdDemoParticleConstraintSummary Summary = SolveAgents(Agents, Environment, Results);
+  TArray<FCrowdDemoParticleConstraintPair> Pairs;
+  FCrowdDemoParticleConstraintSummary Summary;
+  FCrowdDemoParticleConstraintTrace Trace;
+  FCrowdDemoParticleConstraintKernel::Solve(
+    Agents, Environment, FCrowdDemoParticleConstraintSettings(), Pairs, Results, Summary, &Trace);
   const auto* A = FindResult(Results, 1);
   const auto* B = FindResult(Results, 2);
   TestTrue(TEXT("soft-only candidate remains hard-safe"), Summary.bValid);
@@ -562,7 +671,26 @@ namespace
       Agents[0].PredictedPosition = Agents[0].StartPosition + FVector(20.0f, 0.0f, 0.0f);
       for (int32 Index = 1; Index < Agents.Num(); ++Index)
         Agents[Index].PredictedPosition = Agents[Index].StartPosition;
-      const auto Summary = SolveAgents(Agents, Environment, Results);
+      TArray<FCrowdDemoParticleConstraintPair> StepPairs;
+      FCrowdDemoParticleConstraintSummary Summary;
+      FCrowdDemoParticleConstraintTrace Trace;
+      FCrowdDemoParticleConstraintKernel::Solve(Agents, Environment,
+        FCrowdDemoParticleConstraintSettings(), StepPairs, Results, Summary, &Trace);
+      if (!Summary.bValid)
+      {
+        Test.AddInfo(FString::Printf(TEXT("ring %s step=%d hard=%d swept=%d obstacle=%d bounds=%d constraints=%d residual=%.3f hash=%u"),
+          bExit ? TEXT("exit") : TEXT("entry"), Step, Summary.HardPairViolationCount,
+          Summary.SweptPairViolationCount, Summary.ObstaclePenetrationCount,
+          Summary.BoundsViolationCount, Summary.UnifiedHardConstraintCount,
+          Summary.UnifiedHardResidualCmMax, Summary.CandidateHash));
+        if (Trace.QuantizedPositions.Num() == Agents.Num()
+          && Trace.FinalSafetyPositions.Num() == Agents.Num())
+          Test.AddInfo(FString::Printf(TEXT("ring safety_input center=(%.1f,%.1f) front=(%.1f,%.1f) final center=(%.1f,%.1f) front=(%.1f,%.1f)"),
+            Trace.QuantizedPositions[0].X, Trace.QuantizedPositions[0].Y,
+            Trace.QuantizedPositions[1].X, Trace.QuantizedPositions[1].Y,
+            Trace.FinalSafetyPositions[0].X, Trace.FinalSafetyPositions[0].Y,
+            Trace.FinalSafetyPositions[1].X, Trace.FinalSafetyPositions[1].Y));
+      }
       if (!Test.TestTrue(*FString::Printf(TEXT("ring %s step %d hard safe"),
         bExit ? TEXT("exit") : TEXT("entry"), Step), Summary.bValid))
         return false;
@@ -762,7 +890,11 @@ bool FCrowdDemoParticle8371UnifiedClosureRedTest::RunTest(const FString& Paramet
   AddAgent(19, FVector(1872.000f, 1.000f, 60.000f), FVector(1855.106f, 21.633f, 60.000f));
 
   TArray<FCrowdDemoParticleConstraintResult> Results;
-  const FCrowdDemoParticleConstraintSummary Summary = SolveAgents(Agents, Environment, Results);
+  TArray<FCrowdDemoParticleConstraintPair> Pairs;
+  FCrowdDemoParticleConstraintSummary Summary;
+  FCrowdDemoParticleConstraintTrace Trace;
+  FCrowdDemoParticleConstraintKernel::Solve(
+    Agents, Environment, FCrowdDemoParticleConstraintSettings(), Pairs, Results, Summary, &Trace);
   const FCrowdDemoParticleConstraintResult* ResultA = FindResult(Results, 5);
   const FCrowdDemoParticleConstraintResult* ResultB = FindResult(Results, 13);
   AddInfo(FString::Printf(TEXT("8371 summary valid=%d hard=%d swept=%d obstacle=%d bounds=%d constraints=%d infeasible=%d residual=%.3f env_soft=%d"),
@@ -772,16 +904,279 @@ bool FCrowdDemoParticle8371UnifiedClosureRedTest::RunTest(const FString& Paramet
     Summary.UnifiedHardResidualCmMax, Summary.EnvironmentSoftContactCount));
   TestNotNull(TEXT("8371 Agent 5 result"), ResultA);
   TestNotNull(TEXT("8371 Agent 13 result"), ResultB);
-  TestFalse(TEXT("8371 old sequential closure is invalid"), Summary.bValid);
-  TestTrue(TEXT("8371 old closure has endpoint violation"), Summary.HardPairViolationCount > 0);
-  TestTrue(TEXT("8371 old closure has swept violation"), Summary.SweptPairViolationCount > 0);
+  TestTrue(TEXT("8371 unified closure is valid"), Summary.bValid);
+  TestEqual(TEXT("8371 no endpoint violation"), Summary.HardPairViolationCount, 0);
+  TestEqual(TEXT("8371 no swept violation"), Summary.SweptPairViolationCount, 0);
+  TestEqual(TEXT("8371 no obstacle violation"), Summary.ObstaclePenetrationCount, 0);
+  TestEqual(TEXT("8371 no bounds violation"), Summary.BoundsViolationCount, 0);
   if (ResultA && ResultB)
   {
     const float Distance = FVector::Dist2D(ResultA->CorrectedPosition, ResultB->CorrectedPosition);
-    AddInfo(FString::Printf(TEXT("8371 red endpoint_distance=%.3f candidate_hash=%u"),
+    AddInfo(FString::Printf(TEXT("8371 unified endpoint_distance=%.3f candidate_hash=%u"),
       Distance, Summary.CandidateHash));
-    TestTrue(TEXT("8371 red reproduces 93.021cm"), FMath::IsNearlyEqual(Distance, 93.021f, 0.01f));
+    TestTrue(TEXT("8371 keeps 94cm hard distance"), Distance + 0.01f >= 94.0f);
   }
+  if (!Summary.bValid)
+  {
+    TArray<FVector> FinalPositions;
+    FinalPositions.Reserve(Agents.Num());
+    for (const auto& Agent : Agents)
+    {
+      const auto* Result = FindResult(Results, Agent.AgentId);
+      FinalPositions.Add(Result ? Result->CorrectedPosition : Agent.StartPosition);
+    }
+    TArray<FCrowdDemoParticleConstraintPair> FinalPairs;
+    FCrowdDemoParticleConstraintKernel::BuildCandidatePairs(Agents, FinalPositions, FinalPairs);
+    for (const auto& Pair : FinalPairs)
+    {
+      const auto& PairA = Agents[Pair.MinAgentIndex];
+      const auto& PairB = Agents[Pair.MaxAgentIndex];
+      const float Required = PairA.PhysicalRadiusCm + PairB.PhysicalRadiusCm
+        + FMath::Max(PairA.HardSafetyGapCm, PairB.HardSafetyGapCm);
+      const float Distance = FVector::Dist2D(
+        FinalPositions[Pair.MinAgentIndex], FinalPositions[Pair.MaxAgentIndex]);
+      if (Distance + 0.01f < Required)
+        AddInfo(FString::Printf(TEXT("8371 final_hard_pair=%d,%d distance=%.3f required=%.3f A=(%.1f,%.1f) B=(%.1f,%.1f)"),
+          Pair.MinAgentId, Pair.MaxAgentId, Distance, Required,
+          FinalPositions[Pair.MinAgentIndex].X, FinalPositions[Pair.MinAgentIndex].Y,
+          FinalPositions[Pair.MaxAgentIndex].X, FinalPositions[Pair.MaxAgentIndex].Y));
+    }
+    for (const auto& Constraint : Trace.FinalHardConstraints)
+    {
+      if (Constraint.MinAgentId != 5 && Constraint.MinAgentId != 13
+        && Constraint.MaxAgentId != 5 && Constraint.MaxAgentId != 13)
+        continue;
+      AddInfo(FString::Printf(TEXT("8371 final_constraint kind=%d pair=%d,%d env=%d face=%d n=(%.3f,%.3f) scale=%.3f deficit=%.3f threshold=%.3f"),
+        static_cast<int32>(Constraint.Kind), Constraint.MinAgentId, Constraint.MaxAgentId,
+        Constraint.EnvironmentId, static_cast<int32>(Constraint.Face), Constraint.Normal.X,
+        Constraint.Normal.Y, Constraint.CoefficientScale, Constraint.InitialDeficitCm,
+        Constraint.Threshold));
+    }
+    if (ResultA && ResultB)
+    {
+      AddInfo(FString::Printf(TEXT("8371 final_positions A=(%.3f,%.3f) B=(%.3f,%.3f)"),
+        ResultA->CorrectedPosition.X, ResultA->CorrectedPosition.Y,
+        ResultB->CorrectedPosition.X, ResultB->CorrectedPosition.Y));
+    }
+  }
+  const uint32 ForwardHash = Summary.CandidateHash;
+  Algo::Reverse(Agents);
+  TArray<FCrowdDemoParticleConstraintResult> ReverseResults;
+  TArray<FCrowdDemoParticleConstraintPair> ReversePairs;
+  FCrowdDemoParticleConstraintSummary ReverseSummary;
+  FCrowdDemoParticleConstraintKernel::Solve(Agents, Environment,
+    FCrowdDemoParticleConstraintSettings(), ReversePairs, ReverseResults, ReverseSummary);
+  TestTrue(TEXT("8371 reverse closure valid"), ReverseSummary.bValid);
+  TestEqual(TEXT("8371 reverse candidate hash"), ReverseSummary.CandidateHash, ForwardHash);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoParticle8372FullStateClosureTest,
+  "CrowdDemo.SoftPressure.Particle.8372FullStateClosure",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoParticle8372FullStateClosureTest::RunTest(const FString& Parameters)
+{
+  FCrowdDemoParticleConstraintEnvironment Environment;
+  Environment.FlowConfig = FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(1);
+  Environment.bConstrainToFlowBounds = true;
+  TArray<FCrowdDemoParticleConstraintAgent> Agents = Make8372FixtureAgents();
+  TArray<FCrowdDemoParticleConstraintPair> Pairs;
+  TArray<FCrowdDemoParticleConstraintResult> Results;
+  FCrowdDemoParticleConstraintSummary Summary;
+  FCrowdDemoParticleConstraintTrace Trace;
+  FCrowdDemoParticleConstraintSettings Settings;
+  Settings.bCaptureSafetyStageTrace = true;
+  FCrowdDemoParticleConstraintKernel::Solve(
+    Agents, Environment, Settings, Pairs, Results, Summary, &Trace);
+
+  const auto* ResultA = FindResult(Results, 12);
+  const auto* ResultB = FindResult(Results, 13);
+  TestEqual(TEXT("8372 preserves all solve agents"), Trace.AgentIds.Num(), 20);
+  TestNotNull(TEXT("8372 Agent 12 result"), ResultA);
+  TestNotNull(TEXT("8372 Agent 13 result"), ResultB);
+  if (ResultA && ResultB)
+  {
+    AddInfo(FString::Printf(TEXT("8372 final pair=12,13 distance=%.3f valid=%d hard=%d swept=%d obstacle=%d bounds=%d infeasible=%d residual=%.3f hash=%u"),
+      FVector::Dist2D(ResultA->CorrectedPosition, ResultB->CorrectedPosition),
+      Summary.bValid ? 1 : 0, Summary.HardPairViolationCount,
+      Summary.SweptPairViolationCount, Summary.ObstaclePenetrationCount,
+      Summary.BoundsViolationCount, Summary.UnifiedHardInfeasibleCount,
+      Summary.UnifiedHardResidualCmMax, Summary.CandidateHash));
+  }
+  TestTrue(TEXT("8372 rebuilt safety closure is valid"), Summary.bValid);
+  TestEqual(TEXT("8372 no endpoint violation"), Summary.HardPairViolationCount, 0);
+  TestEqual(TEXT("8372 no swept violation"), Summary.SweptPairViolationCount, 0);
+  TestEqual(TEXT("8372 no obstacle violation"), Summary.ObstaclePenetrationCount, 0);
+  TestEqual(TEXT("8372 no bounds violation"), Summary.BoundsViolationCount, 0);
+  if (!Summary.bValid)
+  {
+    const auto LogStage = [&](const TCHAR* Name, const TArray<FVector>& Positions)
+    {
+      if (Positions.Num() != Trace.AgentIds.Num()) return;
+      TArray<FCrowdDemoParticleAppliedState> Applied;
+      Applied.Reserve(Positions.Num());
+      for (int32 Index = 0; Index < Positions.Num(); ++Index)
+      {
+        FCrowdDemoParticleAppliedState& State = Applied.AddDefaulted_GetRef();
+        State.AgentId = Trace.AgentIds[Index];
+        State.Position = Positions[Index];
+      }
+      FCrowdDemoParticleConstraintSummary StageSummary;
+      uint32 StageHash = 0;
+      FCrowdDemoParticleConstraintKernel::EvaluateAppliedState(
+        Make8372FixtureAgents(), Applied, Environment, StageSummary, StageHash);
+      AddInfo(FString::Printf(TEXT("8372 main_stage=%s valid=%d hard=%d swept=%d obstacle=%d bounds=%d hash=%u"),
+        Name, StageSummary.bValid ? 1 : 0, StageSummary.HardPairViolationCount,
+        StageSummary.SweptPairViolationCount, StageSummary.ObstaclePenetrationCount,
+        StageSummary.BoundsViolationCount, StageHash));
+    };
+    LogStage(TEXT("Predict"), Trace.PredictPositions);
+    LogStage(TEXT("PairSoft"), Trace.SoftPositions);
+    LogStage(TEXT("EnvironmentSoft"), Trace.EnvironmentSoftPositions);
+    LogStage(TEXT("UnifiedHard"), Trace.UnifiedHardPositions);
+    LogStage(TEXT("Quantized"), Trace.QuantizedPositions);
+    for (const auto& Stage : Trace.SafetyStages)
+    {
+      AddInfo(FString::Printf(TEXT("8372 safety iteration=%d stage=%d hard=%d swept=%d obstacle=%d bounds=%d endpoint_margin=%.3f swept_margin=%.3f env_deficit=%.3f position_hash=%u"),
+        Stage.Iteration, static_cast<int32>(Stage.Stage), Stage.HardPairViolationCount,
+        Stage.SweptPairViolationCount, Stage.ObstacleViolationCount,
+        Stage.BoundsViolationCount, Stage.MinimumEndpointMarginCm,
+        Stage.MinimumSweptMarginCm, Stage.MaximumEnvironmentDeficitCm,
+        Stage.PositionHash));
+    }
+  }
+
+  const uint32 ForwardHash = Summary.CandidateHash;
+  Algo::Reverse(Agents);
+  TArray<FCrowdDemoParticleConstraintResult> ReverseResults;
+  const auto ReverseSummary = SolveAgents(Agents, Environment, ReverseResults);
+  TestEqual(TEXT("8372 reverse valid"), ReverseSummary.bValid, Summary.bValid);
+  TestEqual(TEXT("8372 reverse hash"), ReverseSummary.CandidateHash, ForwardHash);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoParticle8379Step272ClosureTest,
+  "CrowdDemo.SoftPressure.Particle.8379Step272Closure",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoParticle8379Step272ClosureTest::RunTest(const FString& Parameters)
+{
+  FCrowdDemoParticleConstraintEnvironment Environment;
+  Environment.FlowConfig = FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(1);
+  Environment.FlowConfig.AgentInflateCm = 52.0f;
+  Environment.FlowConfig.ConnectivityContractVersion = 2;
+  Environment.bConstrainToFlowBounds = true;
+  TArray<FCrowdDemoParticleConstraintAgent> Agents = Make8379Step272FixtureAgents();
+  TArray<FCrowdDemoParticleConstraintPair> Pairs;
+  TArray<FCrowdDemoParticleConstraintResult> Results;
+  FCrowdDemoParticleConstraintSummary Summary;
+  FCrowdDemoParticleConstraintTrace Trace;
+  FCrowdDemoParticleConstraintSettings Settings;
+  Settings.bCaptureSafetyStageTrace = true;
+  FCrowdDemoParticleConstraintKernel::Solve(
+    Agents, Environment, Settings, Pairs, Results, Summary, &Trace);
+  const auto* Agent6 = FindResult(Results, 6);
+  const auto* Agent16 = FindResult(Results, 16);
+  TestEqual(TEXT("8379 preserves all solve agents"), Trace.AgentIds.Num(), 20);
+  TestNotNull(TEXT("8379 Agent 6 result"), Agent6);
+  TestNotNull(TEXT("8379 Agent 16 result"), Agent16);
+  if (Agent6 && Agent16)
+  {
+    const float Distance = FVector::Dist2D(
+      Agent6->CorrectedPosition, Agent16->CorrectedPosition);
+    AddInfo(FString::Printf(
+      TEXT("8379 step272 distance=%.3f valid=%d hard=%d swept=%d obstacle=%d bounds=%d residual=%.3f hash=%u"),
+      Distance, Summary.bValid ? 1 : 0, Summary.HardPairViolationCount,
+      Summary.SweptPairViolationCount, Summary.ObstaclePenetrationCount,
+      Summary.BoundsViolationCount, Summary.UnifiedHardResidualCmMax,
+      Summary.CandidateHash));
+    TestTrue(TEXT("8379 step272 keeps 94cm hard distance"), Distance + 0.01f >= 94.0f);
+  }
+  TestTrue(TEXT("8379 step272 closure is valid"), Summary.bValid);
+  TestEqual(TEXT("8379 step272 no endpoint violation"), Summary.HardPairViolationCount, 0);
+  TestEqual(TEXT("8379 step272 no swept violation"), Summary.SweptPairViolationCount, 0);
+  TestEqual(TEXT("8379 step272 no obstacle violation"), Summary.ObstaclePenetrationCount, 0);
+  TestEqual(TEXT("8379 step272 no bounds violation"), Summary.BoundsViolationCount, 0);
+  if (!Summary.bValid)
+  {
+    for (const auto& Stage : Trace.SafetyStages)
+    {
+      AddInfo(FString::Printf(
+        TEXT("8379 safety iteration=%d stage=%d hard=%d swept=%d obstacle=%d bounds=%d endpoint_margin=%.3f swept_margin=%.3f env_deficit=%.3f position_hash=%u"),
+        Stage.Iteration, static_cast<int32>(Stage.Stage),
+        Stage.HardPairViolationCount, Stage.SweptPairViolationCount,
+        Stage.ObstacleViolationCount, Stage.BoundsViolationCount,
+        Stage.MinimumEndpointMarginCm, Stage.MinimumSweptMarginCm,
+        Stage.MaximumEnvironmentDeficitCm, Stage.PositionHash));
+    }
+    for (const auto& Constraint : Trace.FinalHardConstraints)
+    {
+      if (Constraint.MinAgentId != 6 && Constraint.MinAgentId != 16
+        && Constraint.MaxAgentId != 6 && Constraint.MaxAgentId != 16)
+        continue;
+      AddInfo(FString::Printf(
+        TEXT("8379 final constraint kind=%d pair=%d,%d n=(%.6f,%.6f) scale=%.6f threshold=%.3f deficit=%.3f"),
+        static_cast<int32>(Constraint.Kind), Constraint.MinAgentId,
+        Constraint.MaxAgentId, Constraint.Normal.X, Constraint.Normal.Y,
+        Constraint.CoefficientScale, Constraint.Threshold,
+        Constraint.InitialDeficitCm));
+    }
+  }
+  const uint32 ForwardHash = Summary.CandidateHash;
+  Algo::Reverse(Agents);
+  TArray<FCrowdDemoParticleConstraintResult> ReverseResults;
+  const FCrowdDemoParticleConstraintSummary ReverseSummary =
+    SolveAgents(Agents, Environment, ReverseResults);
+  TestEqual(TEXT("8379 reverse valid"), ReverseSummary.bValid, Summary.bValid);
+  TestEqual(TEXT("8379 reverse hash"), ReverseSummary.CandidateHash, ForwardHash);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoParticle8379Step273ClosureTest,
+  "CrowdDemo.SoftPressure.Particle.8379Step273Closure",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoParticle8379Step273ClosureTest::RunTest(const FString& Parameters)
+{
+  FCrowdDemoParticleConstraintEnvironment Environment;
+  Environment.FlowConfig = FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(1);
+  Environment.FlowConfig.AgentInflateCm = 52.0f;
+  Environment.FlowConfig.ConnectivityContractVersion = 2;
+  Environment.bConstrainToFlowBounds = true;
+  TArray<FCrowdDemoParticleConstraintAgent> Agents = Make8379Step273FixtureAgents();
+  TArray<FCrowdDemoParticleConstraintPair> Pairs;
+  TArray<FCrowdDemoParticleConstraintResult> Results;
+  FCrowdDemoParticleConstraintSummary Summary;
+  FCrowdDemoParticleConstraintTrace Trace;
+  FCrowdDemoParticleConstraintSettings Settings;
+  Settings.bCaptureSafetyStageTrace = true;
+  FCrowdDemoParticleConstraintKernel::Solve(
+    Agents, Environment, Settings, Pairs, Results, Summary, &Trace);
+  const auto* Agent5 = FindResult(Results, 5);
+  const auto* Agent6 = FindResult(Results, 6);
+  TestNotNull(TEXT("8379 step273 Agent 5 result"), Agent5);
+  TestNotNull(TEXT("8379 step273 Agent 6 result"), Agent6);
+  if (Agent5 && Agent6)
+  {
+    const float Distance = FVector::Dist2D(
+      Agent5->CorrectedPosition, Agent6->CorrectedPosition);
+    AddInfo(FString::Printf(
+      TEXT("8379 step273 distance=%.3f valid=%d hard=%d swept=%d obstacle=%d bounds=%d residual=%.3f candidate_hash=%u known_fixture_hash=145111886"),
+      Distance, Summary.bValid ? 1 : 0, Summary.HardPairViolationCount,
+      Summary.SweptPairViolationCount, Summary.ObstaclePenetrationCount,
+      Summary.BoundsViolationCount, Summary.UnifiedHardResidualCmMax,
+      Summary.CandidateHash));
+    TestTrue(TEXT("8379 step273 keeps 94cm hard distance"), Distance + 0.01f >= 94.0f);
+  }
+  TestTrue(TEXT("8379 step273 closure is valid"), Summary.bValid);
+  TestEqual(TEXT("8379 step273 no endpoint violation"), Summary.HardPairViolationCount, 0);
+  TestEqual(TEXT("8379 step273 no swept violation"), Summary.SweptPairViolationCount, 0);
+  TestEqual(TEXT("8379 step273 no obstacle violation"), Summary.ObstaclePenetrationCount, 0);
+  TestEqual(TEXT("8379 step273 no bounds violation"), Summary.BoundsViolationCount, 0);
   return true;
 }
 
@@ -864,6 +1259,8 @@ bool FCrowdDemoParticleInvalidCandidateAppliedTest::RunTest(const FString& Param
   TestEqual(TEXT("fixture agent count"), Fixture.Agents.Num(), 2);
   TestTrue(TEXT("fixture captures hard or swept witness"),
     Fixture.bHardViolation || Fixture.bSweptViolation);
+  TestTrue(TEXT("fixture v2 captures first failing hard constraint"),
+    Fixture.bHasFirstFailureConstraint);
   TestEqual(TEXT("fixture fixed step"), Fixture.FixedStepIndex, 7);
   TestNotEqual(TEXT("fixture hash"), Fixture.FixtureHash, 0u);
 
@@ -953,6 +1350,10 @@ bool FCrowdDemoParticleHashContractTest::RunTest(const FString& Parameters)
   ChangedSettings.PositionQuantumCm = 0.5f;
   TestNotEqual(TEXT("settings alter candidate hash"),
     SolveHash(Agents, Environment, ChangedSettings), Base);
+  ChangedSettings = Settings;
+  ChangedSettings.SoftMaxEnvironmentCorrectionPerIterationCm += 1.0f;
+  TestNotEqual(TEXT("environment soft setting alters candidate hash"),
+    SolveHash(Agents, Environment, ChangedSettings), Base);
   auto ChangedEnvironment = Environment;
   ChangedEnvironment.FlowConfig.BoundsMax.X += 1.0f;
   TestNotEqual(TEXT("environment alters candidate hash"),
@@ -984,6 +1385,11 @@ bool FCrowdDemoParticleHashContractTest::RunTest(const FString& Parameters)
   TestEqual(TEXT("applied hash ignores input order"),
     FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(1, 2, 3, 4.0f, States),
     AppliedBase);
+  States[0].Combat.Health -= 1.0f;
+  TestNotEqual(TEXT("combat state alters applied hash"),
+    FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(1, 2, 3, 4.0f, States),
+    AppliedBase);
+  States[0].Combat.Health += 1.0f;
   States[0].Velocity.Z += 1.0f;
   TestNotEqual(TEXT("full XYZ velocity alters applied hash"),
     FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(1, 2, 3, 4.0f, States),
@@ -1058,6 +1464,199 @@ bool FCrowdDemoParticleCorrectionReplayTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("replay final state"),
       Replayed[Index].StartPosition.Equals(Control[Index].StartPosition, 0.01f));
   }
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoParticleEnvironmentContactTest,
+  "CrowdDemo.SoftPressure.Particle.EnvironmentContacts",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoParticleEnvironmentContactTest::RunTest(const FString& Parameters)
+{
+  auto Environment = MakeOpenEnvironment();
+  FCrowdDemoSharedFlowObstacleSpec NearObstacle;
+  NearObstacle.ObstacleId = 7;
+  NearObstacle.Center = FVector::ZeroVector;
+  NearObstacle.Extent = FVector(10.0f, 100.0f, 100.0f);
+  FCrowdDemoSharedFlowObstacleSpec FarObstacle;
+  FarObstacle.ObstacleId = 11;
+  FarObstacle.Center = FVector(1000.0f, 1000.0f, 0.0f);
+  FarObstacle.Extent = FVector(20.0f, 20.0f, 100.0f);
+  Environment.FlowConfig.ObstacleSpecs = {FarObstacle, NearObstacle};
+
+  TArray<FCrowdDemoParticleConstraintAgent> Agents;
+  Agents.Add(MakeAgent(10, FVector(-70.0f, 0.0f, 60.0f),
+    FVector(-70.0f, 0.0f, 60.0f)));
+  TArray<FCrowdDemoParticleConstraintResult> Results;
+  const auto SummaryA = SolveAgents(Agents, Environment, Results);
+  TestTrue(TEXT("environment residual soft pressure remains valid"), SummaryA.bValid);
+  TestTrue(TEXT("environment soft contact reported"), SummaryA.EnvironmentSoftContactCount > 0);
+  TestEqual(TEXT("environment soft applied to one agent"),
+    SummaryA.EnvironmentSoftAppliedAgentCount, 1);
+  TestTrue(TEXT("environment soft keeps a residual comfort error"),
+    SummaryA.EnvironmentSoftErrorCmP95 > 0.0f);
+  TestTrue(TEXT("environment soft moves away from the wall"),
+    Results.Num() == 1 && Results[0].CorrectedPosition.X < -70.0f);
+  TestEqual(TEXT("environment hard safety remains clear"),
+    SummaryA.ObstaclePenetrationCount, 0);
+
+  Algo::Reverse(Environment.FlowConfig.ObstacleSpecs);
+  const auto SummaryB = SolveAgents(Agents, Environment, Results);
+  TestEqual(TEXT("obstacle input order does not alter candidate hash"),
+    SummaryB.CandidateHash, SummaryA.CandidateHash);
+
+  Environment.FlowConfig.ObstacleSpecs.Add(NearObstacle);
+  const auto DuplicateSummary = SolveAgents(Agents, Environment, Results);
+  TestFalse(TEXT("duplicate obstacle id invalidates candidate"), DuplicateSummary.bValid);
+
+  Environment.FlowConfig.ObstacleSpecs = {NearObstacle};
+  Agents[0] = MakeAgent(10, FVector(-100.0f, 0.0f, 60.0f),
+    FVector::ZeroVector);
+  FCrowdDemoParticleConstraintSettings Underpowered;
+  Underpowered.IterationCount = 1;
+  Underpowered.SafetyIterationCount = 1;
+  Underpowered.SoftResponsePerSecond = 0.0f;
+  Underpowered.HardMaxPairCorrectionPerIterationCm = 0.0f;
+  TArray<FCrowdDemoParticleConstraintPair> Pairs;
+  FCrowdDemoParticleConstraintSummary ObstacleFailureSummary;
+  FCrowdDemoParticleConstraintTrace ObstacleFailureTrace;
+  FCrowdDemoParticleConstraintKernel::Solve(Agents, Environment, Underpowered,
+    Pairs, Results, ObstacleFailureSummary, &ObstacleFailureTrace);
+  TestFalse(TEXT("underpowered obstacle candidate is invalid"), ObstacleFailureSummary.bValid);
+  TArray<FCrowdDemoParticleAppliedState> Applied;
+  Applied.SetNum(1);
+  Applied[0].AgentId = 10;
+  Applied[0].Position = Agents[0].StartPosition;
+  FCrowdDemoParticleFailureFixture Fixture;
+  FCrowdDemoParticleConstraintKernel::BuildFailureFixture(
+    Agents, Applied, ObstacleFailureTrace, 5,
+    ObstacleFailureSummary.CandidateHash, 123u, Fixture);
+  TestTrue(TEXT("environment failure produces fixture v2"), Fixture.bValid);
+  TestTrue(TEXT("fixture v2 captures hard environment contact"),
+    Fixture.bHasFirstFailureContact);
+  TestEqual(TEXT("environment fixture remains compact"), Fixture.Agents.Num(), 1);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoParticleUnifiedHardGeometryTest,
+  "CrowdDemo.SoftPressure.Particle.UnifiedHardGeometry",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoParticleUnifiedHardGeometryTest::RunTest(const FString& Parameters)
+{
+  FCrowdDemoParticleConstraintSettings Settings;
+  TArray<FCrowdDemoParticleConstraintAgent> Agents;
+  Agents.Add(MakeAgent(10, FVector::ZeroVector, FVector::ZeroVector));
+  Agents.Add(MakeAgent(20, FVector::ZeroVector, FVector::ZeroVector));
+  Agents[0].Mobility = 1.0f;
+  Agents[1].Mobility = 3.0f;
+
+  FCrowdDemoParticleHardConstraint Pair;
+  Pair.Kind = ECrowdDemoParticleHardConstraintKind::PairEndpoint;
+  Pair.MinAgentId = 10;
+  Pair.MaxAgentId = 20;
+  Pair.MinAgentIndex = 0;
+  Pair.MaxAgentIndex = 1;
+  Pair.Normal = FVector(-1.0f, 0.0f, 0.0f);
+  Pair.Threshold = 4.0f;
+  Pair.InitialDeficitCm = 4.0f;
+  TArray<FCrowdDemoParticleHardConstraint> Constraints = {Pair};
+  TArray<FVector> Positions = {FVector::ZeroVector, FVector::ZeroVector};
+  TArray<FCrowdDemoParticleHardDualState> Duals;
+  FCrowdDemoParticleUnifiedHardSummary Summary;
+  FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+    Agents, Settings, Constraints, Positions, Duals, Summary);
+  TestTrue(TEXT("1:3 mobility pair is feasible"), Summary.bValid);
+  TestTrue(TEXT("1:3 mobility correction share"),
+    FMath::IsNearlyEqual(Positions[1].X, -3.0f * Positions[0].X, 0.01f));
+
+  Agents[0].Mobility = 0.0f;
+  Positions = {FVector::ZeroVector, FVector::ZeroVector};
+  Duals.Reset();
+  FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+    Agents, Settings, Constraints, Positions, Duals, Summary);
+  TestTrue(TEXT("single movable side remains feasible"), Summary.bValid);
+  TestTrue(TEXT("zero mobility side remains fixed"), Positions[0].IsNearlyZero(0.01f));
+
+  Agents[1].Mobility = 0.0f;
+  Positions = {FVector::ZeroVector, FVector::ZeroVector};
+  Duals.Reset();
+  FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+    Agents, Settings, Constraints, Positions, Duals, Summary);
+  TestFalse(TEXT("two zero mobility sides are infeasible"), Summary.bValid);
+  TestEqual(TEXT("zero mobility infeasible count"), Summary.InfeasibleConstraintCount, 1);
+
+  TArray<FCrowdDemoParticleConstraintAgent> Single = {
+    MakeAgent(30, FVector::ZeroVector, FVector::ZeroVector)};
+  FCrowdDemoParticleHardConstraint Slanted;
+  Slanted.Kind = ECrowdDemoParticleHardConstraintKind::ObstacleEndpoint;
+  Slanted.MinAgentId = 30;
+  Slanted.MinAgentIndex = 0;
+  Slanted.EnvironmentId = 99;
+  Slanted.Normal = FVector(1.0f, 1.0f, 0.0f).GetSafeNormal2D();
+  Slanted.Threshold = 10.0f;
+  Positions = {FVector::ZeroVector};
+  Constraints = {Slanted};
+  Duals.Reset();
+  FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+    Single, Settings, Constraints, Positions, Duals, Summary);
+  const FVector Tangent(-Slanted.Normal.Y, Slanted.Normal.X, 0.0f);
+  TestTrue(TEXT("injected slanted contact is feasible"), Summary.bValid);
+  TestTrue(TEXT("slanted contact preserves tangent"),
+    FMath::IsNearlyZero(FVector::DotProduct(Positions[0], Tangent), 0.01f));
+
+  FCrowdDemoParticleHardConstraint Vertical = Slanted;
+  Vertical.Normal = FVector(-1.0f, 0.0f, 0.0f);
+  Vertical.Threshold = 0.0f;
+  Positions = {FVector(1.0f, 5.0f, 0.0f)};
+  Constraints = {Vertical};
+  Duals.Reset();
+  FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+    Single, Settings, Constraints, Positions, Duals, Summary);
+  TestTrue(TEXT("vertical wall keeps tangent coordinate"),
+    FMath::IsNearlyEqual(Positions[0].Y, 5.0f, 0.01f));
+
+  FCrowdDemoParticleHardConstraint InvalidNormal = Vertical;
+  InvalidNormal.Normal = FVector(2.0f, 0.0f, 0.0f);
+  Positions = {FVector::ZeroVector};
+  Constraints = {InvalidNormal};
+  Duals.Reset();
+  FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+    Single, Settings, Constraints, Positions, Duals, Summary);
+  TestFalse(TEXT("non-unit contact normal is invalid"), Summary.bValid);
+
+  FCrowdDemoParticleHardConstraint Left = Slanted;
+  Left.Normal = FVector(1.0f, 0.0f, 0.0f);
+  Left.Threshold = 1.0f;
+  FCrowdDemoParticleHardConstraint Right = Slanted;
+  Right.Normal = FVector(-1.0f, 0.0f, 0.0f);
+  Right.Threshold = 1.0f;
+  Positions = {FVector::ZeroVector};
+  Constraints = {Left, Right};
+  Duals.Reset();
+  for (int32 Iteration = 0; Iteration < 8; ++Iteration)
+  {
+    Duals.Reset();
+    FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+      Single, Settings, Constraints, Positions, Duals, Summary);
+  }
+  TestFalse(TEXT("two-sided insufficient clearance remains invalid"), Summary.bValid);
+  TestTrue(TEXT("two-sided witness retains a positive residual"), Summary.MaxResidualCm >= 0.99f);
+
+  const FVector StablePosition = Positions[0];
+  Algo::Reverse(Constraints);
+  Positions = {FVector::ZeroVector};
+  Duals.Reset();
+  for (int32 Iteration = 0; Iteration < 8; ++Iteration)
+  {
+    Duals.Reset();
+    FCrowdDemoParticleConstraintKernel::SolveUnifiedHardClosure(
+      Single, Settings, Constraints, Positions, Duals, Summary);
+  }
+  TestTrue(TEXT("constraint input reversal does not alter result"),
+    Positions[0].Equals(StablePosition, 0.01f));
   return true;
 }
 

@@ -2,14 +2,26 @@
 
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
+#include "Mass/CrowdDemoMassFragments.h"
 #include "MassEntityHandle.h"
+#include "MassCrowdProjectileMassStore.h"
+#include "MassCrowdRuntimeBridge.h"
+#include "MassCrowdWorkerContracts.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CrowdDemoMassSubsystem.generated.h"
 
 struct FMassEntityManager;
+struct FMassEntityTemplateData;
+struct FMassEntityTemplateID;
 class AActor;
 class UCrowdDemoClientVisualMassProcessor;
-class UCrowdDemoRoundSimFixedStepPipelineProcessor;
+class UCrowdDemoWorkerInputSyncProcessor;
+class UCrowdDemoWorkerResultApplyProcessor;
+
+MASSAICROWDDEMO_API void BuildCrowdDemoAuthorityTemplateData(
+  FMassEntityTemplateData& TemplateData,
+  const FMassEntityTemplateID& TemplateID,
+  ECrowdDemoMassCapability Capabilities);
 
 USTRUCT()
 struct FCrowdDemoMassSpawnResult
@@ -44,19 +56,78 @@ public:
   AActor* GetTargetActor() const;
   void SetScenario(ECrowdDemoScenario InScenario);
   ECrowdDemoScenario GetScenario() const { return CurrentScenario; }
+  void SetSoftPressureTestCase(ECrowdDemoSoftPressureTestCase InTestCase)
+  { SoftPressureTestCase = InTestCase; }
+  ECrowdDemoSoftPressureTestCase GetSoftPressureTestCase() const
+  { return SoftPressureTestCase; }
   FCrowdDemoMassSpawnResult SpawnAgents(int32 AgentCount);
   int32 GetTrackedAgentCount() const;
   int32 GetAliveAgentCount() const;
   int32 BuildVisualSnapshot(TArray<FCrowdDemoEntityState>& OutSnapshot, float ServerTimeSeconds) const;
   int32 BuildRoundAgentStates(TArray<FCrowdDemoRoundAgentState>& OutStates) const;
-
+  bool BuildProductBoundarySnapshot(
+    int32 FixedStepIndex,
+    int32 PlanRevision,
+    FCrowdMassBoundarySnapshot& OutSnapshot,
+    TArray<FCrowdMassCommitTarget>& OutTargets) const;
+  bool ApplyProductBoundaryCommit(
+    const FCrowdMassCommitPlan& Plan,
+    TConstArrayView<FCrowdMassCommitTarget> Targets);
+  bool ResolveTrackedAgentHandle(
+    const FCrowdStableEntityRef& EntityRef,
+    FMassEntityManager& EntityManager,
+    FMassEntityHandle& OutEntity) const;
+  int32 GetStableEntityHandleCount() const
+  { return StableEntityHandles.Num(); }
+  bool RecycleTrackedAgent(
+    const FCrowdStableEntityRef& EntityRef,
+    FCrowdStableEntityRef& OutReplacementRef);
+  bool CopyPendingWorkerLifecycleProfileJournal(
+    TArray<FCrowdWorkerSpawnDelta>& OutSpawns,
+    TArray<FCrowdWorkerDespawnDelta>& OutDespawns,
+    TArray<FCrowdWorkerExternalGameplayInput>& OutProfileRevisions)
+    const;
+  bool AcknowledgeWorkerLifecycleProfileJournal(
+    int32 SpawnCount,
+    int32 DespawnCount,
+    int32 ProfileRevisionCount);
+  bool HasWorkerLifecycleProfileJournalOverflowed() const
+  {
+    return bWorkerLifecycleProfileJournalOverflowed;
+  }
+  bool PrepareProjectileCapacity(int32 RequiredCount);
+  bool ValidateProjectileStates(
+    TConstArrayView<struct FCrowdProjectileState> Projectiles) const;
+  void ApplyProjectileStates(
+    TConstArrayView<struct FCrowdProjectileState> Projectiles);
+  bool GatherProjectileStates(
+    TArray<struct FCrowdProjectileState>& OutProjectiles) const;
+  void ResetProjectileStates();
+  int32 GetTrackedProjectilePoolCount() const
+  {
+    return ProjectileStore.GetCapacity();
+  }
 private:
   TArray<FMassEntityHandle> TrackedAgents;
+  TMap<FCrowdStableEntityRef, FMassEntityHandle> StableEntityHandles;
+  TArray<FCrowdWorkerSpawnDelta> PendingWorkerSpawns;
+  TArray<FCrowdWorkerDespawnDelta> PendingWorkerDespawns;
+  TArray<FCrowdWorkerExternalGameplayInput>
+    PendingWorkerProfileRevisions;
+  bool bWorkerLifecycleProfileJournalOverflowed = false;
+  FCrowdMassProjectileStore ProjectileStore;
   TWeakObjectPtr<AActor> TargetActor;
   ECrowdDemoScenario CurrentScenario = ECrowdDemoScenario::SimRoundObstacle;
+  ECrowdDemoSoftPressureTestCase SoftPressureTestCase =
+    ECrowdDemoSoftPressureTestCase::CorridorRoute;
 
   UPROPERTY(Transient)
-  TObjectPtr<UCrowdDemoRoundSimFixedStepPipelineProcessor> RoundSimPipelineProcessor;
+  TObjectPtr<UCrowdDemoWorkerInputSyncProcessor>
+    WorkerInputSyncProcessor;
+
+  UPROPERTY(Transient)
+  TObjectPtr<UCrowdDemoWorkerResultApplyProcessor>
+    WorkerResultApplyProcessor;
 
   UPROPERTY(Transient)
   TObjectPtr<UCrowdDemoClientVisualMassProcessor> ClientVisualProcessor;

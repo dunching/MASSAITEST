@@ -1,294 +1,271 @@
 # MassAI Crowd Demo 目的与目标效果
 
-## 2026-07-14 当前权威目标：统一软排斥粒子群
-
-[COMPUTED][HIGH] 参考视频 `C:\Users\dunch\Videos\NVIDIA\Desktop\Desktop 2026.07.13 - 14.27.46.01.mp4` 的约 `208s–225s` 只证明一种可见目标：较大实体进入密集小实体群时，局部空间被逐层释放并形成新的平衡。视频不提供底层算法、碰撞状态或双端确定性证据。
-
-[INFERRED][HIGH] Demo 当前唯一的局部群体目标模型改为：每个实体都具有真实硬半径、不可压缩安全间隙、可压缩软间隔和质量/逆质量；SoftMargin同时作用于其他粒子与静态环境。任意局部接触进入软距离时都产生有限排斥，第一层位移继续改变第二、第三层接触的误差，从而自然传播压力。
-
-```text
-HardPairDistance = RadiusA + RadiusB + HardSafetyGap
-SoftPairDistance = HardPairDistance + SoftMarginA + SoftMarginB
-SoftError        = SoftPairDistance - PairDistance
-```
-
-[INFERRED][HIGH] `SoftError > 0`时，确定性局部solver按显式fixed-step response施加有限软压力，再按双方Mobility/InverseMass分担修正；它不要求本步完全恢复SoftDistance。静态障碍和盒体边界视为Mobility为0的不可移动粒子：环境Soft修正全部由实体承担，但只消除指向环境内部的法向分量，合法切向运动必须保留。SoftError允许长期非零，真实半径与HardSafetyGap不得被软模型压缩。
-
-[INFERRED][HIGH] 该模型不区分“普通实体”“穿行者”“Transit Source”“靠墙实体”或“正在恢复阵型的实体”。尺寸和质量只通过PhysicalRadius、SoftMargin与Mobility进入同一求解合同；局部solver不保存另一套priority/responsibility，也不创建额外通道状态机或预先证明某条完整穿行路径。
-
-[INFERRED][HIGH] Flow、目标追逐和玩家输入只提供外部驱动力；局部群体层只负责软压力和硬安全。实体被移除后是否重新填满空洞，由现存密度、边界压力和外部目标共同决定；开放空间中不承诺回到原槽位或原矩阵。
-
-[INFERRED][HIGH] Priority ORCA、Joint Velocity、Transit Influence、Position/Holding回位和多分支Shadow都不是该最小模型的组成部分。ORCA只允许在未来有证据证明“高速预测碰撞”无法由新固定步约束链处理时重新立项，不作为当前兼容层保留。
-
-[COMPUTED][HIGH] 当前代码已实现粒子—粒子的显式Soft response、量化后的Hard/Swept/Obstacle安全闭环、candidate/applied状态拆分和invalid立即停止；8368旧fixture已经关闭。8371 Small 20在step 155因Agent 5/13最终距离`93.021cm < 94cm`而失败。当前Obstacle与Bounds仍只使用`PhysicalRadius + HardSafetyGap`，没有消费SoftMargin；Hard pair与环境也仍按顺序投影，尚未证明存在稳定二维共同解。
-
-[COMPUTED][HIGH] 工程仍保留SF3/SF4 ORCA、SF4 Position/Holding、Elastic Transit和Joint Shadow等旧路径，因为“Small通过后才删除”的前提未成立；当前过渡态不能写成最终架构。
-
-[INFERRED][HIGH] 历史SF1–SF4实验的数值仍可作为回归证据，但历史“下一步”“首选路线”和兼容设计不再覆盖本节。
-
 ## 1. 文档职责
 
-[INFERRED][HIGH] 本文件是 MassAI Crowd Demo 的目的、最终目标效果和长期架构原则的稳定事实源。
+[COMPUTED][HIGH] Demo的最终产品角色已明确为`MassCrowdSimulation`插件的测试宿主；插件模块边界、公共API与迁移顺序以`MassCrowdSimulationPluginArchitecture.md`为准。Demo保留T1–T8、地图、Round、指标、Lighting和人工审片，不作为可复用插件本体。
 
-[INFERRED][HIGH] `CurrentArchitecture.md` 回答“当前如何实现”，`PhasePlan.md` 回答“当前做什么”，`FeatureChecklist.md` 回答“哪些项目已经通过”；这三份阶段文档不能替代本文件，也不能把某一阶段算法写成最终产品架构。
+[INFERRED][HIGH] 本文件是 Demo 目的、最终目标效果与长期架构原则的稳定事实源；`CurrentArchitecture.md` 描述当前实现，`PhasePlan.md` 描述当前任务，`FeatureChecklist.md` 描述验收状态。
 
-[INFERRED][HIGH] 当阶段实现、实验参数或验收结果变化时，本文件只在 Demo 总目的、最终效果或长期职责边界发生变化时更新。
+[INFERRED][HIGH] 生产运行、行为组合、持续生命周期与复制的长期合同以`MassCrowdUnifiedRuntimeAndReplicationContract.md`为唯一事实源。Demo 的最终角色是生产插件的验收宿主：使用同一 Runtime、Networking 和 Presentation，只增加 Scenario 输入、固定 Round 窗口、readiness、hash、fixture、故障注入、VIOLATION 与人工审片设施。
 
-## 2. Demo 来源
+[INFERRED][HIGH] Demo 不得维护一套“当前先测、以后再换掉”的运行或复制协议。当前 `RoundBootstrapPacket`、`RoundPlan`、`RoundResult` 和固定 Agent 集合只属于实现现状；它们必须适配未来通用 Relevant Snapshot/Delta 合同，不能成为插件最终产品 API。
 
-[KNOWN][HIGH] 本 Demo 基于 `E:\Projects\SuperInvincibleTank_BugFix` 中已有的 MassAI 实验、代码和设计文档形成独立验证工程。
+[INFERRED][HIGH] Demo 是目标架构的快速验证宿主，不承担 Legacy 框架或接口的向后兼容责任。业务能力迁入生产插件路径时，必须在同一切片删除被替代的 Demo 生产入口、兼容包装、fallback 与双写路径；可以保留测试 fixture、故障注入和 Golden 证据，但不得为了旧测试继续维护第二套 Runtime、Commit Barrier、Transaction 或 rollback 数据源。
 
-[COMPUTED][HIGH] 原工程设计文档覆盖 Planner、GroundMovement、MassReplication、Client Visual、WorkRuntime/Prepared 数据、局部避让、PBD/HardSeparation、StateTree 和战斗业务行为。
+[INFERRED][HIGH] 最终产品目标是通用持续 Agent population，不是持续敌群专用系统。敌方追逐、友方搬运和中立游荡只是 Capability、Behavior、Objective 与关系策略的不同配置，所有实体复用同一 Movement、Avoidance、Particle、Replication 与 Presentation 路径。
 
-[INFERRED][HIGH] 随着实验分支、性能路径、复制路径、视觉修复和业务逻辑叠加，在原工程中同时定位群体路线、局部拥塞、复制误差和视觉表现的归因成本越来越高。
+## 1.1 当前能力与未来目标
 
-[INFERRED][HIGH] 独立 Demo 的目的不是抛弃原工程，而是隔离群体运动变量，建立小而可信、可复现、可逐阶段验收的技术验证器。
+[COMPUTED][HIGH] 当前能力包括固定 Agent 集合的 Round 验收、Core/Runtime 通用运动链、Demo correction/checkpoint chunks、Target Region、Combat HitFact 与 Demo ISM/VAT 表现。
 
-[INFERRED][HIGH] Demo 中验证通过的职责边界、数据契约和纯算法内核可作为原工程未来收敛的依据；它们不构成“将 Demo 整体复制回原工程”的默认决定。
+[COMPUTED][HIGH] 当前已具备生产Snapshot、bounded lifecycle batches、持续spawn/despawn、死亡移除、Lifecycle槽位复用、membership增量、统一Behavior、owner-only late join、空间RelevantSet、公共Presentation、NavFlowProductSmall、FriendlyLogisticsSmall和20/100/500同路径Mixed Sandbox。真实移动视区enter/exit专项仍未单独保存证据。
 
-## 3. Demo 总目的
+[INFERRED][HIGH] 未来能力必须以 Faction、Capability、Active Behavior 与 Cohort 分离为前提：Faction 只表达关系/权限/目标过滤；Capability 表达能做什么；Active Behavior 表达当前做什么；Cohort 由共享 Objective、NavigationLayer、MovementProfile、CapabilityProfile 与宏观策略形成，不等同于阵营。
 
-[INFERRED][HIGH] Demo 的总目的是：使用 Unreal Mass 验证一套适用于大规模虫群的“群体驱动 + 个体修正”运动架构。
+## 2. Demo 来源与目的
 
-[INFERRED][HIGH] 群体目标、共享导航事实、密度趋势、通道调度和主要运动方向应按 cohort、区域或目标批量生成和消费。
+[KNOWN][HIGH] 本 Demo 基于 `E:\Projects\SuperInvincibleTank_BugFix` 中已有 MassAI 实验、代码和设计文档形成独立验证工程。
 
-[INFERRED][HIGH] 每个虫子仍是完整业务实体，保存独立身份、位置、速度、生命周期和业务状态，并承担局部安全修正；它不应为相同群体目标重复执行完整目标生成、Nav/EQS 查询和整体路线规划。
+[INFERRED][HIGH] 独立工程用于隔离群体运动、复制、视觉与业务变量，建立小而可信、可复现、可逐阶段验收的技术验证器；它不是对原工程的整体替代。
 
-[INFERRED][HIGH] Demo 最终必须同时证明：
+[INFERRED][HIGH] Demo 总目的，是使用 Unreal Mass 验证适用于大规模虫群的“群体驱动 + 个体修正”运动架构。
 
-1. [INFERRED][HIGH] 群体运动在开放区域、障碍路线、窄通道和目标附近具有可读且连续的整体效果。
-2. [INFERRED][HIGH] 大规模 processor 的数据准备、WORK 计算和 GT 提交边界成立。
-3. [INFERRED][HIGH] Server/Client 使用同一模拟事实，correction 不产生跨轮扩散或客户端伪运动。
-4. [INFERRED][HIGH] 20、100、500 实体可以按正确性、容量和规模逐级验收。
-5. [INFERRED][HIGH] 客户端完整显示全部实体，不通过隐藏实例、客户端偏移、传送或视觉假间距制造通过结果。
-
-## 4. 核心架构原则
-
-### 4.1 群体驱动 + 个体修正
-
-[INFERRED][HIGH] 长期职责结构为：
+## 3. 群体驱动 + 个体修正
 
 ```text
-群体调度层
-├── 选择 cohort / 群体目标
-├── 生成共享 Navigation / Crowd / Flow Field
-├── 聚合密度和局部交通状态
-├── 决定主要通行趋势和共享运动事实
-└── 输出稳定、可批量消费的群体结果
+群体Guidance层
+├── 选择 cohort/群体目标
+├── 生成 Shared Flow 等共享导航事实
+├── 按行为选择可选的宏观策略
+│   ├── Target Region空间分布
+│   └── 未来自由游荡等群体意图
+└── 输出统一、可批量消费的Desired/Preferred guidance
 
 个体实体层
-├── 保存 AgentId、位置、速度和业务状态
-├── 消费群体结果
-├── 处理局部避让和安全修正
-├── 处理受击、攻击、死亡等个体事件
-└── 提交最终 Transform / Velocity
+├── 保存 AgentId、位置、速度、尺寸和业务状态
+├── 按 AgentId 消费群体 guidance
+├── 执行 Local Predictive短程轨迹避让与公平让行
+├── 执行 Particle Soft/Hard/Environment最终安全修正
+├── 保留受击、攻击、死亡等个体事件边界
+└── 提交最终 Transform/Velocity
 ```
 
-[INFERRED][HIGH] 群体层决定“大多数实体总体往哪里、通过哪片区域、何时进入或等待通道”；个体层决定“这个实体如何在局部安全地完成该趋势，以及是否因业务事件暂时退出群体行为”。
+[INFERRED][HIGH] 每个虫子仍是完整业务实体，但不应独立重复执行完整目标生成、Nav/EQS 查询或整体路线规划。
 
-[INFERRED][HIGH] Flow、Density、Traffic/Portal 或未来 Crowd Navigation Field 属于共享运动事实；ORCA、PBD、ObstacleConstraint 和个体 locomotion 属于局部运动或安全修正。攻击 slot、受击、死亡和能力状态不是 Crowd Field 的职责。
+[INFERRED][HIGH] WORK processors 应承担大规模、可批处理、稳定排序的事实生成；GT processors 只承担必须依赖世界对象、复制或视觉提交的边界工作。
 
-[INFERRED][HIGH] 群体结果不能抹掉 AgentId、生命周期或业务状态；个体修正也不能反过来为每个实体重新生成一套完整群体路线。
+## 4. 目标效果
 
-### 4.2 WORK processor 与 GT processor
+[INFERRED][HIGH] Demo 最终应证明：自由游荡和静态/动态目标追逐都由共享宏观场驱动；虫群能绕障、过通道、围绕目标自然分布，并通过局部粒子约束维持硬安全和可压缩软间距。
 
-[KNOWN][HIGH] 原工程 `38_MassAIProcessorPipelineContract.md` 规定：WORK processor 只消费 POD snapshot 并产生 POD result，不访问 `UWorld`、`UObject`、`AActor`、Mass fragment、Subsystem、NavigationSystem 或可变业务状态。
+[INFERRED][HIGH] Target Region Transport是“需要围绕目标进行区域分布”时使用的可选宏观策略，不是普通移动、自由游荡或窄口通行的固定必经层。
 
-[KNOWN][HIGH] 同一契约规定：GT processor 拥有 Mass fragment 读写、Transform/Velocity 提交、`UWorld/UObject` 访问、Nav 投影/射线、复制和业务 adapter。
+[INFERRED][HIGH] 启用Target Region策略时，目标周围不使用永久 Slot 或 per-agent Region owner；该策略只维护可行 Polar Navigation Cells、固定 Demand Regions、PlanEpoch 和短期 Cell Edge quota。
 
-[INFERRED][HIGH] Demo 的长期流水线应遵守以下方向：
+[INFERRED][HIGH] Navigation Cell 是可共享、可先后通过的空间区域，不是单个实体必须命中的站位点；Cell anchor 只能作为方向参考，不能被解释为要求多个实体同时占据的精确坐标。
+
+[INFERRED][HIGH] 合理落位必须同时满足“覆盖与人口分布成立”和“群体在目标参考系内稳定下来”。多个实体可以读取同一 Flow 方向或先后通过同一 Cell，但不得因持续争抢同一 anchor 而形成“靠近→Particle推开→再次靠近”的闭环振荡。
+
+[INFERRED][HIGH] 当业务启用目标区域分布时，Target Region Transport负责Region人口需求、宏观Cell Edge quota与terminal供需；普通开放移动和窄口移动不应为了兼容该模块而建立目标Region。所有宏观策略之后都统一由Local Predictive Interaction根据邻域轨迹决定当前可执行速度与必要的公平让行，再由Particle负责Soft压力与Hard/Swept/Environment最终安全。
+
+[INFERRED][HIGH] 局部预测层不识别“窄口测试”“同目标测试”或具体地图。Navigation Cell 不是独占站位，局部并发容量必须由当前实体半径、速度、轨迹和环境共同可行域自然产生；只有共同前进不可行时才使用有限期、可回滚的通用让行顺序。
+
+[INFERRED][HIGH] 不同半径、有效距离和 Mobility 的实体应在同一套通用规则下产生差异，不为具体 Agent、墙边实体或特定地图添加特殊生产分支。
+
+[INFERRED][HIGH] 最终群体必须支持SmallLight、Standard、LargeHeavy等不同PhysicalRadius/Mobility实体与Melee、MidRange、Ranged等不同Target中心距离带联合运行；尺寸/质量决定局部Particle响应，攻击距离决定群体Transport的终端区域，两者不得被硬编码成同一职业身份。
+
+[INFERRED][HIGH] 远程实体应沿共享Flow到达目标外围并在外层可行Regions自然展开；近战实体继续跨环进入内层；大型/重型实体通过更大HardDistance和更低Mobility自然影响局部空间，而不是获得另一套碰撞优先级。
+
+[INFERRED][HIGH] Server/Client 必须使用相同 processors 与纯 kernels；correction 只在 fixed-step boundary 应用；客户端完整显示全部实体，不通过隐藏实例或视觉偏移伪造效果。
+
+## 5. 典型场景事实源
+
+[INFERRED][HIGH] T1测试参与集切换与压力传播、T2开放群体移动、T3双向交换、T4有效通道、T5静态/移动Target和T6异构共享区域必须各有独立真实尝试关卡；T1不验收真实spawn/despawn。场景package、输入矩阵和三级验收以`TestScenarioMatrix.md`为准。
+
+[INFERRED][HIGH] 典型场景的终态合同必须匹配测试目的：T2在开放移动后使用Target Region Transport极坐标运输和Distance Band自然落位；T5/T6S/T6M使用目标相对Region站位；T3使用两侧宽交换区，T4/T6A使用通道出口平面。除非场景专门验证点目标，不得把“全体进入140cm圆”作为通用群体完成门。
+
+[INFERRED][HIGH] 每个场景必须依次通过纯kernel、20实体真实关卡、稳定窗口验收、FFmpeg和人工审片，再升级100/500；不能用一个综合地图替代所有归因场景。
+
+[INFERRED][HIGH] 目标类场景不能只用单帧`inside-band`、Region coverage或某一帧`TerminalSettle`数量判定完成。Static使用世界位置，Moving使用Target-relative位置/速度；两者都必须证明连续窗口内没有持续merge阻塞、终态状态抖动、位置往返和高频Particle反向修正。
+
+## 5.1 可视化、FFmpeg 与人工验收流程（2026-07-29）
+
+[INFERRED][HIGH] 每个专项关卡的当前版验收分为两次独立运行，不能用开启录屏和调试文字后的帧率替代性能基线。第一轮使用独立Server/Client、关闭录屏与状态标签，保存fixed-step、client frame、visual、Game/Render/GPU、realtime、step-limit和启动/稳定窗口分类；第二轮开启可视化标签与FFmpeg，保存连续录像、contact sheet、专项事件sidecar和事件短片。
+
+[INFERRED][HIGH] FFmpeg只判定视频是否可读、是否近黑/近白、是否发生长时间冻结，并按权威事件时间切片；它不能从像素反推出BusinessState、ReactiveMode、HitEvent、目标资格或Particle事实。业务正确性必须由服务端/复制权威日志与sidecar判定，人工审片负责核对“权威状态变化是否被连续、可辨识地表现出来”。
+
+[INFERRED][HIGH] 人工验收顺序固定为：先核对无录屏性能门；再看完整contact sheet排除黑屏、错误镜头和长期冻结；再按专项事件短片逐段看进入、保持、退出是否连续；最后对照sidecar中的expected/actual、authority sample step、client observation step和事件计数。复制延迟导致的短暂expected/actual差异必须保留为诊断，不得自动改写成业务失败或静默抹掉。
+
+[INFERRED][HIGH] T1只验收参与集切换、staging reset、压力传播与新平衡，允许被明确标记的测试边界reset，不允许普通帧瞬移；T3/T4/T6A只验收安全穿越与离开出口，不要求出口形成Target Region站位；T2/T5/T6S/T6M才验收目标相对Region覆盖和连续稳定落位。穿过窄口与目标站位是两项不同能力，不得互相替代。
+
+[INFERRED][HIGH] 推荐命令分为两轮：
+
+```powershell
+.\Scripts\RunCrowdDemo.ps1 `
+  -Map /Game/Maps/CrowdDemo_MultiStateVatHitResponseSmall `
+  -EntityCount 20 `
+  -Scenario SimRoundSoftPressure `
+  -RequirePerformanceGate
+
+.\Scripts\CaptureCrowdDemo.ps1 -T7StateAcceptance
+```
+
+[COMPUTED][HIGH] `CaptureCrowdDemo.ps1 -T7StateAcceptance`固定选择T7 Small和20实体，给客户端开启预期/实际状态标签并写入`scenario_state_events.jsonl`；录制结束后以实际Knockback、KnockUp和Death事件时间生成`step_030_knockback`、`step_060_knockup`、`step_090_death`短片及contact sheet，并写出`acceptance_manifest.json`。
+
+## 6. 当前实现与目标差距
+
+[COMPUTED][HIGH] 当前已实现 Shared Flow V2、Target Region Transport、SoftPressure Particle、双端 hash、correction rollback 和 client-only visual。
+
+[COMPUTED][HIGH] 8417 Static Small 20 已证明 20/20 进入有效距离带并覆盖 16/16 可行 Demand Regions；8418 Moving Small 已证明 20/20 进入有效距离带、覆盖当轮 12/12 可行 Demand Regions，且 Plan/Guidance unrouted、validation failure 与 Particle 安全违规均为 0。这些运行没有记录本文新增的连续稳定窗口、merge等待与目标相对抖动指标，因此只保留为旧口径到达/安全证据。
+
+[COMPUTED][HIGH] T1/T2/T3/T4/T6 对应的真实 Small package 与异构 Particle/CapabilityProfile 基础已建立；T1已完成开放压力传播验收，T2已在8426完成Shared Flow→Target Region Transport→Distance Band旧口径单轮验收，T3已在8455完成双cohort相反Shared Flow→中心交换→对侧完成平面的20/20验收，T4已在8460/8461完成有效通道20/20技术、能力与人工审片。T6A 8464通过，T6S 8479仅保留旧口径到达/安全证据，T6M 8492仍为19/20失败。
+
+[COMPUTED][HIGH] Shared Guidance 与 Particle 之间的通用 Local Predictive Interaction 已经接入，并以同一规则通过T3双向交换、T4通道和T5 Static稳定性V1能力门。8521 T5 Static达到inside-band=`20/20`、Region coverage=`16/16`且最终速度/位置抖动为0；当前下一差距是人工审片与Moving Target复验，不是直接进入100/500。
+
+## 2026-07-15 与长期目标的当前差距
+
+[COMPUTED][HIGH] Demo 已具备逐实体异构 Particle 事实与按 capability cohort 共享 Transport 的代码边界；这符合“群体驱动 + 个体修正”的职责分离，但尚未由 T6 真实运行证明最终视觉和能力效果。
+
+[COMPUTED][HIGH] T1 已证明 20 个稳定 Mass 实体在不 spawn/despawn 的前提下，通过测试专用参与状态完成 `0→5→10→15→19→20→19`；真实 Soft correction 图的稳定 BFS 达到第 3 层，插入与移除后两个 settling 窗口均成立，且移除后 12 个保留实体相对 pre-insert 布局仍有超过 1cm 的量化位移。
+
+[INFERRED][HIGH] T1 的“移除”只表示实体退出 Particle active 集合并回到可见 staging 状态，不是业务 despawn、死亡或 Mass 实体生命周期销毁；该边界不能被写成已实现真实生成/销毁系统。
+
+[COMPUTED][HIGH] 历史稳定性审计快照：当时T1、T3、T4已通过，T2/T5仍等待稳定性V1，T6M刚由8670关闭能力门。当前技术回归状态以`TestScenarioMatrix.md`为准，当前版本人工审片仍未全部完成。
+
+[COMPUTED][HIGH] 8426 T2证明20实体能够从开放Shared Flow接近切换到目标相对Transport与Distance Band，并在覆盖16/16可行Region、当帧`TerminalSettle=20/20`时保持Particle硬安全、双端确定性、correction replay和20/20完整显示；当前`terminal_settled_count`没有连续低速或位置稳定窗口语义，因此8426不能单独证明最终无抖动自然落位。
+
+## 2026-07-17 合理站位与稳定落位合同
+
+[INFERRED][HIGH] 最终目标效果不是“每个实体一个永久格子”，也不是“所有实体到同一个点”，而是共享宏观流下的区域分散、容量受控通过和Target-relative稳定终态。
 
 ```text
-GT Prepare
-→ 稳定排序的 POD / SoA snapshot
-→ WORK 纯计算
-→ revision / compatibility 检查
-→ GT Apply / Commit
-→ Replication / Client Visual
+Shared Flow / Transport决定去哪个可行区域
+→ Local Predictive Interaction根据邻域短期轨迹求解可执行速度
+→ 几何允许时多人并行；不可同时前进时确定性、有限期让行
+→ 进入terminal band后以迟滞保持完成状态
+→ Particle只修正剩余局部Soft/Hard安全
 ```
 
-[INFERRED][HIGH] WORK 结果未就绪时，只能在明确 TTL 和 compatibility hash 内消费 last-good result，或者保持已有输出；不能静默调用旧算法重算来掩盖 WORK 缺失。
+[INFERRED][HIGH] 上述让行不是 Flow Cell“进入锁”：它不创建永久 Cell owner，不把每个 Cell 容量固定为1，也不要求算法知道当前是窄口。完整定义以`LocalPredictiveInteractionDesign.md`为准。
 
-[COMPUTED][HIGH] 当前 Demo 已把主要算法放入纯 C++ kernel，并通过 prepared SoA 在 processor 之间交换；这证明了纯数据接口的可行性，但尚未证明真实 off-thread WORK 调度、预算 continuation 和大规模异步消费已经完成。
+[INFERRED][HIGH] “稳定”必须由连续fixed-step窗口证明：有效带和Region覆盖持续成立、相对目标速度收敛、位置峰峰抖动受限、Terminal/Transport无无因往返、Particle修正趋于稳定。单帧截图、最终一帧计数或Hard violation为0均不足以单独证明稳定落位。
 
-### 4.3 统一群体调度与个体业务实体
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
 
-[INFERRED][HIGH] Planner/群体调度拥有 cohort 目标、共享路径、区域压力、Portal 方向和群体级 approach；它不拥有单个实体的攻击、受击、死亡或能力执行。
+## 2026-07-18 自主移动、局部修正与最终朝向
 
-[KNOWN][HIGH] 原工程架构边界要求 Planner 选择目标/角色/阶段/slot/移动目标，Movement 消费 intent 并产生权威 locomotion，Replication 发布服务器事实，Client Visual 只负责表现消费。
+[INFERRED][HIGH] 实体的“想往哪里走”和“为安全实际怎样微调”必须保持两个语义层。Flow、Target Region Transport和业务guidance产生自主Preferred；Local Predictive、Particle和Obstacle只修正可执行位置/速度，不得反向改写实体认为自己的前进方向。
 
-[INFERRED][HIGH] Demo 的群体调度结果未来接入原工程时，应成为 Planner/Movement 的共享输入，而不是取代 StateTree、BattleObjective、Enemy Profile 或能力 processor。
+[INFERRED][HIGH] 视觉朝向因此采用两阶段合同：最终站位成立前朝自主Preferred，并用确定性角速度限制平滑转向；只有最终落位已经连续稳定后才朝向目标。瞬时避让侧移、推开和墙体滑动不应造成虫子身体高频左右甩头。
 
-[INFERRED][HIGH] 个体实体可以因攻击、死亡、受击、保护状态或特殊能力退出普通 crowd guidance；该例外必须由显式业务状态表达，不能通过视觉偏移或局部 solver 的隐式副作用表达。
+[INFERRED][HIGH] Ranged实体取得合法外圈站位后，目标向它靠近不应触发主动后退。保持资格仍需满足群体分布合同：若该Region后来成为超额人口，应稳定释放多余实体做区域重分流；这不是“因为目标靠近而退远”，而是避免多个实体永久占用同一Region造成空缺。
 
-### 4.4 Locomotion、安全修正与视觉修正
+[COMPUTED][HIGH] T6A现已把通道与目标落位串成同一端到端能力，但两阶段指标继续分开：corridor完成证明安全穿越，inside/coverage和终态稳定证明目标周围自然落位；任何一项都不能替代另一项。
 
-[KNOWN][HIGH] 原工程契约将 locomotion displacement、Nav/Obstacle adjustment、PBD/HardSeparation 和 Client Visual correction 定义为不同概念。
+## 2026-07-18 当前目标效果验收修正
 
-[INFERRED][HIGH] 只有 locomotion 表示正常业务运动；ORCA/PBD/Obstacle correction 只能改变局部安全结果，不能自动成为目标选择、攻击朝向或普通移动动画的依据。
+[COMPUTED][HIGH] T1与T2此前的双端hash/旧Flow owner误判已经修复；T5 Static/Moving也已达到20实体全部进入有效带并覆盖12/12可行Region。
 
-[INFERRED][HIGH] Client Visual 可以平滑和有限预测显示位置，但不得写回 gameplay movement，也不得用额外 pairwise push、隐藏实例或扩大显示步长掩盖服务器拥塞。
+[COMPUTED][HIGH] 上述结果仍不能证明自然稳定落位：两次T5运行最后90步的连续Particle settled window均为0，目标相对速度p95约134cm/s。现行验收继续要求连续窗口，而不是只看最终一帧coverage。
 
-### 4.5 随机地形、Steering与离散调度边界
+[COMPUTED][HIGH] T6 Moving的短期群体路线计划现已拥有可回滚Quota消费进度且不使用永久Region owner。严格30秒旧证据为inside20/20、coverage19/20；显式30秒名义窗口加15秒完成宽限后，8670连续两轮达到inside/coverage20/20。
 
-[INFERRED][HIGH] 随机地形中的石块、墙体、U形结构和不规则缝隙首先是walkability与共享导航事实，不应默认转换为人工lane、永久Portal或逐实体路径锁。静态或一轮内稳定的障碍进入Flow/Crowd Navigation Field；短期小型动态障碍由Obstacle Steering与局部避让处理；持续存在并改变可达拓扑的大型动态障碍才进入确定性overlay并触发有界重建。
+[INFERRED][HIGH] 测试宽限用于区分“合法路线仍在途”和“永久缺口”，不能用于掩盖速度骤降、安全失败或无路可达。稳定验收仍须同时检查实际覆盖、在途Supply、目标相对速度、位置峰峰抖动和Particle settling。
 
-[INFERRED][HIGH] 连续运动的目标组合为：
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
 
-```text
-Shared Flow / Seek / Arrive / Player Input
-→ Preferred Velocity
-→ MovementPredict
-→ Deterministic Particle Constraint Solve
-   ├─ Soft Pair Pressure
-   ├─ Hard Pair Separation
-   └─ Obstacle / Bounds
-→ MovementFinalize
-```
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
 
-[INFERRED][HIGH] 离散群体调度只拥有不能靠连续局部压力表达的真实有限资源，例如业务slot或经过证据门控的极端Portal容量；这些资源不进入通用Soft-Pair数据合同。当前群体运动验证不要求Position归属、Holding归属、Commit许可或逐实体完整polyline。
+## 2026-07-17 T6M 修复后的目标效果边界
 
-[INFERRED][HIGH] UE官方Mass NavMesh/ZoneGraph/MassCrowd可作为MoveTarget、ShortPath、Waiting Slot和Lane Gate的参考实现；当前Demo不直接采用其逐实体同步FindPath、StateTree、World DeltaTime或ZoneGraph运行时作为双端确定性主路径。
+[COMPUTED][HIGH] Demo现已证明连续Round可以从相同稳定输入重新开始，动态目标Shared Flow可以在固定世界障碍Topology上按量化目标anchor重建Integration，并保持server/client、rollback与Particle安全合同一致。
 
-### 4.6 统一硬核与软壳
+[COMPUTED][HIGH] Demo尚未证明20个异构实体都能围绕移动目标完成各自距离带落位：8487两轮均只有`17/20`进入有效距离带。因此“群体驱动 + 个体修正”的移动异构目标效果仍是不完整能力，不能由技术hash通过替代。
 
-[INFERRED][HIGH] Demo必须把“不能物理重叠”和“群体自然保留空间”定义为同一pair的两个阈值：HardPairDistance是硬核，SoftPairDistance是可压缩软壳。不得再由ORCA、Separation、Elastic和Position/Holding分别拥有不同间距语义。
+[COMPUTED][HIGH] 该2026-07-17停止条件已由8670的30+15秒连续两轮结果解除；当前不再需要为T6M修改Transport/Particle。下一能力缺口是T5/T2连续稳定窗口和人工复验。
 
-[INFERRED][HIGH] 开放区域中软壳使实体自然分散；窄口、高密度和墙体压力允许软壳被压缩，但不得压缩真实半径与HardSafetyGap。压力解除后solver只消除仍存在的SoftError，不恢复原Agent顺序、PositionId或矩阵。
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
 
-[INFERRED][HIGH] 大尺寸或低Mobility实体无需成为特殊Transit Source：更大的PhysicalRadius/SoftMargin或更低Mobility会自然使邻居承担更多位移。完整数据语义、实现路径和指标记录在 [CrowdTransitCapabilityDesign.md](CrowdTransitCapabilityDesign.md)。
+## 2026-07-17 T6 异构目标效果当前证据
 
-[INFERRED][HIGH] 统一距离合同同时适用于粒子和环境：
+[COMPUTED][HIGH] T6A 8464 与 T6S 8479 已证明20实体异构尺寸、Mobility及三档 Target distance band 在通道与静态目标条件下可以保持统一 Particle 安全、双端确定性、correction rollback 和完整显示。
 
-```text
-PairHardDistance = RadiusA + RadiusB + max(HardGapA, HardGapB)
-PairSoftDistance = PairHardDistance + SoftMarginA + SoftMarginB
+[COMPUTED][HIGH] T6M 8481 未证明移动目标异构终态：虽然技术门通过，但仅10/20实体进入自己的有效距离带，LargeMelee 与 StandardMelee 均为0/3。
 
-WallHardDistance = RadiusA + HardGapA
-WallSoftDistance = WallHardDistance + SoftMarginA
-```
+[INFERRED][HIGH] 该失败说明“群体驱动”中的共享导航事实必须与动态群体目标处于同一空间参考系；只让个体速度跟随目标平移、但让共享势场继续指向旧世界坐标，不构成完整的移动群体调度。
 
-[INFERRED][HIGH] 当粒子接近静态墙体、障碍或FlowBounds时，环境在WallSoftDistance内产生可压缩法向压力，在WallHardDistance内形成不可违反的硬约束；墙体不承担位移，粒子的合法切向自由度必须保留。粒子—粒子与粒子—环境不得再由两套互不知情的间距语义处理。
+[COMPUTED][HIGH] 历史2026-07-17结论：当时T6M尚未关闭，因此不能描述为T1–T8全部无硬失败。该前置停止条件后来已经解除，Mass Projectile功能迁移、PJ0–PJ6三模块重构与专项均已完成。
 
-[INFERRED][HIGH] 该模型采用类似Boids的“少量局部规则产生群体现象”原则，但不照搬经典Boids的凝聚、对齐和分离三项行为。共享Flow/Seek/Player Input已经负责宏观方向；局部粒子solver只负责质量/可动性分配、Soft压力与Hard安全，不额外生成凝聚目标。第一版的Mobility是约束修正权重，不自动宣称已经实现牛顿力学中的惯性、动量或冲量。
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
 
-[INFERRED][HIGH] 垂直靠墙、斜墙滑动、双侧夹持、窄口压缩、粒子插入/移除和多粒子交叉只作为通用规则的fixture，不得成为生产代码中的场景枚举或特殊身份分支。规则应保持简单；多粒子与环境同时接触时的共同求解可以技术上严谨，但不能引入Portal、Holding、Transit Source或逐场景脚本来代替局部物理合同。
+## 2026-07-15 个体业务、VAT 与受击效果目标补充
 
-[INFERRED][HIGH] 每个fixed-step的目标顺序为：外部guidance生成DesiredVelocity → 预测位置 → 粒子Soft压力 → 环境Soft压力 → 粒子Hard/Swept约束与环境Hard约束的统一局部闭环 → 从最终位移重建Velocity → 独立Hard安全复验 → 原子提交。复验只判断结果是否安全，不能代替前面的相互影响求解。
+[INFERRED][HIGH] “每个虫子是完整业务实体”不仅表示保存身份和位置，还要求最终能表达 AcquireTarget、Attack、Recover、Death 等业务状态，以及 HitReact、Knockback、KnockUp 等受击响应事实；但这些个体事件不得反向承担群体目标生成、共享路线规划或区域人口调度。
 
-[COMPUTED][HIGH] 当前工程已实现单一`PhysicalRadius/HardSafetyGap/SoftMargin/Mobility`数据合同和粒子—粒子Soft/Hard/Swept链，但所有正式实体Mobility仍为1，环境只消费`PhysicalRadius + HardSafetyGap`，尚未实现环境Soft压力、异构质量能力门或粒子/环境统一二维共同求解。
+[INFERRED][HIGH] Melee/MidRange/Ranged 的 Target 距离带只定义群体站位前提，不等于攻击已发生。真正远程攻击必须另有目标有效性、windup、单次发射、projectile、hit fact 和 recovery 合同。
 
-## 5. 最终目标行为
+[INFERRED][HIGH] 最终视觉目标不是“一个StaticMesh换颜色”：真实虫子 VAT 必须由业务/受击事实驱动 Idle、Move、Attack、HitReact 和 Death clip；命中改色是可叠加材质反馈，不能替代动画状态或由客户端本地碰撞自行触发。
 
-### 5.1 自由游荡
+[INFERRED][HIGH] 击退和击飞属于确定性受击运动。水平位移必须继续经过统一 Particle/Environment 安全链；首版击飞以保守2.5D ballistic Z表现离地和落地，XY footprint继续参与Hard/Swept安全，不外推为空中穿越能力。
 
-[INFERRED][HIGH] 无战斗目标或尚未发现目标时，虫群应在允许区域内形成松散、持续、非完全同步的游荡，而不是全部永久 Idle、全部追逐同一点或每个实体独立运行昂贵目标查询。
+[COMPUTED][HIGH] T7 已接入五状态业务/视觉事实、确定性测试 HitFact、击退/击飞/落地、真实 VAT ISM 与同步 ServerTime 播放，并已通过自动化、单轮双端技术门和近景人工审片。
 
-[INFERRED][HIGH] 群体层可周期性生成区域目标、共享方向或低频 wander field；个体层保留短暂停顿、局部偏移、转向差异和障碍修正，使群体可读但不过度整齐。
+[COMPUTED][HIGH] 命中闪色事实与HitFlashIntensity已接入；当前由主体VAT材质读取PICD slot 2独立闪白单个实例，不再使用红色同帧overlay ISM。9208 T7逐帧录像证明Knockback/KnockUp/Death分别只改变目标实例且无副本或重影。T8进一步实现并验证了10射手+10静止目标的目标选择、windup、Mass projectile、swept hit、damage、客户端事件视觉与统一HitResponse。
 
-[KNOWN][HIGH] 原工程游戏设计要求 ClearBugs 中噪音范围外的小青虫和泥蜗牛在 Idle/Wander 间循环，不能永久停在 AcquireTarget，也不能在无噪音时主动追逐平台。
+[INFERRED][HIGH] T8 Small本身只证明静止目标远程投射物链；PJ6另以20/100/500实体和4/20/100并发Projectile关闭模块化规模门。两者仍不能外推为远程Transport handoff、T9混合战斗或原工程迁移已经成立。
 
-[COMPUTED][HIGH] 当前 Demo 没有自由游荡场景，因此该效果是最终目标和当前缺口，不是已实现能力。
+## 2026-07-16 类游戏业务Sandbox与插件化迁移目标
 
-### 5.2 静态目标追逐
+[INFERRED][HIGH] Demo长期目标增加一个独立的类游戏虫群Sandbox：玩家控制Pawn移动，地图持续生成受上限约束的敌群，群体按玩家和世界事实共享目标与导航结果，玩家通过fixed-step命令释放线形或圆形伤害，并由统一HitFact驱动伤害、HitFlash、击退、击飞、落地、死亡和群体membership变化。
 
-[INFERRED][HIGH] 群体发现静态目标后，应共享主要接近路线，绕过障碍、通过连续转角和窄通道，并在目标附近由Soft-Pair Pressure自然消化密度，不能全部挤向同一个goal cell。
+[COMPUTED][HIGH] 阶段I已补充基于静态烘焙NavMesh的稳定分层Surface Graph与共享Flow，并在真实地图验证坡道、桥上桥下、高台、多路线、窄桥和不可通行落差。[INFERRED][HIGH] 该独立导航probe不能外推为continuous lifecycle、Behavior、Combat、Logistics与Presentation已经完成混合运行。
 
-[INFERRED][HIGH] 第一版不再要求Candidate/Assignment、Holding、Commit、RadialStage、Arc/Final route或逐实体槽位。目标吸引与pair排斥共同形成局部平衡；若未来战斗业务需要严格攻击slot，应作为独立业务资源层另行设计，不能反向污染通用群体solver。
+[COMPUTED][HIGH] 该前置顺序已执行到T9：T1–T8独立Small、插件提取/双重回归和T9固定20实体混合战斗均已完成；T10持续生成、玩家命令与完整游戏循环仍是后续阶段。
 
-[COMPUTED][HIGH] 当前 SF1 已证明共享静态 FlowField 路线、障碍约束和双端确定性；SF2/SF3 尚未证明100/500容量和最终目标附近群体效果成立。
+[INFERRED][HIGH] 插件化用于降低未来接入`E:\Projects\SuperInvincibleTank_BugFix`的迁移风险；未来回原工程采用公开接口与Adapter，不默认复制整个Demo Source、Coordinator、地图或历史诊断代码。详细事实源为`GameplaySwarmSandboxAndPluginMigrationPlan.md`。
 
-### 5.3 动态目标追逐
+[COMPUTED][HIGH] 2026-07-17 的Mass Projectile插件前置核对最初因T3生产合同缺失而停止；随后T3、T4、T6M、T8和PJ0–PJ6均已关闭。本句仅保留历史停止原因，不再构成当前前置门。
 
-[INFERRED][HIGH] 动态目标移动时，群体层应以有界 cadence 更新共享目标事实和主要追逐趋势，避免500个实体独立对目标做完整路径/EQS计算，也避免整个群体同一帧机械急转。
+## 2026-07-17 大量远程敌人与通用命中目标
 
-[INFERRED][HIGH] 个体可以因速度、位置、局部拥塞和业务状态产生自然落后；当目标速度高于虫子基础速度时，虫子允许落后，不得通过速度膨胀、传送或视觉 correction 假装追上。
+[COMPUTED][HIGH] Demo长期目标中的大量远程类敌人与大量同时在场Projectile已由PJ6公共Mass Projectile Entity、稳定空间Broadphase和fixed-step相对sweep实现到本仓库规模门；结构测试持续禁止跨Boundary持久Pipeline数组权威或`Projectile×Agent`全量扫描。
 
-[INFERRED][HIGH] 目标停止或低速后，群体应逐步收敛为可读的 approach/包围/预留结构，而不是维持大面积远端尾巴、厘米级追随抖动或同步 stop-go。
+[INFERRED][HIGH] “命中”和“被命中”必须通过通用、无Actor依赖的HitFact连接：Projectile、线形、圆形和近战只生产事实；原工程Adapter负责伤害、防御、状态、击退/击飞、死亡、掉落和视觉结果。
 
-[COMPUTED][HIGH] 当前 Demo 没有动态目标追逐场景，该效果尚未实现或验收。
+[COMPUTED][HIGH] 插件公共模块与Demo验证已经完成；原工程Adapter验证尚未执行。完整事实源为`MassProjectileHitFrameworkDesign.md`。
 
-## 6. 参考媒体中的可见目标效果
+## 2026-07-18 最终站位标记语义
 
-[COMPUTED][HIGH] `Desktop 2026.07.08 - 19.22.20.02.mp4` 为约61.84秒、2560×1440、约30fps的录屏。均匀帧可见开放区域内大量单位围绕多个大型战斗主体持续聚散，屏幕保持高实体密度，并出现局部包围、流动空隙和战斗效果遮挡。
+[INFERRED][HIGH] 客户端验收画面必须忠实显示算法真正拥有的空间事实。若系统存在稳定Agent→Slot分配，则可以显示精确最终位置；若系统只拥有Region人口与可行terminal cell，则只能显示范围、分区和候选cell，不能为了“看起来明确”伪造逐实体Slot。
 
-[COMPUTED][HIGH] `Desktop 2026.07.08 - 19.28.20.03.mp4` 为约38.13秒、2560×1440、约30fps的录屏。均匀帧可见群体进入蛇形窄通道、连续转弯并从出口继续展开，局部拥塞在画面上可读。
+[INFERRED][HIGH] 精确Slot标记用于检查分配是否被正确执行；Region标记用于检查实体是否进入正确距离带、覆盖可行区域并自然稳定。两者都只服务验收可解释性，不参与server gameplay movement、局部避让或Particle求解。
 
-[COMPUTED][HIGH] `Desktop 2026.07.12 - 22.15.23.01.mp4` 为约32.20秒、2560×1440、约30fps的录屏。均匀帧可见游戏单位在开放区域、岩石和不规则墙体之间聚散、追随并参与战斗；画面没有持续稳定的人工lane或固定单一入口。
+[INFERRED][HIGH] Transit与Target落位也必须保持不同完成含义：Transit回答“是否全体安全通过并稳定离开出口”，Target落位回答“是否在目标相对可行区域内覆盖并稳定”。不得再用同一point-goal或同一`goal_reached`数字替代两者。
 
-[INFERRED][HIGH] 三段视频提供的目标效果参考是：大量单位同时可见、整体趋势明确、局部运动不完全同步；明确窄通道中保持推进并在出口重新展开，开放随机地形中则能围绕障碍压缩与展开。它们不要求实体保持固定编队，也不要求所有地形先转换为道路网络。
+## 2026-07-22 阶段 G 持续生命周期基线
 
-[COMPUTED][HIGH] 视频没有提供内部算法、服务器权威状态或处理器数据，因此不能据此声称画面使用了 NavMesh、FlowField、ORCA、RVO、PBD 或任何指定算法。
+[COMPUTED][HIGH] Demo现有地图已提供独立`-CrowdDemoContinuousLifecycle`入口：固定Round agent数为0，10个真实Mass entity逐步增长到20硬上限，再持续执行membership迁移、Death/BusinessRecycle despawn和同槽位高LifecycleSerial respawn；T1 active/inactive没有被复用为生命周期。
 
-[COMPUTED][HIGH] 参考图片表达了“群体驱动 + 个体修正”和“谁是主路径”的架构观点；它是设计输入，不是当前 Demo 已完成该架构的运行证据。
+[COMPUTED][HIGH] 8777双端运行中，序列12把slot 2 serial 1按Death销毁，序列13以serial 2重生；该历史运行使用普通/HitFlash双ISM。当前客户端只按StableEntityRef增量Add/Remove/Update主体ISM，`HitFlashIntensity`位于同一实例slot 2；9203序列44持续生命周期门通过且entity-set hash=`12305161180829922642`。[INFERRED][HIGH] 这只建立持续生命周期与单主体表现基线，不等同于H的统一Behavior或J的混合Sandbox已完成。
 
-## 7. 验收尺度
+## 2026-07-23 阶段 H 统一 Behavior 基线
 
-| 规模 | 验收职责 |
-|---:|---|
-| 20 | [INFERRED][HIGH] 验证算法正确性、连续路线、局部避让、无穿墙、无死锁和人工可读效果。 |
-| 100 | [INFERRED][HIGH] 验证窄口容量、局部密度、队列/通行、公平性和 correction 稳定性。 |
-| 500 | [INFERRED][HIGH] 验证群体调度收益、processor/WORK边界、复制预算、完整显示、性能和长时间稳定性。 |
+[COMPUTED][HIGH] Runtime已用同一provider/transition合同表达Wander、MoveTo、Pursue、HaulPickup、HaulDeliver、Attack、Guard和Flee，并统一输出Target、Objective、MovementProfile、InteractionIntent与BusinessCommitRequest。Demo Logistics与Combat只作为宿主adapter；Faction值变化不会授予缺失Capability。
 
-[INFERRED][HIGH] 小规模未通过时，不能用500规模“看起来热闹”替代正确性；20通过而100/500失败时，应判定容量或架构边界不足，而不是隐藏实例、降低目标或扩大视觉修正。
+[COMPUTED][HIGH] Cargo pickup/deliver、真实Demo HitFact伤害、HitEventId幂等提交及rollback replay不重复伤害/业务提交均通过自动化。[INFERRED][HIGH] H没有把这些行为接入G持续场景；该组合只在I导航完成后的J混合Sandbox中验收。
 
-[INFERRED][HIGH] 每档都必须分别验证服务器运动、客户端模拟、Client Visual、实体/实例数量和错误日志；自动化、双端技术结果和人工审片结论必须分开记录。
+## 2026-07-23 阶段 I 分层导航基线
 
-## 8. 当前进度与最终目标差距
+[COMPUTED][HIGH] Core稳定Surface Graph与Shared Flow、Runtime静态Recast提取器及`CrowdDemo_NavSurfaceGraphVerticalSmall`已形成同一生产导航路径；8800运行提取98 nodes、234 directed edges、4 layers和13个桥上桥下XY overlap，76条可达坡边与8/8目标marker可达，不可通行drop保持隔离。
 
-| 能力 | 当前证据 | 状态 |
-|---|---|---|
-| SF1 Shared FlowField | [COMPUTED][HIGH] 静态路线、绕墙、转角、双端 hash、penetration 已通过既有验收。 | [COMPUTED][HIGH] 阶段通过。 |
-| SF2 Soft Separation + PBD | [COMPUTED][HIGH] 20规模 severe overlap 受控；100/500 出现容量和目标到达回退。 | [COMPUTED][HIGH] 小规模部分通过，容量未通过。 |
-| SF3 Portal/Traffic/Holding/ORCA | [COMPUTED][HIGH] 纯内核、双端确定性、Portal/状态转换和障碍安全通过；ORCA/LP closeout正式结果为goal=10/20，成熟RVO2 reference没有发现continuous LP漏解。 | [COMPUTED][HIGH] 实验代码存在，最终目标区效果未通过。 |
-| Holding | [COMPUTED][HIGH] 已有实验性 target 生成和纯测试，但 Small 能力门失败且没有通过后的人工录像。 | [COMPUTED][HIGH] 未完成最终效果验收。 |
-| SF4 Positioning | [COMPUTED][HIGH] Candidate/Assignment纯内核与双端设施存在；Polar Approach、Phase Reservation、Wait-For Graph和Route-Aware ORCA的Static最终能力为1/20。 | [COMPUTED][HIGH] 复杂路径预约方向停止；Steering-first Holding/Commit修订仅完成文档决定，尚未实现。 |
-| 自由游荡 | [COMPUTED][HIGH] 当前三个场景均为 RoundSim 目标路线验证。 | [COMPUTED][HIGH] 未实现。 |
-| 动态目标追逐 | [COMPUTED][HIGH] 当前目标和 FlowFieldConfig 在每轮内为静态测试事实。 | [COMPUTED][HIGH] 未实现。 |
-| WORK/GT 正式执行边界 | [COMPUTED][HIGH] 已有纯kernel和prepared SoA，但没有真实off-thread WORK与continuation验收。 | [COMPUTED][HIGH] 仅完成接口方向验证。 |
-| 500完整群体效果 | [COMPUTED][HIGH] SF1显示/路线基线存在；SF2容量失败，SF3因Small失败未进入500。 | [COMPUTED][HIGH] 未完成。 |
+[COMPUTED][HIGH] Development/DebugGame `-DisableUnity`、定向3/3、MassCrowd 27/27与CrowdDemo 112/112通过，视觉证据保存于`Saved/StageI_NavSurfaceGraph_Visual.png`。[COMPUTED][HIGH] 后续J已在20实体持续场景中证明导航层、业务切换、生命周期、同步与视觉共同成立。
 
-## 9. 长期推进原则
+## 2026-07-23 阶段 J 混合行为 Sandbox
 
-[INFERRED][HIGH] 后续阶段应继续按“共享群体事实 → 局部个体修正 → GT权威提交 → 双端/视觉验收”逐层推进，不能重新回到每实体独立Nav/slot/workitem作为整体主路径。
+[COMPUTED][HIGH] 独立`-CrowdDemoMixedSandbox`入口不创建固定Round agents；20个真实Mass实体同时消费LifecycleWorld、统一Behavior provider、Cargo/Combat commit ledger、Recast Surface Graph/Shared Flow和客户端增量ISM。行为转换来自距离、Cargo carrier、Health与当前目标事实，不使用固定事件表驱动业务结果。
 
-[INFERRED][HIGH] 未来 Crowd Navigation Field 应由 Editor/Commandlet 从 NavMesh 离线烘焙为确定性资产，由Server/Client加载同一BuildHash；这只是已记录的后续架构方向，当前没有实现。
+[COMPUTED][HIGH] 8804 step600达到active/visible=`20/20`、行为切换29、pickup/delivery=`4/1`、Combat quantity=`500`、commit/duplicate=`25/25`、spawn/despawn=`3/3`、membership=7、同层最小间距=`71.51cm`；Server fixed-step p95=`0.863ms`、Client frame p95=`4.851ms`，双端entity/membership hash一致且无VIOLATION。视觉证据为`Saved/StageJ_MixedSandbox_Visual.png`。
 
-[INFERRED][HIGH] 自由游荡、动态目标、near-target positioning和战斗业务应分别立项；不能在解决群体运动问题时暗中加入攻击，也不能用局部避让承担Position容量分配。near-target第一版应优先验证Holding/Commit/Occupied最小状态，而不是继续扩张Phase Reservation或Wait-For生产控制。
+[INFERRED][HIGH] 该结果只关闭J的20实体混合路径，不能外推为K的100/500规模或L原工程迁移已通过。
 
-[INFERRED][HIGH] 任何失败必须先按 `Symptom → Evidence → Layer Attribution → Allowed Change → Forbidden Change → Test Plan` 归因；未知层只能增加诊断，不能同时修改Planner、Movement、Replication和Client Visual。
-
-## 10. 非目标
-
-[INFERRED][HIGH] Demo 不负责完整复刻原工程的BattleObjective、StateTree、攻击、受击、死亡、掉落或Boss业务。
-
-[INFERRED][HIGH] Demo 不以固定军阵、所有实体严格等距、所有虫子同时转向或永不接触为最终效果。
-
-[INFERRED][HIGH] Demo 不接受用客户端专属运动、隐藏实例、传送、速度膨胀、扩大correction或放宽指标掩盖服务器群体运动失败。
-
-[INFERRED][HIGH] Demo 不把某个具体算法名称当作最终目的；FlowField、Portal、ORCA或未来方案只有在满足群体效果、执行边界和双端验收时才算有效。
-
-## 11. 依据与证据边界
-
-[COMPUTED][HIGH] 本文件的原工程架构依据包括：
-
-- [KNOWN][HIGH] `34_MassAISwarmBusinessLogicContract.md`：群体接近、near-target slot、locomotion/correction和可见虫群业务边界。
-- [KNOWN][HIGH] `35_MassAIArchitectureBoundaries.md`：Planner、Movement、Replication、ClientSim、Client Visual和Submit/deferred的分层归因。
-- [KNOWN][HIGH] `38_MassAIProcessorPipelineContract.md`：WORK POD-only、GT Mass/UObject/Transform ownership、last-good与compatibility规则。
-- [KNOWN][HIGH] `10_MassAINPCExtensionDesign.md`：BattleObjective、Profile、StateTree、capability processor和高规模NPC扩展职责。
-- [KNOWN][HIGH] `03_GameDesign.md`：ClearBugs idle/wander、DefendGarden objective target和SwarmControl密度/路线业务目标。
-- [KNOWN][HIGH] `MassAI_CrowdAcceptance.md`：服务器、客户端、视觉、avoidance、slot/refill和性能的持续验收分类。
-
-[COMPUTED][HIGH] 三段参考视频只作为可见群体效果参考；参考图片只作为架构意图输入。它们不提供源码、服务器事实、processor trace或算法配置，因此不承担算法实现证据职责。
-
-[INFERRED][HIGH] 当前实现与数值结果必须回到 `CurrentArchitecture.md`、`PhasePlan.md`、`FeatureChecklist.md`及对应自动化/运行日志核验，不能从本目标文件反向推定为已完成。
-
-## 12. Soft-Pair Pressure的长期容量原则
-
-[INFERRED][HIGH] “群体驱动 + 个体修正”不能依赖预留固定Transit Aperture或逐穿行者component规划。容量来自当前空间、边界、密度和所有pair软壳的共同状态；局部压力能够传播时自然让行，硬墙与高密度确实无解时允许减速或停止。
-
-[INFERRED][HIGH] 长期距离合同只保留PhysicalRadius、HardSafetyGap和SoftMargin；Mobility/InverseMass决定修正分担。RequiredTransitAperture、YieldBudget、AssignedSpacing和Transit intent不属于当前核心模型。
-
-[INFERRED][HIGH] 同一pair在同一fixed-step只有一个constraint owner。SoftPair、HardPair与Obstacle/Bounds在统一预测位置solver中固定迭代，禁止先后叠加多个互不知情的push、ORCA修正和Shadow polish。
-
-[COMPUTED][HIGH] 当前Demo曾实现容量公式、Transit intent、Joint component和Elastic Shadow，但真实运行没有通过能力或安全门；这些结果现在只证明旧路线复杂且未完成，不再构成兼容保留理由。
+[RULES I BROKE]：[COMPUTED][HIGH] 无。
