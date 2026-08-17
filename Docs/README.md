@@ -10,7 +10,7 @@
 
 | 文档 | 唯一职责 |
 |---|---|
-| `CurrentArchitecture.md` | 当前 `main` 实际存在的生产结构、运行链与迁移债务。 |
+| `CurrentArchitecture.md` | 当前 `main` 实际存在的生产结构、运行链、运行模式与迁移债务。 |
 | `TargetArchitecture.md` | 已经确定的最终产品方向与终态架构。 |
 | `PhasePlan.md` | 从 Current 收敛到 Target 的当前实施顺序。 |
 | `FeatureChecklist.md` | 功能 / 结构能力的 DONE / PARTIAL / OPEN 状态。 |
@@ -36,7 +36,41 @@ PhasePlan.md
 
 ---
 
-## 2. 专项设计文档
+## 2. 源码审计与阅读入口
+
+项目经过多轮实验性迭代，新 Worker 架构与旧 Demo RoundSim shell 仍有共存。为了避免“从最大文件开始读，结果把 Legacy 当主架构”，源码阅读统一增加三个入口：
+
+| 文档 | 职责 |
+|---|---|
+| `SourceReadingMap.md` | 当前源码从哪里开始读；Production / Demo Adapter / Legacy / Diagnostic / Test 如何区分。 |
+| `LegacyCodeInventory.md` | 旧代码、重复 Kernel、巨型 Coordinator 的风险分类与删除前置条件。 |
+| `SourceConsistencyAudit.md` | 文档 ↔ 源码逐项对照，记录 EXACT / DOC BUG / SOURCE DEBT / NEEDS CLARIFICATION。 |
+
+推荐源码阅读路径：
+
+```text
+SourceReadingMap.md
+    ↓
+MassCrowdWorkerRuntimeV2
+    ↓
+MassCrowdAsyncSimulationRuntime
+    ↓
+Worker Domain Executors
+    ↓
+MassCrowdWorkerResultApply
+    ↓
+CrowdDemoWorkerInputSync / Host Apply
+    ↓
+Core Kernels
+    ↓
+最后才进入 RoundSim legacy shell
+```
+
+任何计划删除旧代码前，先查 `LegacyCodeInventory.md`，不要靠文件名判断可删除性。
+
+---
+
+## 3. 专项设计文档
 
 专项 Design 只回答“这个机制怎么设计、边界是什么”，不重新定义项目全局状态。
 
@@ -70,7 +104,7 @@ ParticleSafetyDesign.md
 
 ---
 
-## 3. Reference
+## 4. Reference
 
 从：
 
@@ -90,7 +124,7 @@ Reference 不覆盖 `CurrentArchitecture.md` / `TargetArchitecture.md`。
 
 ---
 
-## 4. AI 恢复入口
+## 5. AI 恢复入口
 
 新的 AI 或开发者需要快速恢复上下文时：
 
@@ -104,13 +138,15 @@ TargetArchitecture.md
 PhasePlan.md
 FeatureChecklist.md
 TestScenarioMatrix.md
+    ↓
+SourceReadingMap.md
 ```
 
 `AI_ENTRY` 只做快速恢复，不拥有架构事实优先级，也不保存已完成执行 Prompt。
 
 ---
 
-## 5. History
+## 6. History
 
 历史统一从：
 
@@ -120,22 +156,15 @@ History/README.md
 
 进入。
 
-History 用于保存：
+History 用于保存被替代的架构方案、重大迁移背景、有归因价值的恢复快照和旧实验总结。
 
-```text
-被替代的架构方案
-重大迁移背景
-有归因价值的恢复快照
-旧实验总结
-```
-
-已完成的执行 Prompt 只在 `History/Prompts/README.md` 留索引，完整正文通过 Git 历史追溯。
+已完成执行 Prompt 只在 `History/Prompts/README.md` 留索引，完整正文通过 Git 历史追溯。
 
 Active `Docs/` 根目录不再保留 AB5、Async Boundary、Persistent Worker 中间态、旧 Ownership Matrix、旧 Plugin Architecture、旧 Distance Band 文档等兼容 stub。
 
 ---
 
-## 6. 推荐阅读顺序
+## 7. 推荐阅读顺序
 
 第一次理解项目：
 
@@ -155,11 +184,18 @@ FeatureChecklist.md
 TestScenarioMatrix.md
 ```
 
-需要深入某个子系统，再进入对应 Design 或 Reference。
+准备修改源码：
+
+```text
+SourceReadingMap.md
+→ SourceConsistencyAudit.md
+→ LegacyCodeInventory.md
+→ 对应 Design / Reference
+```
 
 ---
 
-## 7. 文档维护规则
+## 8. 文档维护规则
 
 1. `CurrentArchitecture.md` 不写历史流水账，也不写未实现目标。
 2. `TargetArchitecture.md` 不把目标写成已经完成。
@@ -168,7 +204,9 @@ TestScenarioMatrix.md
 5. `TestScenarioMatrix.md` 只保留当前有效证据；端口、PID、临时日志留给 Git/Saved/runner artifact。
 6. Design 文档只维护机制合同，不保存阶段编号和逐次性能流水账。
 7. Reference 只维护精确边界，不抢总架构事实权。
-8. `AI_ENTRY` 不追加几十 KB 的迁移日志，也不保留已完成 Prompt。
-9. `History` 不充当当前状态页面。
-10. 被新机制替代的旧架构文档直接退出 active tree；需要追溯使用 Git 历史。
-11. 文档与源码冲突时，以源码为起点修正文档；不得为了保护旧文档而保留 Legacy 代码。
+8. `SourceConsistencyAudit.md` 只记录当前仍有价值的不一致；已修复历史通过 Git 追溯。
+9. `LegacyCodeInventory.md` 中没有完成 consumer audit 的条目，不得直接宣布“安全删除”。
+10. `AI_ENTRY` 不追加几十 KB 的迁移日志，也不保留已完成 Prompt。
+11. `History` 不充当当前状态页面。
+12. 被新机制替代的旧架构文档直接退出 active tree；需要追溯使用 Git 历史。
+13. 文档与源码冲突时，以源码为起点修正文档；不得为了保护旧文档而保留 Legacy 代码。
