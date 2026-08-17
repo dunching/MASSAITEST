@@ -6439,9 +6439,12 @@ bool AdvanceRoundWorkerFrame(
           LastAppliedInputSequence;
       if (AppliedInputSequence < ExpectedInputSequence)
       {
-        Pipeline->RecordPipelineFramePerformance(
-          0, GetRoundPipelineServerTime(*World), false, false);
-        return ECrowdDemoRoundFrameStageResult::Pending;
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoFullWorkerProductionStaleResult step=%d expected=%llu actual=%llu"),
+          Pipeline->GetCurrentFixedStepIndex(), ExpectedInputSequence,
+          AppliedInputSequence);
+        Pipeline->FailFixedStep();
+        return ECrowdDemoRoundFrameStageResult::Failed;
       }
       if (ExpectedInputSequence == 0
         || AppliedInputSequence != ExpectedInputSequence)
