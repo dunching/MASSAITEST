@@ -1,25 +1,29 @@
 # MASSAITEST 文档入口
 
-本目录使用“单一职责 + 明确事实优先级”的方式维护文档。阅读项目时，不应再从旧阶段文档或日期流水账推断当前架构。
+本目录采用 **单一职责 + 明确事实优先级 + active tree 不保留旧架构 stub** 的方式维护文档。
 
-## 1. 核心事实源
+第一次阅读项目，不要从旧阶段名称、历史 Prompt 或 Git 中的退休文件推断当前架构。
+
+---
+
+## 1. 五个核心事实源
 
 | 文档 | 唯一职责 |
 |---|---|
-| `CurrentArchitecture.md` | 当前 `main` 实际存在的生产结构、模块边界、运行链与已知迁移债务。 |
+| `CurrentArchitecture.md` | 当前 `main` 实际存在的生产结构、运行链与迁移债务。 |
 | `TargetArchitecture.md` | 已经确定的最终产品方向与终态架构。 |
-| `PhasePlan.md` | 从 Current 收敛到 Target 的实施顺序与当前下一步。 |
-| `FeatureChecklist.md` | 功能/结构门是否已经完成。 |
-| `TestScenarioMatrix.md` | 当前仍有效的测试、场景与验收证据。 |
+| `PhasePlan.md` | 从 Current 收敛到 Target 的当前实施顺序。 |
+| `FeatureChecklist.md` | 功能 / 结构能力的 DONE / PARTIAL / OPEN 状态。 |
+| `TestScenarioMatrix.md` | 当前仍有效的 PASS / DIAGNOSTIC / FAIL / NOT RUN 证据。 |
 
-事实冲突时按以下规则处理：
+事实冲突时：
 
 ```text
 当前源码事实
     ↓
 CurrentArchitecture.md
     ↓
-FeatureChecklist / TestScenarioMatrix 中最新有效证据
+FeatureChecklist / TestScenarioMatrix 最新有效证据
 
 最终方向
     ↓
@@ -30,85 +34,83 @@ TargetArchitecture.md
 PhasePlan.md
 ```
 
-旧设计、旧计划、旧 Boundary、旧 PW/WA 中间态文档不得覆盖以上核心事实源。
+---
 
-## 2. 详细设计文档
+## 2. 专项设计文档
 
-专项 Design 只解释某个子系统“为什么这样设计、数据和算法边界是什么”，不负责宣布整个项目当前完成状态。
+专项 Design 只回答“这个机制怎么设计、边界是什么”，不重新定义项目全局状态。
 
-### Behavior
+### Behavior / Business
 
-- `EntityBehaviorSourceArchitecture.md`：Capability、Behavior Source、Registry、Command、Resolver 和六类 Channel。
-- `MassCrowdStandardSourcesDesign.md`：插件随包的通用 Movement / Facing / Constraint Source。
+- `EntityBehaviorSourceArchitecture.md` — Capability / Source / Registry / Command / Resolver。
+- `MassCrowdStandardSourcesDesign.md` — 通用 Movement / Facing / Constraint Sources。
+- `DemoBusinessPlanningArchitecture.md` — Demo Planner / Provider / Host Intent / Business Adapter。
 
-### Navigation / Movement / Safety
+### Movement / Crowd
 
-- `TargetRegionTransportFieldDesign.md`：目标附近 Target-relative Polar Transport Field、Demand、Transport Plan 与 Edge Quota。
-- `LocalPredictiveInteractionDesign.md`：局部预测速度、冲突 component 与公平让行。
-- `ParticleSafetyDesign.md`：最终 Soft / Hard / Swept / Obstacle / Bounds 安全、Interaction Island 与大型单 Island 设计。
-- `CrowdTransitCapabilityDesign.md`：已退休的旧 Particle / Transit 混合文档，只保留旧链接兼容。
+```text
+Shared Flow
+    ↓
+TargetRegionTransportFieldDesign.md   （可选 Macro Guidance）
+    ↓
+LocalPredictiveInteractionDesign.md
+    ↓
+ParticleSafetyDesign.md
+```
+
+- `TargetRegionTransportFieldDesign.md` — Target-relative Polar Topology、Distance Band、Demand、Transport Plan、Edge Quota、Guidance。
+- `LocalPredictiveInteractionDesign.md` — Pair prediction、half-plane、conflict component、公平让行。
+- `ParticleSafetyDesign.md` — Soft / Hard / Swept / Obstacle / Bounds / Interaction Island 最终安全闭环。
 
 ### Combat / Projectile / Presentation
 
-- `MassProjectileHitFrameworkDesign.md`：插件级 Projectile simulation、Spatial Broadphase、Swept hit、ImpactFact / HitFact。
-- `RangedCombatVatAndHitResponseDesign.md`：Demo T7/T8 Attack、HitResponse、Reactive Motion、VAT、HitFlash 与视觉验收。
-- `VatAssetProductionPipeline.md`：VAT 资产生产管线。
+- `MassProjectileHitFrameworkDesign.md` — 插件级 Worker Projectile Simulation、Broadphase、Sweep、ImpactFact / HitFact。
+- `RangedCombatVatAndHitResponseDesign.md` — Demo T7/T8 Attack、HitResponse、Reactive Motion、VAT / HitFlash 验收语义。
+- `VatAssetProductionPipeline.md` — Demo VAT 资产可重复生成管线。
 
-### Host / Demo Business
+---
 
-- `DemoBusinessPlanningArchitecture.md`：Demo 业务 Planner / Provider / Host Intent。
+## 3. Reference
 
-## 3. 设计文档之间的关键边界
-
-### Movement
+从：
 
 ```text
-Behavior / Objective
-        ↓
-Shared Flow / Target Region Transport
-        ↓
-Local Predictive Interaction
-        ↓
-Movement Predict
-        ↓
-Particle Safety
-        ↓
-Facing / Finalize
+Reference/README.md
 ```
 
-- Target Region 管宏观人口与区域运输；
-- Local Predictive 管短期轨迹冲突和公平让行；
-- Particle Safety 管最终不可突破的安全闭环。
+进入。
 
-### Combat / Projectile
+当前 Reference：
+
+- `Reference/WorkerOwnershipMatrix.md` — Simulation / Host Business / Mass Proxy / Network / Presentation 的字段 Owner。
+- `Reference/PluginModuleBoundary.md` — 实际 Build.cs 主干、模块职责与依赖禁则。
+- `MassCrowdUnifiedRuntimeAndReplicationContract.md` — 持续 Agent、Lifecycle、Behavior、Result Commit、Replication 的长期详细合同。
+
+Reference 不覆盖 `CurrentArchitecture.md` / `TargetArchitecture.md`。
+
+---
+
+## 4. AI 恢复入口
+
+新的 AI 或开发者需要快速恢复上下文时：
 
 ```text
-Host Attack Intent
-        ↓
-MassCrowdProjectiles
-        ↓
-Spatial Broadphase / Sweep
-        ↓
-ImpactFact / HitFact
-        ↓
-Host Combat Resolve
-        ↓
-Reactive / VAT / Presentation
+AI_ENTRY/README.md
+    ↓
+AI_ENTRY/02_状态恢复.md
+    ↓
+CurrentArchitecture.md
+TargetArchitecture.md
+PhasePlan.md
+FeatureChecklist.md
+TestScenarioMatrix.md
 ```
 
-- `MassProjectileHitFrameworkDesign.md` 是插件机制；
-- `RangedCombatVatAndHitResponseDesign.md` 是 Demo 业务与表现验收；
-- Demo 不重新实现第二套 Projectile trajectory / collision authority。
+`AI_ENTRY` 只做快速恢复，不拥有架构事实优先级，也不保存已完成执行 Prompt。
 
-## 4. Reference
+---
 
-`Reference/` 保存需要长期查阅、但不应该成为“总架构文章”的精确合同或矩阵：
-
-- `Reference/WorkerOwnershipMatrix.md`：Worker / Mass / Network / Presentation 字段所有权与迁移禁则。
-- `Reference/PluginModuleBoundary.md`：MassCrowdSimulation 插件模块职责与依赖方向。
-- `MassCrowdUnifiedRuntimeAndReplicationContract.md`：持续 Agent、Behavior、Lifecycle、Replication 的详细长期合同；它属于深层参考，不覆盖 `CurrentArchitecture.md` 或 `TargetArchitecture.md`。
-
-## 5. History 与 AI 恢复入口
+## 5. History
 
 历史统一从：
 
@@ -116,24 +118,30 @@ Reactive / VAT / Presentation
 History/README.md
 ```
 
-进入。旧 AB5、Async Boundary、Persistent Worker PW0-PW8、Gameplay Sandbox Migration、旧 RoundSim Query Matrix、旧恢复点和旧实验都只用于理解演进过程。
+进入。
 
-新的 AI / 开发者需要恢复上下文时，从：
+History 用于保存：
 
 ```text
-AI_ENTRY/README.md
-→ AI_ENTRY/02_状态恢复.md
+被替代的架构方案
+重大迁移背景
+有归因价值的恢复快照
+旧实验总结
 ```
 
-开始。`AI_ENTRY` 不拥有架构事实优先级，它只是核心文档的快速入口。
+已完成的执行 Prompt 只在 `History/Prompts/README.md` 留索引，完整正文通过 Git 历史追溯。
 
-根目录仍存在的 retirement stub 只用于旧链接兼容；完整历史仍可通过 Git 历史追溯。
+Active `Docs/` 根目录不再保留 AB5、Async Boundary、Persistent Worker 中间态、旧 Ownership Matrix、旧 Plugin Architecture、旧 Distance Band 文档等兼容 stub。
+
+---
 
 ## 6. 推荐阅读顺序
 
 第一次理解项目：
 
 ```text
+../README.md
+    ↓
 Docs/README.md
     ↓
 CurrentArchitecture.md
@@ -147,28 +155,20 @@ FeatureChecklist.md
 TestScenarioMatrix.md
 ```
 
-需要深入实现时，再进入 Behavior、Target、Local Predictive、Particle、Projectile、Networking、Presentation 等专项 Design 或 Reference。
+需要深入某个子系统，再进入对应 Design 或 Reference。
 
-会话恢复：
-
-```text
-AI_ENTRY/README.md
-    ↓
-AI_ENTRY/02_状态恢复.md
-    ↓
-回到上述核心事实源
-```
+---
 
 ## 7. 文档维护规则
 
 1. `CurrentArchitecture.md` 不写历史流水账，也不写未实现目标。
-2. `TargetArchitecture.md` 不把目标写成已完成事实。
-3. `PhasePlan.md` 只保留当前有效实施顺序，旧阶段移入历史。
-4. `FeatureChecklist.md` 只声明当前完成状态，不承担阶段时间线。
-5. `TestScenarioMatrix.md` 只保留可复核的当前有效证据；端口、PID、临时失败日志由 Git/Saved/runner 产物保存。
-6. 专项 Design 不得重新定义项目总权威、总模块边界或全局完成状态。
-7. 专项 Design 正文不再保存 R0/S0/PJ0 等迁移阶段流水账；历史状态使用 Git / History。
-8. 被新机制替代的生产架构，不长期保留第二套“兼容事实源”。
-9. `AI_ENTRY` 只做快速恢复，不再追加几十 KB 的迁移日志。
-10. `History/` 只保存有长期归因价值的演进内容，不充当当前状态页面。
-11. 若文档与源码冲突，先修正文档；不得为了保护旧文档而保留 Legacy 代码。
+2. `TargetArchitecture.md` 不把目标写成已经完成。
+3. `PhasePlan.md` 只保留当前有效 Gate，不累积已完成时间线。
+4. `FeatureChecklist.md` 只维护当前能力状态。
+5. `TestScenarioMatrix.md` 只保留当前有效证据；端口、PID、临时日志留给 Git/Saved/runner artifact。
+6. Design 文档只维护机制合同，不保存阶段编号和逐次性能流水账。
+7. Reference 只维护精确边界，不抢总架构事实权。
+8. `AI_ENTRY` 不追加几十 KB 的迁移日志，也不保留已完成 Prompt。
+9. `History` 不充当当前状态页面。
+10. 被新机制替代的旧架构文档直接退出 active tree；需要追溯使用 Git 历史。
+11. 文档与源码冲突时，以源码为起点修正文档；不得为了保护旧文档而保留 Legacy 代码。

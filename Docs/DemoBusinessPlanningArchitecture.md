@@ -1,59 +1,238 @@
-# Demo 业务规划独立模块架构
+# Demo Business Planning 设计
 
-## 1. 文档职责与当前基线
+## 1. 文档职责
 
-[INFERRED][HIGH] 本文件是 Demo 产品业务规划、Planner 扩展合同和宿主接入边界的现行事实源；公共 Behavior Source、Projectile 和 Boundary 合同继续分别以 `EntityBehaviorSourceArchitecture.md`、`MassProjectileHitFrameworkDesign.md` 和 `CurrentArchitecture.md` 为准。
+本文只定义 `MassCrowdDemoBusiness` 的**业务规划、Provider、Host Intent 和宿主接入边界**。
 
-[COMPUTED][HIGH] DP0 基线提交为 `07359ed`。该基线中 `ACrowdDemoMixedSandboxCoordinator` 约 3769 行，并在 `EvaluateSlotBehavior` 内同时解释每 20 实体角色、选择目标、组合 Source、构建 Context 和提交业务；`MassCrowdRuntimeBehavior` 仍公开 `CargoPickup`、`CargoDeliver` 和 `CombatHit` 领域枚举。
+它不定义通用 Worker Runtime、Behavior Source 协议、Projectile 几何、Networking 或 Presentation 生命周期。
 
-[COMPUTED][HIGH] DP0 回归基线为 `MassCrowd 65/65`、`CrowdDemo 125/125`，Development/DebugGame × ForceUnity/DisableUnity 四构建通过；Mixed 20/100/500 同路径分别并发 4/20/100 发 Projectile，服务端 fixed-step p95=`2.152/9.675/30.016ms`。
+相关事实源：
 
-## 2. 锁定模块边界
+- 通用 Behavior Source：`EntityBehaviorSourceArchitecture.md`
+- Standard Sources：`MassCrowdStandardSourcesDesign.md`
+- Projectile / HitFact：`MassProjectileHitFrameworkDesign.md`
+- 当前生产结构：`CurrentArchitecture.md`
+- 当前完成状态：`FeatureChecklist.md`
 
-[INFERRED][HIGH] 新增项目 Runtime 模块 `MassCrowdDemoBusiness`，只依赖 `Core`、`MassCrowdCore`、`MassCrowdRuntime` 和 `MassCrowdStandardSources`。该模块不得引用 Engine World/Actor、MassEntity、Networking、Spatial、Combat、Projectiles、Presentation 或 `MassAICrowdDemo`。
+---
 
-[INFERRED][HIGH] `MassCrowdDemoBusiness` 拥有 Demo 产品 Source Provider、Source Set Diff、业务 Planner、业务 Ledger、Host Intent 与 Prepared Business Patch；主 Demo 模块负责 World Gather、Nav/Projectile/Movement/Network/Presentation Adapter 和场景验收。
+## 2. 模块边界
 
-[INFERRED][HIGH] Provider/Capability/Source/Schema/Adapter 数值 ID 保持不变，因此模块迁移不得改变 Behavior Registry Hash 或 Codec v3。
+`MassCrowdDemoBusiness` 是项目侧业务模块，不是插件通用机制层。
 
-## 3. Planner 合同
+它负责：
 
-[INFERRED][HIGH] Planner 只读取按 StableEntityRef 排序的不可变 POD Snapshot，并通过有界 Writer 输出 Desired Sources、Context Requests、Host Intents、诊断 Label 和 Stable Hash。Planner 不得直接读取 Source Runtime、业务 Store、Actor、Mass、Nav 或网络对象。
+```text
+Demo Source Provider
+Capability / Source 业务映射
+Source Set Diff
+Business Planner
+Business Ledger
+Context Request
+Host Intent
+Prepared Business Patch
+Demo-specific Stable Hash
+```
 
-[INFERRED][HIGH] Planner Registry 使用稳定 PlannerId，注册后冻结；重复 ID、未知 Planner、重复实体、缺失目标/Objective、无效 Revision、超过 16 个 Source、超过 8 个 Context 或 Host Intent 冲突拒绝完整 Decision Batch。
+它不应直接依赖或操作：
 
-[INFERRED][HIGH] Mixed 的业务 Planner 固定为 Logistics、PursueAttack、GuardFlee、Roam 和 Escort；Reaction 作为正交层叠加 TimedImpulse 或 Death MovementLock，不删除持久 Source。
+```text
+UWorld / Actor
+Mass EntityManager
+Networking transport
+Presentation slot
+Projectile trajectory / broadphase
+Particle / Target / Shared Flow kernel
+Demo Scenario UObject
+```
 
-[INFERRED][HIGH] Friendly Logistics 使用同一 Logistics Planner；Round T7/T8 分别使用 VatShowcase/RangedAttack Planner；Round T1–T6 与 Continuous 显式使用 NoBusiness，保持专项归因性。
+需要 World、Mass、Nav、Network、Presentation 或 Scene 对象的适配，由 `MassAICrowdDemo` 主宿主模块负责。
 
-## 4. Boundary 数据流
+依赖方向固定为：
 
-[INFERRED][HIGH] 生产顺序固定为：GT Gather 不可变业务/目标/Objective 事实 → Planner WORK → 稳定 Merge 与完整验证 → 在本地构建 Source Command/Context Batch → Behavior Prepare → Business/Movement/Projectile/Presentation Prepare → 全量 Validate → 一次不可失败 Final Apply。
+```text
+MassCrowdDemoBusiness
+        ↓
+MassCrowd public contracts / Standard Sources
 
-[INFERRED][HIGH] Pickup/Deliver/Attack 继续由一帧 ServerOnly Source 产生 Resolved Business；Claim/Requeue/Cancel、Round Fire 和测试 Hit 注入使用通用 Host Intent。所有 Host Intent 必须先形成 Prepared Patch，不允许 Planner 或 Coordinator 直接写 Ledger、Health、Cooldown、Cargo 或 Projectile。
+MassAICrowdDemo
+        ↓
+MassCrowdDemoBusiness + MassCrowd plugin adapters
+```
 
-## 5. DP0–DP6
+通用插件不能反向引用 Demo Business。
 
-DP0. [x] [COMPUTED][HIGH] 文档、提交、角色比例、ID、测试和性能基线已冻结；未修改生产代码。
+---
 
-DP1. [x] [COMPUTED][HIGH] 已建立独立模块、Scenario/Planner/Snapshot/Decision/Registry/Writer/Runner 合同和结构测试。
+## 3. Planner 输入合同
 
-DP2. [x] [COMPUTED][HIGH] 已实现 Mixed 五类 Planner、Reaction 叠加、稳定角色表、Context Request 和反序等价专项。
+Planner 只读取按 `StableEntityRef` 稳定排序的不可变 POD Snapshot。
 
-DP3. [x] [COMPUTED][HIGH] 已迁移 Demo Provider、Diff、Ledger、Combat/RangedAttack 规划与 Prepared Business Adapter；Runtime 领域业务 API 已删除。
+典型输入包括：
 
-DP4. [x] [COMPUTED][HIGH] Mixed、Friendly、Round T7/T8 已迁移；T1–T6 与 Continuous 已接入 NoBusiness；旧 Planner 双路径已删除。
+```text
+StableEntityRef / Lifecycle
+Faction / Capability
+当前业务账本事实
+Objective / Target fact
+Cargo / Warehouse fact
+已解析的 Movement / Combat prerequisite
+Fixed Simulation Tick
+Resource / Context Revision
+```
 
-DP5. [x] [COMPUTED][HIGH] 已收口共享 Planning Host 与 Source 状态发布；结构、零写入和 Hash 约束专项通过。
+Planner 不得在规划阶段：
 
-DP6. [x] [COMPUTED][HIGH] MassCrowd 64/64、CrowdDemo 131/131、四构建、Continuous/Friendly/NavFlow/T1–T8及Mixed 20/100/500真实门通过，事实源已更新。
+- 直接查询 Actor 或 World；
+- 直接读取 Mass Fragment；
+- 修改 Source Runtime；
+- 修改 Health / Cargo / Cooldown / Ledger；
+- Spawn Projectile；
+- 发布 Network / Presentation 事件。
 
-[COMPUTED][HIGH] T8现行功能结果为spawn/impact/damage=50/50/50、duplicate=0。canonical SimulationTick Combat时钟后的版本化attack/projectile/event Hash为439379904/1411313634/6141440；旧41852579/488896174/4204062592与更早身份布局Hash保留为历史证据。
+Planner Registry 使用稳定 `PlannerId`，注册后冻结。重复 ID、未知 Planner、Schema/Revision 错误、重复实体、超出有界输出或互斥 Host Intent 冲突必须拒绝完整 Decision Batch。
 
-[COMPUTED][HIGH] 删除`AttackTarget` Source后，生产Behavior Registry/Context Schema黄金值分别为11335697795273479593/7449648488286461483；`CrowdDemo.BehaviorAdapters.RegistryGolden`执行精确断言，T8脚本通过`-RangedProjectileGolden`执行功能计数、双端一致及三个Hash的精确断言。
+---
 
-## 6. 明确范围外
+## 4. Planner 输出合同
 
-[COMPUTED][HIGH] T9已作为DP0–DP6之后的独立阶段完成；T10、玩家GameplayCommand、DataAsset编排、真实StateTree业务Task、动态NavMesh topology和原工程迁移仍不属于DP0–DP6或T9。
+Planner 通过有界 Writer 只输出**意图和候选事实**：
 
-[RULES I BROKE]：[COMPUTED][HIGH] 无。
+```text
+Desired Source Set
+Context Requests
+Host Intents
+Business Diagnostics
+Stable Hash
+```
+
+### Desired Source Set
+
+用于表达 Agent 希望持续拥有哪些 Behavior Source。
+
+例如 Pursue + MaintainDistance + FaceEntity 是持续 Source 组合，而不是把“Attack”重新变成一个通用互斥 Behavior。
+
+### Context Requests
+
+用于向宿主请求后续 Evaluate 所需的版本化 POD Context，例如 Target Kinematics、Formation Anchor 或业务上下文。
+
+### Host Intent
+
+用于表达不能由 Behavior Source 自己提交的业务动作，例如：
+
+```text
+Claim / Requeue / Cancel
+Pickup / Deliver
+Attack Commit Request
+Round-specific Fire Request
+测试 Hit 注入
+```
+
+Host Intent 不是写操作；它必须先转成 Prepared Patch 并完成完整验证。
+
+---
+
+## 5. Demo Planner 组合
+
+Demo 可以拥有领域语义明确的 Planner，例如：
+
+```text
+Logistics
+PursueAttack
+GuardFlee
+Roam
+Escort
+VatShowcase
+RangedAttack
+NoBusiness
+```
+
+这些 Planner 只是验证同一套 Runtime 能否承载不同产品业务。
+
+Reaction 是正交层：HitReaction、TimedImpulse、Death MovementLock 等临时状态可以覆盖普通移动贡献，但不能无理由删除原有持久 Source、Cargo 或任务状态。
+
+Faction 只决定关系、权限、目标过滤和伤害规则；不能直接选择 Particle、Networking 或 Presentation 实现。
+
+---
+
+## 6. Source 与业务提交边界
+
+业务 Planner 负责“为什么做、目标是谁、业务是否合法”，Standard Source / Runtime 负责“如何形成通用运动贡献并安全执行”。
+
+例如远程攻击：
+
+```text
+Planner
+→ 选择/验证业务 Target
+→ Desired Pursue / Distance / Facing Sources
+→ Attack Host Intent
+
+Behavior / Movement Runtime
+→ Resolve Sources
+→ Guidance / Local Predictive / Particle
+
+Host Commit
+→ 验证 Attack Intent
+→ 生成 Projectile / Damage 等业务 side effect
+```
+
+Attack 合法性、Damage、Inventory、Cargo、Mission 等不能被塞进通用 Movement Source。
+
+---
+
+## 7. 原子提交
+
+生产顺序应保持：
+
+```text
+Gather immutable business facts
+        ↓
+Planner WORK
+        ↓
+Stable merge + validation
+        ↓
+Build Source Command / Context / Host Intent candidates
+        ↓
+Behavior / Movement / Projectile / Business prepare
+        ↓
+Final Validate
+        ↓
+no-fail Host Apply
+```
+
+所有可能失败的检查必须发生在第一次业务写入前。
+
+Planner、Coordinator 或 Provider 不得直接修改 Ledger、Health、Cargo、Cooldown 或 Projectile authoritative state。
+
+Host side effect 只能消费已经通过 Owner Commit Barrier 的 Prepared Plan / Ordered Event。
+
+---
+
+## 8. 确定性与幂等
+
+- Planner 输入必须稳定排序。
+- Planner / Provider / Source / Schema / Adapter 使用稳定数值 ID。
+- 相同输入应产生相同 Desired Source、Host Intent 和 Stable Hash。
+- Source Set 通过 stable diff 产生 Start / Update / Stop，不逐步 Stop-All / Start-All。
+- Host Intent 必须携带稳定身份、Lifecycle、Revision 和 Commit/Event identity。
+- 重复提交必须幂等或被明确拒绝，不能重复 Damage、Pickup、Deliver 或 Fire。
+
+---
+
+## 9. Demo 与产品的边界
+
+`MassCrowdDemoBusiness` 可以作为“产品业务层应该如何接入插件”的示例，但它不是插件产品 API。
+
+真实项目可以替换整套 Demo Planner / Ledger，同时继续复用：
+
+```text
+Persistent Worker Runtime
+Behavior Source / Standard Sources
+Movement / Target / Particle
+Projectile / HitFact
+Networking
+Presentation
+Owner Commit contracts
+```
+
+Demo-specific Planner 名称、角色比例、T1-T8、Golden Hash 和历史阶段编号不得进入插件底层。
