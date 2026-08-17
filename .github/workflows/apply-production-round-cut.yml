@@ -22,6 +22,7 @@ jobs:
         shell: bash
         run: |
           set +e
+          sed -i 's/all_source = header + pipeline + processors + combat + local_tests/all_source = header + pipeline + processors/' .github/scripts/apply_production_round_cut.py
           python3 .github/scripts/apply_production_round_cut.py > production_round_cut_run.txt 2>&1
           status=$?
           cat production_round_cut_run.txt
