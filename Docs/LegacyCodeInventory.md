@@ -37,35 +37,37 @@ RENAME / CLEANUP
 
 ### `CrowdDemoRoundSimPipelineSubsystem.*`
 
-当前角色混杂：
+当前角色仍然混杂：
 
 ```text
 旧 Round 事务状态
 Prepared data
 rollback / transaction
 metrics / diagnostics
-Target / Flow / Particle 历史数据
-部分 Worker Input 仍使用的数据源
+Target / Flow / Particle 历史/验收数据
 ```
 
-最重要的现存耦合：
+已完成的 P0 子切片：
 
 ```text
-CrowdDemoWorkerInputSync.cpp
-  → BuildVersionedResources()
-  → World.GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>()
-  → GetRuntimeSharedFlowField()
+Primary FCrowdMassSharedFlowResource owner
+RoundSimPipeline → UMassCrowdRuntimeSubsystem
+
+CrowdDemoWorkerInputSync
+不再 include/query RoundSimPipeline
+直接读取 RuntimeSubsystem SharedFlowResource
+
+Target Prepared ResourceId
+pointer address → CrowdWorkerResourceIds::Environment
 ```
 
-结论：**不能直接删除。**
+结论：**Pipeline 仍不能直接删除。** Shared Flow 的 Worker Input ownership 耦合已关闭，但 Result Apply 后的 Round frame、rollback/transaction、Target prepared state 与 diagnostics 仍是真实运行时消费者。
 
-迁移目标：Shared Flow / environment versioned resource 必须来自独立、明确的 Worker/Host Resource Provider，而不是 RoundSimPipeline。
+剩余删除门：
 
-删除门：
-
-- Worker Input 不再读取 Pipeline；
 - Result Apply 不再依赖 Pipeline transaction/rollback source；
-- 必需 diagnostics 有新 owner；
+- 其他仍由 Pipeline 持有的生产输入/Prepared state 迁到明确 owner；
+- 必需 diagnostics 有长期 owner；
 - tests 不再用 Pipeline 伪装生产状态。
 
 ### `CrowdDemoRoundSimProcessors.*`
@@ -385,7 +387,7 @@ Isolated 500-entity MassAI crowd replication and movement demo.
 
 | 优先级 | 内容 | 原因 |
 |---|---|---|
-| P0 | RoundSimPipeline → Worker resource 数据源耦合 | 新架构仍直接依赖旧壳，是 WA8 核心 |
+| CLOSED slice | Primary SharedFlow → WorkerInput ownership | 已迁到 `UMassCrowdRuntimeSubsystem`；WorkerInput 不再读取 Pipeline |
 | P0 | Round transaction / rollback / TryPrepareRoundApply | 阻止 Full Worker Authority 完整闭环 |
 | P1 | Demo generic kernel 残留消费者迁出 | 双实现持续制造阅读和维护歧义 |
 | P1 | 巨型 RoundSimProcessors 拆掉无消费者 Stage | 直接降低代码阅读复杂度 |

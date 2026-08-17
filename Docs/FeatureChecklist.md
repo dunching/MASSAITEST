@@ -146,7 +146,7 @@ OPEN    尚未达到最终完成定义
 | 能力 | 状态 | 当前结论 |
 |---|---|---|
 | RoundSim 不再是 Processor DAG | DONE | 动态 Simulation Processor 已收敛；旧 Stage struct 仍存在。 |
-| WorkerInput 与 RoundSimPipeline 完全解耦 | OPEN | WorkerInputSync 仍读取 `GetRuntimeSharedFlowField()`。 |
+| WorkerInput 与 RoundSimPipeline 输入资源解耦 | DONE | WorkerInputSync 已不再读取/查询 RoundSimPipeline；Primary Shared Flow resource 由 `UMassCrowdRuntimeSubsystem` 持有并直接发布为 Environment resource。 |
 | Demo generic duplicate kernel 全退出 | OPEN | Particle/SharedFlow 仍有 diagnostics consumer；其他需要 repo-wide audit。 |
 | 巨型 Demo 文件职责拆分 | OPEN | Pipeline/Processors/Mixed/Coordinator 仍显著混合迁移和测试职责。 |
 | Demo Unity build 恢复 | OPEN / deferred | 当前 `bUseUnity=false` 是 legacy helper 同名造成的结构债信号；应在清理后再评估。 |
@@ -183,7 +183,7 @@ Presentation
 
 ## 13. 当前主要 OPEN Gate
 
-1. **WA8 Legacy Removal**：断开 RoundSimPipeline resource/transaction/rollback 依赖，删除失去消费者的 Stage 与重复实现。
+1. **WA8 Legacy Removal**：Primary Shared Flow resource owner 已迁出 RoundSimPipeline；继续清除 transaction/rollback、其他旧数据源、失去消费者的 Stage 与重复实现。
 2. **T5 Long-Window Correctness**：关闭 step ~886 feasible-region-insufficient，Static/Moving 1000+ Tick。
 3. **Particle Scaling**：先明确 island-level task parallelism，再做大型单 Island Cell-Pair/per-round barrier。
 4. **WA9 Full-Scale Acceptance**：1k→2k→5k→10k 同一 Production path，双端网络/表现/性能。
