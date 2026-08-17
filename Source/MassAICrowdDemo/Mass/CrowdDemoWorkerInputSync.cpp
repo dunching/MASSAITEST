@@ -252,13 +252,32 @@ namespace CrowdDemoWorkerInputSyncPrivate
       RuntimeSubsystem.GetNavGraphResource();
     if (NavResource.IsReady())
     {
-      FCrowdWorkerVersionedResourceInput& Input =
-        OutResources.AddDefaulted_GetRef();
-      Input.ResourceId = CrowdWorkerResourceIds::NavTopology;
-      Input.Revision = NavResource.TopologyRevision;
+      FCrowdWorkerPayload ContentIdentity;
       if (!FCrowdWorkerNavTopologyCodec::Encode(
-          NavResource, Input.Payload))
+          NavResource, ContentIdentity))
         return false;
+      uint64 Revision = 0;
+      bool bNeedsPublication = false;
+      if (!RuntimeSubsystem.ResolveWorkerResourceRevision(
+          CrowdWorkerResourceIds::NavTopology,
+          NavResource.TopologyRevision,
+          ContentIdentity.StableHash, Revision,
+          bNeedsPublication)
+        || Revision > static_cast<uint64>(MAX_uint32))
+        return false;
+      if (bNeedsPublication)
+      {
+        FCrowdNavGraphResource PublishedNavResource = NavResource;
+        PublishedNavResource.TopologyRevision =
+          static_cast<uint32>(Revision);
+        FCrowdWorkerVersionedResourceInput& Input =
+          OutResources.AddDefaulted_GetRef();
+        Input.ResourceId = CrowdWorkerResourceIds::NavTopology;
+        Input.Revision = Revision;
+        if (!FCrowdWorkerNavTopologyCodec::Encode(
+            PublishedNavResource, Input.Payload))
+          return false;
+      }
     }
     if (const UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
       World.GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>())
@@ -267,26 +286,32 @@ namespace CrowdDemoWorkerInputSyncPrivate
         Pipeline->GetRuntimeSharedFlowField();
       if (FlowField.IsValid() && FlowField.Config.Revision > 0)
       {
-        FCrowdWorkerVersionedResourceInput& Input =
-          OutResources.AddDefaulted_GetRef();
-        Input.ResourceId = CrowdWorkerResourceIds::Environment;
         FCrowdWorkerPayload ContentIdentity;
         if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
             FlowField, ContentIdentity))
           return false;
+        uint64 Revision = 0;
+        bool bNeedsPublication = false;
         if (!RuntimeSubsystem.ResolveWorkerResourceRevision(
-            Input.ResourceId,
+            CrowdWorkerResourceIds::Environment,
             static_cast<uint64>(FlowField.Config.Revision),
             ContentIdentity.StableHash,
-            Input.Revision)
-          || Input.Revision > static_cast<uint64>(MAX_int32))
+            Revision, bNeedsPublication)
+          || Revision > static_cast<uint64>(MAX_int32))
           return false;
-        FCrowdSharedFlowField PublishedFlowField = FlowField;
-        PublishedFlowField.Config.Revision =
-          static_cast<int32>(Input.Revision);
-        if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
-            PublishedFlowField, Input.Payload))
-          return false;
+        if (bNeedsPublication)
+        {
+          FCrowdWorkerVersionedResourceInput& Input =
+            OutResources.AddDefaulted_GetRef();
+          Input.ResourceId = CrowdWorkerResourceIds::Environment;
+          Input.Revision = Revision;
+          FCrowdSharedFlowField PublishedFlowField = FlowField;
+          PublishedFlowField.Config.Revision =
+            static_cast<int32>(Input.Revision);
+          if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
+              PublishedFlowField, Input.Payload))
+            return false;
+        }
       }
     }
     for (const FCrowdWorkerVersionedResourceInput& Additional :
@@ -705,6 +730,13 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
     LogSubmitFailure(TEXT("submit_rejected"), Shadow, Runtime);
     return false;
   }
+  for (const FCrowdWorkerVersionedResourceInput& Resource :
+    VersionedResources)
+  {
+    if (!RuntimeSubsystem->AcknowledgeWorkerResourceRevision(
+        Resource.ResourceId, Resource.Revision))
+      return false;
+  }
   const int32 SubmittedCommandCount = static_cast<int32>(
     Shadow.GetMetrics().LastSubmittedCommandRecordCount);
   const int32 SubmittedBindingCount = static_cast<int32>(
@@ -1000,6 +1032,13 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
     LogSubmitFailure(TEXT("intent_submit_rejected"), Shadow, Runtime);
     return false;
   }
+  for (const FCrowdWorkerVersionedResourceInput& Resource :
+    VersionedResources)
+  {
+    if (!RuntimeSubsystem->AcknowledgeWorkerResourceRevision(
+        Resource.ResourceId, Resource.Revision))
+      return false;
+  }
   if (MassSubsystem
     && !MassSubsystem->AcknowledgeWorkerLifecycleProfileJournal(
       JournalSpawns.Num(), JournalDespawns.Num(),
@@ -1157,7 +1196,31 @@ bool FCrowdDemoWorkerInputSync::ConsumePublishedResults(
   UWorld& World,
   const uint64 ConsumerFrameSequence)
 {
+  const uint64 ApplyStartCycles = FPlatformTime::Cycles64();
+  FCrowdWorkerPreparedResultApply Prepared;
+  bool bHasBatch = false;
+  if (!PreparePublishedResults(
+      World, ConsumerFrameSequence, Prepared, bHasBatch))
+    return false;
+  if (!bHasBatch)
+    return true;
+  if (!CommitPreparedResults(World, Prepared))
+    return false;
+  const double ApplyMs = FPlatformTime::ToMilliseconds64(
+    FPlatformTime::Cycles64() - ApplyStartCycles);
+  return FinalizeCommittedResults(
+    World, Prepared, ApplyMs, false);
+}
+
+bool FCrowdDemoWorkerInputSync::PreparePublishedResults(
+  UWorld& World,
+  const uint64 ConsumerFrameSequence,
+  FCrowdWorkerPreparedResultApply& OutPrepared,
+  bool& bOutHasBatch)
+{
   check(IsInGameThread());
+  OutPrepared.Reset();
+  bOutHasBatch = false;
   UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
     World.GetSubsystem<UMassCrowdRuntimeSubsystem>();
   if (!RuntimeSubsystem) return false;
@@ -1203,11 +1266,8 @@ bool FCrowdDemoWorkerInputSync::ConsumePublishedResults(
     return false;
   FCrowdWorkerResultApplyProxy& Proxy =
     RuntimeSubsystem->GetWorkerResultApplyProxy();
-  const uint64 ApplyStartCycles = FPlatformTime::Cycles64();
   const ECrowdWorkerResultApplyResult ApplyResult =
-    Proxy.Apply(*Batch);
-  const double ApplyMs = FPlatformTime::ToMilliseconds64(
-    FPlatformTime::Cycles64() - ApplyStartCycles);
+    Proxy.Prepare(*Batch, OutPrepared);
   if (ApplyResult != ECrowdWorkerResultApplyResult::Applied
     && ApplyResult
       != ECrowdWorkerResultApplyResult::AppliedEmpty)
@@ -1224,11 +1284,175 @@ bool FCrowdDemoWorkerInputSync::ConsumePublishedResults(
       FailureMetrics.bViolation ? 1 : 0);
     return false;
   }
-  if (World.GetNetMode() == NM_Client)
+  bOutHasBatch = true;
+  return true;
+}
+
+bool FCrowdDemoWorkerInputSync::CommitPreparedResults(
+  UWorld& World,
+  const FCrowdWorkerPreparedResultApply& Prepared)
+{
+  check(IsInGameThread());
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    World.GetSubsystem<UMassCrowdRuntimeSubsystem>();
+  if (!RuntimeSubsystem || !Prepared.IsValid())
+    return false;
+  FCrowdWorkerResultApplyProxy& Proxy =
+    RuntimeSubsystem->GetWorkerResultApplyProxy();
+  const ECrowdWorkerResultApplyResult ApplyResult =
+    Proxy.CommitPrepared(Prepared);
+  if (ApplyResult == ECrowdWorkerResultApplyResult::Applied
+    || ApplyResult == ECrowdWorkerResultApplyResult::AppliedEmpty)
     return true;
+  const FCrowdWorkerResultApplyMetrics& FailureMetrics =
+    Proxy.GetMetrics();
+  UE_LOG(LogTemp, Error,
+    TEXT("CrowdDemoWorkerResultCommitReject result=%u generation=%llu publish=%llu previous_publish=%llu violation=%d"),
+    static_cast<uint32>(ApplyResult), Prepared.Batch.Generation,
+    Prepared.Batch.PublishSequence,
+    FailureMetrics.LastConsumedPublishSequence,
+    FailureMetrics.bViolation ? 1 : 0);
+  return false;
+}
+
+bool FCrowdDemoWorkerInputSync::PrepareCommittedResultSideEffects(
+  UWorld& World,
+  const FCrowdWorkerPreparedResultApply& Prepared,
+  FCrowdDemoPreparedWorkerResultSideEffects& OutPrepared)
+{
+  check(IsInGameThread());
+  OutPrepared = {};
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    World.GetSubsystem<UMassCrowdRuntimeSubsystem>();
+  if (!RuntimeSubsystem || !Prepared.IsValid()
+    || World.GetNetMode() == NM_Client)
+    return false;
+
+  FCrowdWorkerResultApplyProxy ProxyPreview =
+    RuntimeSubsystem->GetWorkerResultApplyProxy();
+  if (ProxyPreview.ValidatePreparedState(Prepared)
+      != ECrowdWorkerResultApplyResult::Applied)
+    return false;
+  ProxyPreview.CommitPreparedValidated(Prepared);
+
+  FCrowdWorkerBehaviorAuthority BehaviorPreview =
+    RuntimeSubsystem->GetWorkerBehaviorAuthority();
+  if (!BehaviorPreview.IngestOrderedEvents(
+      Prepared.Batch.OrderedEvents))
+    return false;
+  for (int32 Index = 0; Index < MaxQueuedShadowBatches; ++Index)
+  {
+    const ECrowdWorkerBehaviorValidationResult Validation =
+      BehaviorPreview.ValidateAvailable(ProxyPreview);
+    if (Validation
+        == ECrowdWorkerBehaviorValidationResult::Violation)
+      return false;
+    if (Validation
+        != ECrowdWorkerBehaviorValidationResult::Matched)
+      break;
+  }
+
+  OutPrepared.BehaviorAuthority = MoveTemp(BehaviorPreview);
+  OutPrepared.PublishSequence = Prepared.Batch.PublishSequence;
+  OutPrepared.bValid = true;
+  return true;
+}
+
+void FCrowdDemoWorkerInputSync::
+CommitPreparedResultSideEffectsNoFail(
+  UWorld& World,
+  const FCrowdWorkerPreparedResultApply& Prepared,
+  FCrowdDemoPreparedWorkerResultSideEffects& PreparedSideEffects,
+  const double ApplyMilliseconds)
+{
+  check(IsInGameThread());
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    World.GetSubsystem<UMassCrowdRuntimeSubsystem>();
+  checkf(RuntimeSubsystem && Prepared.IsValid()
+      && PreparedSideEffects.bValid
+      && PreparedSideEffects.PublishSequence
+        == Prepared.Batch.PublishSequence,
+    TEXT("Worker result side effects escaped prepared owner barrier"));
+
+  RuntimeSubsystem->GetWorkerBehaviorAuthority() =
+    MoveTemp(PreparedSideEffects.BehaviorAuthority);
+  PreparedSideEffects.bValid = false;
+
+  const FCrowdWorkerResultApplyProxy& Proxy =
+    RuntimeSubsystem->GetWorkerResultApplyProxy();
+  const FCrowdWorkerResultApplyMetrics& Metrics = Proxy.GetMetrics();
+  if (Metrics.AppliedBatchCount <= 2
+    || Metrics.AppliedBatchCount % 300 == 0)
+  {
+    const FCrowdAsyncSimulationRuntimeMetrics RuntimeMetrics =
+      RuntimeSubsystem->GetAsyncSimulationRuntime().GetMetrics();
+    int32 BehaviorPatchCount = 0;
+    for (const FCrowdWorkerStatePatch& Patch :
+      Prepared.Batch.StatePatches)
+    {
+      BehaviorPatchCount += Patch.StateFieldId
+          == static_cast<uint16>(ECrowdWorkerField::Behavior)
+        ? 1 : 0;
+    }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoWorkerResultApplyCheckpoint batches=%llu empty=%llu patches=%llu behavior_patches=%d stale_lifecycle=%llu events=%llu publish_sequence=%llu input_sequence=%llu proxies=%d input_queue_depth=%d oldest_input_age_ms=%.3f simulation_lag_ms=%.3f mirror_entities=%d scan_coverage_ms=%.3f owner_pump_ms=%.3f task_queue_ms=%.3f task_run_ms=%.3f task_critical_ms=%.3f publish_to_consume_ms=%.3f gt_apply_ms=%.3f published_patch_count=%d ordered_event_depth=%d resnapshots=%llu"),
+      Metrics.AppliedBatchCount,
+      Metrics.AppliedEmptyBatchCount,
+      Metrics.AppliedPatchCount,
+      BehaviorPatchCount,
+      Metrics.StaleLifecyclePatchCount,
+      Metrics.AppliedEventCount,
+      Metrics.LastConsumedPublishSequence,
+      Metrics.LastAppliedInputSequence,
+      Metrics.ProxyStateCount,
+      RuntimeMetrics.InputQueueDepth,
+      RuntimeMetrics.OldestInputAgeMs,
+      RuntimeMetrics.SimulationLagMs,
+      RuntimeMetrics.MirrorEntityCount,
+      RuntimeMetrics.LastScanCoverageMs,
+      RuntimeMetrics.LastOwnerPumpMs,
+      RuntimeMetrics.LastTaskQueueMs,
+      RuntimeMetrics.LastTaskRunMs,
+      RuntimeMetrics.MaxTaskCriticalMs,
+      RuntimeMetrics.LastPublishToConsumeMs,
+      ApplyMilliseconds,
+      RuntimeMetrics.LastPublishedPatchCount,
+      RuntimeMetrics.LastPublishedEventCount,
+      RuntimeMetrics.ResnapshotCount);
+  }
+}
+
+bool FCrowdDemoWorkerInputSync::FinalizeCommittedResults(
+  UWorld& World,
+  const FCrowdWorkerPreparedResultApply& Prepared,
+  const double ApplyMilliseconds,
+  const bool bAcknowledgeDirtyBatch)
+{
+  check(IsInGameThread());
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    World.GetSubsystem<UMassCrowdRuntimeSubsystem>();
+  if (!RuntimeSubsystem || !Prepared.IsValid())
+    return false;
+  FCrowdAsyncSimulationRuntime& Runtime =
+    RuntimeSubsystem->GetAsyncSimulationRuntime();
+  FCrowdWorkerResultApplyProxy& Proxy =
+    RuntimeSubsystem->GetWorkerResultApplyProxy();
+  const FCrowdWorkerPublishedBatch& Batch = Prepared.Batch;
+  if (World.GetNetMode() == NM_Client)
+  {
+    if (!bAcknowledgeDirtyBatch)
+      return true;
+    const FCrowdWorkerResultApplyDirtyBatch* DirtyBatch =
+      Proxy.PeekDirtyBatch();
+    return (DirtyBatch
+        && DirtyBatch->PublishSequence == Batch.PublishSequence
+        && Proxy.AcknowledgeDirtyBatch(Batch.PublishSequence))
+      || Proxy.GetMetrics().LastConsumedDirtyPublishSequence
+        >= Batch.PublishSequence;
+  }
   FCrowdWorkerBehaviorAuthority& BehaviorAuthority =
     RuntimeSubsystem->GetWorkerBehaviorAuthority();
-  if (!BehaviorAuthority.IngestOrderedEvents(Batch->OrderedEvents))
+  if (!BehaviorAuthority.IngestOrderedEvents(Batch.OrderedEvents))
     return false;
   for (int32 Index = 0; Index < MaxQueuedShadowBatches; ++Index)
   {
@@ -1272,7 +1496,7 @@ bool FCrowdDemoWorkerInputSync::ConsumePublishedResults(
     const FCrowdAsyncSimulationRuntimeMetrics RuntimeMetrics =
       Runtime.GetMetrics();
     int32 BehaviorPatchCount = 0;
-    for (const FCrowdWorkerStatePatch& Patch : Batch->StatePatches)
+    for (const FCrowdWorkerStatePatch& Patch : Batch.StatePatches)
       BehaviorPatchCount += Patch.StateFieldId
           == static_cast<uint16>(ECrowdWorkerField::Behavior)
         ? 1 : 0;
@@ -1297,10 +1521,21 @@ bool FCrowdDemoWorkerInputSync::ConsumePublishedResults(
       RuntimeMetrics.LastTaskRunMs,
       RuntimeMetrics.MaxTaskCriticalMs,
       RuntimeMetrics.LastPublishToConsumeMs,
-      ApplyMs,
+      ApplyMilliseconds,
       RuntimeMetrics.LastPublishedPatchCount,
       RuntimeMetrics.LastPublishedEventCount,
       RuntimeMetrics.ResnapshotCount);
+  }
+  if (bAcknowledgeDirtyBatch)
+  {
+    const FCrowdWorkerResultApplyDirtyBatch* DirtyBatch =
+      Proxy.PeekDirtyBatch();
+    if (!((DirtyBatch
+          && DirtyBatch->PublishSequence == Batch.PublishSequence
+          && Proxy.AcknowledgeDirtyBatch(Batch.PublishSequence))
+        || Proxy.GetMetrics().LastConsumedDirtyPublishSequence
+          >= Batch.PublishSequence))
+      return false;
   }
   return true;
 }

@@ -10,7 +10,10 @@ class UCrowdDemoRoundSimPipelineSubsystem;
 
 struct FCrowdDemoWorkerResultApplyStage
 {
+  void BindQuery(FMassEntityQuery& Query);
+  void UseQuery(FMassEntityQuery& Query) { EntityQuery = &Query; }
   void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context);
+  FMassEntityQuery* EntityQuery = nullptr;
 };
 
 struct FCrowdDemoRoundPlanApplyStage
@@ -84,10 +87,10 @@ struct FCrowdDemoRoundFacingFinalizeStage
   void BindQuery(FMassEntityQuery& Query);
   void UseQuery(FMassEntityQuery& Query) { EntityQuery = &Query; }
   void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context);
-  bool ApplyPreparedCommit(
-    UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
-    FMassEntityManager& EntityManager,
-    FMassExecutionContext& Context);
+  bool ValidatePreparedCommit(
+    UCrowdDemoRoundSimPipelineSubsystem& Pipeline);
+  void CommitValidatedSideEffects(
+    UCrowdDemoRoundSimPipelineSubsystem& Pipeline);
   FMassEntityQuery* EntityQuery = nullptr;
 };
 

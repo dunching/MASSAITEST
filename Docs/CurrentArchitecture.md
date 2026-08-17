@@ -1,5 +1,71 @@
 # MassAI Crowd Demo 当前架构
 
+## 2026-08-15 Runtime Owner Commit Barrier 已纠偏
+
+[COMPUTED][HIGH] `MassCrowdRuntime` 现在拥有通用 `FCrowdWorkerResultCommitToken`、`ECrowdWorkerResultOwnerCommitResult`、`FCrowdWorkerResultOwnerCommitBarrier` 和既有 `FCrowdWorkerResultApplyProxy`。通用 Token 覆盖 Generation、PublishSequence、LastAppliedInputSequence、BaseConsumedPublishSequence、BaseAppliedEventSequence 与 BaseStableEntityViewRevision；Host revision/lifecycle 由 adapter 负责。
+
+[COMPUTED][HIGH] `MassAICrowdDemo` 只保留 `FCrowdDemoPreparedRoundCommitPlan` 与 Host callbacks。Plan 保存 Prepared Proxy、Runtime Token、一次构建的 Demo Mass/Target/Resource Plan，以及 PlanRevision/FixedStepIndex；Runtime 代码未引用 Demo、Scenario 或 Demo Prepared Round Plan。Demo 旧 Barrier 文件、类型和所有消费者已删除，无兼容入口。
+
+[COMPUTED][HIGH] 实际写前顺序为 Runtime Token match → Proxy Final Validate → Result side-effect 副本 Prepare → Target/Resource Token/Owner/Revision Validate → Facing/Behavior/Event 与 Mass Handle/Lifecycle/Fragment/Query Validate。实际提交顺序为 Demo Mass apply → Proxy commit → Mass/Projectile/Target/Resource/Facing/Behavior/Event 状态与表现/网络发布 → 后续 Dirty ACK。第一次写入后没有正常可失败返回；`checkf` 只守卫已预验证的 no-fail 不变量。
+
+[COMPUTED][HIGH] 源码结构门确认 `CommitPreparedValidated` 不再重复 Validate/Commit，故 Proxy Final Validate 与 Proxy commit 各一次。WA8 没有关闭：完整 rollback 数组、`TryPrepareRoundApply` 和 Demo-local Round Transaction 仍保留；下一切片先删除完整 rollback 旧数据源，再删除 Round Transaction。
+
+## 2026-08-04 Result Apply 单一 Owner Barrier
+
+[COMPUTED][HIGH] Result Apply 的 Prepare 边界一次性解析 StableEntityRef→Mass Handle，验证 LifecycleSerial、字段 Owner、Fragment/Query collection、重复实体/字段及 Publish/Event/Stable View 水位，并把 Prepared Proxy、Prepared Mass Plan、Commit Token 存入单槽 Pending Finalize。普通最终提交不再读取或重建 Published Dirty Batch。
+
+[COMPUTED][HIGH] Owner Barrier 在任何写入前完成 token、Generation、水位、Stable View、Lifecycle、Mass Handle、Fragment、plan/tick revision，以及 Ordered Event admission/Behavior parity 的副本预演。提交顺序为 Mass Dirty Apply → Proxy Commit → Mass/Facing 资源与表现副作用 → 安装已验证 Behavior/Event 状态；Dirty Batch ACK 只在后续成功 Input Sync 执行。Proxy 不再拥有可观察的提前提交窗口，Barrier 后也不再调用可失败的 Result finalize。
+
+[COMPUTED][HIGH] Legacy `TryPrepareRoundApply` 仍存在，但对本 Tick 待提交 Worker 状态只使用只读 Pending overlay，避免要求“Proxy 已提交”后才能完成 prepare。该 overlay 不复制完整世界，也不替换 Checkpoint 或重启 Runtime。
+
+[INFERRED][HIGH] WA8 仍为 OPEN：`PreparedTargetResourceSlots`、完整 rollback 数组和 Demo-local Round Transaction 尚未迁移/删除；Projectile Boundary 与纯计算 Kernel 仍是保留能力，不属于本切片删除范围。
+
+## 2026-08-03 WA8-R retained Worker checkpoint / rollback
+
+[COMPUTED][HIGH] Result Apply Proxy 维护按 StableRef 排序的实体视图和各 Domain 最新已提交状态。Round Checkpoint 仅在发布门开启时从该视图解码 Movement/Combat；PostFinalize rollback 每 Tick 也从同一视图解码 Movement/Combat。两者都校验 Proxy Generation、Publish/Input 水位、Lifecycle 和 Combat capability，不再消费 Prepared Movement/Combat commit。
+
+[COMPUTED][HIGH] 结构门锁定 Checkpoint 与 PostFinalize 的 `Proxy.GetStableEntityView()`/`Proxy.FindDomain()`，并拒绝两段中的 `GetPreparedMovementBoundaryCommit`/`GetPreparedCombatBoundaryCommit`。9840 T5/600 与 9841 T8/900 保持 Dirty Apply、Checkpoint、Ordered Event、Projectile Golden 全部成立。
+
+[INFERRED][HIGH] 这不是普通 Tick 零全量状态：PostFinalize 仍遍历完整 Boundary Snapshot，并构造 Flow metrics、SoftPressure rollback、Combat rollback 与 Particle applied-state 数组；Formation/SharedFlow/Facing/Business 仍来自旧 Round Prepared facts。WA8 的下一个结构目标是迁移这些必要 side effect/历史记录后删除 Round Transaction，而不是新增另一份 retained cache。
+
+## 2026-08-03 WA8-R Worker Projectile 原子提交
+
+[COMPUTED][HIGH] Projectile 不再是旧 Combat Commit 的 Mass/指标副作用。Result Apply 从 Worker Published Projectile Patch 解码完整 `FCrowdWorkerProjectileState`，在 Agent Dirty Mass 写入前完成 Anchor Lifecycle、FixedStep、capacity、Projectile state set 与 HostCombatResult 校验；随后在同一提交函数内应用 Projectile Mass state，并发布 summary、visual lifecycle 与 hit-response 指标。
+
+[COMPUTED][HIGH] 旧 FacingFinalize 对 Projectile 的 capacity、状态应用和三类记录调用均已物理删除。9837 T8/900 保持 150 Ordered Events、50 次完整攻击链与 Golden Hash=`439379904/1411313634/6141440`；DisableUnity、Architecture 2/2 与 Lifecycle/Events 1/1 通过。
+
+[INFERRED][HIGH] 仍未迁移的是全实体 rollback/checkpoint 与 Target resource side effect。PostFinalize 当前仍按 Boundary Snapshot、Prepared Movement/Combat、SharedFlow、Formation/Business facts 构造完整 rollback 数组；这也是删除 `TryPrepareRoundApply` 前的下一主要阻塞。
+
+## 2026-08-03 WA8-R Worker Patch 直写 / 唯一 Mass Writer
+
+[COMPUTED][HIGH] 当前服务端 Result Apply 从 Worker Published Batch 的 Facing/Combat Dirty Patch 直接构造 Movement/Facing/Combat/Visual Mass Apply Record。Enrich 仅查询命中 Stable Entity 的当前碎片作为身份、Combat baseline 与 Combat-only 视觉解析基线，不读取 Prepared Movement、完整 SharedFlow、Boundary Snapshot 或 Boundary Business Facts。
+
+[COMPUTED][HIGH] 新 Writer 只遍历已完整预验证的 Dirty Entity collection，并写 Movement/Facing、Transform/Velocity、Combat/Visual；Flow Sample 暂不由不含 Flow 字段的 Worker Patch 伪造。旧 FacingFinalize 中的备用 Mass traversal 已物理删除，现只保留资源、Projectile、rollback/表现记录与旧事务完成副作用。
+
+[COMPUTED][HIGH] DisableUnity、Architecture 2/2、Lifecycle/Ordered Event 定向门通过；9835 静态 T5 的第 600 批保持 20 Dirty 实体、Objective=`1/600`、Intent resources=`0`、Result batches=`600` 且零硬错误。
+
+[INFERRED][HIGH] 当前仍是迁移态：Worker Dirty Apply 的 Mass 数据源已独立，但提交时序仍位于 `TryPrepareRoundApply` 之后，旧 Round WorkBatch/Stage 链仍是非 Mass 副作用生产者。WA8 关闭条件是副作用进入 Published Batch 的有序合同并删除该事务链，而不是仅有唯一 Mass Writer。
+
+## 2026-08-03 WA8-R Dirty Plan 写入边界
+
+[COMPUTED][HIGH] 服务端 Mass 热字段的当前生产写入者是 `ApplyPreparedWorkerMassDirtyPlan`。它由 Prepared Published Batch 的 Stable Slot 构造 Dirty records，写入 Movement/Facing、Transform/Velocity、Flow、Combat/Visual，并在完整 Query collection 预验证后执行一次原子 traversal。旧 FacingFinalize 在该标志存在时不再写 Mass。
+
+[COMPUTED][HIGH] Proxy Dirty ACK 在下一次 Input Sync 原位刷新 Boundary cache 后发生，Result Finalize 只处理 Ordered Event/Behavior 等提交后副作用。静态 Objective 不要求 Target Guidance 每 Tick 追平 Clock sequence，只要求 Revision 一致且状态序列不超前。
+
+[COMPUTED][HIGH] 9833 静态 T5 达到 step 645；step 600 的 Dirty apply/cache refresh 均为 600，Objective reuse=600，普通 Intent resources=0，零 `VIOLATION/Rejected`。DisableUnity 与 Architecture 2/2 通过。
+
+[INFERRED][HIGH] 该架构仍是迁移态：Dirty Plan 的 Movement/Facing/Flow metadata 仍由旧 Round Prepared Commit 交叉验证和补充，资源/Projectile/表现事实仍由旧 Finalize 完成。只有这些 metadata/side effect 进入 Published Batch 合同并删除 Round Transaction 后，WA8 才能关闭。
+
+## 0.0.30 2026-08-03 WA8-R Prepared Result Barrier / Semantic Input Journals
+
+[COMPUTED][HIGH] Worker Result Apply 的 Runtime 核心已从单函数验证+改写拆为 `Prepare`/`CommitPrepared`。Demo Round 在 Commit 前验证 Dirty Facing/Combat 的 StableRef、Lifecycle、字段 payload、Combat capability bundle 和 Mass Query fragment 集合；Prepared Lifecycle View 改变会拒绝提交。
+
+[COMPUTED][HIGH] 服务端 Ordered Event、Behavior side effect 与 Dirty ACK 由 per-world 单槽 pending barrier 延迟到 Mass Commit 之后；pending 期间不交换下一 Published Batch。当前实际 Mass 写入仍由 Demo-local Round Prepared Commit 完成，所以该屏障尚未成为最终的直接 Dirty Apply 架构。
+
+[COMPUTED][HIGH] Target Objective 使用合同字段语义哈希去重；Environment/Nav resource 只有内容 Revision 未发布时才进入 Intent，且只在 Runtime 接受输入后 ACK。静态 T5 普通 Intent 已观测到 `resources=0` 和 Objective `published=1/reused=1`。
+
+[INFERRED][HIGH] 当前首要结构缺口仍是 Demo-local `FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply` 与 Stage 链。下一版本应让 Prepared Dirty plan 自身完成 Mass 原子写入和事件提交，然后删除旧链；Particle 大 Island 与 WA9 继续后置。
+
 ## 0.0.29 2026-08-03 Target Scoped Cohort / Particle Closed Islands
 
 [COMPUTED][HIGH] Target work 现在以稳定 `CohortKey` scope 调度。静态 Objective 依靠资源与实体依赖增量失效；只有非零 TargetVelocity 需要每 Clock 调度全部 Cohort。10k 双 Cohort 回归证明单 Cohort Movement 变化只增加 40 个 128-entity Guidance shard，另一 Cohort 不发布、不重建。
@@ -686,5 +752,14 @@ RoundPlanApply
 [COMPUTED][HIGH] P4 Coordinator驱动Planner、故障策略、指标和截图，但实体位置由公共`FCrowdMassBoundaryRunner`与Nav Runtime提交；Cargo实例仅由复制后的ownership驱动Presentation attach/detach。7953双端状态hash一致，实例数与相关实体数均为20。
 [COMPUTED][HIGH] J 7939、Continuous 7946及Round 7948–7951复测均无Fatal、Assertion、Ensure、`LogWindows: Error`、VIOLATION或resync。J客户端隐藏窗口记录的Actor Tick p95=`400ms`，不能解释为渲染帧p95；服务端fixed-step p95=`1.972ms`。
 [COMPUTED][HIGH] 当前累计自动化为MassCrowd 43/43、CrowdDemo 115/115，Development/DebugGame `-DisableUnity`通过，插件Source到Demo的反向依赖为0。现行停止点仍为K前。
+
+## 2026-08-15 WA8-R Target/Resource 统一 Owner Commit Barrier
+
+[COMPUTED][HIGH] `FCrowdDemoPendingWorkerResultFinalize` 现在拥有 `PreparedProxyResult`、`PreparedMassPlan`、`PreparedTargetResourcePlan` 与 `CommitToken`。Target/Resource plan 在 Prepare 阶段只构建一次，包含已适配的 homogeneous state 或按稳定 destination index 准备的完整 cohort runtime，以及 OwnerRevision、BoundaryGeneration、PlanRevision、FixedStepIndex、TargetRevision、BaseStateHash、PreparedStateHash 和 SharedFlow ResourceId/Revision/BuildHash/RebuildCount。
+[COMPUTED][HIGH] Prepare 会拒绝非法 SharedFlow resource pointer、缺失 Owner/revision、重复 Slot、重复 entity、重复 entity-field、缺失阶段、错误 fixed-step/target revision 和消失的 cohort Owner；`ValidateExecution`、Owner 查找、Runtime adapter 转换和 lifecycle diagnostic 构造均在首次状态写入前完成。
+[COMPUTED][HIGH] 最终屏障实际顺序为：Proxy/worker token validate → prepare ordered-result side effects → Target/Resource token/base-state/Owner final validate → Facing/Behavior/Lifecycle/Handle validate → Mass final validate 与 atomic-write claim → Mass apply → Proxy commit → Target/Resource prepared move apply → remaining validated state side effects → Round commit marker → result presentation/network side-effect publish。Dirty Batch ACK 不在该屏障内，仍由后续 Input Sync 最后执行。
+[COMPUTED][HIGH] 旧 `ApplyPreparedBoundaryResourcePatches` 已删除；Final Barrier、`AdvanceRoundWorkerFrame` 和 PostFinalize 都不再读取 `PreparedTargetResourceSlots`、查找 cohort 或调用 `ValidateExecution`。`PreparedTargetResourceSlots` 本身仍作为 Prepare 输入保留，构建后立即清空。
+[COMPUTED][HIGH] 第一次写入后的 Target/Resource 路径只按 Final Validate 已锁定的 destination index 移动 Prepared runtime 或 homogeneous fields；没有返回失败的正常分支。外部 Authority/Client publish 与下一帧 Dirty ACK 仍在完整 commit 之后。
+[COMPUTED][HIGH] 本切片未删除完整 rollback 数组、`TryPrepareRoundApply` 或 Demo-local Round Transaction，因此 WA8 与 Legacy Transaction 清理仍为 OPEN。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

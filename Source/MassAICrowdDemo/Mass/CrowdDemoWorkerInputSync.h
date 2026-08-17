@@ -2,9 +2,18 @@
 
 #include "CoreMinimal.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
+#include "MassCrowdWorkerLifecycleBehaviorDomain.h"
+#include "MassCrowdWorkerResultApply.h"
 #include "MassCrowdWorkerShadowSync.h"
 
 class UWorld;
+
+struct FCrowdDemoPreparedWorkerResultSideEffects
+{
+  FCrowdWorkerBehaviorAuthority BehaviorAuthority;
+  uint64 PublishSequence = 0;
+  bool bValid = false;
+};
 
 class FCrowdDemoWorkerInputSync
 {
@@ -54,6 +63,33 @@ public:
   static bool ConsumePublishedResults(
     UWorld& World,
     uint64 ConsumerFrameSequence);
+
+  static bool PreparePublishedResults(
+    UWorld& World,
+    uint64 ConsumerFrameSequence,
+    FCrowdWorkerPreparedResultApply& OutPrepared,
+    bool& bOutHasBatch);
+
+  static bool CommitPreparedResults(
+    UWorld& World,
+    const FCrowdWorkerPreparedResultApply& Prepared);
+
+  static bool PrepareCommittedResultSideEffects(
+    UWorld& World,
+    const FCrowdWorkerPreparedResultApply& Prepared,
+    FCrowdDemoPreparedWorkerResultSideEffects& OutPrepared);
+
+  static void CommitPreparedResultSideEffectsNoFail(
+    UWorld& World,
+    const FCrowdWorkerPreparedResultApply& Prepared,
+    FCrowdDemoPreparedWorkerResultSideEffects& PreparedSideEffects,
+    double ApplyMilliseconds);
+
+  static bool FinalizeCommittedResults(
+    UWorld& World,
+    const FCrowdWorkerPreparedResultApply& Prepared,
+    double ApplyMilliseconds,
+    bool bAcknowledgeDirtyBatch);
 
   static bool SubmitShadowWork(
     UWorld& World,

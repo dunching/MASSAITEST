@@ -91,10 +91,12 @@ bool UMassCrowdRuntimeSubsystem::ResolveWorkerResourceRevision(
   const uint64 ResourceId,
   const uint64 UpstreamRevision,
   const uint64 ContentHash,
-  uint64& OutRevision)
+  uint64& OutRevision,
+  bool& bOutNeedsPublication)
 {
   check(IsInGameThread());
   OutRevision = 0;
+  bOutNeedsPublication = false;
   if (ResourceId == 0 || UpstreamRevision == 0
     || ContentHash == 0)
     return false;
@@ -103,13 +105,15 @@ bool UMassCrowdRuntimeSubsystem::ResolveWorkerResourceRevision(
   if (!Previous)
   {
     WorkerResourcePublications.Add(
-      ResourceId, {UpstreamRevision, ContentHash});
+      ResourceId, {UpstreamRevision, ContentHash, false});
     OutRevision = UpstreamRevision;
+    bOutNeedsPublication = true;
     return true;
   }
   if (Previous->ContentHash == ContentHash)
   {
     OutRevision = Previous->Revision;
+    bOutNeedsPublication = !Previous->bPublished;
     return true;
   }
   if (Previous->Revision == MAX_uint64)
@@ -117,7 +121,24 @@ bool UMassCrowdRuntimeSubsystem::ResolveWorkerResourceRevision(
   Previous->Revision = FMath::Max(
     UpstreamRevision, Previous->Revision + 1);
   Previous->ContentHash = ContentHash;
+  Previous->bPublished = false;
   OutRevision = Previous->Revision;
+  bOutNeedsPublication = true;
+  return true;
+}
+
+bool UMassCrowdRuntimeSubsystem::AcknowledgeWorkerResourceRevision(
+  const uint64 ResourceId,
+  const uint64 Revision)
+{
+  check(IsInGameThread());
+  FWorkerResourcePublication* Publication =
+    WorkerResourcePublications.Find(ResourceId);
+  if (!Publication)
+    return true;
+  if (Revision == 0 || Publication->Revision != Revision)
+    return false;
+  Publication->bPublished = true;
   return true;
 }
 

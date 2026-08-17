@@ -1111,6 +1111,12 @@ bool UCrowdDemoMassSubsystem::PrepareProjectileCapacity(
   return RequiredCount <= ProjectileStore.GetCapacity();
 }
 
+bool UCrowdDemoMassSubsystem::ValidateProjectileStates(
+  const TConstArrayView<FCrowdProjectileState> Projectiles) const
+{
+  return ProjectileStore.ValidatePreparedStates(Projectiles);
+}
+
 void UCrowdDemoMassSubsystem::ApplyProjectileStates(
   const TConstArrayView<FCrowdProjectileState> Projectiles)
 {

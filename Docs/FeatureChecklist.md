@@ -1,5 +1,26 @@
 # MassAI Crowd Demo 功能检查表
 
+## 2026-08-15 Demo/Runtime 边界纠偏
+
+- [x] [COMPUTED][HIGH] 产品原则已澄清：Demo 是目标架构快速验证宿主，不承担 Legacy 框架或 API 的兼容责任；保留的是业务能力和验收证据，不是旧实现结构。
+- [x] [COMPUTED][HIGH] 通用 Barrier/Token/拒绝分类已迁入 `MassCrowdRuntime`；Demo 只保留 `FCrowdDemoPreparedRoundCommitPlan` 与 Host FinalValidate/NoFailApply adapter。
+- [x] [COMPUTED][HIGH] 旧 Demo Barrier 文件、类型、include、注册和测试消费者已物理删除；无 typedef、wrapper、shim、fallback 或双 Barrier。
+- [x] [COMPUTED][HIGH] Runtime 原子故障门、插件依赖边界门、Legacy 零符号门、既有 Target/Resource 故障门和最小 Production T8 Golden 全部通过。
+- [ ] [INFERRED][HIGH] 后续 rollback 与 Round Transaction 切片同样执行“替换即删除”：不保留完整 rollback 兼容数据源，不保留 `TryPrepareRoundApply` 包装或 Demo-local Transaction fallback。
+
+[COMPUTED][HIGH] WA8 未关闭；下一切片处理完整 rollback 数组并删除旧数据源，之后才删除 `TryPrepareRoundApply` 与 Demo-local Round Transaction。
+
+## 2026-08-04 WA8-R Result Apply 原子 Barrier
+
+- [x] [COMPUTED][HIGH] Pending Finalize 同时持有 Prepared Proxy、一次构建的 Prepared Mass Plan 与 Commit Token。
+- [x] [COMPUTED][HIGH] Result Apply Stage 不提前 Commit Proxy；`AdvanceRoundWorkerFrame` 不重建 Dirty Mass Plan。
+- [x] [COMPUTED][HIGH] Final Validate 在首次写入前覆盖 token、水位、Generation、Stable View、Lifecycle、Mass Handle、字段 Owner、Fragment 与 Query collection。
+- [x] [COMPUTED][HIGH] Ordered Event/Behavior 在写前使用 Proxy/Authority 副本完整预演；成功提交顺序为 Mass Apply → Proxy Commit → no-fail 资源/表现/Behavior/Event 安装，Dirty ACK 仅在之后执行；Barrier 后可失败 finalize 已删除。
+- [x] [COMPUTED][HIGH] 定向门通过：DisableUnity、Architecture 2/2、WorkerResultApply 2/2、RuntimeV2 33/33。
+- [ ] [COMPUTED][HIGH] 完整双端 T8 runner 未通过：server/client RoundResult、client visual 与服务端 Golden/事件/性能日志均正确存在，但脚本仍误判这些完成日志缺失并超时。
+- [ ] [COMPUTED][HIGH] WA8 未关闭；`PreparedTargetResourceSlots`、完整 rollback 数组和 Demo-local Round Transaction 仍保留。
+- [x] [COMPUTED][HIGH] `PreparedTargetResourceSlots` 生产副作用已于 2026-08-15 迁入一次构建的 Prepared Target/Resource Plan；下一优先级已修正为 Runtime Barrier 所有权纠偏，再处理完整 rollback 数组与 Demo-local Round Transaction。
+
 ## 2026-08-03 当前状态
 
 - [x] [COMPUTED][HIGH] 每 Tick Commit 已收敛为唯一 Movement Boundary Commit；重复 CommitPlan、PostFinalize State 和常驻 Checkpoint State 数组已物理删除。
@@ -346,5 +367,15 @@
 - [x] [COMPUTED][HIGH] 阶段 F 的最小Mass World定向1/1验证snapshot初始化、不同fixed-step spawn、真实destroy、Mass handle serial变化、StableEntityRef高serial复用、membership原子迁移、stale correction/despawn拒绝及完整entity-set hash；Development/DebugGame、MassCrowd 24/24与CrowdDemo 109/109通过。
 - [x] [COMPUTED][HIGH] 8771 T2 rollback hit/miss/mismatch=`54/0/0`、terminal/inside/coverage=`20/20、20/20、16/16`；8772异构T6 rollback=`80/0/0`、completed/settled/inside=`20/20`、coverage=`20`，通用历史没有造成SoftPressure能力、安全、同步或性能回退。
 - [ ] [INFERRED][HIGH] 整个fixed-step尚未达到一次Mass读取；该长期优化不再阻塞Behavior Source。Resolver权威化、Final Apply原子性、行为网络和同路径20/100/500已由S0–S6关闭；真实StateTree业务Task不属于当前验收门。
+
+## 2026-08-15 WA8-R Owner Barrier 功能检查
+
+- [x] [COMPUTED][HIGH] Prepared Target/Resource plan 在 Prepare 构建一次，并由单槽 Pending Finalize 持有。
+- [x] [COMPUTED][HIGH] Final Validate 复核 Generation、OwnerRevision、PlanRevision、FixedStepIndex、TargetRevision、base-state hash、cohort destination/key 和资源引用准备结果。
+- [x] [COMPUTED][HIGH] Target/Resource revision 或 Owner 失效时，Mass、Proxy、水位、Target/Resource、Dirty Batch、表现/网络和 Ordered Event 均不改变。
+- [x] [COMPUTED][HIGH] 非法资源引用、缺失 Owner、重复 Slot、重复实体和重复字段在 Prepare 被拒，Final Barrier 不执行。
+- [x] [COMPUTED][HIGH] Final Barrier、AdvanceRoundWorkerFrame 与 PostFinalize 不重建或重新解析 Target/Resource plan；旧 late apply 入口已删除。
+- [x] [COMPUTED][HIGH] 成功路径的 Prepared Mass、Prepared Target/Resource、Proxy、Target/Resource side effect、Ordered Event 与 Dirty ACK 各一次测试通过；20 实体全 Production T8 Golden 与事件计数不变。
+- [ ] [COMPUTED][HIGH] WA8 未关闭；通用 Barrier/Token 仍位于 Demo，完整 rollback 数组、`TryPrepareRoundApply` 与 Demo-local Round Transaction 仍保留。下一切片先完成 Runtime Barrier 所有权纠偏并删除 Demo Barrier，之后依次删除完整 rollback 数据源和 Demo-local Round Transaction。
 
 [RULES I BROKE]：[COMPUTED][HIGH] 无。

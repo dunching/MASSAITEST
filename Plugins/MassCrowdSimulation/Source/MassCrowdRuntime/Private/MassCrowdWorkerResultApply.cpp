@@ -1,5 +1,69 @@
 #include "MassCrowdWorkerResultApply.h"
 
+FCrowdWorkerResultCommitToken
+FCrowdWorkerResultCommitToken::FromPrepared(
+  const FCrowdWorkerPreparedResultApply& Prepared)
+{
+  FCrowdWorkerResultCommitToken Token;
+  Token.Generation = Prepared.Batch.Generation;
+  Token.PublishSequence = Prepared.Batch.PublishSequence;
+  Token.LastAppliedInputSequence =
+    Prepared.Batch.LastAppliedInputSequence;
+  Token.BaseConsumedPublishSequence =
+    Prepared.BaseConsumedPublishSequence;
+  Token.BaseAppliedEventSequence =
+    Prepared.BaseAppliedEventSequence;
+  Token.BaseStableEntityViewRevision =
+    Prepared.BaseStableEntityViewRevision;
+  return Token;
+}
+
+bool FCrowdWorkerResultCommitToken::Matches(
+  const FCrowdWorkerPreparedResultApply& Prepared) const
+{
+  return IsValid() && Prepared.IsValid()
+    && Generation == Prepared.Batch.Generation
+    && PublishSequence == Prepared.Batch.PublishSequence
+    && LastAppliedInputSequence
+      == Prepared.Batch.LastAppliedInputSequence
+    && BaseConsumedPublishSequence
+      == Prepared.BaseConsumedPublishSequence
+    && BaseAppliedEventSequence
+      == Prepared.BaseAppliedEventSequence
+    && BaseStableEntityViewRevision
+      == Prepared.BaseStableEntityViewRevision;
+}
+
+bool FCrowdWorkerResultCommitToken::IsValid() const
+{
+  return Generation != 0 && PublishSequence != 0;
+}
+
+ECrowdWorkerResultOwnerCommitResult
+FCrowdWorkerResultOwnerCommitBarrier::Commit(
+  FCrowdWorkerResultApplyProxy& Proxy,
+  const FCrowdWorkerPreparedResultApply& Prepared,
+  const FCrowdWorkerResultCommitToken& CommitToken,
+  TFunctionRef<bool()> HostFinalValidate,
+  TFunctionRef<void()> HostApplyNoFail,
+  TFunctionRef<void()> HostCommitSideEffectsNoFail)
+{
+  if (!CommitToken.Matches(Prepared))
+    return ECrowdWorkerResultOwnerCommitResult::RejectedCandidate;
+  const ECrowdWorkerResultApplyResult ProxyValidation =
+    Proxy.ValidatePreparedState(Prepared);
+  if (ProxyValidation != ECrowdWorkerResultApplyResult::Applied
+    && ProxyValidation != ECrowdWorkerResultApplyResult::AppliedEmpty)
+    return ECrowdWorkerResultOwnerCommitResult::RejectedProxyState;
+  if (!HostFinalValidate())
+    return ECrowdWorkerResultOwnerCommitResult::RejectedHostState;
+
+  HostApplyNoFail();
+  Proxy.CommitPreparedValidated(Prepared);
+  HostCommitSideEffectsNoFail();
+  return ECrowdWorkerResultOwnerCommitResult::Committed;
+}
+
 bool FCrowdWorkerResultApplyProxy::ResetQuiescent(
   const uint64 Generation,
   const FCrowdWorkerContractLimits& InLimits)
@@ -95,9 +159,11 @@ void FCrowdWorkerResultApplyProxy::LatchViolation()
 }
 
 ECrowdWorkerResultApplyResult
-FCrowdWorkerResultApplyProxy::Apply(
-  const FCrowdWorkerPublishedBatch& Batch)
+FCrowdWorkerResultApplyProxy::Prepare(
+  const FCrowdWorkerPublishedBatch& Batch,
+  FCrowdWorkerPreparedResultApply& OutPrepared)
 {
+  OutPrepared.Reset();
   if (!bInitialized)
     return ECrowdWorkerResultApplyResult::RejectedNotInitialized;
   if (Metrics.bViolation)
@@ -145,10 +211,85 @@ FCrowdWorkerResultApplyProxy::Apply(
     }
   }
 
+  OutPrepared.Batch = Batch;
+  OutPrepared.StatePatchStableSlots.Reserve(
+    Batch.StatePatches.Num());
   for (const FCrowdWorkerStatePatch& Patch : Batch.StatePatches)
   {
     const int32* StableSlot = StableEntitySlots.Find(Patch.EntityRef);
-    if (!StableSlot)
+    OutPrepared.StatePatchStableSlots.Add(
+      StableSlot ? *StableSlot : INDEX_NONE);
+  }
+  OutPrepared.BaseConsumedPublishSequence =
+    Metrics.LastConsumedPublishSequence;
+  OutPrepared.BaseAppliedEventSequence =
+    Metrics.LastAppliedEventSequence;
+  OutPrepared.BaseStableEntityViewRevision =
+    Metrics.StableEntityViewRevision;
+  OutPrepared.bPrepared = true;
+  return Batch.StatePatches.IsEmpty()
+      && Batch.OrderedEvents.IsEmpty()
+    ? ECrowdWorkerResultApplyResult::AppliedEmpty
+    : ECrowdWorkerResultApplyResult::Applied;
+}
+
+ECrowdWorkerResultApplyResult
+FCrowdWorkerResultApplyProxy::ValidatePreparedState(
+  const FCrowdWorkerPreparedResultApply& Prepared) const
+{
+  if (!bInitialized)
+    return ECrowdWorkerResultApplyResult::RejectedNotInitialized;
+  if (Metrics.bViolation)
+    return ECrowdWorkerResultApplyResult::Violation;
+  if (!Prepared.IsValid()
+    || Prepared.Batch.Generation != Metrics.Generation
+    || Prepared.BaseConsumedPublishSequence
+      != Metrics.LastConsumedPublishSequence
+    || Prepared.BaseAppliedEventSequence
+      != Metrics.LastAppliedEventSequence
+    || Prepared.BaseStableEntityViewRevision
+      != Metrics.StableEntityViewRevision)
+    return ECrowdWorkerResultApplyResult::RejectedPreparedState;
+  return Prepared.Batch.StatePatches.IsEmpty()
+      && Prepared.Batch.OrderedEvents.IsEmpty()
+    ? ECrowdWorkerResultApplyResult::AppliedEmpty
+    : ECrowdWorkerResultApplyResult::Applied;
+}
+
+ECrowdWorkerResultApplyResult
+FCrowdWorkerResultApplyProxy::CommitPrepared(
+  const FCrowdWorkerPreparedResultApply& Prepared)
+{
+  const ECrowdWorkerResultApplyResult Validation =
+    ValidatePreparedState(Prepared);
+  if (Validation != ECrowdWorkerResultApplyResult::Applied
+    && Validation != ECrowdWorkerResultApplyResult::AppliedEmpty)
+  {
+    if (Validation == ECrowdWorkerResultApplyResult::RejectedPreparedState)
+      LatchViolation();
+    return Validation;
+  }
+
+  return ApplyPreparedNoFail(Prepared);
+}
+
+ECrowdWorkerResultApplyResult
+FCrowdWorkerResultApplyProxy::ApplyPreparedNoFail(
+  const FCrowdWorkerPreparedResultApply& Prepared)
+{
+  checkf(Prepared.IsValid(),
+    TEXT("Invalid prepared Result Apply entered no-fail commit"));
+
+  const FCrowdWorkerPublishedBatch& Batch = Prepared.Batch;
+
+  for (int32 PatchIndex = 0;
+       PatchIndex < Batch.StatePatches.Num(); ++PatchIndex)
+  {
+    const FCrowdWorkerStatePatch& Patch =
+      Batch.StatePatches[PatchIndex];
+    const int32 StableSlot =
+      Prepared.StatePatchStableSlots[PatchIndex];
+    if (StableSlot == INDEX_NONE)
     {
       ++Metrics.StaleLifecyclePatchCount;
       continue;
@@ -168,7 +309,7 @@ FCrowdWorkerResultApplyProxy::Apply(
       State.PublishSequence = Batch.PublishSequence;
       FCrowdWorkerResultApplyDirtyRecord& Dirty =
         PendingDirtyStates.FindOrAdd({Patch.EntityRef, Field});
-      Dirty.StableSlot = *StableSlot;
+      Dirty.StableSlot = StableSlot;
       Dirty.DomainState = State;
       ++Metrics.AppliedPatchCount;
       ++Metrics.AppliedDomainPatchCount;
@@ -207,6 +348,30 @@ FCrowdWorkerResultApplyProxy::Apply(
     return ECrowdWorkerResultApplyResult::AppliedEmpty;
   }
   return ECrowdWorkerResultApplyResult::Applied;
+}
+
+void FCrowdWorkerResultApplyProxy::CommitPreparedValidated(
+  const FCrowdWorkerPreparedResultApply& Prepared)
+{
+  const ECrowdWorkerResultApplyResult CommitResult =
+    ApplyPreparedNoFail(Prepared);
+  checkf(CommitResult == ECrowdWorkerResultApplyResult::Applied
+      || CommitResult == ECrowdWorkerResultApplyResult::AppliedEmpty,
+    TEXT("Validated Result Apply proxy commit unexpectedly failed"));
+}
+
+ECrowdWorkerResultApplyResult
+FCrowdWorkerResultApplyProxy::Apply(
+  const FCrowdWorkerPublishedBatch& Batch)
+{
+  FCrowdWorkerPreparedResultApply Prepared;
+  const ECrowdWorkerResultApplyResult PrepareResult =
+    Prepare(Batch, Prepared);
+  if (PrepareResult != ECrowdWorkerResultApplyResult::Applied
+    && PrepareResult
+      != ECrowdWorkerResultApplyResult::AppliedEmpty)
+    return PrepareResult;
+  return CommitPrepared(Prepared);
 }
 
 const FCrowdWorkerPresentationDiagnosticProxyState*

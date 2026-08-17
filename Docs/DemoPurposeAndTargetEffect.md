@@ -10,6 +10,8 @@
 
 [INFERRED][HIGH] Demo 不得维护一套“当前先测、以后再换掉”的运行或复制协议。当前 `RoundBootstrapPacket`、`RoundPlan`、`RoundResult` 和固定 Agent 集合只属于实现现状；它们必须适配未来通用 Relevant Snapshot/Delta 合同，不能成为插件最终产品 API。
 
+[INFERRED][HIGH] Demo 是目标架构的快速验证宿主，不承担 Legacy 框架或接口的向后兼容责任。业务能力迁入生产插件路径时，必须在同一切片删除被替代的 Demo 生产入口、兼容包装、fallback 与双写路径；可以保留测试 fixture、故障注入和 Golden 证据，但不得为了旧测试继续维护第二套 Runtime、Commit Barrier、Transaction 或 rollback 数据源。
+
 [INFERRED][HIGH] 最终产品目标是通用持续 Agent population，不是持续敌群专用系统。敌方追逐、友方搬运和中立游荡只是 Capability、Behavior、Objective 与关系策略的不同配置，所有实体复用同一 Movement、Avoidance、Particle、Replication 与 Presentation 路径。
 
 ## 1.1 当前能力与未来目标

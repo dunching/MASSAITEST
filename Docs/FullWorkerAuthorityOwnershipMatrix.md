@@ -1,5 +1,11 @@
 # 全面 Worker 权威字段 Ownership Matrix
 
+## 2026-08-15 Result Commit ownership 纠偏
+
+[COMPUTED][HIGH] 当前 `FCrowdWorkerResultApplyProxy` 位于 `MassCrowdRuntime`，但通用 Commit Token、拒绝结果和 Owner Barrier 状态机仍以 `FCrowdDemo*` 定义在 Demo 模块；这是模块 ownership 漂移，不是终态。
+
+[INFERRED][HIGH] WA 终态由 `MassCrowdRuntime` 拥有无 Demo 语义的 Prepare/Token/Final Validate/唯一 Owner/no-fail Commit 协议；Demo 只拥有 Host-specific Prepared Plan 和 adapter。下一切片必须原子切换并物理删除 Demo Barrier 文件、类型和测试绑定，不保留兼容别名、wrapper 或 fallback。
+
 ## 2026-08-03 Dirty Proxy/Gather 删除检查点
 
 [COMPUTED][HIGH] WA7-R Digest 已对齐为 Unreliable 自覆盖语义；Intent/Correction 继续可靠有序。Result Apply Proxy 使用稳定实体视图、Stable Slot 和可 ACK Dirty Batch，普通 Intent/Proxy refresh 不再复制或扫描完整 membership。
@@ -46,6 +52,7 @@
 | Ordered Gameplay Event | [COMPUTED][HIGH] Worker Ordered Event Ring持有Lifecycle、Hit、Behavior与Business事件 | [COMPUTED][HIGH] Worker Ordered Event Ring | [COMPUTED][HIGH] WA5/WA6已迁移不可latest-wins的Gameplay事件 | [COMPUTED][HIGH] GT不得覆盖或重排 |
 | Checkpoint/Intent/Digest/Correction/Event Baseline | [COMPUTED][HIGH] Worker Checkpoint Store与有序Intent/Digest/稀疏Correction合同；Demo网络Adapter仍保留迁移期发布外壳 | [COMPUTED][HIGH] Worker Checkpoint Store | [COMPUTED][HIGH] WA7-R已关闭普通完整State Correction语义；WA8删除剩余PostCommit/Legacy发布外壳 | [COMPUTED][HIGH] 网络Adapter只序列化冻结数据 |
 | Presentation/ISM/VAT/Actor | [COMPUTED][HIGH] GT Presentation | [INFERRED][HIGH] GT Presentation Proxy | [INFERRED][HIGH] 不迁入Worker | [INFERRED][HIGH] 只表现，不参与下一模拟步 |
+| Worker Result Owner Commit Barrier | [COMPUTED][HIGH] 通用 Proxy 在 Runtime；Commit Token/Barrier/Pending 混合容器在 Demo | [INFERRED][HIGH] `MassCrowdRuntime` 通用 Barrier + Demo Host Prepared Plan adapter | [INFERRED][HIGH] 下沉通用 Token/拒绝分类/状态机，并在同一切片删除 Demo Barrier 全部旧符号 | [INFERRED][HIGH] GT 只执行已验证 Host no-fail apply 与最后发布 |
 | Legacy Frame Transaction/Mailbox | [COMPUTED][HIGH] 公共类型与四节点已删除；仅余 Demo-local Work Batch/DAG | [INFERRED][HIGH] 不存在 | [COMPUTED][HIGH] 公共 Legacy 已物理删除；剩余本地完整成员 DAG 继续收敛 | [INFERRED][HIGH] 无 |
 
 ## 当前结构结论

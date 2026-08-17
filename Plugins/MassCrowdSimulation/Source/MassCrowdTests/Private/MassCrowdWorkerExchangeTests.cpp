@@ -5,7 +5,9 @@
 #include "Algo/Reverse.h"
 #include "Async/Async.h"
 #include "HAL/Event.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
+#include "Interfaces/IPluginManager.h"
 #include "MassCrowdAsyncSimulationRuntime.h"
 #include "MassCrowdRuntimeSubsystem.h"
 #include "MassCrowdWorkerContracts.h"
@@ -14,6 +16,7 @@
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerResultApply.h"
 #include "MassCrowdWorkerShadowSync.h"
+#include "Misc/FileHelper.h"
 
 namespace CrowdWorkerExchangeTests
 {
@@ -892,8 +895,29 @@ bool FMassCrowdWorkerResultApplyProxyTest::RunTest(
     ECrowdWorkerExchangeResult::Exchanged);
   TestNotNull(TEXT("result fixture batch exists"), Batch);
   if (!Batch) return false;
-  TestEqual(TEXT("result proxy applies batch"),
-    Proxy.Apply(*Batch),
+  FCrowdWorkerPreparedResultApply Prepared;
+  const FCrowdWorkerResultApplyMetrics MetricsBeforePrepare =
+    Proxy.GetMetrics();
+  TestEqual(TEXT("result proxy prepares batch"),
+    Proxy.Prepare(*Batch, Prepared),
+    ECrowdWorkerResultApplyResult::Applied);
+  TestTrue(TEXT("prepared result apply is valid"),
+    Prepared.IsValid());
+  TestNull(TEXT("prepare does not mutate presentation state"),
+    Proxy.Find({1, 10, 1}));
+  TestNull(TEXT("prepare does not mutate domain state"),
+    Proxy.FindDomain(
+      {1, 10, 1}, ECrowdWorkerField::Movement));
+  TestNull(TEXT("prepare does not publish dirty batch"),
+    Proxy.PeekDirtyBatch());
+  TestEqual(TEXT("prepare does not consume publish sequence"),
+    Proxy.GetMetrics().LastConsumedPublishSequence,
+    MetricsBeforePrepare.LastConsumedPublishSequence);
+  TestEqual(TEXT("prepare does not consume event sequence"),
+    Proxy.GetMetrics().LastAppliedEventSequence,
+    MetricsBeforePrepare.LastAppliedEventSequence);
+  TestEqual(TEXT("result proxy commits prepared batch"),
+    Proxy.CommitPrepared(Prepared),
     ECrowdWorkerResultApplyResult::Applied);
   TestNotNull(TEXT("current lifecycle proxy state applied"),
     Proxy.Find({1, 10, 1}));
@@ -973,7 +997,321 @@ bool FMassCrowdWorkerResultApplyProxyTest::RunTest(
     ECrowdWorkerResultApplyResult::RejectedOwnerMask);
   TestTrue(TEXT("owner violation latches"),
     OwnerViolation.GetMetrics().bViolation);
+
+  FCrowdWorkerResultApplyProxy LifecycleChanged;
+  TestTrue(TEXT("prepared lifecycle change proxy initializes"),
+    LifecycleChanged.ResetQuiescent(7, Limits));
+  TestTrue(TEXT("prepared lifecycle baseline accepted"),
+    LifecycleChanged.UpdateCurrentEntities(7, CurrentRefs));
+  FCrowdWorkerPreparedResultApply StalePrepared;
+  TestEqual(TEXT("batch prepares before lifecycle change"),
+    LifecycleChanged.Prepare(*Batch, StalePrepared),
+    ECrowdWorkerResultApplyResult::Applied);
+  const FCrowdStableEntityRef ChangedRefs[] = {
+    {1, 10, 2}, {1, 20, 2}};
+  TestTrue(TEXT("lifecycle changes before prepared commit"),
+    LifecycleChanged.UpdateCurrentEntities(7, ChangedRefs));
+  TestEqual(TEXT("prepared commit rejects changed lifecycle view"),
+    LifecycleChanged.CommitPrepared(StalePrepared),
+    ECrowdWorkerResultApplyResult::RejectedPreparedState);
+  TestNull(TEXT("rejected prepared commit leaves state absent"),
+    LifecycleChanged.Find({1, 10, 1}));
+  TestNull(TEXT("rejected prepared commit leaves dirty batch absent"),
+    LifecycleChanged.PeekDirtyBatch());
+  TestTrue(TEXT("prepared state violation latches"),
+    LifecycleChanged.GetMetrics().bViolation);
   return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdWorkerResultOwnerCommitBarrierTest,
+  "MassCrowd.Runtime.WorkerResultApply.OwnerCommitBarrierAtomicity",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdWorkerResultOwnerCommitBarrierTest::RunTest(
+  const FString& Parameters)
+{
+  const FCrowdWorkerContractLimits Limits = MakeLimits(10, 4);
+  const FCrowdStableEntityRef CurrentRefs[] = {{1, 10, 1}};
+  auto PrepareCandidate = [&](FCrowdWorkerResultApplyProxy& Proxy,
+      FCrowdWorkerPreparedResultApply& Prepared,
+      FCrowdWorkerResultCommitToken& Token,
+      int32& TokenBuildCount)
+  {
+    FCrowdWorkerPublishedExchange Exchange;
+    const bool bReady = Proxy.ResetQuiescent(7, Limits)
+      && Proxy.UpdateCurrentEntities(7, CurrentRefs)
+      && Exchange.ResetQuiescent(7, Limits)
+      && Exchange.AppendStatePatch(MakePatch(
+        10, 1, 1,
+        CrowdWorkerResultFields::PresentationDiagnosticProxy, 101))
+        == ECrowdWorkerAppendResult::Appended
+      && Exchange.AppendOrderedEvent(MakeEvent(1, 1, 1))
+        == ECrowdWorkerAppendResult::Appended
+      && Exchange.TryPublishBuildingBatch(MakeMetadata(1, 1, 1))
+        == ECrowdWorkerPublishResult::Published;
+    const FCrowdWorkerPublishedBatch* Batch = nullptr;
+    if (!bReady
+      || Exchange.TryExchangePublishedBatch(7, 1, Batch)
+        != ECrowdWorkerExchangeResult::Exchanged
+      || !Batch
+      || Proxy.Prepare(*Batch, Prepared)
+        != ECrowdWorkerResultApplyResult::Applied)
+      return false;
+    Token = FCrowdWorkerResultCommitToken::FromPrepared(Prepared);
+    ++TokenBuildCount;
+    return Token.IsValid() && Token.Matches(Prepared);
+  };
+  auto ExpectNoCommit = [&](const TCHAR* Prefix,
+      FCrowdWorkerResultApplyProxy& Proxy,
+      const FCrowdWorkerPreparedResultApply& Prepared,
+      const FCrowdWorkerResultCommitToken& Token,
+      const ECrowdWorkerResultOwnerCommitResult Expected,
+      TFunctionRef<bool()> HostFinalValidate)
+  {
+    const FCrowdWorkerResultApplyMetrics Before = Proxy.GetMetrics();
+    const uint64 DirtyPublishBefore = Proxy.PeekDirtyBatch()
+      ? Proxy.PeekDirtyBatch()->PublishSequence : 0;
+    int32 HostApplyCount = 0;
+    int32 SideEffectCount = 0;
+    TestEqual(FString::Printf(TEXT("%s rejects candidate"), Prefix),
+      FCrowdWorkerResultOwnerCommitBarrier::Commit(
+        Proxy, Prepared, Token, HostFinalValidate,
+        [&]() { ++HostApplyCount; },
+        [&]() { ++SideEffectCount; }),
+      Expected);
+    TestEqual(FString::Printf(TEXT("%s invokes no Host apply"), Prefix),
+      HostApplyCount, 0);
+    TestEqual(FString::Printf(TEXT("%s publishes no side effect"), Prefix),
+      SideEffectCount, 0);
+    TestEqual(FString::Printf(TEXT("%s does not advance Proxy commit"), Prefix),
+      Proxy.GetMetrics().AppliedBatchCount, Before.AppliedBatchCount);
+    TestEqual(FString::Printf(TEXT("%s does not advance publish watermark"), Prefix),
+      Proxy.GetMetrics().LastConsumedPublishSequence,
+      Before.LastConsumedPublishSequence);
+    TestEqual(FString::Printf(TEXT("%s does not advance event watermark"), Prefix),
+      Proxy.GetMetrics().LastAppliedEventSequence,
+      Before.LastAppliedEventSequence);
+    TestEqual(FString::Printf(TEXT("%s does not publish or replace Dirty Batch"), Prefix),
+      Proxy.PeekDirtyBatch()
+        ? Proxy.PeekDirtyBatch()->PublishSequence : 0,
+      DirtyPublishBefore);
+  };
+
+  FCrowdWorkerResultApplyProxy GenerationProxy;
+  FCrowdWorkerPreparedResultApply GenerationPrepared;
+  FCrowdWorkerResultCommitToken GenerationToken;
+  int32 GenerationTokenBuildCount = 0;
+  TestTrue(TEXT("generation fixture prepares once"),
+    PrepareCandidate(GenerationProxy, GenerationPrepared,
+      GenerationToken, GenerationTokenBuildCount));
+  TestTrue(TEXT("generation expires before final barrier"),
+    GenerationProxy.ResetQuiescent(8, Limits));
+  ExpectNoCommit(TEXT("stale Generation"), GenerationProxy,
+    GenerationPrepared, GenerationToken,
+    ECrowdWorkerResultOwnerCommitResult::RejectedProxyState,
+    []() { return true; });
+
+  FCrowdWorkerResultApplyProxy WatermarkProxy;
+  FCrowdWorkerPreparedResultApply WatermarkPrepared;
+  FCrowdWorkerResultCommitToken WatermarkToken;
+  int32 WatermarkTokenBuildCount = 0;
+  TestTrue(TEXT("watermark fixture prepares once"),
+    PrepareCandidate(WatermarkProxy, WatermarkPrepared,
+      WatermarkToken, WatermarkTokenBuildCount));
+  TestEqual(TEXT("competing owner advances publish and event watermarks"),
+    WatermarkProxy.CommitPrepared(WatermarkPrepared),
+    ECrowdWorkerResultApplyResult::Applied);
+  ExpectNoCommit(TEXT("stale Publish/Event watermarks"), WatermarkProxy,
+    WatermarkPrepared, WatermarkToken,
+    ECrowdWorkerResultOwnerCommitResult::RejectedProxyState,
+    []() { return true; });
+
+  FCrowdWorkerResultApplyProxy StableViewProxy;
+  FCrowdWorkerPreparedResultApply StableViewPrepared;
+  FCrowdWorkerResultCommitToken StableViewToken;
+  int32 StableViewTokenBuildCount = 0;
+  TestTrue(TEXT("Stable View fixture prepares once"),
+    PrepareCandidate(StableViewProxy, StableViewPrepared,
+      StableViewToken, StableViewTokenBuildCount));
+  const FCrowdStableEntityRef ReusedRefs[] = {{1, 10, 2}};
+  TestTrue(TEXT("Stable View changes before final barrier"),
+    StableViewProxy.UpdateCurrentEntities(7, ReusedRefs));
+  ExpectNoCommit(TEXT("stale Stable View"), StableViewProxy,
+    StableViewPrepared, StableViewToken,
+    ECrowdWorkerResultOwnerCommitResult::RejectedProxyState,
+    []() { return true; });
+
+  FCrowdWorkerResultApplyProxy HostTokenProxy;
+  FCrowdWorkerPreparedResultApply HostTokenPrepared;
+  FCrowdWorkerResultCommitToken HostToken;
+  int32 HostTokenBuildCount = 0;
+  TestTrue(TEXT("Host token fixture prepares once"),
+    PrepareCandidate(HostTokenProxy, HostTokenPrepared,
+      HostToken, HostTokenBuildCount));
+  int32 HostFinalValidateCount = 0;
+  ExpectNoCommit(TEXT("stale Host token"), HostTokenProxy,
+    HostTokenPrepared, HostToken,
+    ECrowdWorkerResultOwnerCommitResult::RejectedHostState,
+    [&]()
+    {
+      ++HostFinalValidateCount;
+      return false;
+    });
+  TestEqual(TEXT("stale Host token is checked once"),
+    HostFinalValidateCount, 1);
+
+  FCrowdWorkerResultApplyProxy SuccessProxy;
+  FCrowdWorkerPreparedResultApply SuccessPrepared;
+  FCrowdWorkerResultCommitToken SuccessToken;
+  int32 SuccessTokenBuildCount = 0;
+  TestTrue(TEXT("success fixture prepares"),
+    PrepareCandidate(SuccessProxy, SuccessPrepared,
+      SuccessToken, SuccessTokenBuildCount));
+  int32 SuccessHostValidateCount = 0;
+  int32 SuccessHostApplyCount = 0;
+  int32 SuccessSideEffectCount = 0;
+  bool bSideEffectsObservedCommittedState = false;
+  TestEqual(TEXT("Runtime Owner Barrier commits candidate"),
+    FCrowdWorkerResultOwnerCommitBarrier::Commit(
+      SuccessProxy, SuccessPrepared, SuccessToken,
+      [&]()
+      {
+        ++SuccessHostValidateCount;
+        return true;
+      },
+      [&]() { ++SuccessHostApplyCount; },
+      [&]()
+      {
+        ++SuccessSideEffectCount;
+        bSideEffectsObservedCommittedState =
+          SuccessHostApplyCount == 1
+          && SuccessProxy.GetMetrics().AppliedBatchCount == 1;
+      }),
+    ECrowdWorkerResultOwnerCommitResult::Committed);
+  TestEqual(TEXT("Commit Token is built once"),
+    SuccessTokenBuildCount, 1);
+  TestEqual(TEXT("Host FinalValidate executes once"),
+    SuccessHostValidateCount, 1);
+  TestEqual(TEXT("Host no-fail apply executes once"),
+    SuccessHostApplyCount, 1);
+  TestEqual(TEXT("Host side effects execute once"),
+    SuccessSideEffectCount, 1);
+  TestEqual(TEXT("Proxy commits once"),
+    SuccessProxy.GetMetrics().AppliedBatchCount, uint64{1});
+  TestEqual(TEXT("Ordered Event commits once"),
+    SuccessProxy.GetMetrics().AppliedEventCount, uint64{1});
+  TestTrue(TEXT("side effects follow Host and Proxy state commit"),
+    bSideEffectsObservedCommittedState);
+  const FCrowdWorkerResultApplyDirtyBatch* Dirty =
+    SuccessProxy.PeekDirtyBatch();
+  TestNotNull(TEXT("Dirty Batch publishes after state commit"), Dirty);
+  if (Dirty)
+  {
+    const uint64 PublishSequence = Dirty->PublishSequence;
+    TestTrue(TEXT("Dirty Batch ACK succeeds once"),
+      SuccessProxy.AcknowledgeDirtyBatch(PublishSequence));
+    TestFalse(TEXT("Dirty Batch duplicate ACK is rejected"),
+      SuccessProxy.AcknowledgeDirtyBatch(PublishSequence));
+  }
+  TestEqual(TEXT("Dirty Batch ACK count is exact"),
+    SuccessProxy.GetMetrics().ConsumedDirtyBatchCount, uint64{1});
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdWorkerResultOwnerCommitStructureTest,
+  "MassCrowd.Runtime.WorkerResultApply.OwnerCommitModuleStructure",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdWorkerResultOwnerCommitStructureTest::RunTest(
+  const FString& Parameters)
+{
+  const TSharedPtr<IPlugin> Plugin =
+    IPluginManager::Get().FindPlugin(TEXT("MassCrowdSimulation"));
+  if (!TestTrue(TEXT("MassCrowdSimulation plugin is found"),
+      Plugin.IsValid()))
+    return false;
+  const FString RuntimeRoot =
+    Plugin->GetBaseDir() / TEXT("Source/MassCrowdRuntime");
+  TArray<FString> RuntimeFiles;
+  IFileManager::Get().FindFilesRecursive(
+    RuntimeFiles, *RuntimeRoot, TEXT("*.*"), true, false);
+  bool bRuntimeBoundaryClean = true;
+  for (const FString& File : RuntimeFiles)
+  {
+    FString Source;
+    if (!FFileHelper::LoadFileToString(Source, *File)
+      || Source.Contains(TEXT("Crowd") TEXT("Demo"))
+      || Source.Contains(TEXT("ECrowd") TEXT("DemoScenario"))
+      || Source.Contains(TEXT("Prepared") TEXT("RoundCommit")))
+    {
+      bRuntimeBoundaryClean = false;
+      AddError(FString::Printf(
+        TEXT("MassCrowdRuntime contains a Demo host dependency: %s"),
+        *File));
+    }
+  }
+  TestTrue(TEXT("MassCrowdRuntime has no Demo/Scenario/Round-plan dependency"),
+    bRuntimeBoundaryClean);
+
+  FString Header;
+  FString Source;
+  const FString HeaderPath = RuntimeRoot
+    / TEXT("Public/MassCrowdWorkerResultApply.h");
+  const FString SourcePath = RuntimeRoot
+    / TEXT("Private/MassCrowdWorkerResultApply.cpp");
+  TestTrue(TEXT("Runtime Owner Barrier header is readable"),
+    FFileHelper::LoadFileToString(Header, *HeaderPath));
+  TestTrue(TEXT("Runtime Owner Barrier source is readable"),
+    FFileHelper::LoadFileToString(Source, *SourcePath));
+  const int32 BarrierStart = Source.Find(TEXT(
+    "FCrowdWorkerResultOwnerCommitBarrier::Commit("));
+  const int32 ResetStart = Source.Find(TEXT(
+    "bool FCrowdWorkerResultApplyProxy::ResetQuiescent("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart, BarrierStart);
+  const FString BarrierBlock = BarrierStart != INDEX_NONE
+      && ResetStart > BarrierStart
+    ? Source.Mid(BarrierStart, ResetStart - BarrierStart)
+    : FString();
+  TestTrue(TEXT("Runtime owns generic Token/result/Owner Barrier"),
+    Header.Contains(TEXT("struct MASSCROWDRUNTIME_API FCrowdWorkerResultCommitToken"))
+      && Header.Contains(TEXT("enum class ECrowdWorkerResultOwnerCommitResult"))
+      && Header.Contains(TEXT("class MASSCROWDRUNTIME_API FCrowdWorkerResultOwnerCommitBarrier")));
+  TestFalse(TEXT("Runtime Owner Barrier has no host vocabulary"),
+    BarrierBlock.Contains(TEXT("Demo"))
+      || BarrierBlock.Contains(TEXT("Round"))
+      || BarrierBlock.Contains(TEXT("Scenario"))
+      || BarrierBlock.Contains(TEXT("UObject")));
+  int32 ProxyFinalValidateCallCount = 0;
+  int32 ValidationSearchFrom = 0;
+  while (true)
+  {
+    const int32 Found = BarrierBlock.Find(
+      TEXT("ValidatePreparedState("), ESearchCase::CaseSensitive,
+      ESearchDir::FromStart, ValidationSearchFrom);
+    if (Found == INDEX_NONE)
+      break;
+    ++ProxyFinalValidateCallCount;
+    ValidationSearchFrom = Found + 1;
+  }
+  TestEqual(TEXT("source-symbol gate: Proxy final validation occurs once"),
+    ProxyFinalValidateCallCount, 1);
+  const int32 ValidatedCommitStart = Source.Find(TEXT(
+    "void FCrowdWorkerResultApplyProxy::CommitPreparedValidated("));
+  const int32 ApplyStart = Source.Find(TEXT(
+    "ECrowdWorkerResultApplyResult\nFCrowdWorkerResultApplyProxy::Apply("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    ValidatedCommitStart);
+  const FString ValidatedCommitBlock =
+    ValidatedCommitStart != INDEX_NONE && ApplyStart > ValidatedCommitStart
+      ? Source.Mid(ValidatedCommitStart,
+        ApplyStart - ValidatedCommitStart)
+      : FString();
+  TestFalse(TEXT("source-symbol gate: validated Proxy commit does not revalidate"),
+    ValidatedCommitBlock.Contains(TEXT("ValidatePreparedState("))
+      || ValidatedCommitBlock.Contains(TEXT("CommitPrepared(")));
+  return bRuntimeBoundaryClean;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

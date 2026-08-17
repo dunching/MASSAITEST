@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "MassCrowdWorkerContracts.h"
 #include "MassCrowdWorkerRuntimeV2.h"
+#include "Templates/Function.h"
 
 namespace CrowdWorkerResultFields
 {
@@ -19,6 +20,7 @@ enum class ECrowdWorkerResultApplyResult : uint8
   RejectedBatch,
   RejectedOwnerMask,
   RejectedEventSequence,
+  RejectedPreparedState,
   Violation
 };
 
@@ -92,6 +94,76 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerResultApplyDirtyBatch
   }
 };
 
+struct MASSCROWDRUNTIME_API FCrowdWorkerPreparedResultApply
+{
+  FCrowdWorkerPublishedBatch Batch;
+  TArray<int32> StatePatchStableSlots;
+  uint64 BaseConsumedPublishSequence = 0;
+  uint64 BaseAppliedEventSequence = 0;
+  uint64 BaseStableEntityViewRevision = 0;
+  bool bPrepared = false;
+
+  bool IsValid() const
+  {
+    return bPrepared && Batch.Generation != 0
+      && Batch.PublishSequence != 0
+      && StatePatchStableSlots.Num() == Batch.StatePatches.Num();
+  }
+
+  void Reset()
+  {
+    Batch = {};
+    StatePatchStableSlots.Reset();
+    BaseConsumedPublishSequence = 0;
+    BaseAppliedEventSequence = 0;
+    BaseStableEntityViewRevision = 0;
+    bPrepared = false;
+  }
+};
+
+// Runtime-owned identity of one prepared Worker result candidate. Host-owned
+// revisions and lifecycle tokens remain in the host prepared commit plan and
+// are checked by the host final-validation adapter.
+struct MASSCROWDRUNTIME_API FCrowdWorkerResultCommitToken
+{
+  uint64 Generation = 0;
+  uint64 PublishSequence = 0;
+  uint64 LastAppliedInputSequence = 0;
+  uint64 BaseConsumedPublishSequence = 0;
+  uint64 BaseAppliedEventSequence = 0;
+  uint64 BaseStableEntityViewRevision = 0;
+
+  static FCrowdWorkerResultCommitToken FromPrepared(
+    const FCrowdWorkerPreparedResultApply& Prepared);
+
+  bool Matches(const FCrowdWorkerPreparedResultApply& Prepared) const;
+  bool IsValid() const;
+};
+
+enum class ECrowdWorkerResultOwnerCommitResult : uint8
+{
+  Committed = 0,
+  RejectedCandidate,
+  RejectedProxyState,
+  RejectedHostState
+};
+
+class FCrowdWorkerResultApplyProxy;
+
+// The single Runtime owner barrier for a prepared Worker result. All
+// fallible Runtime and host validation occurs before either no-fail callback.
+class MASSCROWDRUNTIME_API FCrowdWorkerResultOwnerCommitBarrier
+{
+public:
+  static ECrowdWorkerResultOwnerCommitResult Commit(
+    FCrowdWorkerResultApplyProxy& Proxy,
+    const FCrowdWorkerPreparedResultApply& Prepared,
+    const FCrowdWorkerResultCommitToken& CommitToken,
+    TFunctionRef<bool()> HostFinalValidate,
+    TFunctionRef<void()> HostApplyNoFail,
+    TFunctionRef<void()> HostCommitSideEffectsNoFail);
+};
+
 class MASSCROWDRUNTIME_API FCrowdWorkerResultApplyProxy
 {
 public:
@@ -112,6 +184,25 @@ public:
 
   ECrowdWorkerResultApplyResult Apply(
     const FCrowdWorkerPublishedBatch& Batch);
+
+  ECrowdWorkerResultApplyResult Prepare(
+    const FCrowdWorkerPublishedBatch& Batch,
+    FCrowdWorkerPreparedResultApply& OutPrepared);
+
+  ECrowdWorkerResultApplyResult CommitPrepared(
+    const FCrowdWorkerPreparedResultApply& Prepared);
+
+  // Read-only final owner-barrier validation. This deliberately does not
+  // latch a violation: the host may reject a prepared batch because its Mass
+  // lifecycle changed while asynchronous work was in flight.
+  ECrowdWorkerResultApplyResult ValidatePreparedState(
+    const FCrowdWorkerPreparedResultApply& Prepared) const;
+
+  // The host must call ValidatePreparedState immediately before its external
+  // no-fail write. With the GT owner held, no proxy-observable state can
+  // change between that validation and this commit.
+  void CommitPreparedValidated(
+    const FCrowdWorkerPreparedResultApply& Prepared);
 
   const FCrowdWorkerPresentationDiagnosticProxyState* Find(
     const FCrowdStableEntityRef& EntityRef) const;
@@ -142,6 +233,8 @@ public:
 
 private:
   void LatchViolation();
+  ECrowdWorkerResultApplyResult ApplyPreparedNoFail(
+    const FCrowdWorkerPreparedResultApply& Prepared);
   void RebuildPendingDirtyBatch();
 
   FCrowdWorkerContractLimits Limits;

@@ -1,5 +1,13 @@
 # MassCrowd 通用运行与生产复制合同
 
+## 2026-08-15 Worker Result Owner Commit 合同
+
+[COMPUTED][HIGH] Runtime Commit Token 只冻结 Prepared Result 的 Generation、Publish/Input/Event 水位与 Stable Entity View revision。Runtime Barrier 必须先匹配 Token、执行一次 Proxy Final Validate，再调用 Host FinalValidate；任何拒绝都不得调用 Host Apply、Proxy Commit 或 Host side-effect callback。
+
+[COMPUTED][HIGH] Host FinalValidate 成功后进入 no-fail 区：Host state apply → Proxy commit → Host state/Ordered Event/表现/网络 side effects。Dirty Batch ACK 不属于 Barrier 内写入，只能由成功提交后的消费者执行。Host-specific Mass、Target/Resource、Behavior、Round 或 Scenario 类型不得进入 Runtime 公共 API。
+
+[COMPUTED][HIGH] Demo 通过 `FCrowdDemoPreparedRoundCommitPlan` 冻结自己的 PlanRevision、FixedStepIndex、Mass Handle/Lifecycle/Fragment collection 与 Target/Resource Owner/Revision/引用 Token。Runtime 不提供旧 Demo Barrier 的 alias、wrapper 或 fallback。
+
 ## 0. R版合同覆盖
 
 [INFERRED][HIGH] 2026-07-28起，本合同以开放Behavior Provider、通用Boundary Scheduler和Mass权威Projectile为目标；旧B0–B7只保留历史证据，不再要求StateTree业务链、具体Demo Source或动画Root Motion Clip作为框架完成条件。
@@ -85,6 +93,10 @@ Capability / SourceSet Snapshot
 [INFERRED][HIGH] 所有阵营和行为复用同一安全链；Business决定“做什么和目标是什么”，Movement/Safety决定“如何安全执行”。
 
 ## 5. Boundary原子性
+
+[INFERRED][HIGH] 跨 Worker Result Proxy、Mass 代理状态和宿主 side effect 的最终提交由 `MassCrowdRuntime` 通用 Owner Commit Barrier 协调：Prepare 产生不可变候选与 Commit Token，Final Validate 在首次写入前复核 Generation/Sequence/Stable View/Lifecycle 及宿主 Token，随后只调用预验证完成的 no-fail Host Apply；对外事件与 ACK 最后发布。Runtime 不解释 Demo Target、Combat、Round 或 Scenario 语义，宿主通过 Prepared Plan adapter 接入。
+
+[INFERRED][HIGH] 测试宿主不保留旧 Barrier、Transaction 或 rollback 数据结构的兼容路径；替代实现获得业务与故障门证据后，应在同一切片物理删除旧生产者、消费者、类型和绑定旧结构的测试断言。
 
 [INFERRED][HIGH] Boundary固定为一次不可变Gather、显式POD Overlay、依赖图WORK、稳定Merge、完整集合预验证和一次GT Final Apply。
 

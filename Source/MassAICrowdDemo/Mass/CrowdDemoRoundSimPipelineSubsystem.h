@@ -24,6 +24,7 @@
 #include "MassCrowdMovementPipelineWork.h"
 #include "MassCrowdParticlePipelineWork.h"
 #include "MassCrowdTargetRegionWork.h"
+#include "MassCrowdWorkerResultApply.h"
 #include "Mass/CrowdDemoTargetFactKernel.h"
 #include "Mass/CrowdDemoTargetRegionTransportKernel.h"
 #include "Mass/CrowdDemoTargetRegionPlanLifecycleDiagnosticKernel.h"
@@ -33,6 +34,35 @@
 #include "CrowdDemoRoundSimPipelineSubsystem.generated.h"
 
 class FCrowdDemoRoundWorkBatch;
+struct FCrowdDemoPreparedWorkerMassApplyPlan;
+struct FCrowdDemoPreparedTargetResourcePlan;
+
+// Demo-owned payload for the Runtime Owner Commit Barrier. Runtime owns the
+// generic prepared-result token and barrier protocol; this plan owns only the
+// Round host state and validation tokens needed by the adapter callbacks.
+struct FCrowdDemoPreparedRoundCommitPlan
+{
+  FCrowdWorkerPreparedResultApply PreparedProxyResult;
+  TSharedPtr<FCrowdDemoPreparedWorkerMassApplyPlan> PreparedMassPlan;
+  TSharedPtr<FCrowdDemoPreparedTargetResourcePlan>
+    PreparedTargetResourcePlan;
+  FCrowdWorkerResultCommitToken WorkerCommitToken;
+  int32 PlanRevision = INDEX_NONE;
+  int32 FixedStepIndex = INDEX_NONE;
+  double ApplyStartSeconds = 0.0;
+
+  bool IsValid() const
+  {
+    return PreparedProxyResult.IsValid()
+      && PreparedMassPlan.IsValid()
+      && PreparedTargetResourcePlan.IsValid()
+      && WorkerCommitToken.Matches(PreparedProxyResult)
+      && PlanRevision != INDEX_NONE
+      && FixedStepIndex != INDEX_NONE
+      && FMath::IsFinite(ApplyStartSeconds)
+      && ApplyStartSeconds > 0.0;
+  }
+};
 
 // Demo-local scheduling vocabulary retained only until the remaining Round
 // work graph is folded into Worker Input Sync / Worker Result Apply. These
@@ -336,6 +366,102 @@ struct FCrowdDemoTargetRegionCapabilityCohortRuntime
   int32 TargetEngagementReleaseCount = 0;
   int32 TargetEngagementSuppressedRetreatCount = 0;
   bool bRoundValid = true;
+};
+
+struct FCrowdDemoTargetResourceCommitToken
+{
+  uint64 OwnerId = 0;
+  uint64 OwnerRevision = 0;
+  uint64 Generation = 0;
+  uint64 BaseStateHash = 0;
+  uint64 PreparedStateHash = 0;
+  uint64 ResourceId = 0;
+  int32 ResourceRevision = INDEX_NONE;
+  uint32 ResourceBuildHash = 0;
+  int32 ResourceRebuildCount = INDEX_NONE;
+  int32 PlanRevision = INDEX_NONE;
+  int32 FixedStepIndex = INDEX_NONE;
+  int32 TargetRevision = INDEX_NONE;
+
+  bool IsValid() const
+  {
+    return OwnerId != 0 && OwnerRevision != 0 && Generation != 0
+      && BaseStateHash != 0 && PreparedStateHash != 0
+      && ResourceId != 0 && ResourceBuildHash != 0
+      && ResourceRebuildCount != INDEX_NONE
+      && PlanRevision != INDEX_NONE && FixedStepIndex != INDEX_NONE;
+  }
+
+  bool Matches(
+    const uint64 InOwnerId,
+    const uint64 InOwnerRevision,
+    const uint64 InGeneration,
+    const uint64 InBaseStateHash,
+    const uint64 InResourceId,
+    const int32 InResourceRevision,
+    const uint32 InResourceBuildHash,
+    const int32 InResourceRebuildCount,
+    const int32 InPlanRevision,
+    const int32 InFixedStepIndex,
+    const int32 InTargetRevision) const
+  {
+    return IsValid() && OwnerId == InOwnerId
+      && OwnerRevision == InOwnerRevision && Generation == InGeneration
+      && BaseStateHash == InBaseStateHash
+      && ResourceId == InResourceId
+      && ResourceRevision == InResourceRevision
+      && ResourceBuildHash == InResourceBuildHash
+      && ResourceRebuildCount == InResourceRebuildCount
+      && PlanRevision == InPlanRevision
+      && FixedStepIndex == InFixedStepIndex
+      && TargetRevision == InTargetRevision;
+  }
+};
+
+struct FCrowdDemoTargetResourcePrepareValidationInput
+{
+  uint64 OwnerId = 0;
+  uint64 ResourceRevision = 0;
+  bool bResourceReferenceValid = false;
+  TArray<uint64> SlotKeys;
+  TArray<uint64> EntityKeys;
+  TArray<uint64> EntityFieldKeys;
+};
+
+struct FCrowdDemoPreparedTargetResourceCohortApply
+{
+  int32 DestinationIndex = INDEX_NONE;
+  uint32 CohortKey = 0;
+  uint64 BaseStateHash = 0;
+  FCrowdDemoTargetRegionCapabilityCohortRuntime PreparedRuntime;
+};
+
+struct FCrowdDemoPreparedTargetResourceHomogeneousApply
+{
+  FCrowdDemoTargetPolarTopology Topology;
+  FCrowdDemoTargetPolarTopologySummary TopologySummary;
+  FCrowdDemoTargetRegionDemandResult Demand;
+  FCrowdDemoTargetRegionFlowPlan Plan;
+  FCrowdDemoTargetRegionQuotaExecutionState QuotaExecution;
+  FCrowdDemoTargetRegionPlanValidationResult Validation;
+  TArray<FCrowdDemoTargetRegionGuidanceResult> Guidance;
+  FCrowdDemoTargetRegionGuidanceSummary GuidanceSummary;
+  float SolverMilliseconds = 0.0f;
+  int32 RebuildReason = 0;
+  bool bSet = false;
+};
+
+struct FCrowdDemoPreparedTargetResourcePlan
+{
+  FCrowdDemoTargetResourceCommitToken CommitToken;
+  TArray<FCrowdDemoPreparedTargetResourceCohortApply> CohortApplies;
+  FCrowdDemoPreparedTargetResourceHomogeneousApply HomogeneousApply;
+  int32 BuildCount = 0;
+  int32 ApplyCount = 0;
+  bool bValid = false;
+
+  static bool ValidatePrepareInput(
+    const FCrowdDemoTargetResourcePrepareValidationInput& Input);
 };
 
 struct FCrowdDemoTargetRegionCapabilityCohortRollbackState
@@ -676,6 +802,34 @@ public:
     return ++WorkerResultConsumerFrameSequence;
   }
 
+  bool QueuePreparedRoundCommitPlan(
+    FCrowdDemoPreparedRoundCommitPlan&& Pending)
+  {
+    if (PreparedRoundCommitPlan.IsSet()
+      || !Pending.IsValid())
+      return false;
+    PreparedRoundCommitPlan.Emplace(MoveTemp(Pending));
+    return true;
+  }
+
+  FCrowdDemoPreparedRoundCommitPlan* PeekPreparedRoundCommitPlan()
+  {
+    return PreparedRoundCommitPlan.IsSet()
+      ? &PreparedRoundCommitPlan.GetValue() : nullptr;
+  }
+
+  const FCrowdDemoPreparedRoundCommitPlan*
+    PeekPreparedRoundCommitPlan() const
+  {
+    return PreparedRoundCommitPlan.IsSet()
+      ? &PreparedRoundCommitPlan.GetValue() : nullptr;
+  }
+
+  void ClearPreparedRoundCommitPlan()
+  {
+    PreparedRoundCommitPlan.Reset();
+  }
+
   void QueueBootstrap(const FCrowdDemoRoundBootstrapPacket& Packet);
   void QueueRoundPlan(const FCrowdDemoRoundPlanPacket& Packet);
   void QueueRoundResult(const FCrowdDemoRoundResultPacket& Packet);
@@ -767,6 +921,27 @@ public:
     GetCurrentStepMassDirtyEntityRefs() const
   { return CurrentStepMassDirtyEntityRefs; }
   void RecordDirtyMassApply(int32 EntityCount);
+  bool MarkCurrentStepWorkerDirtyMassApplied(
+    uint64 PublishSequence,
+    int32 EntityCount)
+  {
+    if (!bStepInProgress
+      || CurrentStepMassAccessCounts.CommitWriteCount != 1
+      || bCurrentStepWorkerDirtyMassApplied
+      || PublishSequence == 0
+      || EntityCount < 0)
+      return false;
+    bCurrentStepWorkerDirtyMassApplied = true;
+    CurrentStepWorkerDirtyMassPublishSequence = PublishSequence;
+    CurrentStepWorkerDirtyMassEntityCount = EntityCount;
+    return true;
+  }
+  bool IsCurrentStepWorkerDirtyMassApplied() const
+  { return bCurrentStepWorkerDirtyMassApplied; }
+  uint64 GetCurrentStepWorkerDirtyMassPublishSequence() const
+  { return CurrentStepWorkerDirtyMassPublishSequence; }
+  int32 GetCurrentStepWorkerDirtyMassEntityCount() const
+  { return CurrentStepWorkerDirtyMassEntityCount; }
   bool IsBoundarySnapshotCurrent() const
   {
     return BoundarySnapshot.bValid
@@ -815,6 +990,8 @@ public:
   // not submit safely. Ineligible frames retain the prepared-boundary path.
   bool TrySubmitWorkerV2ClockIntentEarly();
   ECrowdBoundaryPollResult TryPrepareRoundApply();
+  int32 GetLastBoundaryPrepareCheckpoint() const
+  { return LastBoundaryPrepareCheckpoint; }
   ECrowdBoundaryTransactionState GetRoundWorkState() const;
   bool ConsumeBoundaryFacingWork(
     FCrowdMassFacingFinalizeWorkOutput& OutOutput,
@@ -835,7 +1012,11 @@ public:
   }
   bool ValidateRoundApplyPlan(
     TConstArrayView<FCrowdMassCommitTarget> ResolvedTargets);
-  void ApplyPreparedBoundaryResourcePatches();
+  bool PreparePendingTargetResourcePlan();
+  bool FinalValidatePreparedTargetResourcePlan(
+    const FCrowdDemoPreparedTargetResourcePlan& Plan) const;
+  void ApplyPreparedTargetResourcePlanNoFail(
+    FCrowdDemoPreparedTargetResourcePlan& Plan);
   bool MarkRoundApplyCommitted(double CommitMilliseconds);
   const FCrowdBoundaryOrchestratorResult& GetLastBoundaryTransactionResult()
     const
@@ -1332,6 +1513,7 @@ private:
   bool DrainWorkerV2MovementShadowComparisons();
   void ResetBoundaryDerivedStateAfterPublish();
   uint64 WorkerResultConsumerFrameSequence = 0;
+  TOptional<FCrowdDemoPreparedRoundCommitPlan> PreparedRoundCommitPlan;
   uint64 WorkerProxyGatherBypassCount = 0;
   uint64 WorkerProxyGatherFallbackCount = 0;
   uint64 WorkerProxyInPlaceRefreshCount = 0;
@@ -1341,6 +1523,9 @@ private:
   uint64 WorkerProxySnapshotBaselineHash = 0;
   bool bCurrentStepUsedWorkerProxySnapshot = false;
   bool bCurrentStepUsedBootstrapBoundarySnapshot = false;
+  bool bCurrentStepWorkerDirtyMassApplied = false;
+  uint64 CurrentStepWorkerDirtyMassPublishSequence = 0;
+  int32 CurrentStepWorkerDirtyMassEntityCount = 0;
   bool bBootstrapBoundarySnapshotPending = false;
   int32 LastBootstrapMassReadPlanRevision = INDEX_NONE;
   uint64 BootstrapMassReadCount = 0;
@@ -1357,6 +1542,7 @@ private:
   FCrowdDemoRoundCheckpointFrameMetrics LastCorrectionMetrics;
   FCrowdMassBoundarySnapshot BoundarySnapshot;
   int32 MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
+  int32 LastBoundaryPrepareCheckpoint = 0;
   TArray<FCrowdDemoRoundBoundaryFormationFact> BoundaryFormationFacts;
   TArray<FCrowdDemoRoundBoundaryFacingFact> BoundaryFacingFacts;
   TArray<FCrowdDemoRoundBoundaryBusinessFact> BoundaryBusinessFacts;
@@ -1543,6 +1729,7 @@ private:
   uint64 PlanApplyBoundarySequence = 0;
   uint64 LastClaimedPlanApplyBoundarySequence = MAX_uint64;
   uint64 BoundaryGeneration = 1;
+  uint64 TargetResourceOwnerRevision = 1;
   uint64 NextWorkerTaskSequence = 1;
   uint64 NextWorkerV2MovementControlRevision = 1;
   uint64 LastWorkerV2MovementControlGeneration = 0;
@@ -1553,9 +1740,12 @@ private:
   uint64 NextWorkerV2TargetObjectiveRevision = 1;
   uint64 NextWorkerV2ProjectileControlRevision = 1;
   uint64 LastWorkerV2TargetControlSemanticHash = 0;
+  uint64 LastWorkerV2TargetObjectiveSemanticHash = 0;
   uint64 LastWorkerV2ProjectileControlSemanticHash = 0;
   uint64 WorkerV2TargetControlPublishCount = 0;
   uint64 WorkerV2TargetControlReuseCount = 0;
+  uint64 WorkerV2TargetObjectivePublishCount = 0;
+  uint64 WorkerV2TargetObjectiveReuseCount = 0;
   uint64 WorkerV2ProjectileControlPublishCount = 0;
   uint64 WorkerV2ProjectileControlReuseCount = 0;
   uint64 WorkerV2EarlyClockIntentCount = 0;

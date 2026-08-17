@@ -1,12 +1,16 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "HAL/FileManager.h"
 
 #include "Mass/CrowdDemoCombatStateKernel.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Mass/CrowdDemoWorkerCombatExtension.h"
 #include "MassCrowdWorkerCombatState.h"
+#include "MassCrowdWorkerContracts.h"
+#include "MassCrowdWorkerExchange.h"
+#include "MassCrowdWorkerResultApply.h"
 #include "MassEntityTemplate.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -43,6 +47,83 @@ namespace
     Hit.VerticalImpulseCmps = Vertical;
     Hit.HitFlashProfileKey = 7;
     return Hit;
+  }
+
+  FCrowdWorkerPayload MakeOwnerBarrierPayload(
+    const uint32 Value,
+    const uint32 SchemaId)
+  {
+    FCrowdWorkerPayload Payload;
+    Payload.SchemaId = SchemaId;
+    Payload.SchemaVersion = 1;
+    Payload.Bytes.SetNumUninitialized(sizeof(Value));
+    FMemory::Memcpy(Payload.Bytes.GetData(), &Value, sizeof(Value));
+    Payload.RecalculateStableHash();
+    return Payload;
+  }
+
+  FCrowdWorkerContractLimits MakeOwnerBarrierLimits()
+  {
+    FCrowdWorkerContractLimits Limits;
+    Limits.MaxPayloadBytes = 64;
+    Limits.MaxInputRecordsPerBatch = 8;
+    Limits.MaxStatePatchesPerSlot = 8;
+    Limits.MaxPendingOrderedEvents = 8;
+    return Limits;
+  }
+
+  bool BuildOwnerBarrierBatch(FCrowdWorkerPublishedBatch& OutBatch)
+  {
+    const FCrowdWorkerContractLimits Limits = MakeOwnerBarrierLimits();
+    FCrowdWorkerPublishedExchange Exchange;
+    if (!Exchange.ResetQuiescent(7, Limits))
+      return false;
+    FCrowdWorkerStatePatch Patch;
+    Patch.EntityRef = {1, 10, 1};
+    Patch.Generation = 7;
+    Patch.WorkerEpoch = 1;
+    Patch.SourceInputSequence = 1;
+    Patch.DirtyMask = CrowdWorkerRuntimeV2FieldMask(
+      ECrowdWorkerField::Movement);
+    Patch.StateFieldId =
+      1 + static_cast<uint16>(ECrowdWorkerField::Movement);
+    Patch.State.StateRevision = 1;
+    Patch.State.Payload = MakeOwnerBarrierPayload(101, 4001);
+    Patch.RecalculateStableHash();
+    if (Exchange.AppendStatePatch(Patch)
+        != ECrowdWorkerAppendResult::Appended)
+      return false;
+
+    FCrowdWorkerGameplayEvent Event;
+    Event.EntityRef = Patch.EntityRef;
+    Event.Generation = 7;
+    Event.WorkerEpoch = 1;
+    Event.SourceInputSequence = 1;
+    Event.EventSequence = 1;
+    Event.EventId = 5001;
+    Event.Payload = MakeOwnerBarrierPayload(202, 5001);
+    Event.RecalculateStableHash();
+    if (Exchange.AppendOrderedEvent(Event)
+        != ECrowdWorkerAppendResult::Appended)
+      return false;
+
+    FCrowdWorkerPublishMetadata Metadata;
+    Metadata.Generation = 7;
+    Metadata.PublishSequence = 1;
+    Metadata.MinWorkerEpoch = 1;
+    Metadata.MaxWorkerEpoch = 1;
+    Metadata.LastAppliedInputSequence = 1;
+    Metadata.PublishedSimulationTimeSeconds = 1.0 / 30.0;
+    if (Exchange.TryPublishBuildingBatch(Metadata)
+        != ECrowdWorkerPublishResult::Published)
+      return false;
+    const FCrowdWorkerPublishedBatch* Published = nullptr;
+    if (Exchange.TryExchangePublishedBatch(7, 1, Published)
+        != ECrowdWorkerExchangeResult::Exchanged
+      || !Published)
+      return false;
+    OutBatch = *Published;
+    return true;
   }
 }
 
@@ -920,6 +1001,336 @@ bool FCrowdDemoCapabilityArchetypeCompositionTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoPreparedRoundCommitAdapterAtomicityTest,
+  "CrowdDemo.WorkerV2.WA8R.PreparedRoundCommitAdapterAtomicity",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoPreparedRoundCommitAdapterAtomicityTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdWorkerPublishedBatch Batch;
+  TestTrue(TEXT("owner barrier fixture builds"),
+    BuildOwnerBarrierBatch(Batch));
+  if (Batch.Generation == 0 || Batch.PublishSequence == 0)
+    return false;
+  const FCrowdWorkerContractLimits Limits = MakeOwnerBarrierLimits();
+  const FCrowdStableEntityRef CurrentRefs[] = {{1, 10, 1}};
+  auto PrepareProxy = [&](FCrowdWorkerResultApplyProxy& Proxy,
+      FCrowdWorkerPreparedResultApply& Prepared)
+  {
+    return Proxy.ResetQuiescent(7, Limits)
+      && Proxy.UpdateCurrentEntities(7, CurrentRefs)
+      && Proxy.Prepare(Batch, Prepared)
+        == ECrowdWorkerResultApplyResult::Applied;
+  };
+
+  FCrowdWorkerResultApplyProxy LifecycleProxy;
+  FCrowdWorkerPreparedResultApply LifecyclePrepared;
+  TestTrue(TEXT("lifecycle fault fixture prepares"),
+    PrepareProxy(LifecycleProxy, LifecyclePrepared));
+  const FCrowdWorkerResultCommitToken LifecycleToken =
+    FCrowdWorkerResultCommitToken::FromPrepared(LifecyclePrepared);
+  const uint64 LifecyclePublishWatermark = LifecycleProxy.GetMetrics()
+    .LastConsumedPublishSequence;
+  const uint64 LifecycleEventWatermark = LifecycleProxy.GetMetrics()
+    .LastAppliedEventSequence;
+  const FCrowdStableEntityRef ReusedRefs[] = {{1, 10, 2}};
+  TestTrue(TEXT("lifecycle changes before final barrier"),
+    LifecycleProxy.UpdateCurrentEntities(7, ReusedRefs));
+  int32 LifecycleMassApplyCount = 0;
+  int32 LifecycleSideEffectCount = 0;
+  TestEqual(TEXT("final barrier rejects stale lifecycle view"),
+    FCrowdWorkerResultOwnerCommitBarrier::Commit(
+      LifecycleProxy, LifecyclePrepared, LifecycleToken,
+      []() { return true; },
+      [&]() { ++LifecycleMassApplyCount; },
+      [&]() { ++LifecycleSideEffectCount; }),
+    ECrowdWorkerResultOwnerCommitResult::RejectedProxyState);
+  TestEqual(TEXT("lifecycle rejection does not write Mass"),
+    LifecycleMassApplyCount, 0);
+  TestEqual(TEXT("lifecycle rejection does not publish side effects"),
+    LifecycleSideEffectCount, 0);
+  TestEqual(TEXT("lifecycle rejection preserves publish watermark"),
+    LifecycleProxy.GetMetrics().LastConsumedPublishSequence,
+    LifecyclePublishWatermark);
+  TestEqual(TEXT("lifecycle rejection preserves event watermark"),
+    LifecycleProxy.GetMetrics().LastAppliedEventSequence,
+    LifecycleEventWatermark);
+  TestNull(TEXT("lifecycle rejection does not publish Dirty Batch"),
+    LifecycleProxy.PeekDirtyBatch());
+
+  FCrowdWorkerResultApplyProxy TokenProxy;
+  FCrowdWorkerPreparedResultApply TokenPrepared;
+  TestTrue(TEXT("stale token fixture prepares"),
+    PrepareProxy(TokenProxy, TokenPrepared));
+  FCrowdWorkerResultCommitToken StaleToken =
+    FCrowdWorkerResultCommitToken::FromPrepared(TokenPrepared);
+  ++StaleToken.BaseStableEntityViewRevision;
+  int32 TokenMassApplyCount = 0;
+  int32 TokenSideEffectCount = 0;
+  TestEqual(TEXT("stale Commit Token is rejected completely"),
+    FCrowdWorkerResultOwnerCommitBarrier::Commit(
+      TokenProxy, TokenPrepared, StaleToken,
+      []() { return true; },
+      [&]() { ++TokenMassApplyCount; },
+      [&]() { ++TokenSideEffectCount; }),
+    ECrowdWorkerResultOwnerCommitResult::RejectedCandidate);
+  TestEqual(TEXT("stale token does not write Mass"),
+    TokenMassApplyCount, 0);
+  TestEqual(TEXT("stale token does not publish side effects"),
+    TokenSideEffectCount, 0);
+  TestEqual(TEXT("stale token does not advance Proxy"),
+    TokenProxy.GetMetrics().AppliedBatchCount, uint64{0});
+
+  FCrowdWorkerResultApplyProxy FragmentProxy;
+  FCrowdWorkerPreparedResultApply FragmentPrepared;
+  TestTrue(TEXT("missing fragment fixture prepares"),
+    PrepareProxy(FragmentProxy, FragmentPrepared));
+  const FCrowdWorkerResultCommitToken FragmentToken =
+    FCrowdWorkerResultCommitToken::FromPrepared(FragmentPrepared);
+  int32 FragmentMassApplyCount = 0;
+  int32 FragmentSideEffectCount = 0;
+  TestEqual(TEXT("final fragment validation rejects before commit"),
+    FCrowdWorkerResultOwnerCommitBarrier::Commit(
+      FragmentProxy, FragmentPrepared, FragmentToken,
+      []() { return false; },
+      [&]() { ++FragmentMassApplyCount; },
+      [&]() { ++FragmentSideEffectCount; }),
+    ECrowdWorkerResultOwnerCommitResult::RejectedHostState);
+  TestEqual(TEXT("fragment rejection does not write Mass"),
+    FragmentMassApplyCount, 0);
+  TestEqual(TEXT("fragment rejection does not commit Proxy"),
+    FragmentProxy.GetMetrics().AppliedBatchCount, uint64{0});
+  TestEqual(TEXT("fragment rejection does not publish side effects"),
+    FragmentSideEffectCount, 0);
+
+  FCrowdWorkerResultApplyProxy InvalidOwnerProxy;
+  TestTrue(TEXT("invalid owner proxy initializes"),
+    InvalidOwnerProxy.ResetQuiescent(7, Limits)
+      && InvalidOwnerProxy.UpdateCurrentEntities(7, CurrentRefs));
+  FCrowdWorkerPublishedBatch InvalidOwnerBatch = Batch;
+  InvalidOwnerBatch.StatePatches[0].DirtyMask = 1ull << 63;
+  InvalidOwnerBatch.StatePatches[0].RecalculateStableHash();
+  InvalidOwnerBatch.RecalculateStableHash();
+  FCrowdWorkerPreparedResultApply InvalidOwnerPrepared;
+  TestEqual(TEXT("illegal field owner fails during Prepare"),
+    InvalidOwnerProxy.Prepare(InvalidOwnerBatch, InvalidOwnerPrepared),
+    ECrowdWorkerResultApplyResult::RejectedOwnerMask);
+  TestFalse(TEXT("illegal owner never creates a commit candidate"),
+    InvalidOwnerPrepared.IsValid());
+
+  FCrowdWorkerResultApplyProxy DuplicateFieldProxy;
+  TestTrue(TEXT("duplicate field proxy initializes"),
+    DuplicateFieldProxy.ResetQuiescent(7, Limits)
+      && DuplicateFieldProxy.UpdateCurrentEntities(7, CurrentRefs));
+  FCrowdWorkerPublishedBatch DuplicateFieldBatch = Batch;
+  const FCrowdWorkerStatePatch DuplicatePatch =
+    DuplicateFieldBatch.StatePatches[0];
+  DuplicateFieldBatch.StatePatches.Add(DuplicatePatch);
+  DuplicateFieldBatch.RecalculateStableHash();
+  FCrowdWorkerPreparedResultApply DuplicateFieldPrepared;
+  const ECrowdWorkerResultApplyResult DuplicateFieldResult =
+    DuplicateFieldProxy.Prepare(
+      DuplicateFieldBatch, DuplicateFieldPrepared);
+  TestTrue(TEXT("duplicate entity-field fails during Prepare"),
+    DuplicateFieldResult != ECrowdWorkerResultApplyResult::Applied
+      && DuplicateFieldResult
+        != ECrowdWorkerResultApplyResult::AppliedEmpty);
+  TestFalse(TEXT("duplicate entity-field never reaches final barrier"),
+    DuplicateFieldPrepared.IsValid());
+
+  FCrowdDemoTargetResourcePrepareValidationInput TargetPrepareInput;
+  TargetPrepareInput.OwnerId = 17;
+  TargetPrepareInput.ResourceRevision = 5;
+  TargetPrepareInput.bResourceReferenceValid = true;
+  TargetPrepareInput.SlotKeys = {11, 12};
+  TargetPrepareInput.EntityKeys = {101, 102};
+  TargetPrepareInput.EntityFieldKeys = {1001, 1002};
+  TestTrue(TEXT("valid Target/Resource descriptors prepare"),
+    FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
+      TargetPrepareInput));
+  auto RejectTargetPrepare = [this, &TargetPrepareInput](
+      const TCHAR* Name,
+      TFunctionRef<void(FCrowdDemoTargetResourcePrepareValidationInput&)>
+        InjectFault)
+  {
+    FCrowdDemoTargetResourcePrepareValidationInput Invalid =
+      TargetPrepareInput;
+    InjectFault(Invalid);
+    int32 FinalBarrierCount = 0;
+    const bool bPrepared =
+      FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(Invalid);
+    if (bPrepared)
+      ++FinalBarrierCount;
+    TestFalse(Name, bPrepared);
+    TestEqual(FString::Printf(TEXT("%s never reaches Final Barrier"), Name),
+      FinalBarrierCount, 0);
+  };
+  RejectTargetPrepare(TEXT("illegal Target/Resource reference fails Prepare"),
+    [](auto& Input) { Input.bResourceReferenceValid = false; });
+  RejectTargetPrepare(TEXT("missing Target/Resource Owner fails Prepare"),
+    [](auto& Input) { Input.OwnerId = 0; });
+  RejectTargetPrepare(TEXT("duplicate Target/Resource Slot fails Prepare"),
+    [](auto& Input) { Input.SlotKeys[1] = Input.SlotKeys[0]; });
+  RejectTargetPrepare(TEXT("duplicate Target/Resource entity fails Prepare"),
+    [](auto& Input) { Input.EntityKeys[1] = Input.EntityKeys[0]; });
+  RejectTargetPrepare(TEXT("duplicate Target/Resource field fails Prepare"),
+    [](auto& Input)
+    {
+      Input.EntityFieldKeys[1] = Input.EntityFieldKeys[0];
+    });
+
+  FCrowdWorkerResultApplyProxy TargetRevisionProxy;
+  FCrowdWorkerPreparedResultApply TargetRevisionPrepared;
+  TestTrue(TEXT("Target revision fault fixture prepares"),
+    PrepareProxy(TargetRevisionProxy, TargetRevisionPrepared));
+  const FCrowdWorkerResultCommitToken TargetRevisionWorkerToken =
+    FCrowdWorkerResultCommitToken::FromPrepared(TargetRevisionPrepared);
+  FCrowdDemoTargetResourceCommitToken TargetRevisionToken;
+  TargetRevisionToken.OwnerId = 17;
+  TargetRevisionToken.OwnerRevision = 5;
+  TargetRevisionToken.Generation = 7;
+  TargetRevisionToken.BaseStateHash = 19;
+  TargetRevisionToken.PreparedStateHash = 23;
+  TargetRevisionToken.ResourceId = 29;
+  TargetRevisionToken.ResourceRevision = 31;
+  TargetRevisionToken.ResourceBuildHash = 37;
+  TargetRevisionToken.ResourceRebuildCount = 41;
+  TargetRevisionToken.PlanRevision = 3;
+  TargetRevisionToken.FixedStepIndex = 11;
+  TargetRevisionToken.TargetRevision = 13;
+  int32 TargetRevisionMassCount = 0;
+  int32 TargetRevisionSideEffectCount = 0;
+  int32 TargetRevisionPresentationCount = 0;
+  int32 TargetRevisionNetworkCount = 0;
+  int32 TargetRevisionAckCount = 0;
+  TestEqual(TEXT("expired Target/Resource revision rejects full commit"),
+    FCrowdWorkerResultOwnerCommitBarrier::Commit(
+      TargetRevisionProxy, TargetRevisionPrepared,
+      TargetRevisionWorkerToken,
+      [&]()
+      {
+        return TargetRevisionToken.Matches(
+          17, 5, 7, 19, 29, 32, 37, 41, 3, 11, 13);
+      },
+      [&]() { ++TargetRevisionMassCount; },
+      [&]()
+      {
+        ++TargetRevisionSideEffectCount;
+        ++TargetRevisionPresentationCount;
+        ++TargetRevisionNetworkCount;
+        ++TargetRevisionAckCount;
+      }),
+    ECrowdWorkerResultOwnerCommitResult::RejectedHostState);
+  TestEqual(TEXT("expired Target/Resource revision does not write Mass"),
+    TargetRevisionMassCount, 0);
+  TestEqual(TEXT("expired Target/Resource revision does not commit Proxy"),
+    TargetRevisionProxy.GetMetrics().AppliedBatchCount, uint64{0});
+  TestEqual(TEXT("expired Target/Resource revision changes no Target/Resource"),
+    TargetRevisionSideEffectCount, 0);
+  TestEqual(TEXT("expired Target/Resource revision publishes no presentation"),
+    TargetRevisionPresentationCount, 0);
+  TestEqual(TEXT("expired Target/Resource revision publishes no network"),
+    TargetRevisionNetworkCount, 0);
+  TestEqual(TEXT("expired Target/Resource revision ACKs no Dirty Batch"),
+    TargetRevisionAckCount, 0);
+  TestNull(TEXT("expired Target/Resource revision publishes no Dirty Batch"),
+    TargetRevisionProxy.PeekDirtyBatch());
+  TestEqual(TEXT("expired Target/Resource revision preserves event watermark"),
+    TargetRevisionProxy.GetMetrics().LastAppliedEventSequence, uint64{0});
+
+  FCrowdWorkerResultApplyProxy TargetOwnerProxy;
+  FCrowdWorkerPreparedResultApply TargetOwnerPrepared;
+  TestTrue(TEXT("Target owner fault fixture prepares"),
+    PrepareProxy(TargetOwnerProxy, TargetOwnerPrepared));
+  const FCrowdWorkerResultCommitToken TargetOwnerWorkerToken =
+    FCrowdWorkerResultCommitToken::FromPrepared(TargetOwnerPrepared);
+  int32 TargetOwnerMassCount = 0;
+  int32 TargetOwnerSideEffectCount = 0;
+  TestEqual(TEXT("invalid Target/Resource Owner rejects full commit"),
+    FCrowdWorkerResultOwnerCommitBarrier::Commit(
+      TargetOwnerProxy, TargetOwnerPrepared, TargetOwnerWorkerToken,
+      [&]()
+      {
+        return TargetRevisionToken.Matches(
+          18, 5, 7, 19, 29, 31, 37, 41, 3, 11, 13);
+      },
+      [&]() { ++TargetOwnerMassCount; },
+      [&]() { ++TargetOwnerSideEffectCount; }),
+    ECrowdWorkerResultOwnerCommitResult::RejectedHostState);
+  TestEqual(TEXT("invalid Target Owner does not write Mass"),
+    TargetOwnerMassCount, 0);
+  TestEqual(TEXT("invalid Target Owner does not commit Proxy"),
+    TargetOwnerProxy.GetMetrics().AppliedBatchCount, uint64{0});
+  TestEqual(TEXT("invalid Target Owner does not change Target/Resource"),
+    TargetOwnerSideEffectCount, 0);
+
+  FCrowdWorkerResultApplyProxy SuccessProxy;
+  FCrowdWorkerPreparedResultApply SuccessPrepared;
+  TestTrue(TEXT("success fixture prepares"),
+    PrepareProxy(SuccessProxy, SuccessPrepared));
+  const FCrowdWorkerResultCommitToken SuccessToken =
+    FCrowdWorkerResultCommitToken::FromPrepared(SuccessPrepared);
+  const int32 PreparedMassPlanBuildCount = 1;
+  int32 PreparedMassPlanApplyCount = 0;
+  const int32 PreparedTargetResourcePlanBuildCount = 1;
+  int32 PreparedTargetResourcePlanApplyCount = 0;
+  int32 SuccessSideEffectCount = 0;
+  bool bProxyCommittedBeforeSideEffects = false;
+  TestEqual(TEXT("owner barrier commits success path"),
+    FCrowdWorkerResultOwnerCommitBarrier::Commit(
+      SuccessProxy, SuccessPrepared, SuccessToken,
+       [&]()
+       {
+         return PreparedMassPlanBuildCount == 1
+           && PreparedTargetResourcePlanBuildCount == 1;
+       },
+      [&]() { ++PreparedMassPlanApplyCount; },
+      [&]()
+      {
+         bProxyCommittedBeforeSideEffects =
+           SuccessProxy.GetMetrics().AppliedBatchCount == 1;
+         ++PreparedTargetResourcePlanApplyCount;
+         ++SuccessSideEffectCount;
+      }),
+    ECrowdWorkerResultOwnerCommitResult::Committed);
+  TestEqual(TEXT("Prepared Mass Plan is built once"),
+    PreparedMassPlanBuildCount, 1);
+  TestEqual(TEXT("Prepared Mass Plan is applied once"),
+    PreparedMassPlanApplyCount, 1);
+  TestEqual(TEXT("Prepared Target/Resource Plan is built once"),
+    PreparedTargetResourcePlanBuildCount, 1);
+  TestEqual(TEXT("Prepared Target/Resource Plan is applied once"),
+    PreparedTargetResourcePlanApplyCount, 1);
+  TestEqual(TEXT("Proxy commits once"),
+    SuccessProxy.GetMetrics().AppliedBatchCount, uint64{1});
+  TestTrue(TEXT("side effects observe committed Mass and Proxy"),
+    bProxyCommittedBeforeSideEffects
+      && PreparedMassPlanApplyCount == 1);
+  TestEqual(TEXT("side effects publish once"),
+    SuccessSideEffectCount, 1);
+  TestEqual(TEXT("ordered event applies once"),
+    SuccessProxy.GetMetrics().AppliedEventCount, uint64{1});
+  TestEqual(TEXT("ordered event watermark is exact"),
+    SuccessProxy.GetMetrics().LastAppliedEventSequence, uint64{1});
+  const FCrowdWorkerResultApplyDirtyBatch* DirtyBatch =
+    SuccessProxy.PeekDirtyBatch();
+  TestNotNull(TEXT("successful Proxy commit publishes Dirty Batch"),
+    DirtyBatch);
+  if (DirtyBatch)
+  {
+    const uint64 DirtyPublishSequence = DirtyBatch->PublishSequence;
+    TestTrue(TEXT("Dirty Batch ACK succeeds once"),
+      SuccessProxy.AcknowledgeDirtyBatch(DirtyPublishSequence));
+    TestFalse(TEXT("Dirty Batch duplicate ACK is rejected"),
+      SuccessProxy.AcknowledgeDirtyBatch(DirtyPublishSequence));
+  }
+  TestEqual(TEXT("Dirty Batch ACK count is one"),
+    SuccessProxy.GetMetrics().ConsumedDirtyBatchCount, uint64{1});
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoPostFinalizeMinimalQueryStructureTest,
   "CrowdDemo.Architecture.PostFinalizeMinimalQuery",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -957,9 +1368,18 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
     ExecuteStart, CommitQueryStart - ExecuteStart);
   TestFalse(TEXT("post-finalize execute does not traverse a Mass query"),
     PostFinalizeBlock.Contains(TEXT("EntityQuery.")));
-  TestTrue(TEXT("post-finalize consumes the retained worker commit output"),
-    PostFinalizeBlock.Contains(
-      TEXT("GetPreparedMovementBoundaryCommit()")));
+  TestTrue(TEXT("post-finalize consumes retained Worker domains"),
+    PostFinalizeBlock.Contains(TEXT("Proxy.GetStableEntityView()"))
+      && PostFinalizeBlock.Contains(TEXT("Proxy.FindDomain("))
+      && PostFinalizeBlock.Contains(
+        TEXT("FCrowdWorkerMovementStateCodec::Decode"))
+      && PostFinalizeBlock.Contains(
+        TEXT("FCrowdDemoWorkerCombatStatePayloadCodec::Decode")));
+  TestFalse(TEXT("post-finalize does not read prepared movement/combat"),
+    PostFinalizeBlock.Contains(TEXT(
+      "GetPreparedMovementBoundaryCommit()"))
+      || PostFinalizeBlock.Contains(TEXT(
+        "GetPreparedCombatBoundaryCommit()")));
   TestFalse(TEXT("post-finalize duplicate full-state array is deleted"),
     ProcessorSource.Contains(TEXT("PreparedPostFinalizeAgentRecords")));
   TestFalse(TEXT("authority commit has no Mass query configuration"),
@@ -978,7 +1398,7 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   const FString CheckpointExecuteMarker = TEXT(
     "void FCrowdDemoRoundCheckpointPublisherStage::Execute");
   const FString WorkerResultStageMarker = TEXT(
-    "void FCrowdDemoWorkerResultApplyStage::Execute");
+    "void FCrowdDemoWorkerResultApplyStage::BindQuery");
   const int32 CheckpointExecuteStart = ProcessorSource.Find(
     CheckpointExecuteMarker);
   const int32 WorkerResultStageStart = ProcessorSource.Find(
@@ -996,9 +1416,15 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       WorkerResultStageStart - CheckpointExecuteStart);
     TestFalse(TEXT("checkpoint publisher does not traverse a Mass query"),
       CheckpointBlock.Contains(TEXT("EntityQuery.")));
-    TestTrue(TEXT("checkpoint publisher serializes from the retained commit"),
-      CheckpointBlock.Contains(TEXT("CommitRecords"))
+    TestTrue(TEXT("checkpoint publisher serializes from retained Worker domains"),
+      CheckpointBlock.Contains(TEXT("Proxy.GetStableEntityView()"))
+        && CheckpointBlock.Contains(TEXT("Proxy.FindDomain("))
         && CheckpointBlock.Contains(TEXT("States.Reserve(")));
+    TestFalse(TEXT("checkpoint publisher does not read prepared movement/combat"),
+      CheckpointBlock.Contains(TEXT(
+        "GetPreparedMovementBoundaryCommit()"))
+        || CheckpointBlock.Contains(TEXT(
+          "GetPreparedCombatBoundaryCommit()")));
     TestTrue(TEXT("checkpoint serialization stays behind the publish gate"),
       CheckpointBlock.Find(TEXT("ShouldBuildRoundResult()"))
           < CheckpointBlock.Find(TEXT("States.Reserve(")));
@@ -1012,60 +1438,136 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       "UCrowdDemoRoundVisualStateResolveProcessor")));
 
   const FString FacingApplyMarker =
-    TEXT("bool FCrowdDemoRoundFacingFinalizeStage::ApplyPreparedCommit");
+    TEXT("bool FCrowdDemoRoundFacingFinalizeStage::ValidatePreparedCommit");
   const int32 FacingApplyStart = ProcessorSource.Find(FacingApplyMarker);
+  const FString FacingSideEffectMarker = TEXT(
+    "void FCrowdDemoRoundFacingFinalizeStage::CommitValidatedSideEffects");
+  const int32 FacingSideEffectStart =
+    ProcessorSource.Find(FacingSideEffectMarker);
   const FString FacingExecuteMarker =
     TEXT("void FCrowdDemoRoundFacingFinalizeStage::Execute");
   const int32 FacingExecuteStart = ProcessorSource.Find(FacingExecuteMarker);
   if (FacingApplyStart != INDEX_NONE
-    && FacingExecuteStart > FacingApplyStart)
+    && FacingSideEffectStart > FacingApplyStart)
   {
     const FString FacingApplyBlock = ProcessorSource.Mid(
-      FacingApplyStart, FacingExecuteStart - FacingApplyStart);
-    int32 ApplyTraversalCount = 0;
-    int32 SearchFrom = 0;
-    const FString TraversalMarker = TEXT("EntityQuery->ForEachEntityChunk");
-    while (true)
-    {
-      const int32 Found = FacingApplyBlock.Find(
-        TraversalMarker, ESearchCase::CaseSensitive,
-        ESearchDir::FromStart, SearchFrom);
-      if (Found == INDEX_NONE) break;
-      ++ApplyTraversalCount;
-      SearchFrom = Found + TraversalMarker.Len();
-    }
-    TestEqual(TEXT("prepared apply performs exactly one atomic write traversal"),
-      ApplyTraversalCount, 1);
-    TestTrue(TEXT("prepared apply traverses only validated dirty collections"),
+      FacingApplyStart, FacingSideEffectStart - FacingApplyStart);
+    TestFalse(TEXT("legacy finalize Mass-writer fallback is physically removed"),
       FacingApplyBlock.Contains(TEXT(
-        "EntityQuery->ForEachEntityChunkInCollections("))
-        && FacingApplyBlock.Contains(TEXT(
-          "Pipeline.GetCurrentStepMassDirtyEntityRefs()"))
-        && FacingApplyBlock.Contains(TEXT(
-          "UE::Mass::Utils::CreateEntityCollections(")));
-    TestTrue(TEXT("dirty handles are resolved before atomic write begins"),
-      FacingApplyBlock.Find(TEXT("ResolveTrackedAgentHandle("))
-          < FacingApplyBlock.Find(TEXT("TryBeginAtomicCommitWrite("))
-        && FacingApplyBlock.Find(TEXT("GetNumMatchingEntities("))
-          < FacingApplyBlock.Find(TEXT("TryBeginAtomicCommitWrite(")));
-    TestFalse(TEXT("prepared apply has no unbounded Mass query traversal"),
-      FacingApplyBlock.Contains(TEXT(
-        "EntityQuery->ForEachEntityChunk(\n")));
-    TestTrue(TEXT("prepared apply validates against canonical snapshot"),
-      FacingApplyBlock.Contains(TEXT(
-        "Pipeline.GetBoundarySnapshot().Agents")));
-    TestTrue(TEXT("prepared apply writes engine transform"),
-      FacingApplyBlock.Contains(TEXT(
-        "Transforms[It].SetTransform(Transform)")));
-    TestTrue(TEXT("prepared apply writes engine velocity"),
-      FacingApplyBlock.Contains(TEXT(
-        "Velocities[It].Value = Movement.Velocity")));
-    TestTrue(TEXT("prepared apply builds final business only for dirty entities"),
-      FacingApplyBlock.Contains(TEXT("BuildFinalBusinessFact("))
-        && FacingApplyBlock.Contains(TEXT(
-          "FinalBusinessByAgentId.Reserve(DirtyEntityRefs.Num())")));
+        "IsCurrentStepWorkerDirtyMassApplied()"))
+        || FacingApplyBlock.Contains(TEXT(
+          "ForEachEntityChunkInCollections("))
+        || FacingApplyBlock.Contains(TEXT(
+          "ApplyCommitRecord("))
+        || FacingApplyBlock.Contains(TEXT(
+          "ApplyMovementToState(")));
+    TestFalse(TEXT("legacy finalize no longer applies projectile Mass state"),
+      FacingApplyBlock.Contains(TEXT("ApplyProjectileFinalState("))
+        || FacingApplyBlock.Contains(TEXT("RecordProjectileStep("))
+        || FacingApplyBlock.Contains(TEXT("RecordProjectileHitResponse("))
+        || FacingApplyBlock.Contains(TEXT("CombatCommit->Projectiles")));
     TestFalse(TEXT("prepared apply does not build checkpoint arrays"),
       FacingApplyBlock.Contains(TEXT("CheckpointAgentStates")));
+  }
+  const FString DirtyFinalValidateMarker =
+    TEXT("bool FinalValidatePreparedWorkerMassDirtyPlan(");
+  const int32 DirtyFinalValidateStart =
+    ProcessorSource.Find(DirtyFinalValidateMarker);
+  const FString DirtyApplyMarker =
+    TEXT("void ApplyValidatedWorkerMassDirtyPlan(");
+  const int32 DirtyApplyStart = ProcessorSource.Find(DirtyApplyMarker);
+  const FString DirtySideEffectMarker =
+    TEXT("void CommitValidatedWorkerMassSideEffects(");
+  const int32 DirtySideEffectStart =
+    ProcessorSource.Find(DirtySideEffectMarker);
+  const FString DirtyEnrichMarker =
+    TEXT("bool EnrichPreparedWorkerMassApplyPlan(");
+  const int32 DirtyEnrichStart = ProcessorSource.Find(DirtyEnrichMarker);
+  TestTrue(TEXT("Worker Dirty Mass enrichment block found"),
+    DirtyEnrichStart != INDEX_NONE
+      && DirtyFinalValidateStart > DirtyEnrichStart);
+  if (DirtyEnrichStart != INDEX_NONE
+    && DirtyFinalValidateStart > DirtyEnrichStart)
+  {
+    const FString DirtyEnrichBlock = ProcessorSource.Mid(
+      DirtyEnrichStart,
+      DirtyFinalValidateStart - DirtyEnrichStart);
+    TestFalse(TEXT("Dirty Plan does not read the prepared movement transaction"),
+      DirtyEnrichBlock.Contains(TEXT(
+        "GetPreparedMovementBoundaryCommit()")));
+    TestFalse(TEXT("Dirty Plan does not read the full Shared Flow output array"),
+      DirtyEnrichBlock.Contains(TEXT(
+        "GetPreparedRuntimeSharedFlowOutputs()")));
+    TestFalse(TEXT("Dirty Plan does not read the Boundary Snapshot"),
+      DirtyEnrichBlock.Contains(TEXT("GetBoundarySnapshot()")));
+    TestFalse(TEXT("Dirty Plan does not read Boundary Business facts"),
+      DirtyEnrichBlock.Contains(TEXT("GetBoundaryBusinessFacts()")));
+    TestTrue(TEXT("Dirty Plan constructs movement from the Worker patch"),
+      DirtyEnrichBlock.Contains(TEXT(
+        "Record.WorkerMovement.Position"))
+        && DirtyEnrichBlock.Contains(TEXT(
+          "Record.WorkerMovement.Velocity")));
+  }
+  const FString WorkerResultExecuteMarker =
+    TEXT("void FCrowdDemoWorkerResultApplyStage::Execute");
+  const int32 WorkerResultExecuteStart = ProcessorSource.Find(
+    WorkerResultExecuteMarker, ESearchCase::CaseSensitive,
+    ESearchDir::FromStart,
+    DirtySideEffectStart + DirtySideEffectMarker.Len());
+  TestTrue(TEXT("Worker Dirty Mass apply block found"),
+    DirtyFinalValidateStart != INDEX_NONE
+      && DirtyApplyStart > DirtyFinalValidateStart
+      && DirtySideEffectStart > DirtyApplyStart
+      && WorkerResultExecuteStart > DirtyApplyStart);
+  if (DirtyFinalValidateStart != INDEX_NONE
+    && DirtyApplyStart > DirtyFinalValidateStart
+    && DirtySideEffectStart > DirtyApplyStart
+    && WorkerResultExecuteStart > DirtyApplyStart)
+  {
+    const FString DirtyFinalValidateBlock = ProcessorSource.Mid(
+      DirtyFinalValidateStart,
+      DirtyApplyStart - DirtyFinalValidateStart);
+    const FString DirtyApplyBlock = ProcessorSource.Mid(
+      DirtyApplyStart, DirtySideEffectStart - DirtyApplyStart);
+    const FString DirtySideEffectBlock = ProcessorSource.Mid(
+      DirtySideEffectStart,
+      WorkerResultExecuteStart - DirtySideEffectStart);
+    TestTrue(TEXT("Dirty Plan final validation owns the write gate"),
+      DirtyFinalValidateBlock.Contains(TEXT(
+        "ResolveTrackedAgentHandle("))
+        && DirtyFinalValidateBlock.Contains(TEXT(
+          "GetNumMatchingEntities(Plan.Collections)"))
+        && DirtyFinalValidateBlock.Contains(TEXT(
+          "TryBeginAtomicCommitWrite()")));
+    TestTrue(TEXT("validated Dirty Plan owns the bounded Mass writer"),
+      DirtyApplyBlock.Contains(TEXT(
+        "EntityQuery.ForEachEntityChunkInCollections("))
+        && DirtySideEffectBlock.Contains(TEXT(
+          "MarkCurrentStepWorkerDirtyMassApplied(")));
+    TestTrue(TEXT("Dirty Plan writes engine transform and velocity"),
+      DirtyApplyBlock.Contains(TEXT(
+        "Transforms[It].SetTransform(Transform)"))
+        && DirtyApplyBlock.Contains(TEXT(
+          "Velocities[It].Value = Movement.Velocity")));
+    TestFalse(TEXT("Dirty Plan has no unbounded Mass traversal"),
+      DirtyApplyBlock.Contains(TEXT(
+        "EntityQuery.ForEachEntityChunk(\n")));
+    TestFalse(TEXT("Dirty Plan does not apply a full-array Shared Flow sample"),
+      DirtyApplyBlock.Contains(TEXT("Record.SharedFlow")));
+    TestTrue(TEXT("Dirty Plan owns Worker projectile state application"),
+      ProcessorSource.Contains(TEXT(
+        "FCrowdWorkerProjectileStateCodec::Decode("))
+        && DirtyFinalValidateBlock.Contains(TEXT(
+          "ValidateProjectileStates("))
+        && DirtyApplyBlock.Contains(TEXT(
+          "Pipeline.ApplyProjectileFinalState(")));
+    TestTrue(TEXT("Dirty Plan publishes Worker projectile metrics and visuals"),
+      ProcessorSource.Contains(TEXT(
+        "FCrowdDemoWorkerCombatHostResultCodec::Decode("))
+        && DirtySideEffectBlock.Contains(TEXT(
+          "Pipeline.RecordProjectileStep("))
+        && DirtySideEffectBlock.Contains(TEXT(
+          "Pipeline.RecordProjectileHitResponse(")));
   }
   if (FacingExecuteStart != INDEX_NONE && ExecuteStart > FacingExecuteStart)
   {
@@ -1163,6 +1665,69 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   TestTrue(TEXT("worker input source is readable"),
     FFileHelper::LoadFileToString(
       WorkerInputSource, *WorkerInputPath));
+  FString OwnerBarrierSource;
+  FString OwnerBarrierHeader;
+  const FString RetiredDemoBarrierBase =
+    TEXT("Source/MassAICrowdDemo/Mass/CrowdDemoWorkerResult")
+    TEXT("OwnerBarrier");
+  const FString RetiredDemoBarrierSourcePath = FPaths::Combine(
+    FPaths::ProjectDir(), RetiredDemoBarrierBase + TEXT(".cpp"));
+  const FString RetiredDemoBarrierHeaderPath = FPaths::Combine(
+    FPaths::ProjectDir(), RetiredDemoBarrierBase + TEXT(".h"));
+  TestFalse(TEXT("retired Demo owner barrier source is physically deleted"),
+    FPaths::FileExists(RetiredDemoBarrierSourcePath));
+  TestFalse(TEXT("retired Demo owner barrier header is physically deleted"),
+    FPaths::FileExists(RetiredDemoBarrierHeaderPath));
+  const FString RetiredCommitToken =
+    TEXT("FCrowdDemoWorkerResult") TEXT("CommitToken");
+  const FString RetiredBarrierResult =
+    TEXT("ECrowdDemoWorkerResult") TEXT("OwnerBarrierResult");
+  const FString RetiredBarrierType =
+    TEXT("FCrowdDemoWorkerResult") TEXT("OwnerBarrier");
+  const FString RetiredPendingType =
+    TEXT("FCrowdDemoPendingWorkerResult") TEXT("Finalize");
+  TArray<FString> ProjectCodeFiles;
+  IFileManager::Get().FindFilesRecursive(ProjectCodeFiles,
+    *(FPaths::ProjectDir() / TEXT("Source")), TEXT("*.h"), true, false);
+  IFileManager::Get().FindFilesRecursive(ProjectCodeFiles,
+    *(FPaths::ProjectDir() / TEXT("Source")), TEXT("*.cpp"), true, false);
+  IFileManager::Get().FindFilesRecursive(ProjectCodeFiles,
+    *(FPaths::ProjectDir()
+      / TEXT("Plugins/MassCrowdSimulation/Source")),
+    TEXT("*.h"), true, false);
+  IFileManager::Get().FindFilesRecursive(ProjectCodeFiles,
+    *(FPaths::ProjectDir()
+      / TEXT("Plugins/MassCrowdSimulation/Source")),
+    TEXT("*.cpp"), true, false);
+  bool bRetiredBarrierSymbolsAbsent = true;
+  for (const FString& CodeFile : ProjectCodeFiles)
+  {
+    FString Code;
+    if (!FFileHelper::LoadFileToString(Code, *CodeFile)
+      || Code.Contains(RetiredCommitToken)
+      || Code.Contains(RetiredBarrierResult)
+      || Code.Contains(RetiredBarrierType)
+      || Code.Contains(RetiredPendingType)
+      || Code.Contains(RetiredDemoBarrierBase))
+    {
+      bRetiredBarrierSymbolsAbsent = false;
+      AddError(FString::Printf(
+        TEXT("retired Demo Owner Barrier symbol consumer remains: %s"),
+        *CodeFile));
+    }
+  }
+  TestTrue(TEXT("source-symbol gate: retired Demo Barrier files/types/includes/tests are zero"),
+    bRetiredBarrierSymbolsAbsent);
+  TestTrue(TEXT("Runtime Result Apply owner barrier source is readable"),
+    FFileHelper::LoadFileToString(
+      OwnerBarrierSource, *FPaths::Combine(
+        FPaths::ProjectDir(), TEXT(
+          "Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Private/MassCrowdWorkerResultApply.cpp"))));
+  TestTrue(TEXT("Runtime Result Apply owner barrier header is readable"),
+    FFileHelper::LoadFileToString(
+      OwnerBarrierHeader, *FPaths::Combine(
+        FPaths::ProjectDir(), TEXT(
+          "Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Public/MassCrowdWorkerResultApply.h"))));
   const int32 IntentSubmitStart = WorkerInputSource.Find(TEXT(
     "bool FCrowdDemoWorkerInputSync::SubmitIntentBatch("));
   const int32 ClientCheckpointStart = WorkerInputSource.Find(TEXT(
@@ -1312,13 +1877,21 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
         "bPublishTargetControl ="))
         && WorkerSubmitBlock.Contains(TEXT(
           "LastWorkerV2TargetControlSemanticHash")));
-    TestTrue(TEXT("moving Target fact uses ordered O(1) objective revision"),
+    TestTrue(TEXT("Target objective publishes only on semantic revision"),
       WorkerSubmitBlock.Contains(TEXT(
         "BuildTargetObjectiveRevisionDelta("))
         && WorkerSubmitBlock.Contains(TEXT(
           "NextWorkerV2TargetObjectiveRevision"))
+        && WorkerSubmitBlock.Contains(TEXT(
+          "bPublishTargetObjective"))
+        && WorkerSubmitBlock.Contains(TEXT(
+          "LastWorkerV2TargetObjectiveSemanticHash"))
         && PipelineSource.Contains(TEXT(
           "TargetObjectives))")));
+    TestTrue(TEXT("unchanged Runtime resources are omitted until a new revision"),
+      WorkerInputSource.Contains(TEXT("bNeedsPublication"))
+        && WorkerInputSource.Contains(TEXT(
+          "AcknowledgeWorkerResourceRevision(")));
     const int32 ProjectileResourceGate = WorkerSubmitBlock.Find(TEXT(
       "if (bPublishProjectileControl)"),
       ESearchCase::CaseSensitive, ESearchDir::FromStart,
@@ -1458,11 +2031,176 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
       && ProcessorSource.Contains(TEXT(
         "PlanApply.Execute(EntityManager, Context);")));
   TestTrue(TEXT("Result Apply owns one consolidated Round advance"),
-    ProcessorSource.Contains(TEXT("void AdvanceRoundWorkerFrame("))
+    ProcessorSource.Contains(TEXT("bool AdvanceRoundWorkerFrame("))
       && ProcessorSource.Contains(TEXT(
         "WorkerResultApply.Execute(EntityManager, Context);"))
       && ProcessorSource.Contains(TEXT(
         "AdvanceRoundWorkerFrame(")));
+  const int32 RoundMassCommitCall = ProcessorSource.Find(TEXT(
+    "const bool bMassCommitted = AdvanceRoundWorkerFrame("));
+  const int32 AdvanceStart = ProcessorSource.Find(TEXT(
+    "bool AdvanceRoundWorkerFrame("));
+  const int32 ResultSideEffectPrepare = ProcessorSource.Find(TEXT(
+    "PrepareCommittedResultSideEffects("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    AdvanceStart);
+  const int32 ResultSideEffectCommit = ProcessorSource.Find(TEXT(
+    "CommitPreparedResultSideEffectsNoFail("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    ResultSideEffectPrepare);
+  TestTrue(TEXT("ordered Result side effects validate before and commit inside owner barrier"),
+    ResultSideEffectPrepare > AdvanceStart
+      && ResultSideEffectCommit > ResultSideEffectPrepare
+      && RoundMassCommitCall != INDEX_NONE);
+  TestFalse(TEXT("no fallible Result finalize remains after Mass commit"),
+    RoundMassCommitCall != INDEX_NONE
+      && ProcessorSource.Mid(RoundMassCommitCall).Contains(TEXT(
+        "FinalizeCommittedResults(")));
+  TestTrue(TEXT("Input Sync retains ownership of Dirty Batch ACK"),
+    WorkerInputSource.Contains(TEXT("Proxy.AcknowledgeDirtyBatch("))
+      && !ProcessorSource.Contains(TEXT("AcknowledgeDirtyBatch(")));
+  TestTrue(TEXT("static Target Guidance may reuse an older input sequence"),
+    PipelineSource.Contains(TEXT(
+      "Worker->SourceInputSequence\n          > ExpectedWorkerV2Sequence"))
+      && !PipelineSource.Contains(TEXT(
+        "Worker->SourceInputSequence\n          != ExpectedWorkerV2Sequence\n        || !FCrowdWorkerTargetStateCodec::Decode")));
+  const int32 PreparePublishedResults = WorkerInputSource.Find(TEXT(
+    "bool FCrowdDemoWorkerInputSync::PreparePublishedResults("));
+  const int32 FinalizeCommittedResults = WorkerInputSource.Find(TEXT(
+    "bool FCrowdDemoWorkerInputSync::FinalizeCommittedResults("));
+  TestTrue(TEXT("Result Apply exposes prepared no-fail side-effect adapters"),
+    PreparePublishedResults != INDEX_NONE
+      && FinalizeCommittedResults > PreparePublishedResults
+      && WorkerInputSource.Contains(TEXT(
+        "PrepareCommittedResultSideEffects("))
+      && WorkerInputSource.Contains(TEXT(
+        "CommitPreparedResultSideEffectsNoFail("))
+      && WorkerInputSource.Contains(TEXT(
+        "Proxy.Prepare(*Batch, OutPrepared)")));
+  TestFalse(TEXT("Result Apply adapter no longer validates and mutates in one call"),
+    WorkerInputSource.Contains(TEXT("Proxy.Apply(*Batch)")));
+  const int32 MassTargetValidation = ProcessorSource.Find(TEXT(
+    "BuildPreparedWorkerMassApplyPlan("));
+  const int32 ResultStageStart = ProcessorSource.Find(TEXT(
+    "void FCrowdDemoWorkerResultApplyStage::Execute("));
+  const FString ResultStageBlock = ResultStageStart != INDEX_NONE
+      && AdvanceStart > ResultStageStart
+    ? ProcessorSource.Mid(
+      ResultStageStart, AdvanceStart - ResultStageStart)
+    : FString();
+  const int32 DirtyMassCommit = ProcessorSource.Find(TEXT(
+    "ApplyValidatedWorkerMassDirtyPlan("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    AdvanceStart);
+  const int32 ProxyCommit = OwnerBarrierSource.Find(TEXT(
+    "Proxy.CommitPreparedValidated(Prepared)"));
+  const int32 SideEffectCommit = OwnerBarrierSource.Find(TEXT(
+    "HostCommitSideEffectsNoFail()"), ESearchCase::CaseSensitive,
+    ESearchDir::FromStart, ProxyCommit);
+  TestTrue(TEXT("Round Result Apply prepares Mass targets once before Pending Finalize"),
+    MassTargetValidation != INDEX_NONE
+      && ResultStageBlock.Contains(TEXT(
+        "BuildPreparedWorkerMassApplyPlan("))
+      && ResultStageBlock.Contains(TEXT(
+        "EnrichPreparedWorkerMassApplyPlan("))
+      && ResultStageBlock.Contains(TEXT(
+        "Pending.PreparedMassPlan ="))
+      && ResultStageBlock.Contains(TEXT(
+        "Pending.WorkerCommitToken ="))
+      && ProcessorSource.Contains(TEXT(
+        "ResolveTrackedAgentHandle("))
+      && ProcessorSource.Contains(TEXT(
+        "GetNumMatchingEntities(OutPlan.Collections)")));
+  TestTrue(TEXT("Mass Prepare rejects duplicate entity handles and missing fragments"),
+    ProcessorSource.Contains(TEXT("UniqueEntityHandles.Contains(Entity)"))
+      && ProcessorSource.Contains(TEXT(
+        "GetFragmentDataPtr<FCrowdDemoMassStatsFragment>"))
+      && ProcessorSource.Contains(TEXT(
+        "GetFragmentDataPtr<FCrowdDemoBusinessStateFragment>"))
+      && ProcessorSource.Contains(TEXT("UniqueFields.Contains(Key)")));
+  TestFalse(TEXT("Result Apply production stage never commits Proxy early"),
+    ResultStageBlock.Contains(TEXT("CommitPreparedResults("))
+      || ResultStageBlock.Contains(TEXT("CommitPrepared("))
+      || ResultStageBlock.Contains(TEXT("CommitPreparedValidated(")));
+  TestFalse(TEXT("AdvanceRoundWorkerFrame never rebuilds Dirty Mass Plan"),
+    AdvanceStart != INDEX_NONE
+      && ProcessorSource.Mid(AdvanceStart).Contains(TEXT(
+        "BuildPreparedWorkerMassApplyPlan(")));
+  TestTrue(TEXT("Demo Prepared Round Commit Plan owns Proxy, Mass, Target/Resource, and Runtime Token"),
+    PipelineHeader.Contains(TEXT(
+      "FCrowdWorkerPreparedResultApply PreparedProxyResult"))
+      && PipelineHeader.Contains(TEXT(
+        "PreparedMassPlan"))
+      && PipelineHeader.Contains(TEXT(
+        "PreparedTargetResourcePlan"))
+      && PipelineHeader.Contains(TEXT(
+        "FCrowdWorkerResultCommitToken WorkerCommitToken"))
+      && PipelineHeader.Contains(TEXT(
+        "struct FCrowdDemoPreparedRoundCommitPlan")));
+  TestTrue(TEXT("Result Apply allocates Target/Resource Plan before Pending Finalize"),
+    ResultStageBlock.Contains(TEXT(
+      "Pending.PreparedTargetResourcePlan ="))
+      && ResultStageBlock.Contains(TEXT(
+        "MakeShared<FCrowdDemoPreparedTargetResourcePlan>")));
+  TestTrue(TEXT("Target/Resource Plan is prepared once and applied by owner barrier"),
+    PipelineSource.Contains(TEXT("PreparePendingTargetResourcePlan()"))
+      && PipelineSource.Contains(TEXT("++Prepared.BuildCount"))
+      && PipelineSource.Contains(TEXT("++Prepared.ApplyCount"))
+      && ProcessorSource.Contains(TEXT(
+        "FinalValidatePreparedTargetResourcePlan("))
+      && ProcessorSource.Contains(TEXT(
+        "ApplyPreparedTargetResourcePlanNoFail(")));
+  TestTrue(TEXT("Target/Resource token carries owner, resource, and lifecycle guards"),
+    PipelineHeader.Contains(TEXT("uint64 OwnerRevision"))
+      && PipelineHeader.Contains(TEXT("uint64 Generation"))
+      && PipelineHeader.Contains(TEXT("uint64 ResourceId"))
+      && PipelineHeader.Contains(TEXT("int32 ResourceRevision"))
+      && PipelineHeader.Contains(TEXT("uint32 ResourceBuildHash"))
+      && PipelineHeader.Contains(TEXT("int32 ResourceRebuildCount"))
+      && PipelineHeader.Contains(TEXT("int32 TargetRevision"))
+      && PipelineHeader.Contains(TEXT("uint64 BaseStateHash")));
+  TestFalse(TEXT("legacy late Target/Resource apply entry is deleted"),
+    PipelineHeader.Contains(TEXT("ApplyPreparedBoundaryResourcePatches"))
+      || PipelineSource.Contains(TEXT(
+        "ApplyPreparedBoundaryResourcePatches"))
+      || ProcessorSource.Contains(TEXT(
+        "ApplyPreparedBoundaryResourcePatches")));
+  const int32 OwnerBarrierCall = ProcessorSource.Find(TEXT(
+    "FCrowdWorkerResultOwnerCommitBarrier::Commit("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart, AdvanceStart);
+  const int32 OwnerBarrierEnd = ProcessorSource.Find(TEXT(
+    "const bool bApplied = BarrierResult"),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart, OwnerBarrierCall);
+  const FString OwnerBarrierBlock = OwnerBarrierCall != INDEX_NONE
+      && OwnerBarrierEnd > OwnerBarrierCall
+    ? ProcessorSource.Mid(
+        OwnerBarrierCall, OwnerBarrierEnd - OwnerBarrierCall)
+    : FString();
+  TestTrue(TEXT("source-symbol Owner Barrier block is found"),
+    !OwnerBarrierBlock.IsEmpty());
+  TestTrue(TEXT("Target/Resource final validation precedes first Mass write"),
+    OwnerBarrierBlock.Find(TEXT(
+      "FinalValidatePreparedTargetResourcePlan(")) != INDEX_NONE
+      && OwnerBarrierBlock.Find(TEXT(
+        "FinalValidatePreparedTargetResourcePlan("))
+          < OwnerBarrierBlock.Find(TEXT(
+            "ApplyValidatedWorkerMassDirtyPlan(")));
+  TestFalse(TEXT("Final Barrier does not reconstruct Target/Resource Plan"),
+    OwnerBarrierBlock.Contains(TEXT("PreparedTargetResourceSlots"))
+      || OwnerBarrierBlock.Contains(TEXT("ValidateExecution("))
+      || OwnerBarrierBlock.Contains(TEXT(
+        "BuildDemoTargetRegion"))
+      || OwnerBarrierBlock.Contains(TEXT("IndexOfByPredicate(")));
+  TestFalse(TEXT("Advance/PostFinalize do not rebuild Target/Resource Plan"),
+    ProcessorSource.Contains(TEXT(
+      "PreparePendingTargetResourcePlan();"))
+      || ProcessorSource.Contains(TEXT(
+        "CalculatePreparedTargetResourceHash(")));
+  TestTrue(TEXT("single owner barrier commits Mass then Proxy then side effects"),
+    OwnerBarrierSource.Find(TEXT("HostApplyNoFail()")) != INDEX_NONE
+      && ProxyCommit > OwnerBarrierSource.Find(TEXT("HostApplyNoFail()"))
+      && SideEffectCommit > ProxyCommit
+      && DirtyMassCommit > AdvanceStart);
   TestFalse(TEXT("legacy Round poll shell is physically deleted"),
     ProcessorSource.Contains(TEXT("PollRoundWorkBatch("))
       || PipelineHeader.Contains(TEXT("PollRoundWorkBatch("))
@@ -2030,13 +2768,13 @@ bool FCrowdDemoPostFinalizeMinimalQueryStructureTest::RunTest(
   TestFalse(TEXT("cross-processor pending hit bridge is deleted"),
     ProcessorSource.Contains(TEXT("SetPendingProjectileHitFacts"))
       || ProcessorSource.Contains(TEXT("ConsumePendingProjectileHitFacts")));
-  TestTrue(TEXT("final boundary writer applies prepared combat state"),
+  TestTrue(TEXT("Worker Dirty writer applies Worker-derived combat state"),
     ProcessorSource.Contains(TEXT(
-      "FinalBusinessByAgentId.FindChecked(AgentId)"))
+      "Record.FinalBusiness = BuildFinalBusinessFactFromState("))
       && ProcessorSource.Contains(TEXT(
-        "Stats[It] = FinalBusiness.Stats"))
+        "Stats[It] = Record.FinalBusiness.Stats"))
       && ProcessorSource.Contains(TEXT(
-        "Visuals[It] = FinalBusiness.Visual")));
+        "Visuals[It] = Record.FinalBusiness.Visual")));
   TestTrue(TEXT("final boundary writer publishes Mass-authoritative projectile state"),
     ProcessorSource.Contains(TEXT(
       "Pipeline.ApplyProjectileFinalState(")));

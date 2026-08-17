@@ -160,13 +160,19 @@ public:
     uint64 ResourceId,
     uint64 UpstreamRevision,
     uint64 ContentHash,
-    uint64& OutRevision);
+    uint64& OutRevision,
+    bool& bOutNeedsPublication);
+
+  bool AcknowledgeWorkerResourceRevision(
+    uint64 ResourceId,
+    uint64 Revision);
 
 private:
   struct FWorkerResourcePublication
   {
     uint64 Revision = 0;
     uint64 ContentHash = 0;
+    bool bPublished = false;
   };
 
   TUniquePtr<ICrowdNavDataProvider> NavDataProvider;

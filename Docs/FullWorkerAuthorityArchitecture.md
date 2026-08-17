@@ -10,7 +10,9 @@
 
 [COMPUTED][HIGH] 持久 StableEntityRef→Mass Handle 索引和最终 Dirty Mass Apply Plan 已完成；普通 Mass 写入只遍历已验证 Dirty EntityCollection。
 
-[INFERRED][HIGH] 当前下一结构门是删除 Demo-local 普通帧完整成员 DAG 和 Commit/PostFinalize/Checkpoint CPU 数组。9780 的 T5 step 886 Target Demand 拒绝也必须在 WA9 前单独关闭；不得直接开始三个 10k 场景。
+[COMPUTED][HIGH] 通用 Worker Result Owner Commit Barrier/Token 已下沉到 `MassCrowdRuntime`，Demo 只保留 Prepared Round Commit Plan 与 Host adapter；旧 Demo Barrier 文件/类型/消费者已物理删除且无兼容包装。Runtime Final Validate 覆盖 Token/Generation/Publish/Input/Event/Stable View，Host FinalValidate 覆盖 Mass/Target/Resource/Behavior/Event 的 Handle、Lifecycle、Owner 与 Revision；写后只执行 no-fail commit。
+
+[INFERRED][HIGH] 当前下一结构门是删除 Demo-local 普通帧完整 rollback/DAG CPU 数组及旧数据源，随后删除 `TryPrepareRoundApply` 与 Demo-local Round Transaction。9780 的 T5 step 886 Target Demand 拒绝也必须在 WA9 前单独关闭；不得直接开始三个 10k 场景。
 
 ## 1. 唯一权威与方向
 
@@ -69,6 +71,8 @@ Lifecycle/Input
 ## 5. 迁移原则
 
 [INFERRED][HIGH] 每个域严格执行`Shadow → 封闭实体Canary → Production → 关闭Legacy Writer`。同一字段在任意时刻只能有一个Production Writer；迁移状态以`FullWorkerAuthorityOwnershipMatrix.md`逐字段审计。
+
+[INFERRED][HIGH] 上述 Shadow/Canary 只用于证明算法或字段权威切换，不授权在 Demo 中长期保留兼容框架。基础件完成生产验证后，同一切片必须删除旧 Barrier/Transaction/fallback/alias；测试改为验证插件生产路径，而不是冻结旧类型名称。
 
 [INFERRED][HIGH] 四节点在WA8前原样承担未迁移域，不先合并、不继续结构优化。WA8删除四节点、完整Mass Gather、Boundary Request/Result/Commit、Frame Transaction和旧Mailbox；最终模拟Processor只保留Worker Input Sync与Worker Result Apply。
 

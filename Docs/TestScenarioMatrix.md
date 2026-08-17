@@ -1,5 +1,46 @@
 # MassAI Crowd Demo 测试场景矩阵
 
+## 2026-08-15 Runtime Owner Commit Barrier 迁移结果
+
+| 门 | 实际结果 |
+|---|---|
+| Runtime ResultApply | [COMPUTED][HIGH] 4/4 通过；含 LifecycleOwnerAndEvents、RuntimeVariablePublishedBatch、OwnerCommitBarrierAtomicity 与 OwnerCommitModuleStructure。 |
+| Runtime 原子故障 | [COMPUTED][HIGH] Prepare 后 Generation、Publish/Event 水位、Stable View 或 Host Token 过期均拒绝；Barrier 未增加 Proxy commit/watermark/Dirty Batch，Host Apply/side effect 为 0。 |
+| 成功单次提交 | [COMPUTED][HIGH] Token 构建 1 次，Host FinalValidate/Apply/side effect 各 1 次，Proxy commit/Ordered Event/Dirty ACK 各 1 次；重复 ACK 被拒。Proxy Final Validate 1 次由源码符号/结构门证明，不是完整 AST 审计。 |
+| Demo Host Adapter | [COMPUTED][HIGH] 1/1 通过；覆盖 Target/Resource stale revision、invalid Owner、非法引用、缺失 Owner、重复 Slot/entity/field 和成功单次 Mass/Target apply。 |
+| Architecture/Legacy | [COMPUTED][HIGH] 1/1 通过；旧 Demo Barrier 文件、类型、include、注册和测试消费者为 0，Runtime 不含 Demo/Scenario/Demo Round Plan 依赖。 |
+| Target/RuntimeV2 | [COMPUTED][HIGH] TargetRegionTransport 7/7、RuntimeV2 Target 1/1、Lifecycle 2/2 通过。 |
+| 最小全 Production T8 | [COMPUTED][HIGH] server-only 正式脚本 1/1：900 batches、90940 patches、150 Ordered Events、attack/spawn/impact/damage=`50/50/50/50`、duplicate=`0/0`、Golden=`439379904/1411313634/6141440`、fixed-step p95=`18.579ms`、commit p95=`0.281ms`、realtime=`0.999`。 |
+| 未运行 | [COMPUTED][HIGH] 双端 T8、完整场景矩阵、完整 WA9、T5 1000+ 与较大 T8 未运行；历史正式 runner 0/1 保持失败记录。 |
+
+## 2026-08-04 WA8-R Result Apply Owner Barrier 定向门
+
+[COMPUTED][HIGH] 自动化通过：Owner Barrier 故障注入 1/1、Architecture 2/2、Runtime WorkerResultApply 2/2、RuntimeV2 33/33。故障门覆盖 Prepare 后 Lifecycle/Stable View 失效、Commit Token 过期、Final Fragment validation 拒绝、非法字段 Owner、重复 entity-field，以及成功路径的 Mass/Proxy/ACK/Event 单次提交。
+
+[COMPUTED][HIGH] 结构门随 `CrowdDemo.Architecture.PostFinalizeMinimalQuery` 通过：Pending Finalize 必须持有 Prepared Proxy/Mass Plan/Token；Result Stage 禁止提前 Proxy Commit；Advance 禁止重建 Dirty Mass Plan；Ordered Event/Behavior 必须先在副本预演；Barrier 源码顺序必须为 Mass→Proxy→no-fail side effects；Advance 后禁止 fallible Result finalize。该门是源码符号/结构检查，不是完整 AST 审计。
+
+[COMPUTED][HIGH] 最新 20 实体全 Production T8 日志证据：900 Tick、Dirty entities=`18000`、Ordered Event=`150`、五阶段攻击各 `50`、duplicate=`0/0`、Golden Hash=`439379904/1411313634/6141440`、fixed-step p95=`32.624ms`、commit p95=`0.439ms`、realtime=`0.998`、client frame p95=`7.723ms`，server/client RoundResult 与 client visual 均存在。完整 runner 仍为 0/1：脚本错误报告缺少上述完成日志并超时；不得将该轮登记为正式场景通过。
+
+[COMPUTED][HIGH] T5/T8 大回归、完整场景矩阵、四构建组合与 WA9 10k 场景本轮未运行。
+
+[COMPUTED][HIGH] 2026-08-03 WA8-R retained Worker checkpoint/rollback 切片：Development Editor DisableUnity 与 `CrowdDemo.Architecture` 2/2 通过。结构门确认 Checkpoint/PostFinalize 均从 Proxy Stable Entity View 与 retained Movement/Combat Domain 解码，且两段中的 Prepared Movement/Combat commit 读取为零。
+
+[COMPUTED][HIGH] 9840 全 Production 静态 T5 首轮 600 Tick：Dirty Batch/实体=`600/12000`、Checkpoint entities=`20`、Runtime failure=`0`。9841 全 Production T8/900：Dirty Batch/实体=`900/18000`、Ordered Events=`150`、acquired/windup/spawned/impacted/damage=`50/50/50/50/50`、duplicate fire/hit=`0/0`、Golden Hash=`439379904/1411313634/6141440`、Checkpoint entities=`20`，均无 `VIOLATION/Rejected/Fatal`。
+
+[INFERRED][HIGH] 下一测试顺序：Target resource revision side effect 定向门 → rollback retained/delta 与 Round Transaction AST/注册零门 → T5 1000+ → 端到端 10k 双 Cohort → Particle 大型单 Island/SoA → WA9。当前 20 实体门不替代 10k 性能门，retained Movement/Combat 也不等于完整 rollback 数组已经删除。
+
+[COMPUTED][HIGH] 2026-08-03 WA8-R Worker Projectile side-effect 切片：Development Editor DisableUnity、`CrowdDemo.Architecture` 2/2、`MassCrowd.Runtime.WorkerResultApply.LifecycleOwnerAndEvents` 1/1 通过。结构门验证 Projectile Patch 的 decode/capacity/state-set/HostResult 全量预验证位于 Worker Dirty Plan，旧 FacingFinalize 无 Projectile 状态或指标消费。
+
+[COMPUTED][HIGH] 9837 全 Production T8/900：Dirty batch/entities=`900/18000`、Ordered Events=`150`、acquired/windup/spawned/impacted/damage=`50/50/50/50/50`、duplicate fire/hit=`0/0`、Golden Hash=`439379904/1411313634/6141440`，无硬错误。该门证明 Worker Projectile side effect 替换成功，不代表 rollback/checkpoint 全实体路径已删除。
+
+[INFERRED][HIGH] 下一测试顺序：retained Worker commit → rollback/checkpoint 零旧全实体输入门 → Target resource revision side effect → Round Transaction AST/注册零门 → T5 1000+ → 端到端 10k 双 Cohort → Particle/SoA/WA9。
+
+[COMPUTED][HIGH] 2026-08-03 WA8-R Worker Patch 直写/唯一 Writer 切片：Development Editor DisableUnity、`CrowdDemo.Architecture` 2/2 与 `MassCrowd.Runtime.WorkerResultApply.LifecycleOwnerAndEvents` 1/1 通过。结构门确认 Dirty Enrich 不读取 Prepared Movement、完整 SharedFlow、Boundary Snapshot/Business Facts，且旧 FacingFinalize 备用 Mass traversal 已物理删除。
+
+[COMPUTED][HIGH] 9835 全 Production 静态 T5 达到第 600 个 Dirty Batch：last/total entities=`20/12000`、Objective published/reused=`1/600`、普通 Intent resources=`0`、Result batches=`600`、Runtime failure=`0`，无 `VIOLATION/Rejected/Fatal`。该 20 实体门证明删除备用 Writer 无业务回退，不代表 10k 性能验收。
+
+[INFERRED][HIGH] 下一测试顺序：Published Batch side effect/Owner Barrier 单元门 → 删除剩余 Round Transaction 的 AST/注册门 → T5 1000+ Tick → 端到端 10k 双 Cohort → Particle 大型单 Island/SoA → WA9 三个 10k 场景。
+
 [COMPUTED][HIGH] 2026-08-03 WA8.5 Work/Timer/Spatial 切片：Development Editor DisableUnity、`MassCrowd.RuntimeV2.Complexity` 3/3 与完整 `MassCrowd.RuntimeV2` 32/32 通过。Work Ring 分别 Drain 1k/2k/5k/10k，累计 Bucket Probe 不超过 `W × 固定Bucket数`；Sparse Time Wheel 安排 10k 未来 Tick，提前 Drain 扫描为 0，只累计实际到期的 7 个 Bucket。
 
 [COMPUTED][HIGH] Spatial 回归执行 10k×1% 与 10k×10% Movement Dirty：两组均保留 10k 成员、完成 20k 次增量 Spawn/Update、full rebuild=`0`，跨 Cell migration 分别精确为 100 和 1000。
@@ -347,3 +388,18 @@
 | T8 配置反例 9758 | [COMPUTED][HIGH] T8 无 Target cohort，额外强制 Target Production 会在 bootstrap 正确 fail-closed 为 `WorkerTargetMissing`；该运行不作为阶段合并回归。 |
 | T8 修复与 9764 | [COMPUTED][HIGH] ImpactId 改为 Tick-major；Movement Profile v2 / Control v9 保留权威 Guidance 所有权。14 项 T8、两个 Movement 定向门及全 Production 900 Tick 通过：50/50/50/50/50，duplicate/expired=`0/0`，三哈希=`439379904/1411313634/6141440`，p95=`34.181ms`、realtime=`0.998`。 |
 | 验收边界 | [INFERRED][HIGH] 四阶段结构删除、T5 与 T8 黄金门通过；WA8 总关闭仍为 OPEN，因为 Round 仍消费 WorkGraph/Orchestrator。下一门是迁移最后消费者并执行 AST/注册零消费者审计。 |
+
+## 2026-08-15 WA8-R Target/Resource Owner Barrier 定向矩阵
+
+| 门 | 结果 |
+|---|---|
+| Development Editor DisableUnity | [COMPUTED][HIGH] PASS；最终增量构建 4 actions，UBT `14.78s`。 |
+| Owner Barrier 故障注入 | [COMPUTED][HIGH] `1/1` PASS，最终重跑测试时间 `0.018s`；覆盖 stale Target revision、invalid Owner、非法资源引用、缺失 Owner、重复 Slot/entity/field 与零部分提交。 |
+| 源码符号/结构门 | [COMPUTED][HIGH] `1/1` PASS，最终重跑 `0.080s`；这是源码符号/结构检查，不是完整 C++ AST 审计。 |
+| WorkerResultApply | [COMPUTED][HIGH] `2/2` PASS，最终重跑首项开始至末项完成 `0.034s`。 |
+| RuntimeV2 Target / Lifecycle | [COMPUTED][HIGH] `1/1` + `2/2` PASS，最终重跑分别 `0.020s` 与 `0.042s`。 |
+| TargetRegionTransport | [COMPUTED][HIGH] `7/7` PASS，最终重跑 `0.164s`。 |
+| 异构 Target Static 20，Target Shadow | [COMPUTED][HIGH] 9875 正式 runner `1/1`；非空 PreparedTargetResourceSlots 的 step 0 transaction 为 33 tasks、160 patches、commit `0.500ms`，硬错误 0。该短运行未完成 Round，不宣称完整 T6 能力门。 |
+| T8 20 全 Production Golden | [COMPUTED][HIGH] 9876 正式 runner `1/1`；900 batches、150 Ordered Events、50 acquired/windup/spawned/impacted/damage、duplicate=`0/0`、Golden Hash=`439379904/1411313634/6141440`、fixed-step/commit p95=`18.706/0.312ms`。 |
+| 失败运行 | [COMPUTED][HIGH] 9871 正式 `0/1`，空 Production Target plan 被 Prepare 错拒，已修复；9872 正式 `0/1`，runner 等待不足导致未见 Round checkpoint，未用内部日志冒充通过。 |
+| 未运行 | [COMPUTED][HIGH] 完整 WA9、完整场景矩阵、T5 1000+、较大 T8、双端 T8 均未运行。 |

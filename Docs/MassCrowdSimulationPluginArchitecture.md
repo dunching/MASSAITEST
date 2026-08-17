@@ -1,12 +1,18 @@
 # MassCrowdSimulation 插件产品边界
 
+## 2026-08-15 Worker Result Owner Commit 边界
+
+[COMPUTED][HIGH] `MassCrowdRuntime` 拥有 Worker Result Commit Token、拒绝结果、唯一 Owner Commit Barrier、Prepared Proxy 的 Final Validate 与 no-fail commit。公共 API 不包含 CrowdDemo、Scenario、Demo Round Plan 或 Demo UObject；Host-specific revision/lifecycle validation 通过回调接入。
+
+[COMPUTED][HIGH] `MassAICrowdDemo` 只拥有 Prepared Round Commit Plan，以及 Mass、Target/Resource、Behavior/Event、表现/网络的 FinalValidate/NoFailApply adapter。依赖方向保持 Demo → Runtime；`MassCrowdRuntime.Build.cs` 不依赖 `MassAICrowdDemo`。旧 Demo Barrier 文件和符号已删除且没有兼容层。
+
 ## 1. 文档职责
 
 [COMPUTED][HIGH] 本文件是可复用 MassCrowd 插件的模块边界与依赖方向事实源。生产运行、行为组合和复制合同查阅`MassCrowdUnifiedRuntimeAndReplicationContract.md`，Demo目的查阅`DemoPurposeAndTargetEffect.md`，当前代码事实查阅`CurrentArchitecture.md`，阶段执行查阅`PhasePlan.md`。
 
 [COMPUTED][HIGH] Behavior Source详细合同和关闭状态由`EntityBehaviorSourceArchitecture.md`管理；本文件只管理模块责任与依赖，不以模块存在推断端到端功能完成。
 
-[COMPUTED][HIGH] 2026-07-30 `MassCrowdRuntime`已拥有Runner单槽Mailbox、非阻塞Orchestrator状态、事务envelope和Task telemetry；Core继续只承载纯POD/Kernel，Demo拥有Round GT Coordinator和宿主Adapter。详细合同见`AsyncFixedStepBoundaryArchitecture.md`。生产`WaitAndDrain()`已删除，真实场景和最终性能门尚未关闭。
+[COMPUTED][HIGH] 历史快照：2026-07-30 `MassCrowdRuntime`曾拥有Runner单槽Mailbox、非阻塞Orchestrator状态和事务envelope。当前源码已物理删除公共 Runner/Orchestrator/WorkGraph/transaction envelope；该历史描述不得作为当前模块拥有关系。Runtime 当前通用写入边界是 Worker Result Owner Commit Barrier。
 
 [INFERRED][HIGH] PW0冻结的下一代目标由`MassCrowdRuntime`承载通用Input/Result合同、Sequence/Generation门、三缓冲Exchange和不含Demo语义的Worker Runtime基础；`MassAICrowdDemo`只拥有场景Input Sync、Result Apply、字段映射和迁移Canary。Core继续只承载纯Kernel，Networking/Presentation只消费版本化公共输出，不得反向控制Worker调度。详细合同见`PersistentWorkerSimulationArchitecture.md`。
 
@@ -95,6 +101,10 @@ MassAICrowdDemo → 插件公共接口与可选模块
 [INFERRED][HIGH] Demo 必须直接测试同一套生产 Runtime、Networking 与 Presentation。固定 Round、readiness、全量 hash、fixture、故障注入、VIOLATION 和人工审片属于宿主观察/控制层，不得成为生产 Agent 的运行依赖。
 
 [INFERRED][HIGH] `RoundPlan`、`RoundResult`、测试端口、Scenario 枚举与当前 `RoundBootstrapPacket` 不进入插件公共产品 API；当前 RoundBootstrap 只能在通用 Relevant Snapshot primitive 建立后成为适配器。
+
+[INFERRED][HIGH] Worker Result 的通用 Prepare/Token/Final Validate/唯一 Owner/no-fail Commit 状态机属于 `MassCrowdRuntime`；Demo 只提供 Host-specific Prepared Mass/Target/Resource/Behavior/Event Plan 及其 FinalValidate/Commit adapter。Demo 不得拥有可被其他宿主复用的第二套 Commit Barrier，也不得通过兼容别名或转发包装保留旧 Demo Barrier API。
+
+[COMPUTED][HIGH] 当前代码与上述边界存在漂移：通用 `FCrowdWorkerResultApplyProxy` 已位于 `MassCrowdRuntime`，但 `FCrowdDemoWorkerResultCommitToken`、`FCrowdDemoWorkerResultOwnerBarrier` 和 Pending Finalize 容器仍位于 `MassAICrowdDemo`，且同一头文件混合 Runtime 提交协议与 Demo Mass/Target Plan。该漂移尚未修复。
 
 [COMPUTED][HIGH] 插件Source禁止引用`CrowdDemo`、`SimRound`、`/Game/Maps/`和端口命令行。Core额外禁止引用MassEntity、World、Actor、MassReplication或Runtime。`MassCrowd.Plugin.Boundary`自动化对这些规则执行源码扫描。
 

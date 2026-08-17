@@ -96,6 +96,8 @@ public:
     return bWorkerLifecycleProfileJournalOverflowed;
   }
   bool PrepareProjectileCapacity(int32 RequiredCount);
+  bool ValidateProjectileStates(
+    TConstArrayView<struct FCrowdProjectileState> Projectiles) const;
   void ApplyProjectileStates(
     TConstArrayView<struct FCrowdProjectileState> Projectiles);
   bool GatherProjectileStates(
