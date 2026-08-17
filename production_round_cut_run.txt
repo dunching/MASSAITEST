@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/apply_production_round_cut.py", line 811, in <module>
-    raise RuntimeError(f"retired full rollback symbol remains: {retired}")
-RuntimeError: retired full rollback symbol remains: FCrowdDemoSoftPressureRollbackAgentState
