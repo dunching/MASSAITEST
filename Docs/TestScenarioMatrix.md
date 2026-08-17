@@ -17,6 +17,7 @@ DIAGNOSTIC    有真实业务结果，但正式 runner/验收形式未通过
 FAIL          已知真实 correctness failure 尚未被关闭
 NOT RUN       当前结构上尚未执行
 OPEN          实现/规模门本身尚未完成
+RETIRED       验收对象/机制已从当前架构物理删除，不再作为当前测试门
 ```
 
 当前最重要的证据边界：
