@@ -50,6 +50,7 @@ void UMassCrowdRuntimeSubsystem::Initialize(
   NavDataProvider = MakeUnique<FCrowdRecastNavDataProvider>(*GetWorld());
   NavGraphResource = {};
   FlowCache.Reset();
+  SharedFlowResource = {};
   verify(BehaviorSourceRuntime.InitializeFromRegisteredProviders());
   AsyncSimulationRuntime =
     MakeUnique<FCrowdAsyncSimulationRuntime>();
@@ -80,11 +81,42 @@ void UMassCrowdRuntimeSubsystem::Deinitialize()
     AsyncSimulationRuntime.Reset();
   }
   FlowCache.Reset();
+  SharedFlowResource = {};
   BehaviorSourceRuntime.Reset();
   WorkerResourcePublications.Reset();
   NavGraphResource = {};
   NavDataProvider.Reset();
   Super::Deinitialize();
+}
+
+bool UMassCrowdRuntimeSubsystem::EnsureSharedFlowResource(
+  const FCrowdMassSharedFlowBuildInput& Input,
+  FCrowdMassSharedFlowBuildOutput& OutOutput)
+{
+  check(IsInGameThread());
+  OutOutput = FCrowdMassSharedFlowWork::EnsureResource(
+    Input, SharedFlowResource);
+  return OutOutput.bValid;
+}
+
+void UMassCrowdRuntimeSubsystem::ResetSharedFlowDynamicState()
+{
+  check(IsInGameThread());
+  SharedFlowResource.DynamicAnchorCellKey = INDEX_NONE;
+  SharedFlowResource.IntegrationRebuildCount = 0;
+}
+
+bool UMassCrowdRuntimeSubsystem::RestoreSharedFlowDynamicState(
+  const int32 DynamicAnchorCellKey,
+  const int32 IntegrationRebuildCount)
+{
+  check(IsInGameThread());
+  if (DynamicAnchorCellKey < INDEX_NONE
+    || IntegrationRebuildCount < 0)
+    return false;
+  SharedFlowResource.DynamicAnchorCellKey = DynamicAnchorCellKey;
+  SharedFlowResource.IntegrationRebuildCount = IntegrationRebuildCount;
+  return true;
 }
 
 bool UMassCrowdRuntimeSubsystem::ResolveWorkerResourceRevision(

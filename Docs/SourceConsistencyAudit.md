@@ -55,7 +55,7 @@ SOURCE COMMENT / NAMING DEBT
 | 12 | Projectile Authority | Worker owns projectile simulation | Executor 内持久 `Projectiles` state，并发布 Projectile/Combat dirty state；Mass 是代理 | EXACT |
 | 13 | Plugin 模块依赖 | TargetArchitecture 有旧/模糊依赖图 | 实际 Build.cs：Runtime→Core+Spatial；Projectiles→Runtime+Spatial+Combat+Core | DOC BUG |
 | 14 | Demo 项目定位 | Demo 是大规模 Runtime 验证宿主 | `.uproject` Description 仍写 “Isolated 500-entity...” | DOC/METADATA BUG |
-| 15 | WA8 Legacy | 新 Worker 仍有旧 Round shell 残留 | WorkerInputSync 仍从 `RoundSimPipelineSubsystem` 读取 Runtime Shared Flow | SOURCE DEBT |
+| 15 | WA8 Legacy / SharedFlow owner | 新 Worker 不应从旧 Round shell 取生产资源 | Primary Shared Flow owner 已迁到 `UMassCrowdRuntimeSubsystem`，WorkerInputSync 已与 Pipeline 断开；Round transaction/rollback 等仍残留 | EXACT + SOURCE DEBT REMAINS |
 | 16 | Duplicate Kernel | Plugin 是 canonical，Demo 仍有迁移副本 | Demo Particle/SharedFlow 仍有 diagnostics consumer；其他重复 kernel 仍需引用审计 | SOURCE DEBT |
 | 17 | Demo 巨型文件 | 文档说 legacy shell 很大 | RoundSimPipeline ~390KB、Processors ~330KB、Mixed ~204KB | EXACT / SOURCE DEBT |
 | 18 | Unity | Demo 关闭 Unity 是技术债信号 | Build.cs 明确因 legacy helper 重名而 `bUseUnity=false` | EXACT / SOURCE DEBT |
@@ -243,36 +243,29 @@ Build.cs dependency direction
 
 ---
 
-## 7. 审计发现 5：Worker Input 仍依赖旧 RoundSimPipeline 数据源
+## 7. 审计发现 5：Primary Shared Flow Resource Owner 已完成迁移
 
-### 源码事实
+### 当前源码事实
 
-`CrowdDemoWorkerInputSync.cpp` 在构建 versioned resources 时仍访问：
-
-```text
-UCrowdDemoRoundSimPipelineSubsystem
-```
-
-并读取：
+`FCrowdMassSharedFlowResource` 的 primary world resource 现在由：
 
 ```text
-GetRuntimeSharedFlowField()
+UMassCrowdRuntimeSubsystem
 ```
 
-这意味着：
+持有。Pipeline 的 static/dynamic SharedFlow build 通过 RuntimeSubsystem 调用同一个 `FCrowdMassSharedFlowWork::EnsureResource()`，自身只保留 Demo diagnostic view/counters。
 
-> Worker 已经是 Simulation Authority，不代表旧 Pipeline 已经退出生产数据链。
-
-这里是非常典型的迁移态：
+`CrowdDemoWorkerInputSync.cpp` 构建 Environment versioned resource 时直接读取：
 
 ```text
-Authority migrated
-Data source not fully migrated
+RuntimeSubsystem.GetSharedFlowResource().Field
 ```
 
-状态：SOURCE DEBT。
+并且不再 include 或查询 `UCrowdDemoRoundSimPipelineSubsystem`。Target Prepared Resource 的资源身份也使用稳定 `CrowdWorkerResourceIds::Environment`，不再使用成员地址。
 
-这应成为 WA8 的高优先级治理点，因为只要 Worker Input 仍需要 RoundSimPipeline，开发者就不能把 Pipeline 纯粹理解成 Test Harness。
+状态：该 P0 子切片已关闭。
+
+仍需注意：RoundSimPipeline 继续承担 legacy Round frame、rollback/transaction、Target prepared state、metrics/diagnostics，因此 WA8 整体仍是 SOURCE DEBT / OPEN。
 
 ---
 

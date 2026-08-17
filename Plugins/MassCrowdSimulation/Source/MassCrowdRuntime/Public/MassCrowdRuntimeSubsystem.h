@@ -4,6 +4,7 @@
 #include "MassCrowdAsyncSimulationRuntime.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
 #include "MassCrowdNavRuntime.h"
+#include "MassCrowdSharedFlowWork.h"
 #include "MassCrowdWorkerResultApply.h"
 #include "MassCrowdWorkerLifecycleBehaviorDomain.h"
 #include "MassCrowdWorkerMovementAuthority.h"
@@ -80,6 +81,20 @@ public:
   {
     FlowCache.SetLimits(Limits);
   }
+
+  bool EnsureSharedFlowResource(
+    const FCrowdMassSharedFlowBuildInput& Input,
+    FCrowdMassSharedFlowBuildOutput& OutOutput);
+
+  const FCrowdMassSharedFlowResource& GetSharedFlowResource() const
+  {
+    return SharedFlowResource;
+  }
+
+  void ResetSharedFlowDynamicState();
+  bool RestoreSharedFlowDynamicState(
+    int32 DynamicAnchorCellKey,
+    int32 IntegrationRebuildCount);
 
   FCrowdBehaviorSourceRuntime& GetBehaviorSourceRuntime()
   {
@@ -179,6 +194,7 @@ private:
   FCrowdNavGraphResource NavGraphResource;
   FCrowdNavSurfaceGraphBuildConfig GraphBuildConfig;
   FCrowdNavFlowCache FlowCache;
+  FCrowdMassSharedFlowResource SharedFlowResource;
   FCrowdBehaviorSourceRuntime BehaviorSourceRuntime;
   TUniquePtr<FCrowdAsyncSimulationRuntime> AsyncSimulationRuntime;
   TUniquePtr<FCrowdWorkerBoundaryShadowSync> WorkerShadowSync;

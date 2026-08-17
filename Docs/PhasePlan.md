@@ -50,9 +50,26 @@ Target Architecture
 - Worker Dirty Mass Apply 已使用 StableEntityRef→Mass Handle 持久索引和 Dirty EntityCollection。
 - Movement、Behavior、Target、Particle、Combat、Projectile、Lifecycle 等生产域已有 Worker Owner。
 
-## 3.2 当前必须删除的 Legacy
+## 3.2 已完成的 WA8 子切片
 
-按以下顺序实施，不建立第三套 retained cache、兼容 wrapper 或 fallback：
+本轮已完成：
+
+```text
+Primary SharedFlow Runtime Resource ownership
+RoundSimPipeline → UMassCrowdRuntimeSubsystem
+
+WorkerInputSync → RuntimeSubsystem SharedFlow resource
+WorkerInputSync → RoundSimPipeline direct dependency = 0
+
+Target Prepared ResourceId
+pointer-address → CrowdWorkerResourceIds::Environment
+```
+
+SharedFlow 算法、Round Stage 顺序和 Round Transaction 本切片未改变。
+
+## 3.3 当前必须删除的 Legacy
+
+继续按以下顺序实施，不建立第三套 retained cache、兼容 wrapper 或 fallback：
 
 1. **替换普通帧完整 rollback 数据源**
    - 只保留真正需要 replay/checkpoint/diagnostic 的 retained/delta 历史。
@@ -72,7 +89,7 @@ Target Architecture
    - Runtime 不反向依赖 Demo。
    - 不保留旧文件名 shim、typedef、wrapper 或 alias。
 
-## 3.3 WA8 验证门
+## 3.4 WA8 验证门
 
 WA8 删除切片完成后至少执行：
 

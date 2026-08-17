@@ -567,25 +567,25 @@ Presentation State 与 Simulation State 是不同职责；视觉系统不能反�
 
 当前最大的误读风险不是“还有旧文件”，而是**部分新主链仍真实依赖旧壳**。
 
-### 17.1 WorkerInputSync 仍读取 RoundSimPipeline Shared Flow
+### 17.1 Shared Flow Primary Resource Owner 已迁出 RoundSimPipeline
 
-当前 `CrowdDemoWorkerInputSync.cpp` 构建 versioned resources 时仍访问：
-
-```text
-UCrowdDemoRoundSimPipelineSubsystem
-→ GetRuntimeSharedFlowField()
-```
-
-所以 `RoundSimPipelineSubsystem` 还不能被当成纯 Test Harness 删除。
-
-这属于：
+当前 Primary Shared Flow 的 GT-side runtime resource 已由 `UMassCrowdRuntimeSubsystem` 唯一持有：
 
 ```text
-Authority 已迁移
-但部分 Input Resource Source 尚未迁移
+SharedFlow Build Stage / Host facts
+        ↓
+UMassCrowdRuntimeSubsystem
+        ↓ owns
+FCrowdMassSharedFlowResource
+        ↓
+WorkerInputSync / legacy Pipeline consumers
 ```
 
-是 WA8 需要优先断开的依赖。
+`CrowdDemoWorkerInputSync.cpp` 已不再 include、查询或读取 `UCrowdDemoRoundSimPipelineSubsystem`，Environment versioned resource 直接来自 RuntimeSubsystem。
+
+Target Prepared Resource 的 Shared Flow identity 也已从对象成员地址改为稳定 `CrowdWorkerResourceIds::Environment`。
+
+但这**不表示 RoundSimPipeline 已可删除**：Result Apply 后的 legacy Round frame、rollback/transaction、Target prepared state、metrics/diagnostics 等仍有真实消费者，是后续 WA8 工作。
 
 ### 17.2 RoundSim Stage struct 仍大量存在
 
