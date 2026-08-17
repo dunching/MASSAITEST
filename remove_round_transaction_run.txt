@@ -3,8 +3,13 @@ Traceback (most recent call last):
     raise RuntimeError(f"retired transaction symbol remains: {retired}")
 RuntimeError: retired transaction symbol remains: BoundaryOrchestrator
 
+===== applying orphan validation cleanup =====
+Traceback (most recent call last):
+  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/fix_remove_round_residuals.py", line 103, in <module>
+    raise RuntimeError("orphan FailFixedStep scheduler block missing")
+RuntimeError: orphan FailFixedStep scheduler block missing
+
 ===== residual transaction symbols after in-worktree patch =====
-Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:761:  const FCrowdBoundaryOrchestratorResult& GetLastBoundaryTransactionResult()
 Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5067:  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
 Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5068:    || BoundaryOrchestrator->GetState()
 Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5069:      != ECrowdBoundaryTransactionState::Merging)
@@ -14,5 +19,3 @@ Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5142:  if (!B
 Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5143:    || !BoundaryOrchestrator->MarkCommitted(CommitMilliseconds))
 Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5145:  LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
 Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5913:  if (BoundaryOrchestrator.IsValid())
-Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3502:      && Pipeline.GetRoundWorkState()
-Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3503:        == ECrowdBoundaryTransactionState::ReadyToCommit,
