@@ -20,355 +20,133 @@
 #include "Misc/Parse.h"
 #include "Tasks/Task.h"
 
-// Demo-local scheduler for one immutable Round input batch. It intentionally
-// owns no commit envelope and exposes no Runtime boundary transaction API.
-class FCrowdDemoRoundWorkBatch
+namespace
+{
+struct FCrowdBootstrapStageId
+{
+  uint32 Value = 0;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBootstrapStageId&) const = default;
+  auto operator<=>(const FCrowdBootstrapStageId&) const = default;
+};
+
+struct FCrowdBootstrapTaskTypeId
+{
+  uint32 Value = 0;
+  bool IsValid() const { return Value != 0; }
+  bool operator==(const FCrowdBootstrapTaskTypeId&) const = default;
+  auto operator<=>(const FCrowdBootstrapTaskTypeId&) const = default;
+};
+
+struct FCrowdBootstrapTaskKey
+{
+  FCrowdBootstrapStageId StageId;
+  FCrowdBootstrapTaskTypeId TaskTypeId;
+  uint64 ScopeKey = 0;
+  bool operator==(const FCrowdBootstrapTaskKey&) const = default;
+  bool operator<(const FCrowdBootstrapTaskKey& Other) const
+  {
+    if (StageId != Other.StageId) return StageId < Other.StageId;
+    if (TaskTypeId != Other.TaskTypeId) return TaskTypeId < Other.TaskTypeId;
+    return ScopeKey < Other.ScopeKey;
+  }
+  bool IsValid() const
+  { return StageId.IsValid() && TaskTypeId.IsValid(); }
+};
+
+struct FCrowdBootstrapTaskResult
+{
+  uint64 StableHash = 14695981039346656037ull;
+  bool bSucceeded = false;
+  static FCrowdBootstrapTaskResult Success(uint64 Hash)
+  {
+    FCrowdBootstrapTaskResult Result;
+    Result.StableHash = Hash;
+    Result.bSucceeded = Hash != 0;
+    return Result;
+  }
+  static FCrowdBootstrapTaskResult Failure() { return {}; }
+};
+
+using FCrowdBootstrapTaskBody =
+  TUniqueFunction<FCrowdBootstrapTaskResult()>;
+
+class FCrowdDemoBootstrapSynchronousGraph
 {
 public:
-  bool Begin(
-    const FCrowdMassBoundarySnapshot& Snapshot,
-    const double GatherMilliseconds,
-    const uint64 Generation)
-  {
-    if (!IsInGameThread()
-      || State != ECrowdBoundaryTransactionState::Idle
-      || !Snapshot.bValid || Snapshot.FixedStepIndex < 0
-      || Snapshot.PlanRevision < 0 || Snapshot.Agents.IsEmpty()
-      || Generation == 0)
-      return false;
-    FixedStepIndex = Snapshot.FixedStepIndex;
-    PlanRevision = Snapshot.PlanRevision;
-    SnapshotHash = Snapshot.StableHash;
-    BatchGeneration = Generation;
-    Timings = {};
-    Timings.GatherMilliseconds = FMath::Max(0.0, GatherMilliseconds);
-    State = ECrowdBoundaryTransactionState::Gathering;
-    return SnapshotHash != 0;
-  }
-
-  bool Matches(
-    const FCrowdMassBoundarySnapshot& Snapshot,
-    const uint64 Generation) const
-  {
-    return Generation != 0 && Generation == BatchGeneration
-      && Snapshot.bValid && Snapshot.FixedStepIndex == FixedStepIndex
-      && Snapshot.PlanRevision == PlanRevision
-      && Snapshot.StableHash == SnapshotHash;
-  }
-
   bool AddTask(
-    const FCrowdBoundaryTaskKey Key,
-    const TConstArrayView<FCrowdBoundaryTaskKey> Prerequisites,
-    FCrowdBoundaryTaskBody&& Body,
+    const FCrowdBootstrapTaskKey Key,
+    const TConstArrayView<FCrowdBootstrapTaskKey> Prerequisites,
+    FCrowdBootstrapTaskBody&& Body,
     const bool bRequireOffGameThread = true)
   {
-    if (!IsInGameThread()
-      || State != ECrowdBoundaryTransactionState::Gathering
-      || !Key.IsValid() || !Body || FindNode(Key))
+    (void)bRequireOffGameThread;
+    if (!IsInGameThread() || !Key.IsValid() || !Body
+      || Nodes.ContainsByPredicate(
+        [&Key](const FNode& Node) { return Node.Key == Key; }))
       return false;
-    TUniquePtr<FTaskNode> Node = MakeUnique<FTaskNode>();
-    Node->Key = Key;
-    Node->Prerequisites = TArray<FCrowdBoundaryTaskKey>(Prerequisites);
-    Node->Prerequisites.Sort();
-    for (int32 Index = 0; Index < Node->Prerequisites.Num(); ++Index)
-    {
-      if (!Node->Prerequisites[Index].IsValid()
-        || Node->Prerequisites[Index] == Key
+    FNode& Node = Nodes.AddDefaulted_GetRef();
+    Node.Key = Key;
+    Node.Prerequisites = TArray<FCrowdBootstrapTaskKey>(Prerequisites);
+    Node.Prerequisites.Sort();
+    for (int32 Index = 0; Index < Node.Prerequisites.Num(); ++Index)
+      if (!Node.Prerequisites[Index].IsValid()
+        || Node.Prerequisites[Index] == Key
         || (Index > 0
-          && !(Node->Prerequisites[Index - 1]
-            < Node->Prerequisites[Index])))
+          && !(Node.Prerequisites[Index - 1]
+            < Node.Prerequisites[Index])))
         return false;
-    }
-    Node->Body = MoveTemp(Body);
-    Node->bRequireOffGameThread = bRequireOffGameThread;
-    Nodes.Add(MoveTemp(Node));
+    Node.Body = MoveTemp(Body);
     return true;
   }
 
-  bool Dispatch()
+  bool Run()
   {
-    if (!IsInGameThread()
-      || State != ECrowdBoundaryTransactionState::Gathering
-      || !ValidateGraph())
+    if (!IsInGameThread() || Nodes.IsEmpty()) return false;
+    TSet<int32> Completed;
+    while (Completed.Num() < Nodes.Num())
     {
-      Fail();
-      return false;
-    }
-    const double QueueStartSeconds = FPlatformTime::Seconds();
-    Nodes.Sort([](const TUniquePtr<FTaskNode>& A,
-      const TUniquePtr<FTaskNode>& B)
-    {
-      return A->Key < B->Key;
-    });
-    TSet<FCrowdBoundaryTaskKey> Launched;
-    while (Launched.Num() < Nodes.Num())
-    {
-      bool bMadeProgress = false;
-      for (const TUniquePtr<FTaskNode>& Node : Nodes)
+      int32 Selected = INDEX_NONE;
+      for (int32 Index = 0; Index < Nodes.Num(); ++Index)
       {
-        if (Launched.Contains(Node->Key)) continue;
-        bool bPrerequisitesLaunched = true;
-        for (const FCrowdBoundaryTaskKey& Prerequisite
-          : Node->Prerequisites)
-          bPrerequisitesLaunched &= Launched.Contains(Prerequisite);
-        if (!bPrerequisitesLaunched) continue;
-
-        TArray<UE::Tasks::FTask> PrerequisiteTasks;
-        TArray<TSharedRef<FCrowdBoundaryTaskResult,
-          ESPMode::ThreadSafe>> PrerequisiteResults;
-        for (const FCrowdBoundaryTaskKey& Prerequisite
-          : Node->Prerequisites)
+        if (Completed.Contains(Index)) continue;
+        bool bReady = true;
+        for (const FCrowdBootstrapTaskKey& Prerequisite
+          : Nodes[Index].Prerequisites)
         {
-          const FTaskNode* PrerequisiteNode = FindNode(Prerequisite);
-          if (!PrerequisiteNode)
+          const int32 PrerequisiteIndex = Nodes.IndexOfByPredicate(
+            [&Prerequisite](const FNode& Node)
+            { return Node.Key == Prerequisite; });
+          if (PrerequisiteIndex == INDEX_NONE
+            || !Completed.Contains(PrerequisiteIndex))
           {
-            Fail();
-            return false;
+            bReady = false;
+            break;
           }
-          PrerequisiteTasks.Add(PrerequisiteNode->Task);
-          PrerequisiteResults.Add(PrerequisiteNode->Result);
         }
-        FCrowdBoundaryTaskBody Body = MoveTemp(Node->Body);
-        const auto Result = Node->Result;
-        const auto Telemetry = Node->Telemetry;
-        Telemetry->EnqueueSeconds = FPlatformTime::Seconds();
-        Node->Task = UE::Tasks::Launch(
-          TEXT("CrowdDemoRoundWork"),
-          [Body = MoveTemp(Body), Result, Telemetry,
-            PrerequisiteResults = MoveTemp(PrerequisiteResults)]() mutable
-          {
-            Telemetry->StartSeconds = FPlatformTime::Seconds();
-            for (const auto& PrerequisiteResult : PrerequisiteResults)
-            {
-              if (!PrerequisiteResult->bSucceeded)
-              {
-                *Result = FCrowdBoundaryTaskResult::Failure();
-                Result->bRanOffGameThread = !IsInGameThread();
-                Telemetry->FinishSeconds = FPlatformTime::Seconds();
-                return;
-              }
-            }
-            *Result = Body();
-            Result->bRanOffGameThread = !IsInGameThread();
-            Telemetry->FinishSeconds = FPlatformTime::Seconds();
-          },
-          UE::Tasks::Prerequisites(PrerequisiteTasks),
-          UE::Tasks::ETaskPriority::Normal,
-          UE::Tasks::EExtendedTaskPriority::None,
-          UE::Tasks::ETaskFlags::DoNotRunInsideBusyWait);
-        Launched.Add(Node->Key);
-        bMadeProgress = true;
+        if (!bReady) continue;
+        if (Selected == INDEX_NONE
+          || Nodes[Index].Key < Nodes[Selected].Key)
+          Selected = Index;
       }
-      if (!bMadeProgress)
-      {
-        Fail();
-        return false;
-      }
+      if (Selected == INDEX_NONE) return false;
+      FCrowdBootstrapTaskResult Result = Nodes[Selected].Body();
+      if (!Result.bSucceeded) return false;
+      Completed.Add(Selected);
     }
-    TArray<UE::Tasks::FTask> AllTasks;
-    AllTasks.Reserve(Nodes.Num());
-    for (const TUniquePtr<FTaskNode>& Node : Nodes)
-      AllTasks.Add(Node->Task);
-    CompletionTask = UE::Tasks::Launch(
-      TEXT("CrowdDemoRoundWorkCompletion"), [] {},
-      UE::Tasks::Prerequisites(AllTasks),
-      UE::Tasks::ETaskPriority::Normal,
-      UE::Tasks::EExtendedTaskPriority::None,
-      UE::Tasks::ETaskFlags::DoNotRunInsideBusyWait);
-    Timings.QueueMilliseconds =
-      (FPlatformTime::Seconds() - QueueStartSeconds) * 1000.0;
-    WorkStartSeconds = FPlatformTime::Seconds();
-    State = ECrowdBoundaryTransactionState::Working;
     return true;
-  }
-
-  ECrowdBoundaryPollResult Poll()
-  {
-    if (!IsInGameThread()
-      || State != ECrowdBoundaryTransactionState::Working)
-    {
-      Fail();
-      return ECrowdBoundaryPollResult::Failed;
-    }
-    if (!CompletionTask.IsValid() || !CompletionTask.IsCompleted())
-      return ECrowdBoundaryPollResult::Pending;
-    Timings.WorkMilliseconds =
-      (FPlatformTime::Seconds() - WorkStartSeconds) * 1000.0;
-    for (const TUniquePtr<FTaskNode>& Node : Nodes)
-    {
-      if (!Node->Result->bSucceeded
-        || (Node->bRequireOffGameThread
-          && !Node->Result->bRanOffGameThread))
-      {
-        Fail();
-        return ECrowdBoundaryPollResult::Failed;
-      }
-    }
-    State = ECrowdBoundaryTransactionState::Merging;
-    return ECrowdBoundaryPollResult::Ready;
-  }
-
-  bool MarkApplyPlanValidated(
-    const uint64 ApplyPlanHash,
-    const double MergeMilliseconds,
-    const double ValidateMilliseconds)
-  {
-    if (!IsInGameThread()
-      || State != ECrowdBoundaryTransactionState::Merging
-      || ApplyPlanHash == 0)
-    {
-      Fail();
-      return false;
-    }
-    CommitPlanHash = ApplyPlanHash;
-    Timings.MergeMilliseconds = FMath::Max(0.0, MergeMilliseconds);
-    Timings.ValidateMilliseconds =
-      FMath::Max(0.0, ValidateMilliseconds);
-    State = ECrowdBoundaryTransactionState::ReadyToCommit;
-    return true;
-  }
-
-  bool MarkCommitted(const double CommitMilliseconds)
-  {
-    if (!IsInGameThread()
-      || State != ECrowdBoundaryTransactionState::ReadyToCommit)
-    {
-      Fail();
-      return false;
-    }
-    Timings.CommitMilliseconds = FMath::Max(0.0, CommitMilliseconds);
-    State = ECrowdBoundaryTransactionState::Committed;
-    return true;
-  }
-
-  void Fail()
-  {
-    if (State != ECrowdBoundaryTransactionState::Committed)
-      State = ECrowdBoundaryTransactionState::Failed;
-  }
-
-  ECrowdBoundaryTransactionState GetState() const { return State; }
-
-  FCrowdBoundaryOrchestratorResult BuildResult() const
-  {
-    FCrowdBoundaryOrchestratorResult Result;
-    Result.State = State;
-    Result.Timings = Timings;
-    Result.SnapshotHash = SnapshotHash;
-    Result.CommitPlanHash = CommitPlanHash;
-    Result.bSucceeded =
-      State == ECrowdBoundaryTransactionState::Committed;
-    Result.Tasks.Reserve(Nodes.Num());
-    for (const TUniquePtr<FTaskNode>& Node : Nodes)
-    {
-      FCrowdBoundaryTaskTimings TaskTimings;
-      if (Node->Telemetry->StartSeconds > 0.0)
-      {
-        TaskTimings.QueueMilliseconds =
-          (Node->Telemetry->StartSeconds
-            - Node->Telemetry->EnqueueSeconds) * 1000.0;
-      }
-      if (Node->Telemetry->FinishSeconds > 0.0)
-      {
-        TaskTimings.ExecutionMilliseconds =
-          (Node->Telemetry->FinishSeconds
-            - Node->Telemetry->StartSeconds) * 1000.0;
-        TaskTimings.EndToEndMilliseconds =
-          (Node->Telemetry->FinishSeconds
-            - Node->Telemetry->EnqueueSeconds) * 1000.0;
-      }
-      Result.Tasks.Add({Node->Key, Node->Key.TaskTypeId.Value,
-        *Node->Result, TaskTimings});
-    }
-    Result.Tasks.Sort([](const auto& A, const auto& B)
-    {
-      return A.Key < B.Key;
-    });
-    return Result;
   }
 
 private:
-  struct FTaskNode
+  struct FNode
   {
-    struct FTelemetry
-    {
-      double EnqueueSeconds = 0.0;
-      double StartSeconds = 0.0;
-      double FinishSeconds = 0.0;
-    };
-    FCrowdBoundaryTaskKey Key;
-    TArray<FCrowdBoundaryTaskKey> Prerequisites;
-    FCrowdBoundaryTaskBody Body;
-    TSharedRef<FCrowdBoundaryTaskResult, ESPMode::ThreadSafe> Result =
-      MakeShared<FCrowdBoundaryTaskResult, ESPMode::ThreadSafe>();
-    TSharedRef<FTelemetry, ESPMode::ThreadSafe> Telemetry =
-      MakeShared<FTelemetry, ESPMode::ThreadSafe>();
-    UE::Tasks::FTask Task;
-    bool bRequireOffGameThread = true;
+    FCrowdBootstrapTaskKey Key;
+    TArray<FCrowdBootstrapTaskKey> Prerequisites;
+    FCrowdBootstrapTaskBody Body;
   };
-
-  FTaskNode* FindNode(const FCrowdBoundaryTaskKey& Key)
-  {
-    for (const TUniquePtr<FTaskNode>& Node : Nodes)
-      if (Node->Key == Key) return Node.Get();
-    return nullptr;
-  }
-
-  const FTaskNode* FindNode(const FCrowdBoundaryTaskKey& Key) const
-  {
-    for (const TUniquePtr<FTaskNode>& Node : Nodes)
-      if (Node->Key == Key) return Node.Get();
-    return nullptr;
-  }
-
-  bool ValidateGraph() const
-  {
-    if (Nodes.IsEmpty()) return false;
-    TMap<FCrowdBoundaryTaskKey, int32> InDegree;
-    TMap<FCrowdBoundaryTaskKey, TArray<FCrowdBoundaryTaskKey>> Dependents;
-    for (const TUniquePtr<FTaskNode>& Node : Nodes)
-    {
-      InDegree.Add(Node->Key, Node->Prerequisites.Num());
-      for (const FCrowdBoundaryTaskKey& Prerequisite
-        : Node->Prerequisites)
-      {
-        if (!FindNode(Prerequisite)) return false;
-        Dependents.FindOrAdd(Prerequisite).Add(Node->Key);
-      }
-    }
-    TArray<FCrowdBoundaryTaskKey> Ready;
-    for (const TPair<FCrowdBoundaryTaskKey, int32>& Pair : InDegree)
-      if (Pair.Value == 0) Ready.Add(Pair.Key);
-    int32 Visited = 0;
-    while (!Ready.IsEmpty())
-    {
-      Ready.Sort();
-      const FCrowdBoundaryTaskKey Key = Ready[0];
-      Ready.RemoveAt(0, EAllowShrinking::No);
-      ++Visited;
-      for (const FCrowdBoundaryTaskKey& Dependent
-        : Dependents.FindRef(Key))
-      {
-        int32* Degree = InDegree.Find(Dependent);
-        if (!Degree) return false;
-        if (--(*Degree) == 0) Ready.Add(Dependent);
-      }
-    }
-    return Visited == Nodes.Num();
-  }
-
-  TArray<TUniquePtr<FTaskNode>> Nodes;
-  UE::Tasks::FTask CompletionTask;
-  FCrowdBoundaryPhaseTimings Timings;
-  ECrowdBoundaryTransactionState State =
-    ECrowdBoundaryTransactionState::Idle;
-  uint64 BatchGeneration = 0;
-  int32 FixedStepIndex = INDEX_NONE;
-  int32 PlanRevision = INDEX_NONE;
-  uint64 SnapshotHash = 0;
-  uint64 CommitPlanHash = 0;
-  double WorkStartSeconds = 0.0;
+  TArray<FNode> Nodes;
 };
+}
 
 bool FCrowdDemoRoundWorkGraph::BuildMovementInput(
   const FCrowdDemoRoundWorkGraphInput& Input,
@@ -2211,7 +1989,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   BoundaryFormationFacts.Reset();
   BoundaryFacingFacts.Reset();
   BoundaryBusinessFacts.Reset();
-  BoundaryOrchestrator.Reset();
   BoundaryFacingWorkState.Reset();
   ClearPreparedRoundCommitPlan();
   bWorkerV2TargetStateBootstrapped = false;
@@ -2588,7 +2365,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::
 ResetBoundaryDerivedStateAfterPublish()
 {
   MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
-  BoundaryOrchestrator.Reset();
   BoundaryFacingWorkState.Reset();
   PreparedTargetResourceSlots.Reset();
   PreparedMovementBoundaryCommit = {};
@@ -2782,18 +2558,16 @@ TryPublishWorkerProxyBoundarySnapshot()
   return true;
 }
 
-bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction(
-  const double GatherMilliseconds)
+
+bool UCrowdDemoRoundSimPipelineSubsystem::
+  BeginWorkerBootstrapPreparation(const double GatherMilliseconds)
 {
   if (!IsInGameThread() || !IsBoundarySnapshotCurrent()
-    || BoundaryOrchestrator.IsValid())
+    || bCurrentStepFullWorkerProductionFastPath
+    || BoundaryFacingWorkState.IsValid())
     return false;
-  BoundaryOrchestrator =
-    MakeShared<FCrowdDemoRoundWorkBatch>();
-  if (!BoundaryOrchestrator->Begin(
-      BoundarySnapshot, GatherMilliseconds, BoundaryGeneration))
-    return false;
-  CurrentBoundaryRequestStartSeconds = FPlatformTime::Seconds();
+  CurrentBoundaryRequestStartSeconds = FPlatformTime::Seconds()
+    - FMath::Max(0.0, GatherMilliseconds) / 1000.0;
   return true;
 }
 
@@ -2807,13 +2581,6 @@ float UCrowdDemoRoundSimPipelineSubsystem::
     : 0.0f;
 }
 
-ECrowdBoundaryTransactionState
-UCrowdDemoRoundSimPipelineSubsystem::GetRoundWorkState() const
-{
-  return BoundaryOrchestrator.IsValid()
-    ? BoundaryOrchestrator->GetState()
-    : ECrowdBoundaryTransactionState::Idle;
-}
 
 bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
 {
@@ -2829,10 +2596,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
       BoundarySnapshot.bValid ? 1 : 0);
     return false;
   };
-  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Gathering
-    || !IsBoundarySnapshotCurrent())
+  if (!IsInGameThread() || !IsBoundarySnapshotCurrent())
     return RejectBusinessStage(TEXT("invalid_boundary_state"));
   if (!BoundaryFacingWorkState.IsValid())
   {
@@ -2916,9 +2680,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
 bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundarySharedFlowWork(
   const FCrowdMassSharedFlowSampleInput& Input)
 {
-  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Gathering
+  if (!IsInGameThread()
     || Input.FixedStepIndex != GetCurrentFixedStepIndex()
     || Input.PlanRevision != GetCurrentPlanRevision()
     || Input.Agents.Num() != BoundarySnapshot.Agents.Num())
@@ -2944,8 +2706,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryTargetTopologyWork(
 {
   if (!IsInGameThread() || !BoundaryFacingWorkState.IsValid()
     || !BoundaryFacingWorkState->bSharedFlowStaged
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Gathering)
+)
     return false;
   for (const auto& Slot : BoundaryFacingWorkState->TargetTopologySlots)
     if (Slot.CohortKey == CohortKey)
@@ -3033,9 +2794,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryTargetGuidanceWork(
 bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryMovementWork(
   FCrowdMassMovementPipelineWorkInput&& Input)
 {
-  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Gathering
+  if (!IsInGameThread()
     || (BoundaryFacingWorkState.IsValid()
       && !BoundaryFacingWorkState->bSharedFlowStaged)
     || (BoundaryFacingWorkState.IsValid()
@@ -3060,9 +2819,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeBoundaryMovementWork(
     || !BoundaryFacingWorkState->bCompleted
     || BoundaryFacingWorkState->bMovementConsumed
     || !BoundaryFacingWorkState->GraphOutput.Movement.bCompleted
-    || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Merging)
+)
     return false;
   OutOutput = MoveTemp(BoundaryFacingWorkState->GraphOutput.Movement);
   BoundaryFacingWorkState->bMovementConsumed = true;
@@ -3107,9 +2864,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeBoundaryParticleWork(
     || !BoundaryFacingWorkState->bCompleted
     || BoundaryFacingWorkState->bParticleConsumed
     || !BoundaryFacingWorkState->GraphOutput.Particle.bCompleted
-    || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Merging)
+)
     return false;
   OutOutput = MoveTemp(BoundaryFacingWorkState->GraphOutput.Particle);
   BoundaryFacingWorkState->bParticleConsumed = true;
@@ -3994,160 +3749,35 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   return true;
 }
 
+
 bool UCrowdDemoRoundSimPipelineSubsystem::
-  TrySubmitWorkerV2ClockIntentEarly()
+  SubmitPreparedWorkerBootstrapInput()
 {
   check(IsInGameThread());
-  if (!BoundaryFacingWorkState.IsValid()
-    || !BoundaryFacingWorkState->bBusinessStaged
-    || BoundaryFacingWorkState->bWorkerV2InputSubmitted
-    || !IsBoundarySnapshotCurrent() || !GetWorld()
-    || GetWorld()->GetNetMode() == NM_Client)
-    return true;
-
-  // Bootstrap, plan changes and non-Production comparison modes still consume
-  // the fully prepared Boundary input below. Once the immutable controls are
-  // installed, ordinary Target frames carry only Clock plus the O(1) moving
-  // objective fact; Projectile frames carry Clock alone.
-  if (ActivePlan.Rules.Scenario
-        != ECrowdDemoScenario::SimRoundSoftPressure)
-    return true;
-  const bool bTargetActive = IsTargetRegionExecutionActive();
-  const bool bProjectileActive =
-    ActivePlan.Rules.SoftPressureTestCase
-      == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
-    && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
-  if ((!bTargetActive && !bProjectileActive)
-    || (bTargetActive && !bWorkerV2TargetStateBootstrapped)
-    || (bProjectileActive
-      && !bWorkerV2ProjectileStateBootstrapped))
-    return true;
-
-  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
-    GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>();
-  if (!RuntimeSubsystem)
-    return false;
-  const FCrowdWorkerBoundaryShadowSync& WorkerShadow =
-    RuntimeSubsystem->GetWorkerShadowSync();
-  if (!WorkerShadow.IsStarted()
-    || WorkerShadow.GetMetrics().FullResnapshotCount == 0
-    || LastWorkerV2MovementControlGeneration
-        != WorkerShadow.GetGeneration()
-    || LastWorkerV2MovementControlPlanRevision
-        != GetCurrentPlanRevision())
-    return true;
-  if (RuntimeSubsystem->GetWorkerMovementAuthority().GetMode()
-        != ECrowdWorkerMovementAuthorityMode::Production
-    || RuntimeSubsystem->GetWorkerBehaviorAuthority().GetMode()
-        != ECrowdWorkerBehaviorAuthorityMode::Production)
-    return true;
-
-  ECrowdDemoWorkerParticleAuthorityMode ParticleMode =
-    ECrowdDemoWorkerParticleAuthorityMode::Shadow;
-  TSet<FCrowdStableEntityRef> ParticleCanaries;
-  ECrowdDemoWorkerTargetAuthorityMode TargetMode =
-    ECrowdDemoWorkerTargetAuthorityMode::Shadow;
-  TSet<FCrowdStableEntityRef> TargetCanaries;
-  ECrowdDemoWorkerProjectileAuthorityMode ProjectileMode =
-    ECrowdDemoWorkerProjectileAuthorityMode::Shadow;
-  ECrowdDemoWorkerCombatAuthorityMode CombatMode =
-    ECrowdDemoWorkerCombatAuthorityMode::Shadow;
-  if (!ResolveWorkerParticleAuthority(
-      BoundarySnapshot, ParticleMode, ParticleCanaries)
-    || (bTargetActive && !ResolveWorkerTargetAuthority(
-      BoundarySnapshot, TargetMode, TargetCanaries))
-    || (bProjectileActive
-      && !ResolveWorkerProjectileAuthority(ProjectileMode))
-    || (bProjectileActive
-      && !ResolveWorkerCombatAuthority(CombatMode)))
-    return false;
-  if (ParticleMode
-        != ECrowdDemoWorkerParticleAuthorityMode::Production
-    || (bTargetActive && TargetMode
-      != ECrowdDemoWorkerTargetAuthorityMode::Production)
-    || (bProjectileActive && ProjectileMode
-      != ECrowdDemoWorkerProjectileAuthorityMode::Production)
-    || (bProjectileActive && CombatMode
-      != ECrowdDemoWorkerCombatAuthorityMode::Production))
-    return true;
-
-  TArray<FCrowdWorkerObjectiveRevisionDelta> TargetObjectives;
-  const uint64 TargetObjectiveSemanticHash = bTargetActive
-    ? CalculateTargetObjectiveSemanticHash(GetTargetFact()) : 0;
-  const bool bPublishTargetObjective = bTargetActive
-    && TargetObjectiveSemanticHash
-      != LastWorkerV2TargetObjectiveSemanticHash;
-  if (bPublishTargetObjective)
-  {
-    FCrowdWorkerObjectiveRevisionDelta& Objective =
-      TargetObjectives.AddDefaulted_GetRef();
-    if (!BuildTargetObjectiveRevisionDelta(
-        GetTargetFact(), GetCurrentFixedStepIndex(),
-        NextWorkerV2TargetObjectiveRevision, Objective))
-      return false;
-  }
-  const uint64 PreviousInputSequence =
-    WorkerShadow.GetMetrics().LastSubmittedInputSequence;
-  if (!FCrowdDemoWorkerInputSync::SubmitIntentBatch(
-      *GetWorld(), GetCurrentFixedStepIndex(),
-      GetCurrentPlanRevision(),
-      GetCurrentStepEndServerTimeSeconds(), {}, {}, {}, {}, nullptr,
-      TargetObjectives))
+  if (!IsFullWorkerProductionMode()
+    || !BoundaryFacingWorkState.IsValid()
+    || !BoundaryFacingWorkState->bCompleted
+    || bCurrentStepFullWorkerProductionFastPath
+    || CurrentStepFullWorkerInputSequence != 0)
   {
     UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoWorkerEarlyClockIntentRejected step=%d previous_sequence=%llu"),
-      GetCurrentFixedStepIndex(), PreviousInputSequence);
+      TEXT("VIOLATION CrowdDemoWorkerBootstrapRequiresFullProduction step=%d prepared=%d"),
+      GetCurrentFixedStepIndex(),
+      BoundaryFacingWorkState.IsValid()
+        && BoundaryFacingWorkState->bCompleted ? 1 : 0);
     return false;
   }
+  if (!SubmitWorkerV2BoundaryInput())
+    return false;
   const uint64 AcceptedInputSequence =
-    RuntimeSubsystem->GetWorkerShadowSync().GetMetrics().
-      LastSubmittedInputSequence;
-  if (AcceptedInputSequence == 0
-    || AcceptedInputSequence <= PreviousInputSequence)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoWorkerEarlyClockIntentSequence step=%d previous_sequence=%llu accepted_sequence=%llu"),
-      GetCurrentFixedStepIndex(), PreviousInputSequence,
-      AcceptedInputSequence);
+    BoundaryFacingWorkState->WorkerV2InputSequence;
+  if (AcceptedInputSequence == 0)
     return false;
-  }
-
-  BoundaryFacingWorkState->WorkerV2InputSequence =
-    AcceptedInputSequence;
-  BoundaryFacingWorkState->bWorkerV2InputSubmitted = true;
-  BoundaryFacingWorkState->bUseWorkerV2Target = bTargetActive;
-  ++WorkerV2MovementControlReuseCount;
-  if (bTargetActive)
-  {
-    ++WorkerV2TargetControlReuseCount;
-    if (bPublishTargetObjective)
-    {
-      LastWorkerV2TargetObjectiveSemanticHash =
-        TargetObjectiveSemanticHash;
-      ++WorkerV2TargetObjectivePublishCount;
-      ++NextWorkerV2TargetObjectiveRevision;
-      if (NextWorkerV2TargetObjectiveRevision == 0)
-        return false;
-    }
-    else
-    {
-      ++WorkerV2TargetObjectiveReuseCount;
-    }
-  }
-  if (bProjectileActive)
-    ++WorkerV2ProjectileControlReuseCount;
-  ++WorkerV2EarlyClockIntentCount;
-  if (WorkerV2EarlyClockIntentCount == 1
-    || WorkerV2EarlyClockIntentCount % 300 == 0)
-  {
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoWorkerEarlyClockCheckpoint submitted=%llu input_sequence=%llu simulation_tick=%d generation=%llu plan_revision=%d objective_published=%llu objective_reused=%llu source=WorkerInputSync"),
-      WorkerV2EarlyClockIntentCount, AcceptedInputSequence,
-      GetCurrentFixedStepIndex(), WorkerShadow.GetGeneration(),
-      GetCurrentPlanRevision(),
-      WorkerV2TargetObjectivePublishCount,
-      WorkerV2TargetObjectiveReuseCount);
-  }
+  CurrentStepFullWorkerInputSequence = AcceptedInputSequence;
+  bCurrentStepFullWorkerProductionFastPath = true;
+  UE_LOG(LogTemp, Display,
+    TEXT("CrowdDemoWorkerBootstrapCutover step=%d input_sequence=%llu source=WorkerInputSync"),
+    GetCurrentFixedStepIndex(), AcceptedInputSequence);
   return true;
 }
 
@@ -4416,9 +4046,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     TMap<int32, int32>&& PreviousSettleStepsByAgentId,
     TMap<int32, bool>&& TerminalOwnerByAgentId)
 {
-  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Gathering
+  FCrowdDemoBootstrapSynchronousGraph BootstrapGraph;
+  if (!IsInGameThread()
     || !BoundaryFacingWorkState.IsValid()
     || !BoundaryFacingWorkState->bBusinessStaged
     || !BoundaryFacingWorkState->bSharedFlowStaged
@@ -4444,10 +4073,10 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
 
   const uint64 SnapshotHash = BoundarySnapshot.StableHash;
   const auto AddHashTask = [this, SnapshotHash](
-    const FCrowdBoundaryTaskKey Key,
-    const TConstArrayView<FCrowdBoundaryTaskKey> Prerequisites)
+    const FCrowdBootstrapTaskKey Key,
+    const TConstArrayView<FCrowdBootstrapTaskKey> Prerequisites)
   {
-    return BoundaryOrchestrator->AddTask(
+    return BootstrapGraph.AddTask(
       Key, Prerequisites,
       [SnapshotHash, Key]
       {
@@ -4456,34 +4085,34 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           Hash, Key.StageId.Value);
         Hash = FoldBoundaryHash(Hash, Key.TaskTypeId.Value);
         Hash = FoldBoundaryHash(Hash, Key.ScopeKey);
-        return FCrowdBoundaryTaskResult::Success(Hash);
+        return FCrowdBootstrapTaskResult::Success(Hash);
       },
       false);
   };
-  const FCrowdBoundaryTaskKey Business = {{1}, {101}, 0};
-  const FCrowdBoundaryTaskKey SharedFlow = {{2}, {201}, 0};
-  const FCrowdBoundaryTaskKey Movement = {{3}, {301}, 0};
-  const FCrowdBoundaryTaskKey Particle = {{4}, {401}, 0};
-  const FCrowdBoundaryTaskKey Facing = {{5}, {501}, 0};
-  TArray<FCrowdBoundaryTaskKey> MovementDeps = {Business, SharedFlow};
+  const FCrowdBootstrapTaskKey Business = {{1}, {101}, 0};
+  const FCrowdBootstrapTaskKey SharedFlow = {{2}, {201}, 0};
+  const FCrowdBootstrapTaskKey Movement = {{3}, {301}, 0};
+  const FCrowdBootstrapTaskKey Particle = {{4}, {401}, 0};
+  const FCrowdBootstrapTaskKey Facing = {{5}, {501}, 0};
+  TArray<FCrowdBootstrapTaskKey> MovementDeps = {Business, SharedFlow};
   const bool bHasTargetWork =
     !State->bUseWorkerV2Target
     && !State->TargetTopologySlots.IsEmpty();
-  const FCrowdBoundaryTaskKey ParticleDeps[] = {Movement};
-  const FCrowdBoundaryTaskKey FacingDeps[] = {Particle};
+  const FCrowdBootstrapTaskKey ParticleDeps[] = {Movement};
+  const FCrowdBootstrapTaskKey FacingDeps[] = {Particle};
   bool bRegistered =
-    BoundaryOrchestrator->AddTask(
+    BootstrapGraph.AddTask(
       Business, {},
       [State]
       {
         State->BusinessOutput =
           RunBoundaryBusinessWork(State->BusinessInput);
         return State->BusinessOutput.bCompleted
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->BusinessOutput.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       })
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       SharedFlow, {},
       [State]
       {
@@ -4502,9 +4131,9 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
             FlowIndex);
         }
         return State->GraphOutput.SharedFlow.bValid
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->GraphOutput.SharedFlow.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       });
   if (bRegistered && bHasTargetWork)
   {
@@ -4518,20 +4147,20 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     {
       const uint32 CohortKey =
         State->TargetTopologySlots[SlotIndex].CohortKey;
-      const FCrowdBoundaryTaskKey Topology = {
+      const FCrowdBootstrapTaskKey Topology = {
         {2}, {202}, CohortKey};
-      const FCrowdBoundaryTaskKey Demand = {
+      const FCrowdBootstrapTaskKey Demand = {
         {2}, {203}, CohortKey};
-      const FCrowdBoundaryTaskKey Plan = {
+      const FCrowdBootstrapTaskKey Plan = {
         {2}, {204}, CohortKey};
-      const FCrowdBoundaryTaskKey Guidance = {
+      const FCrowdBootstrapTaskKey Guidance = {
         {2}, {205}, CohortKey};
-      const FCrowdBoundaryTaskKey DemandDeps[] = {
+      const FCrowdBootstrapTaskKey DemandDeps[] = {
         SharedFlow, Topology};
-      const FCrowdBoundaryTaskKey PlanDeps[] = {Demand};
-      const FCrowdBoundaryTaskKey GuidanceDeps[] = {Plan};
+      const FCrowdBootstrapTaskKey PlanDeps[] = {Demand};
+      const FCrowdBootstrapTaskKey GuidanceDeps[] = {Plan};
       MovementDeps.Add(Guidance);
-      bRegistered = BoundaryOrchestrator->AddTask(
+      bRegistered = BootstrapGraph.AddTask(
         Topology, {},
         [State, SlotIndex]
         {
@@ -4542,19 +4171,19 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
               FCrowdMassTargetRegionWork::BuildTopology(Slot.Input);
           }
           return Slot.Output.bValid
-            ? FCrowdBoundaryTaskResult::Success(
+            ? FCrowdBootstrapTaskResult::Success(
                 FoldBoundaryHash(
                   Slot.Output.Summary.TopologyHash,
                   Slot.CohortKey))
-            : FCrowdBoundaryTaskResult::Failure();
+            : FCrowdBootstrapTaskResult::Failure();
         })
-        && BoundaryOrchestrator->AddTask(
+        && BootstrapGraph.AddTask(
           Demand, DemandDeps,
           [State, SlotIndex]
           {
             auto& Slot = State->TargetTopologySlots[SlotIndex];
             if (!Slot.bDemandStaged)
-              return FCrowdBoundaryTaskResult::Failure();
+              return FCrowdBootstrapTaskResult::Failure();
             FCrowdMassTargetRegionDemandInput DemandInput =
               Slot.DemandInput;
             DemandInput.Topology = Slot.Output.Topology;
@@ -4583,7 +4212,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
             for (FCrowdTargetRegionTransportAgent& Agent
               : DemandInput.Agents)
               if (!JoinFarFlow(Agent))
-                return FCrowdBoundaryTaskResult::Failure();
+                return FCrowdBootstrapTaskResult::Failure();
             for (FCrowdTargetRegionTransportAgent& Agent
               : DemandInput.ExternalAgents)
             {
@@ -4598,17 +4227,17 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
             Slot.DemandOutput =
               FCrowdMassTargetRegionWork::BuildDemand(DemandInput);
             return Slot.DemandOutput.bValid
-              ? FCrowdBoundaryTaskResult::Success(
+              ? FCrowdBootstrapTaskResult::Success(
                   Slot.DemandOutput.Demand.DemandHash)
-              : FCrowdBoundaryTaskResult::Failure();
+              : FCrowdBootstrapTaskResult::Failure();
           })
-        && BoundaryOrchestrator->AddTask(
+        && BootstrapGraph.AddTask(
           Plan, PlanDeps,
           [State, SlotIndex]
           {
             auto& Slot = State->TargetTopologySlots[SlotIndex];
             if (!Slot.bPlanStaged)
-              return FCrowdBoundaryTaskResult::Failure();
+              return FCrowdBootstrapTaskResult::Failure();
             FCrowdMassTargetRegionPlanInput PlanInput =
               Slot.PlanInput;
             PlanInput.Topology = Slot.Output.Topology;
@@ -4616,19 +4245,19 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
             Slot.PlanOutput =
               FCrowdMassTargetRegionWork::SolvePlan(PlanInput);
             return Slot.PlanOutput.bValid
-              ? FCrowdBoundaryTaskResult::Success(
+              ? FCrowdBootstrapTaskResult::Success(
                   FoldBoundaryHash(
                     Slot.PlanOutput.Plan.TransportHash,
                     Slot.PlanOutput.Execution.ExecutionHash))
-              : FCrowdBoundaryTaskResult::Failure();
+              : FCrowdBootstrapTaskResult::Failure();
           })
-        && BoundaryOrchestrator->AddTask(
+        && BootstrapGraph.AddTask(
           Guidance, GuidanceDeps,
           [State, SlotIndex]
           {
             auto& Slot = State->TargetTopologySlots[SlotIndex];
             if (!Slot.bGuidanceStaged)
-              return FCrowdBoundaryTaskResult::Failure();
+              return FCrowdBootstrapTaskResult::Failure();
             FCrowdMassTargetRegionGuidanceInput GuidanceInput =
               Slot.GuidanceInput;
             GuidanceInput.Topology = Slot.Output.Topology;
@@ -4643,7 +4272,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
               if (!FlowIndex
                 || !State->GraphOutput.SharedFlow.Agents.IsValidIndex(
                   *FlowIndex))
-                return FCrowdBoundaryTaskResult::Failure();
+                return FCrowdBootstrapTaskResult::Failure();
               const FCrowdMassSharedFlowAgentOutput& Flow =
                 State->GraphOutput.SharedFlow.Agents[*FlowIndex];
               Agent.FarFlowPreferredVelocity =
@@ -4659,14 +4288,14 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
               FCrowdMassTargetRegionWork::BuildGuidance(
                 GuidanceInput);
             return Slot.GuidanceOutput.bValid
-              ? FCrowdBoundaryTaskResult::Success(
+              ? FCrowdBootstrapTaskResult::Success(
                   Slot.GuidanceOutput.Summary.GuidanceHash)
-              : FCrowdBoundaryTaskResult::Failure();
+              : FCrowdBootstrapTaskResult::Failure();
           });
     }
   }
   bRegistered = bRegistered
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       Movement, MovementDeps,
       [State]
       {
@@ -4674,7 +4303,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         if (!FCrowdDemoRoundWorkGraph::BuildMovementInput(
             State->GraphInput, State->GraphOutput.SharedFlow,
             MovementInput))
-          return FCrowdBoundaryTaskResult::Failure();
+          return FCrowdBootstrapTaskResult::Failure();
         TMap<int32, FCrowdMassGatherRecord*> RecordById;
         for (FCrowdMassGatherRecord& Record
           : MovementInput.Guidance.Records)
@@ -4685,7 +4314,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           FCrowdMassGatherRecord* const* Record =
             RecordById.Find(Candidate.AgentId);
           if (!Record)
-            return FCrowdBoundaryTaskResult::Failure();
+            return FCrowdBootstrapTaskResult::Failure();
           (*Record)->Guidance.BusinessOverride = Candidate;
         }
         TMap<int32, FCrowdMassMovementPipelineAgentOverlay*>
@@ -4699,7 +4328,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           FCrowdMassMovementPipelineAgentOverlay* const* Overlay =
             OverlayById.Find(Step.AgentId);
           if (!Overlay)
-            return FCrowdBoundaryTaskResult::Failure();
+            return FCrowdBootstrapTaskResult::Failure();
           if (Step.bActive)
           {
             (*Overlay)->bVerticalOverride = true;
@@ -4720,7 +4349,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
               FCrowdMassGatherRecord* const* Record =
                 RecordById.Find(Guidance.AgentId);
               if (!Record)
-                return FCrowdBoundaryTaskResult::Failure();
+                return FCrowdBootstrapTaskResult::Failure();
               const FVector DesiredVelocity(
                 Guidance.DesiredVelocity.X,
                 Guidance.DesiredVelocity.Y, 0.0f);
@@ -4743,7 +4372,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
             }
           }
           if (JoinedTargetCount != RecordById.Num())
-            return FCrowdBoundaryTaskResult::Failure();
+            return FCrowdBootstrapTaskResult::Failure();
         }
         State->MovementShadowInput = MovementInput;
         State->bMovementShadowInputValid = true;
@@ -4751,11 +4380,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           FCrowdMassMovementPipelineWork::Run(
             MovementInput);
         return State->GraphOutput.Movement.bCompleted
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->GraphOutput.Movement.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       })
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       Particle, ParticleDeps,
       [State]
       {
@@ -4763,15 +4392,15 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         if (!FCrowdDemoRoundWorkGraph::BuildParticleInput(
             State->GraphInput, State->GraphOutput.Movement,
             ParticleInput))
-          return FCrowdBoundaryTaskResult::Failure();
+          return FCrowdBootstrapTaskResult::Failure();
         State->GraphOutput.Particle =
           FCrowdMassParticlePipelineWork::Run(ParticleInput);
         return State->GraphOutput.Particle.bCompleted
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->GraphOutput.Particle.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       })
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       Facing, FacingDeps,
       [State]
       {
@@ -4779,7 +4408,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         if (!FCrowdDemoRoundWorkGraph::BuildFacingInput(
             State->GraphInput, State->GraphOutput.Movement,
             State->GraphOutput.Particle, FacingInput))
-          return FCrowdBoundaryTaskResult::Failure();
+          return FCrowdBootstrapTaskResult::Failure();
         TMap<int32, const FCrowdParticleConstraintResult*> ParticleById;
         for (const FCrowdParticleConstraintResult& Result
           : State->GraphOutput.Particle.PublishPlan.PreparedResults)
@@ -4793,7 +4422,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           const bool* bTerminal =
             State->TerminalOwnerByAgentId.Find(Agent.AgentId);
           if (!ParticleResult || !Previous || !bTerminal)
-            return FCrowdBoundaryTaskResult::Failure();
+            return FCrowdBootstrapTaskResult::Failure();
           const bool bSettledThisStep = *bTerminal
             && FVector2f((*ParticleResult)->CorrectedVelocity.X,
               (*ParticleResult)->CorrectedVelocity.Y).Size() <= 20.0f
@@ -4812,14 +4441,12 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         State->Output = State->GraphOutput.FacingFinalize;
         State->bCompleted = State->Output.bCompleted;
         return State->bCompleted
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->Output.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       });
-  if (!bRegistered || !BoundaryOrchestrator->Dispatch())
+  if (!bRegistered || !BootstrapGraph.Run())
   {
-    BoundaryOrchestrator->Fail();
-    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
     return false;
   }
   return true;
@@ -4830,9 +4457,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
   TMap<int32, int32>&& ConsecutiveSettleStepsByAgentId,
   TMap<int32, bool>&& FinalSettledByAgentId)
 {
-  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Gathering
+  FCrowdDemoBootstrapSynchronousGraph BootstrapGraph;
+  if (!IsInGameThread()
     || !BoundaryFacingWorkState.IsValid()
     || !BoundaryFacingWorkState->bBusinessStaged
     || !BoundaryFacingWorkState->bSharedFlowStaged
@@ -4854,27 +4480,27 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
       State->GraphInput.FacingTemplates.AddDefaulted_GetRef();
     Template.Input = MoveTemp(FacingInput);
   }
-  const FCrowdBoundaryTaskKey Business = {{1}, {101}, 0};
-  const FCrowdBoundaryTaskKey SharedFlow = {{2}, {201}, 0};
-  const FCrowdBoundaryTaskKey Movement = {{3}, {301}, 0};
-  const FCrowdBoundaryTaskKey Constraint = {{4}, {402}, 0};
-  const FCrowdBoundaryTaskKey Facing = {{5}, {501}, 0};
-  const FCrowdBoundaryTaskKey MovementDeps[] = {Business, SharedFlow};
-  const FCrowdBoundaryTaskKey ConstraintDeps[] = {Movement};
-  const FCrowdBoundaryTaskKey FacingDeps[] = {Constraint};
+  const FCrowdBootstrapTaskKey Business = {{1}, {101}, 0};
+  const FCrowdBootstrapTaskKey SharedFlow = {{2}, {201}, 0};
+  const FCrowdBootstrapTaskKey Movement = {{3}, {301}, 0};
+  const FCrowdBootstrapTaskKey Constraint = {{4}, {402}, 0};
+  const FCrowdBootstrapTaskKey Facing = {{5}, {501}, 0};
+  const FCrowdBootstrapTaskKey MovementDeps[] = {Business, SharedFlow};
+  const FCrowdBootstrapTaskKey ConstraintDeps[] = {Movement};
+  const FCrowdBootstrapTaskKey FacingDeps[] = {Constraint};
   const bool bRegistered =
-    BoundaryOrchestrator->AddTask(
+    BootstrapGraph.AddTask(
       Business, {},
       [State]
       {
         State->BusinessOutput =
           RunBoundaryBusinessWork(State->BusinessInput);
         return State->BusinessOutput.bCompleted
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->BusinessOutput.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       })
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       SharedFlow, {},
       [State]
       {
@@ -4882,11 +4508,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
           FCrowdMassSharedFlowWork::BuildPreferred(
             State->GraphInput.SharedFlow);
         return State->GraphOutput.SharedFlow.bValid
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->GraphOutput.SharedFlow.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       })
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       Movement, MovementDeps,
       [State]
       {
@@ -4894,7 +4520,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
         if (!FCrowdDemoRoundWorkGraph::BuildMovementInput(
             State->GraphInput, State->GraphOutput.SharedFlow,
             MovementInput))
-          return FCrowdBoundaryTaskResult::Failure();
+          return FCrowdBootstrapTaskResult::Failure();
         TMap<int32, FCrowdMassGatherRecord*> RecordById;
         for (FCrowdMassGatherRecord& Record
           : MovementInput.Guidance.Records)
@@ -4904,7 +4530,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
         {
           FCrowdMassGatherRecord* const* Record =
             RecordById.Find(Candidate.AgentId);
-          if (!Record) return FCrowdBoundaryTaskResult::Failure();
+          if (!Record) return FCrowdBootstrapTaskResult::Failure();
           (*Record)->Guidance.BusinessOverride = Candidate;
         }
         State->MovementShadowInput = MovementInput;
@@ -4912,11 +4538,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
         State->GraphOutput.Movement =
           FCrowdMassMovementPipelineWork::Run(MovementInput);
         return State->GraphOutput.Movement.bCompleted
-          ? FCrowdBoundaryTaskResult::Success(
+          ? FCrowdBootstrapTaskResult::Success(
               State->GraphOutput.Movement.StableHash)
-          : FCrowdBoundaryTaskResult::Failure();
+          : FCrowdBootstrapTaskResult::Failure();
       })
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       Constraint, ConstraintDeps,
       [State]
       {
@@ -4924,12 +4550,12 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
           State->GraphOutput.Movement.MovementPredict.Results;
         if (Predicted.Num()
           != State->BusinessInput.Snapshot.Agents.Num())
-          return FCrowdBoundaryTaskResult::Failure();
+          return FCrowdBootstrapTaskResult::Failure();
         TMap<int32, const FCrowdMassPredictedMovement*> ById;
         for (const FCrowdMassPredictedMovement& Value : Predicted)
         {
           if (!Value.bValid || ById.Contains(Value.AgentId))
-            return FCrowdBoundaryTaskResult::Failure();
+            return FCrowdBootstrapTaskResult::Failure();
           ById.Add(Value.AgentId, &Value);
         }
         uint64 Hash = 14695981039346656037ull;
@@ -4939,7 +4565,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
         {
           const FCrowdMassPredictedMovement* const* Value =
             ById.Find(Agent.Identity.AgentId);
-          if (!Value) return FCrowdBoundaryTaskResult::Failure();
+          if (!Value) return FCrowdBootstrapTaskResult::Failure();
           const FCrowdDemoSharedFlowConstraintResult Result =
             FCrowdDemoSharedFlowFieldKernel::ConstrainMovement(
               State->ObstacleConfig, (*Value)->StartPosition,
@@ -4965,10 +4591,10 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
           return A.AgentId < B.AgentId;
         });
         return State->ObstacleKinematics.Num() == Predicted.Num()
-          ? FCrowdBoundaryTaskResult::Success(Hash)
-          : FCrowdBoundaryTaskResult::Failure();
+          ? FCrowdBootstrapTaskResult::Success(Hash)
+          : FCrowdBootstrapTaskResult::Failure();
       })
-    && BoundaryOrchestrator->AddTask(
+    && BootstrapGraph.AddTask(
       Facing, FacingDeps,
       [State]
       {
@@ -4978,7 +4604,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
             State->GraphInput, State->BusinessInput.Snapshot,
             State->GraphOutput.Movement,
             State->ObstacleKinematics, FacingInput))
-          return FCrowdBoundaryTaskResult::Failure();
+          return FCrowdBootstrapTaskResult::Failure();
         State->FacingShadowInput = FacingInput.Facing;
         State->Output =
           FCrowdMassFacingFinalizeWork::Run(FacingInput);
@@ -4988,1929 +4614,16 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
           State->Output.Finalize.CommitPlan.StableHash,
           State->Output.Facing.StableHash);
         return State->bCompleted
-          ? FCrowdBoundaryTaskResult::Success(Hash)
-          : FCrowdBoundaryTaskResult::Failure();
+          ? FCrowdBootstrapTaskResult::Success(Hash)
+          : FCrowdBootstrapTaskResult::Failure();
       });
-  if (!bRegistered || !BoundaryOrchestrator->Dispatch())
+  if (!bRegistered || !BootstrapGraph.Run())
   {
-    BoundaryOrchestrator->Fail();
-    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
     return false;
   }
   return true;
 }
 
-ECrowdBoundaryPollResult
-UCrowdDemoRoundSimPipelineSubsystem::TryPrepareRoundApply()
-{
-  LastBoundaryPrepareCheckpoint = 1;
-  const auto RejectPrepare = [this](const TCHAR* Reason)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoBoundaryPrepareRejected step=%d reason=%s orchestrator=%d facing_state=%d transaction_state=%d"),
-      GetCurrentFixedStepIndex(), Reason,
-      BoundaryOrchestrator.IsValid() ? 1 : 0,
-      BoundaryFacingWorkState.IsValid() ? 1 : 0,
-      BoundaryOrchestrator.IsValid()
-        ? static_cast<int32>(BoundaryOrchestrator->GetState()) : -1);
-    return ECrowdBoundaryPollResult::Failed;
-  };
-  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
-    || !BoundaryFacingWorkState.IsValid())
-    return RejectPrepare(TEXT("entry_state"));
-  if (!DrainWorkerV2MovementShadowComparisons())
-    return RejectPrepare(TEXT("movement_shadow_drain"));
-  if (BoundaryPendingFrameCount > 0
-    && BoundaryPendingFrameCount % 120 == 0)
-  {
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoBoundaryPendingProbe step=%d state=%d pending_frames=%d worker_v2_submitted=%d movement_tail_submitted=%d movement_tail_completed=%d movement_tail_consumed=%d"),
-      GetCurrentFixedStepIndex(),
-      static_cast<int32>(BoundaryOrchestrator->GetState()),
-      BoundaryPendingFrameCount,
-      BoundaryFacingWorkState->bWorkerV2InputSubmitted ? 1 : 0,
-      BoundaryFacingWorkState->bWorkerMovementTailSubmitted ? 1 : 0,
-      BoundaryFacingWorkState->WorkerMovementTail.IsValid()
-        && BoundaryFacingWorkState->WorkerMovementTail->
-          bCompleted.Load() ? 1 : 0,
-      BoundaryFacingWorkState->bWorkerMovementTailConsumed ? 1 : 0);
-  }
-
-  if (!BoundaryOrchestrator->Matches(
-      BoundarySnapshot, BoundaryGeneration))
-  {
-    ++BoundaryStaleResultCount;
-    BoundaryOrchestrator->Fail();
-    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoBoundaryTransactionStale step=%d generation=%llu stale_count=%d"),
-      GetCurrentFixedStepIndex(),
-      static_cast<unsigned long long>(BoundaryGeneration),
-      BoundaryStaleResultCount);
-    return ECrowdBoundaryPollResult::Failed;
-  }
-
-  ECrowdBoundaryPollResult PollResult =
-    ECrowdBoundaryPollResult::Failed;
-  const ECrowdBoundaryTransactionState TransactionState =
-    BoundaryOrchestrator->GetState();
-  if (TransactionState
-      == ECrowdBoundaryTransactionState::Working)
-  {
-    PollResult = BoundaryOrchestrator->Poll();
-  }
-  else if (TransactionState
-      == ECrowdBoundaryTransactionState::Merging)
-  {
-    PollResult = ECrowdBoundaryPollResult::Ready;
-  }
-  if (PollResult == ECrowdBoundaryPollResult::Pending)
-  {
-    ++BoundaryPendingFrameCount;
-    return PollResult;
-  }
-  if (PollResult == ECrowdBoundaryPollResult::Failed)
-  {
-    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoBoundaryWorkFailed step=%d state=%d tasks=%d"),
-      GetCurrentFixedStepIndex(),
-      static_cast<int32>(LastBoundaryTransactionResult.State),
-      LastBoundaryTransactionResult.Tasks.Num());
-    for (const FCrowdBoundaryCompletedTask& Task
-      : LastBoundaryTransactionResult.Tasks)
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoBoundaryTaskFailed step=%d stage=%d task_type=%d scope=%llu succeeded=%d off_gt=%d hash=%llu"),
-        GetCurrentFixedStepIndex(),
-        static_cast<int32>(Task.Key.StageId.Value),
-        static_cast<int32>(Task.Key.TaskTypeId.Value),
-        static_cast<unsigned long long>(Task.Key.ScopeKey),
-        Task.Result.bSucceeded ? 1 : 0,
-        Task.Result.bRanOffGameThread ? 1 : 0,
-        static_cast<unsigned long long>(Task.Result.StableHash));
-    }
-    return PollResult;
-  }
-  LastBoundaryPrepareCheckpoint = 2;
-  if (!BoundaryFacingWorkState->bWorkerV2InputSubmitted)
-  {
-    if (!SubmitWorkerV2BoundaryInput())
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoWorkerV2PreparedInputSubmitFailed step=%d"),
-        GetCurrentFixedStepIndex());
-      BoundaryOrchestrator->Fail();
-      LastBoundaryTransactionResult =
-        BoundaryOrchestrator->BuildResult();
-      return ECrowdBoundaryPollResult::Failed;
-    }
-  }
-  UMassCrowdRuntimeSubsystem* WorkerV2RuntimeSubsystem =
-    GetWorld()
-      ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
-      : nullptr;
-  if (!WorkerV2RuntimeSubsystem)
-    return RejectPrepare(TEXT("worker_runtime_missing"));
-  TMap<FCrowdWorkerDirtyStateKey, FCrowdWorkerDomainProxyState>
-    PendingPreparedDomains;
-  uint64 PendingAppliedInputSequence = 0;
-  if (const FCrowdDemoPreparedRoundCommitPlan* Pending =
-      PeekPreparedRoundCommitPlan())
-  {
-    const FCrowdWorkerPreparedResultApply& Prepared =
-      Pending->PreparedProxyResult;
-    PendingAppliedInputSequence =
-      Prepared.Batch.LastAppliedInputSequence;
-    PendingPreparedDomains.Reserve(
-      Prepared.Batch.StatePatches.Num());
-    for (int32 PatchIndex = 0;
-      PatchIndex < Prepared.Batch.StatePatches.Num(); ++PatchIndex)
-    {
-      if (!Prepared.StatePatchStableSlots.IsValidIndex(PatchIndex)
-        || Prepared.StatePatchStableSlots[PatchIndex] == INDEX_NONE)
-        continue;
-      const FCrowdWorkerStatePatch& Patch =
-        Prepared.Batch.StatePatches[PatchIndex];
-      if (Patch.StateFieldId == 0)
-        continue;
-      const ECrowdWorkerField Field =
-        static_cast<ECrowdWorkerField>(Patch.StateFieldId - 1);
-      if (Field >= ECrowdWorkerField::Count)
-        continue;
-      FCrowdWorkerDomainProxyState State;
-      State.EntityRef = Patch.EntityRef;
-      State.Field = Field;
-      State.State = Patch.State;
-      State.WorkerEpoch = Patch.WorkerEpoch;
-      State.SourceInputSequence = Patch.SourceInputSequence;
-      State.PublishSequence = Prepared.Batch.PublishSequence;
-      PendingPreparedDomains.Add(
-        {Patch.EntityRef, Field}, MoveTemp(State));
-    }
-  }
-  const auto FindResultDomain = [&PendingPreparedDomains](
-    const FCrowdWorkerResultApplyProxy& Proxy,
-    const FCrowdStableEntityRef& EntityRef,
-    const ECrowdWorkerField Field)
-      -> const FCrowdWorkerDomainProxyState*
-  {
-    if (const FCrowdWorkerDomainProxyState* Pending =
-        PendingPreparedDomains.Find({EntityRef, Field}))
-      return Pending;
-    return Proxy.FindDomain(EntityRef, Field);
-  };
-  const ECrowdWorkerMovementAuthorityMode
-    ConfiguredMovementMode =
-      WorkerV2RuntimeSubsystem->GetWorkerMovementAuthority().GetMode();
-  ECrowdDemoWorkerParticleAuthorityMode ParticleMode =
-    ECrowdDemoWorkerParticleAuthorityMode::Shadow;
-  TSet<FCrowdStableEntityRef> ParticleCanaries;
-  ECrowdDemoWorkerTargetAuthorityMode TargetMode =
-    ECrowdDemoWorkerTargetAuthorityMode::Shadow;
-  TSet<FCrowdStableEntityRef> TargetCanaries;
-  ECrowdDemoWorkerProjectileAuthorityMode ProjectileMode =
-    ECrowdDemoWorkerProjectileAuthorityMode::Shadow;
-  ECrowdDemoWorkerCombatAuthorityMode CombatMode =
-    ECrowdDemoWorkerCombatAuthorityMode::Shadow;
-  if (!ResolveWorkerParticleAuthority(
-      BoundarySnapshot, ParticleMode, ParticleCanaries)
-    || !ResolveWorkerTargetAuthority(
-      BoundarySnapshot, TargetMode, TargetCanaries)
-    || !ResolveWorkerProjectileAuthority(ProjectileMode)
-    || !ResolveWorkerCombatAuthority(CombatMode)
-    || (ParticleMode
-        != ECrowdDemoWorkerParticleAuthorityMode::Shadow
-      && ConfiguredMovementMode
-        != ECrowdWorkerMovementAuthorityMode::Production)
-    || (TargetMode
-        != ECrowdDemoWorkerTargetAuthorityMode::Shadow
-      && ConfiguredMovementMode
-        != ECrowdWorkerMovementAuthorityMode::Production))
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoWorkerDomainAuthorityConfig movement_mode=%d particle_mode=%d particle_canaries=%d target_mode=%d target_canaries=%d projectile_mode=%d combat_mode=%d"),
-      static_cast<int32>(ConfiguredMovementMode),
-      static_cast<int32>(ParticleMode),
-      ParticleCanaries.Num(),
-      static_cast<int32>(TargetMode),
-      TargetCanaries.Num(),
-      static_cast<int32>(ProjectileMode),
-      static_cast<int32>(CombatMode));
-    return ECrowdBoundaryPollResult::Failed;
-  }
-  const bool bRequireWorkerV2MovementReady =
-    ConfiguredMovementMode
-      != ECrowdWorkerMovementAuthorityMode::Shadow;
-  const uint64 ExpectedWorkerV2Sequence =
-    BoundaryFacingWorkState->WorkerV2InputSequence;
-  bool bWorkerV2MovementReady = !bRequireWorkerV2MovementReady
-    || ExpectedWorkerV2Sequence != 0;
-  if (bRequireWorkerV2MovementReady)
-  {
-    const FCrowdWorkerResultApplyProxy& Proxy =
-      WorkerV2RuntimeSubsystem->GetWorkerResultApplyProxy();
-    if (FMath::Max(
-        Proxy.GetMetrics().LastAppliedInputSequence,
-        PendingAppliedInputSequence)
-        < ExpectedWorkerV2Sequence)
-      bWorkerV2MovementReady = false;
-    for (const FCrowdMassBoundaryAgentRecord& Agent :
-      BoundarySnapshot.Agents)
-    {
-      const FCrowdWorkerDomainProxyState* Movement =
-        FindResultDomain(Proxy,
-            Agent.AgentFacts.StableEntityRef,
-            ECrowdWorkerField::Movement);
-      if (!Movement
-        || Movement->SourceInputSequence
-          != ExpectedWorkerV2Sequence)
-      {
-        bWorkerV2MovementReady = false;
-        break;
-      }
-      if (ParticleMode
-          != ECrowdDemoWorkerParticleAuthorityMode::Shadow)
-      {
-        const FCrowdWorkerDomainProxyState* Particle =
-          FindResultDomain(Proxy,
-            Agent.AgentFacts.StableEntityRef,
-            ECrowdWorkerField::Particle);
-        if (!Particle
-          || Particle->SourceInputSequence
-            > ExpectedWorkerV2Sequence)
-        {
-          bWorkerV2MovementReady = false;
-          break;
-        }
-      }
-    }
-    const bool bProjectileCombat =
-      BoundaryFacingWorkState->BusinessInput.Rules.
-        RangedCombatSettings.bEnabled != 0;
-    if (bWorkerV2MovementReady && bProjectileCombat)
-    {
-      const FCrowdStableEntityRef AnchorEntity =
-        BoundarySnapshot.Agents[0].AgentFacts.StableEntityRef;
-      const FCrowdWorkerDomainProxyState* WorkerProjectile =
-        FindResultDomain(Proxy,
-          AnchorEntity, ECrowdWorkerField::Projectile);
-      if (!WorkerProjectile
-        || WorkerProjectile->SourceInputSequence
-          < ExpectedWorkerV2Sequence)
-      {
-        bWorkerV2MovementReady = false;
-      }
-      else if (WorkerProjectile->SourceInputSequence
-          != ExpectedWorkerV2Sequence)
-      {
-        UE_LOG(LogTemp, Error,
-          TEXT("VIOLATION CrowdDemoWorkerProjectileSequence expected_input=%llu actual_input=%llu"),
-          ExpectedWorkerV2Sequence,
-          WorkerProjectile->SourceInputSequence);
-        return ECrowdBoundaryPollResult::Failed;
-      }
-      else
-      {
-        FCrowdWorkerProjectileState WorkerState;
-        FCrowdDemoWorkerCombatHostResult WorkerCombatResult;
-        const FCrowdDemoProjectileStepSummary& Legacy =
-          BoundaryFacingWorkState->BusinessOutput.Commit.
-            ProjectileSummary;
-        if (!FCrowdWorkerProjectileStateCodec::Decode(
-              WorkerProjectile->State.Payload, WorkerState)
-          || !FCrowdDemoWorkerCombatHostResultCodec::Decode(
-              WorkerState.HostCombatResult, WorkerCombatResult)
-          || WorkerState.ControlRevision == 0
-          || WorkerState.Prepared.FixedStepIndex
-            != GetCurrentFixedStepIndex()
-          || WorkerCombatResult.FixedStepIndex
-            != GetCurrentFixedStepIndex()
-          || WorkerCombatResult.AttackSummary.TargetAcquiredCount
-            != Legacy.TargetAcquiredCount
-          || WorkerCombatResult.AttackSummary.CompletedWindupCount
-            != Legacy.CompletedWindupCount
-          || WorkerCombatResult.AttackSummary.InvalidTargetLifecycleCount
-            != Legacy.InvalidTargetLifecycleCount
-          || WorkerCombatResult.AttackSummary.AttackStateHash
-            != Legacy.AttackStateHash
-          || WorkerCombatResult.HitSummary.InputHitCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.InputHitCount
-          || WorkerCombatResult.HitSummary.AppliedHitCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.AppliedHitCount
-          || WorkerCombatResult.HitSummary.DuplicateHitCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.DuplicateHitCount
-          || WorkerCombatResult.HitSummary.StaleLifecycleCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.StaleLifecycleCount
-          || WorkerCombatResult.HitSummary.MissingTargetCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.MissingTargetCount
-          || WorkerCombatResult.HitSummary.AlreadyDeadCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.AlreadyDeadCount
-          || WorkerCombatResult.HitSummary.DamageAppliedAgentCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.DamageAppliedAgentCount
-          || WorkerCombatResult.HitSummary.ReactiveAgentCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.ReactiveAgentCount
-          || WorkerCombatResult.HitSummary.DeathCount
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.DeathCount
-          || WorkerCombatResult.HitSummary.StableHash
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.StableHash
-          || WorkerState.Prepared.Summary.bValid
-            != Legacy.bValid
-          || WorkerState.Prepared.Summary.SpawnedCount
-            != Legacy.SpawnedCount
-          || WorkerState.Prepared.Summary.ActiveCount
-            != Legacy.ActiveCount
-          || WorkerState.Prepared.Summary.ImpactedCount
-            != Legacy.ImpactedCount
-          || WorkerState.Prepared.Summary.ExpiredCount
-            != Legacy.ExpiredCount
-          || WorkerState.Prepared.Summary.DuplicateFireCount
-            != Legacy.DuplicateFireCount
-          || WorkerState.Prepared.Summary.InvalidProjectileCount
-            != Legacy.InvalidProjectileCount
-          || WorkerState.Prepared.Summary.EnvironmentImpactCount
-            != Legacy.EnvironmentImpactCount
-          || WorkerState.Prepared.Summary.BroadphaseCandidateCount
-            != Legacy.BroadphaseCandidateCount
-          || WorkerState.Prepared.Summary.SweepTestCount
-            != Legacy.SweepTestCount
-          || WorkerState.Prepared.Summary.ProjectileStateHash
-            != Legacy.ProjectileStateHash
-          || WorkerState.Prepared.Summary.EventHash
-            != Legacy.EventHash
-          || WorkerState.Prepared.States.Num()
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              Projectiles.Num()
-          || WorkerState.ResolvedHits.Hits.Num()
-            != BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.InputHitCount)
-        {
-          UE_LOG(LogTemp, Error,
-            TEXT("VIOLATION CrowdDemoWorkerProjectileShadowMismatch step=%d expected_input=%llu worker_states=%d legacy_states=%d worker_resolved_hits=%d legacy_input_hits=%d legacy_applied_hits=%d worker_spawned=%d legacy_spawned=%d worker_active=%d legacy_active=%d worker_impacted=%d legacy_impacted=%d worker_expired=%d legacy_expired=%d worker_environment=%d legacy_environment=%d worker_projectile_hash=%u legacy_projectile_hash=%u worker_event_hash=%u legacy_event_hash=%u"),
-            GetCurrentFixedStepIndex(),
-            ExpectedWorkerV2Sequence,
-            WorkerState.Prepared.States.Num(),
-            BoundaryFacingWorkState->BusinessOutput.Commit.
-              Projectiles.Num(),
-            WorkerState.ResolvedHits.Hits.Num(),
-            BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.InputHitCount,
-            BoundaryFacingWorkState->BusinessOutput.Commit.
-              HitSummary.AppliedHitCount,
-            WorkerState.Prepared.Summary.SpawnedCount,
-            Legacy.SpawnedCount,
-            WorkerState.Prepared.Summary.ActiveCount,
-            Legacy.ActiveCount,
-            WorkerState.Prepared.Summary.ImpactedCount,
-            Legacy.ImpactedCount,
-            WorkerState.Prepared.Summary.ExpiredCount,
-            Legacy.ExpiredCount,
-            WorkerState.Prepared.Summary.EnvironmentImpactCount,
-            Legacy.EnvironmentImpactCount,
-            WorkerState.Prepared.Summary.ProjectileStateHash,
-            Legacy.ProjectileStateHash,
-            WorkerState.Prepared.Summary.EventHash,
-            Legacy.EventHash);
-          TArray<FCrowdProjectileState> WorkerProjectiles =
-            WorkerState.Prepared.States;
-          TArray<FCrowdProjectileState> LegacyProjectiles =
-            BoundaryFacingWorkState->BusinessOutput.Commit.Projectiles;
-          const auto ProjectileLess = [](
-            const FCrowdProjectileState& A,
-            const FCrowdProjectileState& B)
-          {
-            return A.ProjectileId < B.ProjectileId;
-          };
-          WorkerProjectiles.Sort(ProjectileLess);
-          LegacyProjectiles.Sort(ProjectileLess);
-          const int32 DiagnosticCount = FMath::Max(
-            WorkerProjectiles.Num(), LegacyProjectiles.Num());
-          for (int32 ProjectileIndex = 0;
-            ProjectileIndex < DiagnosticCount; ++ProjectileIndex)
-          {
-            const FCrowdProjectileState* WorkerProjectileEntry =
-              WorkerProjectiles.IsValidIndex(ProjectileIndex)
-                ? &WorkerProjectiles[ProjectileIndex] : nullptr;
-            const FCrowdProjectileState* LegacyProjectile =
-              LegacyProjectiles.IsValidIndex(ProjectileIndex)
-                ? &LegacyProjectiles[ProjectileIndex] : nullptr;
-            UE_LOG(LogTemp, Display,
-              TEXT("CrowdDemoWorkerProjectileShadowState step=%d index=%d worker_id=%llu legacy_id=%llu worker_spawn=%lld legacy_spawn=%lld worker_age=%d legacy_age=%d worker_pos=(%.3f,%.3f,%.3f) legacy_pos=(%.3f,%.3f,%.3f) worker_vel=(%.3f,%.3f,%.3f) legacy_vel=(%.3f,%.3f,%.3f) worker_last_hit=%llu legacy_last_hit=%llu worker_flags=%d%d%d legacy_flags=%d%d%d"),
-              GetCurrentFixedStepIndex(), ProjectileIndex,
-              WorkerProjectileEntry ? WorkerProjectileEntry->ProjectileId : 0,
-              LegacyProjectile ? LegacyProjectile->ProjectileId : 0,
-              WorkerProjectileEntry ? WorkerProjectileEntry->SpawnFixedStep : -1,
-              LegacyProjectile ? LegacyProjectile->SpawnFixedStep : -1,
-              WorkerProjectileEntry ? WorkerProjectileEntry->AgeFixedSteps : -1,
-              LegacyProjectile ? LegacyProjectile->AgeFixedSteps : -1,
-              WorkerProjectileEntry ? WorkerProjectileEntry->Position.X : 0.0,
-              WorkerProjectileEntry ? WorkerProjectileEntry->Position.Y : 0.0,
-              WorkerProjectileEntry ? WorkerProjectileEntry->Position.Z : 0.0,
-              LegacyProjectile ? LegacyProjectile->Position.X : 0.0,
-              LegacyProjectile ? LegacyProjectile->Position.Y : 0.0,
-              LegacyProjectile ? LegacyProjectile->Position.Z : 0.0,
-              WorkerProjectileEntry ? WorkerProjectileEntry->Velocity.X : 0.0,
-              WorkerProjectileEntry ? WorkerProjectileEntry->Velocity.Y : 0.0,
-              WorkerProjectileEntry ? WorkerProjectileEntry->Velocity.Z : 0.0,
-              LegacyProjectile ? LegacyProjectile->Velocity.X : 0.0,
-              LegacyProjectile ? LegacyProjectile->Velocity.Y : 0.0,
-              LegacyProjectile ? LegacyProjectile->Velocity.Z : 0.0,
-              WorkerProjectileEntry
-                ? WorkerProjectileEntry->LastHitTarget.StableEntityId : 0,
-              LegacyProjectile
-                ? LegacyProjectile->LastHitTarget.StableEntityId : 0,
-              WorkerProjectileEntry && WorkerProjectileEntry->bActive ? 1 : 0,
-              WorkerProjectileEntry && WorkerProjectileEntry->bImpacted ? 1 : 0,
-              WorkerProjectileEntry && WorkerProjectileEntry->bExpired ? 1 : 0,
-              LegacyProjectile && LegacyProjectile->bActive ? 1 : 0,
-              LegacyProjectile && LegacyProjectile->bImpacted ? 1 : 0,
-              LegacyProjectile && LegacyProjectile->bExpired ? 1 : 0);
-          }
-          return ECrowdBoundaryPollResult::Failed;
-        }
-        int32 VerifiedCombatStateCount = 0;
-        for (const FCrowdMassBoundaryAgentRecord& Agent :
-          BoundarySnapshot.Agents)
-        {
-          const FCrowdWorkerDomainProxyState* WorkerCombat =
-            FindResultDomain(Proxy,
-              Agent.AgentFacts.StableEntityRef,
-              ECrowdWorkerField::Combat);
-          if (!WorkerCombat
-            || WorkerCombat->SourceInputSequence
-              < ExpectedWorkerV2Sequence)
-          {
-            bWorkerV2MovementReady = false;
-            break;
-          }
-          if (WorkerCombat->SourceInputSequence
-              != ExpectedWorkerV2Sequence)
-          {
-            UE_LOG(LogTemp, Error,
-              TEXT("VIOLATION CrowdDemoWorkerCombatSequence agent=%d expected_input=%llu actual_input=%llu"),
-              Agent.Identity.AgentId,
-              ExpectedWorkerV2Sequence,
-              WorkerCombat->SourceInputSequence);
-            return ECrowdBoundaryPollResult::Failed;
-          }
-          FCrowdWorkerCombatState WorkerCombatState;
-          FCrowdDemoCombatAgentState WorkerHostState;
-          const FCrowdDemoRangedCombatAgent* LegacyAgent =
-            BoundaryFacingWorkState->BusinessOutput.Commit.Agents.
-              FindByPredicate(
-                [&Agent](const FCrowdDemoRangedCombatAgent& Candidate)
-                {
-                  return Candidate.AgentId
-                    == Agent.Identity.AgentId;
-                });
-          const FCrowdDemoPreparedReactiveMotionStep* LegacyReactive =
-            BoundaryFacingWorkState->BusinessOutput.ReactiveSteps.
-              FindByPredicate(
-                [&Agent](
-                  const FCrowdDemoPreparedReactiveMotionStep& Candidate)
-                {
-                  return Candidate.AgentId
-                    == Agent.Identity.AgentId;
-                });
-          FCrowdWorkerPayload LegacyHostPayload;
-          if (!LegacyAgent || !LegacyReactive
-            || !FCrowdWorkerCombatStateCodec::Decode(
-              WorkerCombat->State.Payload, WorkerCombatState)
-            || !FCrowdDemoWorkerCombatStatePayloadCodec::Decode(
-              WorkerCombatState.HostState, WorkerHostState)
-            || !FCrowdDemoWorkerCombatStatePayloadCodec::Encode(
-              LegacyAgent->Combat, LegacyHostPayload)
-            || WorkerCombatState.HostState != LegacyHostPayload
-            || WorkerCombatState.bAlive
-              != LegacyAgent->Combat.bAlive
-            || WorkerCombatState.bReactiveActive
-              != LegacyReactive->bActive
-            || !WorkerCombatState.HorizontalReactiveVelocity.Equals(
-              LegacyAgent->Combat.HorizontalReactiveVelocity, 0.0)
-            || !FMath::IsNearlyEqual(
-              WorkerCombatState.ProposedZ,
-              LegacyReactive->ProposedZ, 0.0f)
-            || !FMath::IsNearlyEqual(
-              WorkerCombatState.VerticalVelocityCmps,
-              LegacyReactive->VerticalVelocityCmps, 0.0f))
-          {
-            UE_LOG(LogTemp, Error,
-              TEXT("VIOLATION CrowdDemoWorkerCombatShadowMismatch agent=%d step=%d expected_input=%llu worker=%d legacy=%d worker_host_hash=%llu legacy_host_hash=%llu health=%.3f/%.3f max_health=%.3f/%.3f lifecycle=%d/%d alive=%d/%d business=%d/%d business_revision=%d/%d business_enter=%d/%d target=%d:%d/%d:%d attack=%d/%d attack_enter=%d/%d cooldown=%d/%d locked_target=%d:%d/%d:%d locked_location=(%.3f,%.3f,%.3f)/(%.3f,%.3f,%.3f) fire=%d/%d fire_issued=%d/%d reactive=%d/%d reactive_revision=%d/%d reactive_range=%d:%d/%d:%d restore=%d/%d apex=%d/%d landing=%d/%d hit=%llu/%llu hit_flash_revision=%d/%d hit_flash_start=%.6f/%.6f hit_flash_duration=%.6f/%.6f hit_flash_profile=%u/%u hit_flash_peak=%.6f/%.6f visual=%d/%d visual_revision=%d/%d visual_start=%.6f/%.6f visual_seed=%u/%u"),
-              Agent.Identity.AgentId,
-              GetCurrentFixedStepIndex(),
-              ExpectedWorkerV2Sequence,
-              WorkerCombat ? 1 : 0,
-              LegacyAgent ? 1 : 0,
-              WorkerCombatState.HostState.StableHash,
-              LegacyHostPayload.StableHash,
-              WorkerHostState.Health,
-              LegacyAgent ? LegacyAgent->Combat.Health : -1.0f,
-              WorkerHostState.MaxHealth,
-              LegacyAgent ? LegacyAgent->Combat.MaxHealth : -1.0f,
-              static_cast<int32>(WorkerHostState.LifecycleState),
-              LegacyAgent ? static_cast<int32>(
-                LegacyAgent->Combat.LifecycleState) : -1,
-              WorkerHostState.bAlive ? 1 : 0,
-              LegacyAgent && LegacyAgent->Combat.bAlive ? 1 : 0,
-              static_cast<int32>(WorkerHostState.BusinessState),
-              LegacyAgent
-                ? static_cast<int32>(
-                  LegacyAgent->Combat.BusinessState) : -1,
-              WorkerHostState.BusinessStateRevision,
-              LegacyAgent
-                ? LegacyAgent->Combat.BusinessStateRevision : -1,
-              WorkerHostState.BusinessStateEnterFixedStep,
-              LegacyAgent
-                ? LegacyAgent->Combat.BusinessStateEnterFixedStep : -1,
-              WorkerHostState.TargetAgentId,
-              WorkerHostState.TargetLifecycleSerial,
-              LegacyAgent ? LegacyAgent->Combat.TargetAgentId : -1,
-              LegacyAgent
-                ? LegacyAgent->Combat.TargetLifecycleSerial : -1,
-              static_cast<int32>(WorkerHostState.AttackPhase),
-              LegacyAgent
-                ? static_cast<int32>(
-                  LegacyAgent->Combat.AttackPhase) : -1,
-              WorkerHostState.AttackPhaseEnterFixedStep,
-              LegacyAgent
-                ? LegacyAgent->Combat.AttackPhaseEnterFixedStep : -1,
-              WorkerHostState.CooldownEndFixedStep,
-              LegacyAgent
-                ? LegacyAgent->Combat.CooldownEndFixedStep : -1,
-              WorkerHostState.LockedTargetAgentId,
-              WorkerHostState.LockedTargetLifecycleSerial,
-              LegacyAgent
-                ? LegacyAgent->Combat.LockedTargetAgentId : -1,
-              LegacyAgent
-                ? LegacyAgent->Combat.LockedTargetLifecycleSerial : -1,
-              WorkerHostState.LockedTargetLocation.X,
-              WorkerHostState.LockedTargetLocation.Y,
-              WorkerHostState.LockedTargetLocation.Z,
-              LegacyAgent
-                ? LegacyAgent->Combat.LockedTargetLocation.X : 0.0,
-              LegacyAgent
-                ? LegacyAgent->Combat.LockedTargetLocation.Y : 0.0,
-              LegacyAgent
-                ? LegacyAgent->Combat.LockedTargetLocation.Z : 0.0,
-              WorkerHostState.FireSequence,
-              LegacyAgent
-                ? LegacyAgent->Combat.FireSequence : -1,
-              WorkerHostState.bFireRequestIssued ? 1 : 0,
-              LegacyAgent
-                && LegacyAgent->Combat.bFireRequestIssued ? 1 : 0,
-              static_cast<int32>(WorkerHostState.ReactiveMode),
-              LegacyAgent
-                ? static_cast<int32>(
-                  LegacyAgent->Combat.ReactiveMode) : -1,
-              WorkerHostState.ReactiveRevision,
-              LegacyAgent
-                ? LegacyAgent->Combat.ReactiveRevision : -1,
-              WorkerHostState.ReactiveStartFixedStep,
-              WorkerHostState.ReactiveEndFixedStep,
-              LegacyAgent
-                ? LegacyAgent->Combat.ReactiveStartFixedStep : -1,
-              LegacyAgent
-                ? LegacyAgent->Combat.ReactiveEndFixedStep : -1,
-              static_cast<int32>(WorkerHostState.RestoreBusinessState),
-              LegacyAgent ? static_cast<int32>(
-                LegacyAgent->Combat.RestoreBusinessState) : -1,
-              WorkerHostState.ApexCount,
-              LegacyAgent ? LegacyAgent->Combat.ApexCount : -1,
-              WorkerHostState.LandingCount,
-              LegacyAgent ? LegacyAgent->Combat.LandingCount : -1,
-              WorkerHostState.LastConsumedHitEventId,
-              LegacyAgent
-                ? LegacyAgent->Combat.LastConsumedHitEventId : 0,
-              WorkerHostState.HitFlashRevision,
-              LegacyAgent ? LegacyAgent->Combat.HitFlashRevision : -1,
-              WorkerHostState.HitFlashStartServerTimeSeconds,
-              LegacyAgent
-                ? LegacyAgent->Combat.HitFlashStartServerTimeSeconds : -1.0,
-              WorkerHostState.HitFlashDurationSeconds,
-              LegacyAgent
-                ? LegacyAgent->Combat.HitFlashDurationSeconds : -1.0,
-              WorkerHostState.HitFlashProfileKey,
-              LegacyAgent
-                ? LegacyAgent->Combat.HitFlashProfileKey : 0,
-              WorkerHostState.HitFlashPeakIntensity,
-              LegacyAgent
-                ? LegacyAgent->Combat.HitFlashPeakIntensity : -1.0,
-              static_cast<int32>(WorkerHostState.VisualState),
-              LegacyAgent
-                ? static_cast<int32>(
-                  LegacyAgent->Combat.VisualState) : -1,
-              WorkerHostState.VisualRevision,
-              LegacyAgent
-                ? LegacyAgent->Combat.VisualRevision : -1,
-              WorkerHostState.VisualStateStartServerTimeSeconds,
-              LegacyAgent
-                ? LegacyAgent->Combat.VisualStateStartServerTimeSeconds
-                : -1.0,
-              WorkerHostState.VisualPhaseSeed,
-              LegacyAgent
-                ? LegacyAgent->Combat.VisualPhaseSeed : 0);
-            return ECrowdBoundaryPollResult::Failed;
-          }
-          ++VerifiedCombatStateCount;
-        }
-        if (!BoundaryFacingWorkState->bWorkerMovementTailSubmitted
-          && (GetCurrentFixedStepIndex() == 0
-            || GetCurrentFixedStepIndex() % 300 == 0))
-        {
-          UE_LOG(LogTemp, Display,
-            TEXT("CrowdDemoWorkerProjectileCheckpoint mode=%d step=%d expected_input=%llu states=%d hits=%d combat_states=%d projectile_hash=%u event_hash=%u source=PersistentRuntimeAuthority"),
-            static_cast<int32>(ProjectileMode),
-            GetCurrentFixedStepIndex(),
-            ExpectedWorkerV2Sequence,
-            WorkerState.Prepared.States.Num(),
-            WorkerState.ResolvedHits.Hits.Num(),
-            VerifiedCombatStateCount,
-            WorkerState.Prepared.Summary.ProjectileStateHash,
-            WorkerState.Prepared.Summary.EventHash);
-        }
-      }
-    }
-    if (!BoundaryFacingWorkState->bUseWorkerV2Target
-      && bWorkerV2MovementReady
-      && !BoundaryFacingWorkState->TargetTopologySlots.IsEmpty()
-      && TargetMode
-        != ECrowdDemoWorkerTargetAuthorityMode::Shadow)
-    {
-      struct FLegacyTargetFact
-      {
-        uint32 CohortKey = 0;
-        int32 TargetRevision = INDEX_NONE;
-        const FCrowdTargetRegionGuidanceResult* Guidance = nullptr;
-        uint32 ExecutionHash = 0;
-        uint32 GuidanceHash = 0;
-      };
-      TMap<int32, FLegacyTargetFact> LegacyByAgentId;
-      for (const auto& Slot :
-        BoundaryFacingWorkState->TargetTopologySlots)
-      {
-        for (const FCrowdTargetRegionGuidanceResult& Guidance :
-          Slot.GuidanceOutput.Results)
-        {
-          if (LegacyByAgentId.Contains(Guidance.AgentId))
-            return RejectPrepare(TEXT("target_guidance_duplicate"));
-          LegacyByAgentId.Add(Guidance.AgentId, {
-            Slot.CohortKey,
-            Slot.PlanInput.TargetRevision,
-            &Guidance,
-            Slot.GuidanceOutput.Execution.ExecutionHash,
-            Slot.GuidanceOutput.Summary.GuidanceHash});
-        }
-      }
-      int32 VerifiedTargetOwnerCount = 0;
-      for (const FCrowdMassBoundaryAgentRecord& Agent :
-        BoundarySnapshot.Agents)
-      {
-        const FCrowdStableEntityRef EntityRef =
-          Agent.AgentFacts.StableEntityRef;
-        const bool bWorkerTargetOwner =
-          TargetMode
-            == ECrowdDemoWorkerTargetAuthorityMode::Production
-          || TargetCanaries.Contains(EntityRef);
-        if (!bWorkerTargetOwner)
-          continue;
-        const FLegacyTargetFact* Legacy =
-          LegacyByAgentId.Find(Agent.Identity.AgentId);
-        const FCrowdWorkerDomainProxyState* Worker =
-          FindResultDomain(
-            Proxy, EntityRef, ECrowdWorkerField::Target);
-        FCrowdWorkerTargetState WorkerState;
-        if (!Legacy || !Legacy->Guidance || !Worker
-          || Worker->SourceInputSequence
-            > ExpectedWorkerV2Sequence
-          || !FCrowdWorkerTargetStateCodec::Decode(
-            Worker->State.Payload, WorkerState))
-        {
-          UE_LOG(LogTemp, Error,
-            TEXT("VIOLATION CrowdDemoWorkerTargetMissing agent=%d expected_input=%llu legacy=%d worker=%d worker_input=%llu"),
-            Agent.Identity.AgentId,
-            ExpectedWorkerV2Sequence,
-            Legacy && Legacy->Guidance ? 1 : 0,
-            Worker ? 1 : 0,
-            Worker ? Worker->SourceInputSequence : 0);
-          return ECrowdBoundaryPollResult::Failed;
-        }
-        if (WorkerState.CohortKey != Legacy->CohortKey
-          || WorkerState.TargetRevision
-            != Legacy->TargetRevision)
-        {
-          UE_LOG(LogTemp, Error,
-            TEXT("VIOLATION CrowdDemoWorkerTargetRevisionMismatch agent=%d expected_cohort=%u actual_cohort=%u expected_revision=%d actual_revision=%d"),
-            Agent.Identity.AgentId,
-            Legacy->CohortKey,
-            WorkerState.CohortKey,
-            Legacy->TargetRevision,
-            WorkerState.TargetRevision);
-          return ECrowdBoundaryPollResult::Failed;
-        }
-        if (TargetMode
-            == ECrowdDemoWorkerTargetAuthorityMode::Canary)
-        {
-          const FVector LegacyVelocity(
-            Legacy->Guidance->DesiredVelocity.X,
-            Legacy->Guidance->DesiredVelocity.Y, 0.0);
-          if (WorkerState.CurrentCellKey
-                != Legacy->Guidance->CurrentCellKey
-            || WorkerState.NextCellKey
-                != Legacy->Guidance->NextCellKey
-            || WorkerState.DemandRegionKey
-                != Legacy->Guidance->DemandRegionKey
-            || WorkerState.Mode != Legacy->Guidance->Mode
-            || !WorkerState.DesiredVelocity.Equals(
-              LegacyVelocity, 0.0)
-            || WorkerState.ExecutionHash
-                != Legacy->ExecutionHash
-            || WorkerState.GuidanceHash
-                != Legacy->GuidanceHash)
-          {
-            UE_LOG(LogTemp, Error,
-              TEXT("VIOLATION CrowdDemoWorkerTargetCanaryMismatch agent=%d expected_input=%llu worker_input=%llu expected_velocity=%s actual_velocity=%s expected_mode=%d actual_mode=%d expected_execution=%u actual_execution=%u expected_guidance=%u actual_guidance=%u"),
-              Agent.Identity.AgentId,
-              ExpectedWorkerV2Sequence,
-              Worker->SourceInputSequence,
-              *LegacyVelocity.ToString(),
-              *WorkerState.DesiredVelocity.ToString(),
-              static_cast<int32>(Legacy->Guidance->Mode),
-              static_cast<int32>(WorkerState.Mode),
-              Legacy->ExecutionHash,
-              WorkerState.ExecutionHash,
-              Legacy->GuidanceHash,
-              WorkerState.GuidanceHash);
-            return ECrowdBoundaryPollResult::Failed;
-          }
-        }
-        ++VerifiedTargetOwnerCount;
-      }
-      if (!BoundaryFacingWorkState->bWorkerMovementTailSubmitted
-        && (GetCurrentFixedStepIndex() == 0
-        || GetCurrentFixedStepIndex() % 300 == 0)
-        )
-      {
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoWorkerTargetCheckpoint mode=%d canaries=%d verified=%d expected_input=%llu cohorts=%d source=PersistentRuntimeAuthority"),
-          static_cast<int32>(TargetMode),
-          TargetCanaries.Num(),
-          VerifiedTargetOwnerCount,
-          ExpectedWorkerV2Sequence,
-          BoundaryFacingWorkState->TargetTopologySlots.Num());
-      }
-    }
-  }
-  if (!bWorkerV2MovementReady)
-  {
-    ++BoundaryPendingFrameCount;
-    if (BoundaryPendingFrameCount % 120 == 0)
-    {
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoBoundaryPendingReason reason=worker_v2_movement step=%d expected_input=%llu mode=%d"),
-        GetCurrentFixedStepIndex(),
-        ExpectedWorkerV2Sequence,
-        static_cast<int32>(
-          WorkerV2RuntimeSubsystem->GetWorkerMovementAuthority().
-            GetMode()));
-    }
-    return ECrowdBoundaryPollResult::Pending;
-  }
-  LastBoundaryPrepareCheckpoint = 3;
-  if (!BoundaryFacingWorkState->bWorkerMovementTailSubmitted)
-  {
-    UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
-      GetWorld()
-        ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
-        : nullptr;
-    if (!RuntimeSubsystem)
-      return RejectPrepare(TEXT("movement_runtime_missing"));
-    FCrowdWorkerMovementAuthority& MovementAuthority =
-      RuntimeSubsystem->GetWorkerMovementAuthority();
-    const ECrowdWorkerMovementAuthorityMode MovementMode =
-      MovementAuthority.GetMode();
-    if (MovementMode
-        != ECrowdWorkerMovementAuthorityMode::Shadow)
-    {
-      const uint64 WorkSequence = NextWorkerTaskSequence++;
-      if (WorkSequence == 0 || NextWorkerTaskSequence == 0)
-      {
-        UE_LOG(LogTemp, Error,
-          TEXT("VIOLATION CrowdDemoWorkerTaskSequenceOverflow"));
-        return ECrowdBoundaryPollResult::Failed;
-      }
-      auto Tail =
-        MakeShared<FCrowdDemoWorkerMovementTailExecution,
-          ESPMode::ThreadSafe>();
-      Tail->bUsesWorkerV2PreparedMovement = true;
-      FCrowdMassMovementPipelineWorkOutput PreparedMovement;
-      if (!BuildWorkerV2PreparedMovement(
-          BoundarySnapshot,
-          [&FindResultDomain, RuntimeSubsystem](
-            const FCrowdStableEntityRef& EntityRef,
-            const ECrowdWorkerField Field)
-          {
-            return FindResultDomain(
-              RuntimeSubsystem->GetWorkerResultApplyProxy(),
-              EntityRef, Field);
-          },
-          MovementAuthority, ExpectedWorkerV2Sequence,
-          MovementMode,
-          BoundaryFacingWorkState->MovementShadowInput.
-            FixedStepSeconds,
-          BoundaryFacingWorkState->GraphOutput.Movement,
-          BoundaryFacingWorkState->ObstacleKinematics,
-          PreparedMovement))
-        return RejectPrepare(TEXT("movement_merge"));
-      TArray<FCrowdMassFinalKinematicState>
-        WorkerParticleKinematics;
-      if (ParticleMode
-          != ECrowdDemoWorkerParticleAuthorityMode::Shadow)
-      {
-        if (!BoundaryFacingWorkState->GraphOutput.Particle.bCompleted
-          || !BuildWorkerV2ParticleKinematics(
-            BoundarySnapshot,
-            [&FindResultDomain, RuntimeSubsystem](
-              const FCrowdStableEntityRef& EntityRef,
-              const ECrowdWorkerField Field)
-            {
-              return FindResultDomain(
-                RuntimeSubsystem->GetWorkerResultApplyProxy(),
-                EntityRef, Field);
-            },
-            ExpectedWorkerV2Sequence,
-            FMath::Max(
-              RuntimeSubsystem->GetWorkerResultApplyProxy().
-                GetMetrics().LastAppliedInputSequence,
-              PendingAppliedInputSequence),
-            ParticleMode,
-            ParticleCanaries,
-            PreparedMovement,
-            BoundaryFacingWorkState->GraphOutput.Particle.
-              PublishPlan.FinalKinematics,
-            WorkerParticleKinematics))
-          return RejectPrepare(TEXT("particle_decode_or_shape"));
-        Tail->bUsesWorkerV2PreparedParticle = true;
-      }
-      bool bDirectProductionTail = false;
-      if (MovementMode
-          == ECrowdWorkerMovementAuthorityMode::Production
-        && ParticleMode
-          == ECrowdDemoWorkerParticleAuthorityMode::Production)
-      {
-        TArray<FCrowdFacingResult> WorkerFacings =
-          BoundaryFacingWorkState->Output.Facing.Summary.Results;
-        if (WorkerFacings.Num() != BoundarySnapshot.Agents.Num()
-          || WorkerParticleKinematics.Num()
-            != BoundarySnapshot.Agents.Num())
-          return RejectPrepare(TEXT("direct_tail_shape"));
-        TMap<int32, FCrowdFacingResult*> FacingByAgentId;
-        TMap<int32, FCrowdMassFinalKinematicState*>
-          KinematicByAgentId;
-        for (FCrowdFacingResult& Facing : WorkerFacings)
-        {
-          if (FacingByAgentId.Contains(Facing.AgentId))
-            return RejectPrepare(TEXT("worker_facing_duplicate"));
-          FacingByAgentId.Add(Facing.AgentId, &Facing);
-        }
-        for (FCrowdMassFinalKinematicState& Kinematic :
-          WorkerParticleKinematics)
-        {
-          if (KinematicByAgentId.Contains(Kinematic.AgentId))
-            return RejectPrepare(TEXT("particle_kinematic_duplicate"));
-          KinematicByAgentId.Add(Kinematic.AgentId, &Kinematic);
-        }
-        const FCrowdWorkerResultApplyProxy& Proxy =
-          RuntimeSubsystem->GetWorkerResultApplyProxy();
-        for (const FCrowdMassBoundaryAgentRecord& Agent :
-          BoundarySnapshot.Agents)
-        {
-          FCrowdFacingResult* const* Facing =
-            FacingByAgentId.Find(Agent.Identity.AgentId);
-          FCrowdMassFinalKinematicState* const* Kinematic =
-            KinematicByAgentId.Find(Agent.Identity.AgentId);
-          const FCrowdWorkerDomainProxyState* WorkerFacing =
-            FindResultDomain(Proxy,
-              Agent.AgentFacts.StableEntityRef,
-              ECrowdWorkerField::Facing);
-          FCrowdWorkerMovementState WorkerState;
-          if (!Facing || !Kinematic || !WorkerFacing
-            || WorkerFacing->SourceInputSequence
-              != ExpectedWorkerV2Sequence
-            || !FCrowdWorkerMovementStateCodec::Decode(
-              WorkerFacing->State.Payload, WorkerState)
-            || !WorkerState.Position.Equals(
-              (*Kinematic)->Position, 0.001)
-            || !WorkerState.Velocity.Equals(
-              (*Kinematic)->Velocity, 0.001))
-            return RejectPrepare(TEXT("particle_movement_mismatch"));
-          (*Facing)->ResolvedYawDegrees = WorkerState.YawDegrees;
-          (*Kinematic)->Position = WorkerState.Position;
-          (*Kinematic)->Velocity = WorkerState.Velocity;
-          (*Kinematic)->bValid = true;
-        }
-        FCrowdMassMovementFinalizeWorkInput FinalizeInput;
-        TArray<FCrowdMassCommitTarget> CommitTargets;
-        if (!FCrowdMassMovementFinalizeWork::BuildInputFromPrepared(
-            BoundarySnapshot, WorkerParticleKinematics,
-            WorkerFacings, FinalizeInput, CommitTargets))
-          return RejectPrepare(TEXT("finalize_input"));
-        FCrowdMassMovementFinalizeWorkOutput Finalize =
-          FCrowdMassMovementFinalizeWork::BuildCommitPlan(
-            FinalizeInput);
-        if (!Finalize.bCompleted
-          || !Finalize.CommitPlan.bValid)
-          return RejectPrepare(TEXT("finalize_work"));
-        Tail->GraphOutput.Movement = MoveTemp(PreparedMovement);
-        Tail->ObstacleKinematics =
-          MoveTemp(WorkerParticleKinematics);
-        Tail->Output = BoundaryFacingWorkState->Output;
-        Tail->Output.Facing.Summary.Results =
-          MoveTemp(WorkerFacings);
-        Tail->Output.Finalize = MoveTemp(Finalize);
-        Tail->Output.CommitTargets = MoveTemp(CommitTargets);
-        Tail->Output.bCompleted = true;
-        Tail->ConsecutiveSettleStepsByAgentId =
-          BoundaryFacingWorkState->ConsecutiveSettleStepsByAgentId;
-        Tail->FinalSettledByAgentId =
-          BoundaryFacingWorkState->FinalSettledByAgentId;
-        Tail->StableHash = CalculateMovementTailHash(
-          Tail->GraphOutput, Tail->Output,
-          Tail->ObstacleKinematics);
-        if (Tail->StableHash == 0)
-          return RejectPrepare(TEXT("movement_tail_hash"));
-        Tail->bCompleted.Store(true);
-        BoundaryFacingWorkState->WorkerMovementTail = Tail;
-        BoundaryFacingWorkState->WorkerMovementSequence =
-          WorkSequence;
-        BoundaryFacingWorkState->bWorkerMovementTailSubmitted = true;
-        bDirectProductionTail = true;
-      }
-      if (!bDirectProductionTail)
-      {
-      FCrowdDemoRoundWorkGraphInput GraphInput =
-        BoundaryFacingWorkState->GraphInput;
-      TMap<int32, int32> PreviousSettle =
-        BoundaryFacingWorkState->PreviousSettleStepsByAgentId;
-      TMap<int32, bool> TerminalOwners =
-        BoundaryFacingWorkState->TerminalOwnerByAgentId;
-      FCrowdMassBoundarySnapshot Snapshot = BoundarySnapshot;
-      const bool bUseObstacleConstraint =
-        BoundaryFacingWorkState->bObstacleStaged;
-      const FCrowdDemoSharedFlowFieldConfig ObstacleConfig =
-        BoundaryFacingWorkState->ObstacleConfig;
-      const float ObstacleFixedStepSeconds =
-        BoundaryFacingWorkState->ObstacleFixedStepSeconds;
-      if (!FCrowdDemoWorkerInputSync::SubmitShadowWork(
-          *GetWorld(),
-          FCrowdDemoWorkerInputSync::EShadowKernel::Movement,
-          WorkSequence, 0,
-          [Tail,
-            GraphInput = MoveTemp(GraphInput),
-            PreparedMovement = MoveTemp(PreparedMovement),
-            WorkerParticleKinematics =
-              MoveTemp(WorkerParticleKinematics),
-            PreviousSettle = MoveTemp(PreviousSettle),
-            TerminalOwners = MoveTemp(TerminalOwners),
-            Snapshot = MoveTemp(Snapshot),
-            bUseObstacleConstraint,
-            ObstacleConfig,
-            ObstacleFixedStepSeconds]() mutable
-          {
-            const bool bCompleted =
-              Tail->bUsesWorkerV2PreparedParticle
-              ? RunWorkerFacingTailFromKinematics(
-                MoveTemp(GraphInput),
-                MoveTemp(PreparedMovement),
-                MoveTemp(WorkerParticleKinematics),
-                MoveTemp(PreviousSettle),
-                MoveTemp(TerminalOwners),
-                MoveTemp(Snapshot), *Tail)
-              : RunWorkerDownstreamTail(
-                MoveTemp(GraphInput),
-                MoveTemp(PreparedMovement),
-                MoveTemp(PreviousSettle),
-                MoveTemp(TerminalOwners),
-                MoveTemp(Snapshot),
-                bUseObstacleConstraint, true, ObstacleConfig,
-                ObstacleFixedStepSeconds, *Tail);
-            Tail->bCompleted.Store(true);
-            return bCompleted ? Tail->StableHash : 0;
-          },
-          false))
-        return RejectPrepare(TEXT("movement_tail_submit"));
-      BoundaryFacingWorkState->WorkerMovementTail = Tail;
-      BoundaryFacingWorkState->WorkerMovementSequence =
-        WorkSequence;
-      BoundaryFacingWorkState->bWorkerMovementTailSubmitted = true;
-      }
-    }
-  }
-  if (BoundaryFacingWorkState->bWorkerMovementTailSubmitted
-    && !BoundaryFacingWorkState->bWorkerMovementTailConsumed)
-  {
-    const auto& Tail = BoundaryFacingWorkState->WorkerMovementTail;
-    if (!Tail.IsValid() || !Tail->bCompleted.Load())
-    {
-      ++BoundaryPendingFrameCount;
-      if (BoundaryPendingFrameCount % 120 == 0)
-      {
-        UE_LOG(LogTemp, Display,
-          TEXT("CrowdDemoBoundaryPendingReason reason=movement_tail step=%d tail_valid=%d"),
-          GetCurrentFixedStepIndex(), Tail.IsValid() ? 1 : 0);
-      }
-      return ECrowdBoundaryPollResult::Pending;
-    }
-    UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
-      GetWorld()
-        ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
-        : nullptr;
-    if (!RuntimeSubsystem)
-      return RejectPrepare(TEXT("tail_runtime_missing"));
-    FCrowdWorkerMovementAuthority& MovementAuthority =
-      RuntimeSubsystem->GetWorkerMovementAuthority();
-    const ECrowdWorkerMovementAuthorityMode MovementMode =
-      MovementAuthority.GetMode();
-    const bool bRequireBoundaryComparison =
-      MovementMode
-        != ECrowdWorkerMovementAuthorityMode::Production
-      && !Tail->bUsesWorkerV2PreparedMovement;
-    const uint64 BoundaryTailHash =
-      bRequireBoundaryComparison
-        ? CalculateMovementTailHash(
-          BoundaryFacingWorkState->GraphOutput,
-          BoundaryFacingWorkState->Output,
-          BoundaryFacingWorkState->ObstacleKinematics)
-        : 0;
-    if (Tail->StableHash == 0
-      || (bRequireBoundaryComparison
-        && Tail->StableHash != BoundaryTailHash)
-      || !Tail->Output.bCompleted
-      || Tail->Output.Finalize.CommitPlan.Records.Num()
-        != BoundarySnapshot.Agents.Num())
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoWorkerMovementTailMismatch step=%d expected=%llu actual=%llu records=%d boundary_movement=%u worker_movement=%u boundary_predict=%u worker_predict=%u boundary_local=%u worker_local=%u boundary_particle=%u worker_particle=%u boundary_facing=%u worker_facing=%u"),
-        GetCurrentFixedStepIndex(),
-        BoundaryTailHash,
-        Tail->StableHash,
-        Tail->Output.Finalize.CommitPlan.Records.Num(),
-        BoundaryFacingWorkState->GraphOutput.Movement.StableHash,
-        Tail->GraphOutput.Movement.StableHash,
-        BoundaryFacingWorkState->GraphOutput.Movement.
-          MovementPredict.StableHash,
-        Tail->GraphOutput.Movement.MovementPredict.StableHash,
-        BoundaryFacingWorkState->GraphOutput.Movement.
-          LocalPredictive.StableHash,
-        Tail->GraphOutput.Movement.LocalPredictive.StableHash,
-        BoundaryFacingWorkState->GraphOutput.Particle.StableHash,
-        Tail->GraphOutput.Particle.StableHash,
-        BoundaryFacingWorkState->Output.StableHash,
-        Tail->Output.StableHash);
-      BoundaryOrchestrator->Fail();
-      LastBoundaryTransactionResult =
-        BoundaryOrchestrator->BuildResult();
-      return ECrowdBoundaryPollResult::Failed;
-    }
-
-    TMap<FCrowdStableEntityRef, const FCrowdMassCommitRecord*>
-      BoundaryCommitByRef;
-    for (const FCrowdMassCommitRecord& Record
-      : BoundaryFacingWorkState->Output.Finalize.CommitPlan.Records)
-      BoundaryCommitByRef.Add(Record.EntityRef, &Record);
-    const uint64 MovementVersion =
-      BoundaryFacingWorkState->WorkerMovementSequence;
-    if (MovementVersion == 0)
-      return RejectPrepare(TEXT("movement_version"));
-    const uint64 ExpectedWorkerV2InputSequence =
-      BoundaryFacingWorkState->WorkerV2InputSequence;
-    for (const FCrowdMassCommitRecord& Record
-      : Tail->Output.Finalize.CommitPlan.Records)
-    {
-      if (MovementMode
-          != ECrowdWorkerMovementAuthorityMode::Shadow
-        && !MovementAuthority.IsWorkerOwner(Record.EntityRef))
-        continue;
-      FCrowdWorkerMovementSample PreviousSample;
-      const bool bHasPrevious = MovementAuthority.Sample(
-        Record.EntityRef,
-        GetCurrentStepStartServerTimeSeconds(),
-        PreviousSample);
-      FCrowdWorkerMovementState MovementState;
-      MovementState.Position = Record.Movement.Position;
-      MovementState.Velocity = Record.Movement.Velocity;
-      MovementState.YawDegrees = Record.Movement.YawDegrees;
-      MovementState.SimulationTimeSeconds =
-        GetCurrentStepEndServerTimeSeconds();
-      MovementState.CorrectionRevision =
-        bHasPrevious ? PreviousSample.CorrectionRevision : 0;
-      FCrowdWorkerStatePatch Patch;
-      Patch.EntityRef = Record.EntityRef;
-      Patch.Generation =
-        MovementAuthority.GetMetrics().Generation;
-      Patch.WorkerEpoch = MovementVersion;
-      Patch.SourceInputSequence = MovementVersion;
-      Patch.DirtyMask = CrowdWorkerMovementFields::Movement;
-      Patch.State.StateRevision = MovementVersion;
-      if (!FCrowdWorkerMovementStateCodec::Encode(
-          MovementState, Patch.State.Payload))
-        return RejectPrepare(TEXT("movement_authority_encode"));
-      Patch.RecalculateStableHash();
-      if (MovementAuthority.AcceptPatch(Patch)
-          != ECrowdWorkerMovementAcceptResult::Accepted)
-        return RejectPrepare(TEXT("movement_authority_accept"));
-      if (MovementMode
-          == ECrowdWorkerMovementAuthorityMode::Shadow)
-      {
-        const FCrowdMassCommitRecord* const* BoundaryRecord =
-          BoundaryCommitByRef.Find(Record.EntityRef);
-        if (!BoundaryRecord)
-          return RejectPrepare(TEXT("shadow_boundary_record"));
-        if (const FCrowdWorkerDomainProxyState* Autonomous =
-          FindResultDomain(
-            RuntimeSubsystem->GetWorkerResultApplyProxy(),
-            Record.EntityRef, ECrowdWorkerField::Facing))
-        {
-          if (Autonomous->SourceInputSequence
-              == ExpectedWorkerV2InputSequence)
-          {
-            FCrowdWorkerMovementState AutonomousState;
-            if (!FCrowdWorkerMovementStateCodec::Decode(
-                Autonomous->State.Payload, AutonomousState))
-              return RejectPrepare(TEXT("shadow_autonomous_decode"));
-            const double PositionError = FVector::Distance(
-              AutonomousState.Position,
-              (*BoundaryRecord)->Movement.Position);
-            const double VelocityError = FVector::Distance(
-              AutonomousState.Velocity,
-              (*BoundaryRecord)->Movement.Velocity);
-            const double YawError = FMath::Abs(
-              FMath::FindDeltaAngleDegrees(
-                AutonomousState.YawDegrees,
-                (*BoundaryRecord)->Movement.YawDegrees));
-            ++WorkerV2MovementShadowCompareCount;
-            WorkerV2MovementPositionErrorMaxCm = FMath::Max(
-              WorkerV2MovementPositionErrorMaxCm, PositionError);
-            WorkerV2MovementVelocityErrorMaxCmps = FMath::Max(
-              WorkerV2MovementVelocityErrorMaxCmps, VelocityError);
-            WorkerV2MovementYawErrorMaxDegrees = FMath::Max(
-              WorkerV2MovementYawErrorMaxDegrees, YawError);
-            if (PositionError > 0.001
-              || VelocityError > 0.001
-              || YawError > 0.001)
-              ++WorkerV2MovementShadowMismatchCount;
-          }
-        }
-        FCrowdWorkerMovementState ExpectedState = MovementState;
-        ExpectedState.Position = (*BoundaryRecord)->Movement.Position;
-        ExpectedState.Velocity = (*BoundaryRecord)->Movement.Velocity;
-        ExpectedState.YawDegrees =
-          (*BoundaryRecord)->Movement.YawDegrees;
-        if (!MovementAuthority.CompareShadow(
-            Record.EntityRef, ExpectedState,
-            0.001, 0.001, 0.001))
-          return RejectPrepare(TEXT("movement_shadow_compare"));
-      }
-    }
-    if (MovementMode
-        == ECrowdWorkerMovementAuthorityMode::Production)
-    {
-      BoundaryFacingWorkState->GraphOutput.Movement =
-        Tail->GraphOutput.Movement;
-      if (Tail->GraphOutput.Particle.bCompleted)
-      {
-        BoundaryFacingWorkState->GraphOutput.Particle =
-          Tail->GraphOutput.Particle;
-      }
-      BoundaryFacingWorkState->ObstacleKinematics =
-        Tail->ObstacleKinematics;
-      PreparedRuntimeFinalKinematics =
-        Tail->ObstacleKinematics;
-      bPreparedRuntimeFinalKinematicsWorkerOwned =
-        Tail->bUsesWorkerV2PreparedParticle;
-      BoundaryFacingWorkState->Output = Tail->Output;
-      if (!Tail->ConsecutiveSettleStepsByAgentId.IsEmpty())
-      {
-        BoundaryFacingWorkState->ConsecutiveSettleStepsByAgentId =
-          Tail->ConsecutiveSettleStepsByAgentId;
-        BoundaryFacingWorkState->FinalSettledByAgentId =
-          Tail->FinalSettledByAgentId;
-      }
-    }
-    else if (MovementMode
-        == ECrowdWorkerMovementAuthorityMode::Canary)
-    {
-      TMap<FCrowdStableEntityRef, const FCrowdMassCommitRecord*>
-        WorkerCommitByRef;
-      for (const FCrowdMassCommitRecord& Record
-        : Tail->Output.Finalize.CommitPlan.Records)
-        WorkerCommitByRef.Add(Record.EntityRef, &Record);
-      for (FCrowdMassCommitRecord& Record
-        : BoundaryFacingWorkState->Output.Finalize.CommitPlan.Records)
-      {
-        if (!MovementAuthority.IsWorkerOwner(Record.EntityRef))
-          continue;
-        const FCrowdMassCommitRecord* const* WorkerRecord =
-          WorkerCommitByRef.Find(Record.EntityRef);
-        if (!WorkerRecord)
-          return RejectPrepare(TEXT("canary_worker_record"));
-        Record = **WorkerRecord;
-      }
-      for (const TPair<int32, int32>& Value
-        : Tail->ConsecutiveSettleStepsByAgentId)
-      {
-        const FCrowdMassBoundaryAgentRecord* Agent =
-          BoundarySnapshot.Agents.FindByPredicate(
-            [&Value](const FCrowdMassBoundaryAgentRecord& Candidate)
-            {
-              return Candidate.Identity.AgentId == Value.Key;
-            });
-        if (Agent && MovementAuthority.IsWorkerOwner(
-            Agent->AgentFacts.StableEntityRef))
-        {
-          BoundaryFacingWorkState->
-            ConsecutiveSettleStepsByAgentId.Add(
-              Value.Key, Value.Value);
-          BoundaryFacingWorkState->FinalSettledByAgentId.Add(
-            Value.Key,
-            Tail->FinalSettledByAgentId.FindRef(Value.Key));
-        }
-      }
-    }
-    BoundaryFacingWorkState->bWorkerMovementTailConsumed = true;
-    if (GetCurrentFixedStepIndex() == 0
-      || GetCurrentFixedStepIndex() % 300 == 0)
-    {
-      const FCrowdWorkerMovementAuthorityMetrics& MovementMetrics =
-        MovementAuthority.GetMetrics();
-      const FCrowdAsyncSimulationRuntimeMetrics RuntimeMetrics =
-        RuntimeSubsystem->GetAsyncSimulationRuntime().GetMetrics();
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoWorkerMovementCheckpoint mode=%d particle_mode=%d particle_canaries=%d particle_domain_tail=%d step=%d accepted=%llu corrections=%llu rejected_echo=%llu shadow_compares=%llu shadow_mismatches=%llu v2_shadow_compares=%llu v2_shadow_mismatches=%llu v2_position_error_max_cm=%.3f v2_velocity_error_max_cmps=%.3f v2_yaw_error_max_deg=%.3f v2_movement_stage_compares=%llu v2_movement_stage_mismatches=%llu v2_movement_stage_stale_skips=%llu v2_movement_stage_last_input=%llu v2_movement_stage_position_error_max_cm=%.3f v2_movement_stage_velocity_error_max_cmps=%.3f v2_movement_stage_time_error_max_s=%.6f v2_movement_stage_last_mismatches=%llu v2_movement_stage_last_position_error_max_cm=%.3f v2_movement_stage_last_velocity_error_max_cmps=%.3f canaries=%d states=%d boundary_hash_required=%d production_submitted=%llu production_completed=%llu production_domain_tail=%d source=PersistentRuntimeAuthority"),
-        static_cast<int32>(MovementMode),
-        static_cast<int32>(ParticleMode),
-        ParticleCanaries.Num(),
-        Tail->bUsesWorkerV2PreparedParticle ? 1 : 0,
-        GetCurrentFixedStepIndex(),
-        MovementMetrics.AcceptedPatchCount,
-        MovementMetrics.AcceptedCorrectionCount,
-        MovementMetrics.RejectedEchoCount,
-        MovementMetrics.ShadowCompareCount,
-        MovementMetrics.ShadowMismatchCount,
-        WorkerV2MovementShadowCompareCount,
-        WorkerV2MovementShadowMismatchCount,
-        WorkerV2MovementPositionErrorMaxCm,
-        WorkerV2MovementVelocityErrorMaxCmps,
-        WorkerV2MovementYawErrorMaxDegrees,
-        WorkerV2MovementStageCompareCount,
-        WorkerV2MovementStageMismatchCount,
-        WorkerV2MovementStageStaleSkipCount,
-        WorkerV2MovementStageLastExpectedInputSequence,
-        WorkerV2MovementStagePositionErrorMaxCm,
-        WorkerV2MovementStageVelocityErrorMaxCmps,
-        WorkerV2MovementStageTimeErrorMaxSeconds,
-        WorkerV2MovementStageLastMismatchCount,
-        WorkerV2MovementStageLastPositionErrorMaxCm,
-        WorkerV2MovementStageLastVelocityErrorMaxCmps,
-        MovementMetrics.CanaryEntityCount,
-        MovementMetrics.StateCount,
-        bRequireBoundaryComparison ? 1 : 0,
-        RuntimeMetrics.SubmittedProductionWorkCount,
-        RuntimeMetrics.CompletedProductionWorkCount,
-        MovementMode
-          == ECrowdWorkerMovementAuthorityMode::Production
-          ? 1 : 0);
-    }
-  }
-  LastBoundaryPrepareCheckpoint = 4;
-  const auto FailCompletedWork = [this](const TCHAR* Reason)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoCompletedWorkRejected step=%d reason=%s"),
-      GetCurrentFixedStepIndex(), Reason);
-    BoundaryOrchestrator->Fail();
-    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
-    return ECrowdBoundaryPollResult::Failed;
-  };
-  if (!BoundaryFacingWorkState->bCompleted)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoFacingWorkIncomplete step=%d facing=%d finalize=%d"),
-      GetCurrentFixedStepIndex(),
-      BoundaryFacingWorkState->Output.Facing.bCompleted ? 1 : 0,
-      BoundaryFacingWorkState->Output.Finalize.bCompleted ? 1 : 0);
-    return FailCompletedWork(TEXT("facing_incomplete"));
-  }
-  if (!BoundaryFacingWorkState->BusinessOutput.bCompleted)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoBusinessWorkIncomplete step=%d"),
-      GetCurrentFixedStepIndex());
-    return FailCompletedWork(TEXT("business_incomplete"));
-  }
-  LastBoundaryPrepareCheckpoint = 5;
-  FCrowdDemoOwnedSharedFlowShadowInput SharedFlowShadowInput;
-  if (!SharedFlowShadowInput.Capture(
-      BoundaryFacingWorkState->GraphInput.SharedFlow)
-    || !BoundaryFacingWorkState->GraphOutput.SharedFlow.bValid
-    || !BoundaryFacingWorkState->bMovementShadowInputValid
-    || !BoundaryFacingWorkState->GraphOutput.Movement.bCompleted
-    || !BoundaryFacingWorkState->Output.Facing.bCompleted
-    || BoundaryFacingWorkState->FacingShadowInput.Agents.IsEmpty()
-    || !GetWorld())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoKernelShadowInputInvalid step=%d"),
-      GetCurrentFixedStepIndex());
-    return FailCompletedWork(TEXT("shadow_input"));
-  }
-  const int32 ShardSize =
-    1 + GetCurrentFixedStepIndex() % 64;
-  const bool bReverseDispatchOrder =
-    (GetCurrentFixedStepIndex() & 1) != 0;
-  FCrowdMassFacingWorkInput FacingShadowInput =
-    BoundaryFacingWorkState->FacingShadowInput;
-  FCrowdDemoBoundaryBusinessWorkInput BusinessShadowInput =
-    BoundaryFacingWorkState->BusinessInput;
-  if (!BoundaryFacingWorkState->bWorkerMovementTailSubmitted)
-  {
-    const uint64 WorkSequence = NextWorkerTaskSequence++;
-    if (WorkSequence == 0 || NextWorkerTaskSequence == 0)
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoWorkerTaskSequenceOverflow"));
-      return FailCompletedWork(TEXT("shadow_task_sequence"));
-    }
-    FCrowdMassMovementPipelineWorkInput MovementShadowInput =
-      BoundaryFacingWorkState->MovementShadowInput;
-    UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
-      GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>();
-    if (!RuntimeSubsystem)
-      return FailCompletedWork(TEXT("shadow_runtime"));
-    FCrowdWorkerMovementAuthority& MovementAuthority =
-      RuntimeSubsystem->GetWorkerMovementAuthority();
-    const bool bProductionMovement =
-      MovementAuthority.GetMode()
-        == ECrowdWorkerMovementAuthorityMode::Production;
-    const bool bReplayLegacyMovementTail =
-      MovementAuthority.GetMode()
-        != ECrowdWorkerMovementAuthorityMode::Shadow;
-    if (MovementAuthority.GetMode()
-        != ECrowdWorkerMovementAuthorityMode::Shadow)
-    {
-      for (FCrowdMassGatherRecord& Record
-        : MovementShadowInput.Guidance.Records)
-      {
-        if (!MovementAuthority.IsWorkerOwner(
-            Record.AgentFacts.StableEntityRef))
-          continue;
-        FCrowdWorkerMovementSample Sample;
-        if (MovementAuthority.Sample(
-            Record.AgentFacts.StableEntityRef,
-            GetCurrentStepStartServerTimeSeconds(), Sample))
-        {
-          const bool bAuthorityCorrection =
-            !Record.State.Position.Equals(Sample.Position, 0.001)
-            || !Record.State.Velocity.Equals(
-              Sample.Velocity, 0.001)
-            || FMath::Abs(FMath::FindDeltaAngleDegrees(
-              Record.State.YawDegrees, Sample.YawDegrees)) > 0.001f;
-          if (bAuthorityCorrection)
-          {
-            FCrowdWorkerMovementState CorrectedState;
-            CorrectedState.Position = Record.State.Position;
-            CorrectedState.Velocity = Record.State.Velocity;
-            CorrectedState.YawDegrees = Record.State.YawDegrees;
-            CorrectedState.SimulationTimeSeconds =
-              GetCurrentStepStartServerTimeSeconds();
-            CorrectedState.CorrectionRevision =
-              Sample.CorrectionRevision + 1;
-            FCrowdWorkerCorrectionDelta Correction;
-            Correction.InputSequence = WorkSequence;
-            Correction.EntityRef =
-              Record.AgentFacts.StableEntityRef;
-            Correction.CorrectionRevision =
-              CorrectedState.CorrectionRevision;
-            Correction.DirtyMask =
-              CrowdWorkerMovementFields::Movement;
-            if (!FCrowdWorkerMovementStateCodec::Encode(
-                CorrectedState, Correction.FullState)
-              || MovementAuthority.ApplyCorrection(
-                Correction,
-                MovementAuthority.GetMetrics().Generation,
-                WorkSequence)
-                != ECrowdWorkerMovementAcceptResult::
-                  AcceptedCorrection)
-              return FailCompletedWork(TEXT("shadow_correction"));
-          }
-          else
-          {
-            Record.State.Position = Sample.Position;
-            Record.State.Velocity = Sample.Velocity;
-            Record.State.YawDegrees = Sample.YawDegrees;
-          }
-        }
-        else if (GetCurrentFixedStepIndex() > 0)
-        {
-          UE_LOG(LogTemp, Error,
-            TEXT("VIOLATION CrowdDemoWorkerMovementStateMissing step=%d agent=%d"),
-            GetCurrentFixedStepIndex(), Record.Identity.AgentId);
-          return FailCompletedWork(TEXT("shadow_movement_state"));
-        }
-      }
-    }
-    const uint64 ExpectedMovementTailHash =
-      bProductionMovement
-        ? 0
-        : CalculateMovementTailHash(
-          BoundaryFacingWorkState->GraphOutput,
-          BoundaryFacingWorkState->Output,
-          BoundaryFacingWorkState->ObstacleKinematics);
-    auto MovementTail =
-      MakeShared<FCrowdDemoWorkerMovementTailExecution,
-        ESPMode::ThreadSafe>();
-    if (!bReplayLegacyMovementTail)
-    {
-      MovementTail->GraphOutput =
-        BoundaryFacingWorkState->GraphOutput;
-      MovementTail->Output =
-        BoundaryFacingWorkState->Output;
-      MovementTail->ObstacleKinematics =
-        BoundaryFacingWorkState->ObstacleKinematics;
-      MovementTail->ConsecutiveSettleStepsByAgentId =
-        BoundaryFacingWorkState->ConsecutiveSettleStepsByAgentId;
-      MovementTail->FinalSettledByAgentId =
-        BoundaryFacingWorkState->FinalSettledByAgentId;
-      MovementTail->StableHash = CalculateMovementTailHash(
-        MovementTail->GraphOutput, MovementTail->Output,
-        MovementTail->ObstacleKinematics);
-    }
-    BoundaryFacingWorkState->WorkerMovementTail = MovementTail;
-    BoundaryFacingWorkState->WorkerMovementSequence = WorkSequence;
-    if (!bReplayLegacyMovementTail)
-    {
-      MovementTail->bCompleted.Store(true);
-      BoundaryFacingWorkState->bWorkerMovementTailSubmitted = true;
-      ++BoundaryPendingFrameCount;
-      return ECrowdBoundaryPollResult::Pending;
-    }
-    else
-    {
-    FCrowdDemoRoundWorkGraphInput MovementGraphInput =
-      BoundaryFacingWorkState->GraphInput;
-    TMap<int32, int32> MovementPreviousSettle =
-      BoundaryFacingWorkState->PreviousSettleStepsByAgentId;
-    TMap<int32, bool> MovementTerminalOwners =
-      BoundaryFacingWorkState->TerminalOwnerByAgentId;
-    FCrowdMassBoundarySnapshot MovementSnapshot =
-      BoundarySnapshot;
-    const bool bUseObstacleConstraint =
-      BoundaryFacingWorkState->bObstacleStaged;
-    const FCrowdDemoSharedFlowFieldConfig MovementObstacleConfig =
-      BoundaryFacingWorkState->ObstacleConfig;
-    const float MovementObstacleFixedStepSeconds =
-      BoundaryFacingWorkState->ObstacleFixedStepSeconds;
-    bool bSupportingShadowSubmitted = true;
-    if (!bProductionMovement && bReplayLegacyMovementTail)
-    {
-      bSupportingShadowSubmitted =
-        FCrowdDemoWorkerInputSync::SubmitShadowWork(
-          *GetWorld(),
-          FCrowdDemoWorkerInputSync::EShadowKernel::SharedFlow,
-          WorkSequence,
-          BoundaryFacingWorkState->GraphOutput.SharedFlow.StableHash,
-          [Input = MoveTemp(SharedFlowShadowInput),
-            ShardSize, bReverseDispatchOrder]
-          {
-            return Input.Execute(
-              ShardSize, bReverseDispatchOrder);
-          })
-        && FCrowdDemoWorkerInputSync::SubmitShadowWork(
-          *GetWorld(),
-          FCrowdDemoWorkerInputSync::EShadowKernel::Facing,
-          WorkSequence,
-          BoundaryFacingWorkState->Output.Facing.StableHash,
-          [Input = MoveTemp(FacingShadowInput),
-            ShardSize, bReverseDispatchOrder]
-          {
-            const FCrowdMassFacingWorkOutput Output =
-              FCrowdMassFacingWork::ResolveSharded(
-                Input, ShardSize, bReverseDispatchOrder);
-            return Output.bCompleted ? Output.StableHash : 0;
-          })
-        && FCrowdDemoWorkerInputSync::SubmitShadowWork(
-          *GetWorld(),
-          FCrowdDemoWorkerInputSync::EShadowKernel::Business,
-          WorkSequence,
-          BoundaryFacingWorkState->BusinessOutput.StableHash,
-          [Input = MoveTemp(BusinessShadowInput)]
-          {
-            const FCrowdDemoBoundaryBusinessWorkOutput Output =
-              RunBoundaryBusinessWork(Input);
-            return Output.bCompleted ? Output.StableHash : 0;
-          });
-    }
-    if (!bSupportingShadowSubmitted
-      || !FCrowdDemoWorkerInputSync::SubmitShadowWork(
-      *GetWorld(),
-      FCrowdDemoWorkerInputSync::EShadowKernel::Movement,
-      WorkSequence,
-      ExpectedMovementTailHash,
-      [MovementTail,
-        GraphInput = MoveTemp(MovementGraphInput),
-        Input = MoveTemp(MovementShadowInput),
-        Previous = MoveTemp(MovementPreviousSettle),
-        Terminal = MoveTemp(MovementTerminalOwners),
-        Snapshot = MoveTemp(MovementSnapshot),
-        bUseObstacleConstraint,
-        ObstacleConfig = MovementObstacleConfig,
-        ObstacleFixedStepSeconds =
-          MovementObstacleFixedStepSeconds,
-        bReplayLegacyMovementTail]() mutable
-      {
-        if (!bReplayLegacyMovementTail)
-        {
-          MovementTail->bCompleted.Store(true);
-          return MovementTail->StableHash;
-        }
-        const bool bCompleted = RunWorkerMovementTail(
-          MoveTemp(GraphInput), MoveTemp(Input),
-          MoveTemp(Previous), MoveTemp(Terminal),
-          MoveTemp(Snapshot), bUseObstacleConstraint,
-          ObstacleConfig, ObstacleFixedStepSeconds,
-          *MovementTail);
-        MovementTail->bCompleted.Store(true);
-        return bCompleted ? MovementTail->StableHash : 0;
-      },
-      !bProductionMovement))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoKernelShadowSubmitRejected step=%d"),
-        GetCurrentFixedStepIndex());
-      return FailCompletedWork(TEXT("shadow_submit"));
-    }
-    BoundaryFacingWorkState->bWorkerMovementTailSubmitted = true;
-    ++BoundaryPendingFrameCount;
-    return ECrowdBoundaryPollResult::Pending;
-    }
-  }
-  PreparedBusinessGuidanceCandidates =
-    BoundaryFacingWorkState->BusinessOutput.GuidanceCandidates;
-  PreparedReactiveMotionSteps =
-    BoundaryFacingWorkState->BusinessOutput.ReactiveSteps;
-  PreparedRuntimeSharedFlowOutputs =
-    BoundaryFacingWorkState->GraphOutput.SharedFlow.Agents;
-  PreparedTargetRegionGuidanceCandidates.Reset();
-  int32 TargetGuidanceResultCount = 0;
-  int32 NonZeroTargetGuidanceCount = 0;
-  if (BoundaryFacingWorkState->bUseWorkerV2Target)
-  {
-    for (const FCrowdMassBoundaryAgentRecord& Base :
-      BoundarySnapshot.Agents)
-    {
-      const FCrowdWorkerDomainProxyState* Worker =
-        FindResultDomain(
-          WorkerV2RuntimeSubsystem->GetWorkerResultApplyProxy(),
-            Base.AgentFacts.StableEntityRef,
-            ECrowdWorkerField::Target);
-      FCrowdWorkerTargetState WorkerState;
-      if (!Worker
-        || Worker->SourceInputSequence == 0
-        || Worker->SourceInputSequence
-          > ExpectedWorkerV2Sequence
-        || !FCrowdWorkerTargetStateCodec::Decode(
-          Worker->State.Payload, WorkerState)
-        || WorkerState.TargetRevision
-          != GetTargetFact().TargetRevision)
-        return FailCompletedWork(TEXT("target_worker_state"));
-      ++TargetGuidanceResultCount;
-      if (!WorkerState.DesiredVelocity.IsNearlyZero(0.1f))
-        ++NonZeroTargetGuidanceCount;
-      PreparedTargetRegionGuidanceCandidates.Add(
-        FCrowdGuidanceComposeKernel::BuildCandidate(
-          Base.Identity.AgentId,
-          ECrowdGuidanceProvider::TargetRegion,
-          GetCurrentPlanRevision(),
-          WorkerState.DesiredVelocity,
-          FVector(
-            GetTargetFact().Location.X,
-            GetTargetFact().Location.Y,
-            Base.State.Position.Z),
-          WorkerState.DesiredVelocity.IsNearlyZero()
-            ? Base.State.YawDegrees
-            : WorkerState.DesiredVelocity.Rotation().Yaw,
-          WorkerState.Mode
-            != ECrowdTargetRegionGuidanceMode::Unrouted));
-    }
-  }
-  else for (const auto& Slot :
-    BoundaryFacingWorkState->TargetTopologySlots)
-  {
-    if (!Slot.Output.bValid || !Slot.DemandOutput.bValid
-      || !Slot.PlanOutput.bValid || !Slot.GuidanceOutput.bValid)
-      return FailCompletedWork(TEXT("target_slot_output"));
-    if (ActivePlan.Rules.bEnableHeterogeneousProfiles != 0)
-    {
-      const FCrowdDemoTargetRegionCapabilityCohortRuntime* Runtime =
-        TargetRegionCapabilityCohorts.FindByPredicate(
-          [&Slot](const auto& Value)
-          {
-            return Value.Cohort.CapabilityProfileKey
-              == Slot.CohortKey;
-          });
-      if (!Runtime)
-        return FailCompletedWork(TEXT("target_cohort_runtime"));
-    }
-    for (const auto& Result : Slot.GuidanceOutput.Results)
-    {
-      FCrowdTargetRegionGuidanceResult EffectiveResult = Result;
-      const FCrowdMassBoundaryAgentRecord* Base =
-        BoundarySnapshot.Agents.FindByPredicate(
-          [&Result](const auto& Agent)
-          {
-            return Agent.Identity.AgentId == Result.AgentId;
-          });
-      if (!Base)
-        return FailCompletedWork(TEXT("target_base_agent"));
-      if (TargetMode
-          == ECrowdDemoWorkerTargetAuthorityMode::Production)
-      {
-        const FCrowdWorkerDomainProxyState* Worker =
-          FindResultDomain(
-            WorkerV2RuntimeSubsystem->GetWorkerResultApplyProxy(),
-              Base->AgentFacts.StableEntityRef,
-              ECrowdWorkerField::Target);
-        FCrowdWorkerTargetState WorkerState;
-        if (!Worker
-          || !FCrowdWorkerTargetStateCodec::Decode(
-            Worker->State.Payload, WorkerState)
-          || WorkerState.CohortKey != Slot.CohortKey
-          || WorkerState.TargetRevision
-            != Slot.PlanInput.TargetRevision)
-          return FailCompletedWork(TEXT("target_production_state"));
-        EffectiveResult.CurrentCellKey =
-          WorkerState.CurrentCellKey;
-        EffectiveResult.NextCellKey = WorkerState.NextCellKey;
-        EffectiveResult.DemandRegionKey =
-          WorkerState.DemandRegionKey;
-        EffectiveResult.Mode = WorkerState.Mode;
-        EffectiveResult.DesiredVelocity = FVector2f(
-          WorkerState.DesiredVelocity.X,
-          WorkerState.DesiredVelocity.Y);
-      }
-      ++TargetGuidanceResultCount;
-      if (!EffectiveResult.DesiredVelocity.IsNearlyZero(0.1f))
-        ++NonZeroTargetGuidanceCount;
-      const FVector DesiredVelocity(
-        EffectiveResult.DesiredVelocity.X,
-        EffectiveResult.DesiredVelocity.Y, 0.0f);
-      PreparedTargetRegionGuidanceCandidates.Add(
-        FCrowdGuidanceComposeKernel::BuildCandidate(
-          EffectiveResult.AgentId,
-          ECrowdGuidanceProvider::TargetRegion,
-          GetCurrentPlanRevision(), DesiredVelocity,
-          FVector(
-            Slot.GuidanceInput.Settings.TargetLocation.X,
-            Slot.GuidanceInput.Settings.TargetLocation.Y,
-            Base->State.Position.Z),
-          DesiredVelocity.IsNearlyZero()
-            ? Base->State.YawDegrees
-            : DesiredVelocity.Rotation().Yaw,
-          EffectiveResult.Mode
-            != ECrowdTargetRegionGuidanceMode::Unrouted));
-    }
-  }
-  PreparedTargetRegionGuidanceCandidates.Sort(
-    [](const auto& A, const auto& B)
-    {
-      return A.AgentId < B.AgentId;
-    });
-  if (GetCurrentFixedStepIndex() == 0
-    || GetCurrentFixedStepIndex() % 300 == 0)
-  {
-    int32 TargetProviderCount = 0;
-    int32 NonZeroComposedCount = 0;
-    for (const FCrowdComposedGuidance& Guidance
-      : BoundaryFacingWorkState->GraphOutput.Movement.Guidance.
-        ComposedGuidance)
-    {
-      if (Guidance.SelectedProvider
-        == ECrowdGuidanceProvider::TargetRegion)
-        ++TargetProviderCount;
-      if (!Guidance.AutonomousPreferredVelocity.IsNearlyZero(0.1f))
-        ++NonZeroComposedCount;
-    }
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoBoundaryGuidance step=%d target_results=%d target_nonzero=%d selected_target=%d composed_nonzero=%d source=MassPipeline"),
-      GetCurrentFixedStepIndex(), TargetGuidanceResultCount,
-      NonZeroTargetGuidanceCount, TargetProviderCount,
-      NonZeroComposedCount);
-  }
-  if (TargetMode
-      == ECrowdDemoWorkerTargetAuthorityMode::Production)
-    PreparedTargetResourceSlots.Reset();
-  else
-    PreparedTargetResourceSlots =
-      BoundaryFacingWorkState->TargetTopologySlots;
-  if (!PreparePendingTargetResourcePlan())
-    return FailCompletedWork(TEXT("target_resource_plan"));
-  if (BoundaryFacingWorkState->bObstacleStaged)
-  {
-    PreparedObstacleMaxReprojectDeltaCm =
-      BoundaryFacingWorkState->ObstacleMaxReprojectDeltaCm;
-    PreparedRuntimeComposedGuidance =
-      BoundaryFacingWorkState->GraphOutput.Movement.Guidance.
-        ComposedGuidance;
-    PreparedRuntimePredictedMovements =
-      BoundaryFacingWorkState->GraphOutput.Movement.MovementPredict.
-        Results;
-    PreparedRuntimeFinalKinematics =
-      BoundaryFacingWorkState->ObstacleKinematics;
-    bPreparedRuntimeFinalKinematicsWorkerOwned =
-      BoundaryFacingWorkState->bWorkerMovementTailConsumed
-      && BoundaryFacingWorkState->WorkerMovementTail.IsValid()
-      && BoundaryFacingWorkState->WorkerMovementTail->
-        bUsesWorkerV2PreparedParticle;
-  }
-  if ((ProjectileMode
-      != ECrowdDemoWorkerProjectileAuthorityMode::Shadow
-      || CombatMode
-        != ECrowdDemoWorkerCombatAuthorityMode::Shadow)
-    && BoundaryFacingWorkState->BusinessInput.Rules.
-      RangedCombatSettings.bEnabled != 0)
-  {
-    FCrowdDemoPreparedCombatBoundaryCommit& Commit =
-      BoundaryFacingWorkState->BusinessOutput.Commit;
-    const FCrowdStableEntityRef AnchorEntity =
-      BoundarySnapshot.Agents[0].AgentFacts.StableEntityRef;
-    const FCrowdWorkerDomainProxyState* Worker =
-      FindResultDomain(
-        WorkerV2RuntimeSubsystem->GetWorkerResultApplyProxy(),
-        AnchorEntity, ECrowdWorkerField::Projectile);
-    FCrowdWorkerProjectileState WorkerState;
-    FCrowdDemoWorkerCombatHostResult WorkerCombatResult;
-    if (!Worker
-      || Worker->SourceInputSequence != ExpectedWorkerV2Sequence
-      || !FCrowdWorkerProjectileStateCodec::Decode(
-        Worker->State.Payload, WorkerState)
-      || !FCrowdDemoWorkerCombatHostResultCodec::Decode(
-        WorkerState.HostCombatResult, WorkerCombatResult)
-      || WorkerCombatResult.FixedStepIndex
-        != GetCurrentFixedStepIndex())
-      return FailCompletedWork(TEXT("projectile_state"));
-    if (ProjectileMode
-        != ECrowdDemoWorkerProjectileAuthorityMode::Shadow)
-    {
-      Commit.Projectiles = WorkerState.Prepared.States;
-      Commit.ProjectileEvents.Reset();
-      FCrowdDemoProjectileAdapters::AppendVisualEvents(
-        WorkerState.Prepared.Events, Commit.ProjectileEvents);
-    }
-    if (CombatMode
-        != ECrowdDemoWorkerCombatAuthorityMode::Shadow)
-    {
-      TArray<FCrowdDemoPreparedReactiveMotionStep>
-        WorkerReactiveSteps;
-      WorkerReactiveSteps.Reserve(Commit.Agents.Num());
-      for (FCrowdDemoRangedCombatAgent& Agent : Commit.Agents)
-      {
-        const FCrowdWorkerDomainProxyState* CombatProxy =
-          FindResultDomain(
-            WorkerV2RuntimeSubsystem->GetWorkerResultApplyProxy(),
-              Agent.EntityRef, ECrowdWorkerField::Combat);
-        FCrowdWorkerCombatState CombatState;
-        FCrowdDemoCombatAgentState HostState;
-        if (!CombatProxy
-          || CombatProxy->SourceInputSequence
-            != ExpectedWorkerV2Sequence
-          || !FCrowdWorkerCombatStateCodec::Decode(
-            CombatProxy->State.Payload, CombatState)
-          || !FCrowdDemoWorkerCombatStatePayloadCodec::Decode(
-            CombatState.HostState, HostState)
-          || HostState.AgentId != Agent.AgentId
-          || HostState.LifecycleSerial != Agent.LifecycleSerial)
-          return FailCompletedWork(TEXT("combat_state"));
-        Agent.Combat = HostState;
-        Agent.bAlive = HostState.bAlive;
-        FCrowdDemoPreparedReactiveMotionStep& Reactive =
-          WorkerReactiveSteps.AddDefaulted_GetRef();
-        Reactive.AgentId = Agent.AgentId;
-        Reactive.LifecycleSerial = Agent.LifecycleSerial;
-        Reactive.bActive = CombatState.bReactiveActive;
-        Reactive.ProposedZ = CombatState.ProposedZ;
-        Reactive.VerticalVelocityCmps =
-          CombatState.VerticalVelocityCmps;
-      }
-      WorkerReactiveSteps.Sort([](const auto& A, const auto& B)
-      {
-        return A.AgentId < B.AgentId;
-      });
-      PreparedReactiveMotionSteps = MoveTemp(WorkerReactiveSteps);
-      Commit.HitSummary = WorkerCombatResult.HitSummary;
-    }
-    if (ProjectileMode
-          != ECrowdDemoWorkerProjectileAuthorityMode::Shadow
-      || CombatMode
-          != ECrowdDemoWorkerCombatAuthorityMode::Shadow)
-    {
-      Commit.ProjectileSummary =
-        WorkerCombatResult.AttackSummary;
-      FCrowdDemoProjectileAdapters::MergeSummary(
-        WorkerState.Prepared.Summary,
-        Commit.ProjectileSummary);
-    }
-    Commit.StableHash = CalculateCombatCommitStableHash(
-      BoundarySnapshot.StableHash, Commit.FixedStepIndex,
-      Commit.Agents, Commit.ProjectileSummary,
-      Commit.HitSummary);
-    Commit.bValid = Commit.StableHash != 0;
-    if (!Commit.bValid)
-      return FailCompletedWork(TEXT("combat_commit_hash"));
-  }
-  if (BoundaryFacingWorkState->BusinessOutput.bRequiresCommit
-    && !SetPreparedCombatBoundaryCommit(
-      MoveTemp(BoundaryFacingWorkState->BusinessOutput.Commit)))
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoBusinessPreparedCommitRejected step=%d"),
-      GetCurrentFixedStepIndex());
-    return FailCompletedWork(TEXT("business_prepare_commit"));
-  }
-  if (GetCurrentFixedStepIndex() == 0)
-  {
-    FCrowdWorkerConsistencyEvidence ParticleEvidence;
-    ParticleEvidence.Domain = ECrowdWorkerConsistencyDomain::
-      ParticleInteractionIsland;
-    ParticleEvidence.Generation = BoundaryGeneration;
-    ParticleEvidence.DomainKey = 1;
-    ParticleEvidence.InputEpoch = 1;
-    ParticleEvidence.EnvironmentRevision =
-      BoundaryFacingWorkState->GraphOutput.SharedFlow.StableHash;
-    ParticleEvidence.EntityCount = BoundarySnapshot.Agents.Num();
-    ParticleEvidence.bStableMembership = true;
-    ParticleEvidence.bNetworkSemanticsFrozen = true;
-    ParticleEvidence.bClosedInteractionBoundary = false;
-
-    FCrowdWorkerConsistencyEvidence TargetEvidence;
-    TargetEvidence.Domain =
-      ECrowdWorkerConsistencyDomain::TargetCohort;
-    TargetEvidence.Generation = BoundaryGeneration;
-    TargetEvidence.DomainKey = 2;
-    TargetEvidence.InputEpoch = 1;
-    TargetEvidence.EnvironmentRevision =
-      BoundaryFacingWorkState->GraphOutput.SharedFlow.StableHash;
-    TargetEvidence.EntityCount = BoundarySnapshot.Agents.Num();
-    TargetEvidence.bStableMembership = true;
-    TargetEvidence.bAtomicPlan =
-      !BoundaryFacingWorkState->TargetTopologySlots.IsEmpty();
-    TargetEvidence.bNetworkSemanticsFrozen = false;
-
-    FCrowdWorkerConsistencyEvidence CombatEvidence;
-    CombatEvidence.Domain =
-      ECrowdWorkerConsistencyDomain::CombatEventBoundary;
-    CombatEvidence.Generation = BoundaryGeneration;
-    CombatEvidence.DomainKey = 3;
-    CombatEvidence.InputEpoch = 1;
-    CombatEvidence.EntityCount = BoundarySnapshot.Agents.Num();
-    CombatEvidence.FirstEventSequence = 1;
-    CombatEvidence.LastEventSequence = 1;
-    CombatEvidence.EventCount = 1;
-    CombatEvidence.bStableMembership = true;
-    CombatEvidence.bOrderedEvents = true;
-    CombatEvidence.bIdempotencyProven = true;
-    CombatEvidence.bRollbackProven = false;
-    CombatEvidence.bNetworkSemanticsFrozen = true;
-
-    const FCrowdWorkerConsistencyEvaluation ParticleEvaluation =
-      FCrowdWorkerConsistencyDomainEvaluator::Evaluate(
-        ParticleEvidence);
-    const FCrowdWorkerConsistencyEvaluation TargetEvaluation =
-      FCrowdWorkerConsistencyDomainEvaluator::Evaluate(
-        TargetEvidence);
-    const FCrowdWorkerConsistencyEvaluation CombatEvaluation =
-      FCrowdWorkerConsistencyDomainEvaluator::Evaluate(
-        CombatEvidence);
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoConsistencyDomainCheckpoint particle_decision=%d particle_failure=%d target_decision=%d target_failure=%d combat_decision=%d combat_failure=%d source=FailClosedEvaluator"),
-      static_cast<int32>(ParticleEvaluation.Decision),
-      static_cast<int32>(ParticleEvaluation.Failure),
-      static_cast<int32>(TargetEvaluation.Decision),
-      static_cast<int32>(TargetEvaluation.Failure),
-      static_cast<int32>(CombatEvaluation.Decision),
-      static_cast<int32>(CombatEvaluation.Failure));
-  }
-  LastBoundaryPrepareCheckpoint = 6;
-  return ECrowdBoundaryPollResult::Ready;
-}
 
 bool FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
   const FCrowdDemoTargetResourcePrepareValidationInput& Input)
@@ -7311,9 +5024,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeBoundaryFacingWork(
 {
   if (!IsInGameThread() || !BoundaryFacingWorkState.IsValid()
     || !BoundaryFacingWorkState->bCompleted
-    || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Merging)
+)
     return false;
   OutOutput = MoveTemp(BoundaryFacingWorkState->Output);
   OutConsecutiveSettleStepsByAgentId = MoveTemp(
@@ -7350,131 +5061,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedMovementBoundaryCommit(
   return true;
 }
 
-bool UCrowdDemoRoundSimPipelineSubsystem::ValidateRoundApplyPlan(
-  const TConstArrayView<FCrowdMassCommitTarget> ResolvedTargets)
-{
-  if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
-    || BoundaryOrchestrator->GetState()
-      != ECrowdBoundaryTransactionState::Merging)
-    return false;
-  const double ValidateStartSeconds = FPlatformTime::Seconds();
-  if (!IsPreparedMovementBoundaryCommitCurrent()
-    || PreparedMovementBoundaryCommit.StableHash == 0
-    || PreparedPlannerDecisionHash == 0
-    || !FCrowdMassRuntimeBridge::ValidateCommitTargets(
-      PreparedMovementBoundaryCommit.Finalize.CommitPlan, ResolvedTargets))
-    return false;
-  if (IsPreparedCombatBoundaryCommitCurrent()
-    && PreparedCombatBoundaryCommit.StableHash == 0)
-    return false;
 
-  uint64 ApplyPlanHash = FoldBoundaryHash(
-    BoundarySnapshot.StableHash,
-    PreparedMovementBoundaryCommit.Finalize.CommitPlan.StableHash);
-  ApplyPlanHash = FoldBoundaryHash(
-    ApplyPlanHash, PreparedMovementBoundaryCommit.StableHash);
-  ApplyPlanHash = FoldBoundaryHash(
-    ApplyPlanHash, PreparedPlannerDecisionHash);
-  if (IsPreparedCombatBoundaryCommitCurrent())
-  {
-    ApplyPlanHash = FoldBoundaryHash(
-      ApplyPlanHash, PreparedCombatBoundaryCommit.StableHash);
-  }
-  uint64 FlowDiagnosticHash = 14695981039346656037ull;
-  for (const FCrowdMassSharedFlowAgentOutput& Output
-    : PreparedRuntimeSharedFlowOutputs)
-  {
-    FlowDiagnosticHash = FoldBoundaryHash(
-      FlowDiagnosticHash, static_cast<uint64>(Output.AgentId));
-    FlowDiagnosticHash = FoldBoundaryHash(
-      FlowDiagnosticHash,
-      static_cast<uint64>(Output.Sample.StableCellKey));
-    FlowDiagnosticHash = FoldBoundaryHash(
-      FlowDiagnosticHash,
-      static_cast<uint64>(Output.Candidate.StableHash));
-  }
-  ApplyPlanHash = FoldBoundaryHash(ApplyPlanHash, FlowDiagnosticHash);
-  const FCrowdDemoPreparedRoundCommitPlan* Pending =
-    PeekPreparedRoundCommitPlan();
-  if (!Pending || !Pending->PreparedTargetResourcePlan.IsValid()
-    || !Pending->PreparedTargetResourcePlan->bValid)
-    return false;
-  ApplyPlanHash = FoldBoundaryHash(
-    ApplyPlanHash,
-    Pending->PreparedTargetResourcePlan->CommitToken.PreparedStateHash);
-  if (IsPreparedParticleDiagnosticCommitCurrent())
-  {
-    uint64 ParticleHash = FoldBoundaryHash(
-      14695981039346656037ull,
-      PreparedParticleDiagnosticCommit.AppliedStateHash);
-    ParticleHash = FoldBoundaryHash(
-      ParticleHash,
-      PreparedParticleDiagnosticCommit.CandidateSummary.CandidateHash);
-    if (ParticleHash == 0)
-      return false;
-    ApplyPlanHash = FoldBoundaryHash(ApplyPlanHash, ParticleHash);
-  }
-  const double ValidateMilliseconds =
-    (FPlatformTime::Seconds() - ValidateStartSeconds) * 1000.0;
-  if (!BoundaryOrchestrator->MarkApplyPlanValidated(
-      ApplyPlanHash, 0.0, ValidateMilliseconds))
-  {
-    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
-    return false;
-  }
-  return true;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::MarkRoundApplyCommitted(
-  const double CommitMilliseconds)
-{
-  if (!BoundaryOrchestrator.IsValid()
-    || !BoundaryOrchestrator->MarkCommitted(CommitMilliseconds))
-    return false;
-  LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
-  float CriticalPathMilliseconds = 0.0f;
-  for (const FCrowdBoundaryCompletedTask& Task
-    : LastBoundaryTransactionResult.Tasks)
-  {
-    BoundaryWorkerQueueMsSamples.Add(static_cast<float>(
-      Task.Timings.QueueMilliseconds));
-    BoundaryWorkerRunMsSamples.Add(static_cast<float>(
-      Task.Timings.ExecutionMilliseconds));
-    CriticalPathMilliseconds = FMath::Max(
-      CriticalPathMilliseconds,
-      static_cast<float>(Task.Timings.EndToEndMilliseconds));
-  }
-  BoundaryWorkerCriticalPathMsSamples.Add(CriticalPathMilliseconds);
-  if (LastBoundaryTransactionResult.bSucceeded
-    && PreparedObstacleMaxReprojectDeltaCm >= 0.0f)
-  {
-    RecordNavigationDomainReprojectDelta(
-      PreparedObstacleMaxReprojectDeltaCm);
-  }
-  if (LastBoundaryTransactionResult.bSucceeded
-    && (GetCurrentFixedStepIndex() == 0
-      || GetCurrentFixedStepIndex() % 300 == 0))
-  {
-    const FCrowdBoundaryPhaseTimings& Timings =
-      LastBoundaryTransactionResult.Timings;
-    UE_LOG(LogTemp, Display,
-      TEXT("CrowdDemoBoundaryTransaction step=%d plan_revision=%d snapshot_hash=%llu commit_hash=%llu gather_ms=%.3f queue_ms=%.3f work_ms=%.3f wait_ms=%.3f merge_ms=%.3f validate_ms=%.3f commit_ms=%.3f worker_critical_ms=%.3f tasks=%d pending_frames=%d stale_results=%d ordinary_block_wait_count=%d source=MassPipeline"),
-      GetCurrentFixedStepIndex(), GetCurrentPlanRevision(),
-      static_cast<unsigned long long>(
-        LastBoundaryTransactionResult.SnapshotHash),
-      static_cast<unsigned long long>(
-        LastBoundaryTransactionResult.CommitPlanHash),
-      Timings.GatherMilliseconds, Timings.QueueMilliseconds,
-      Timings.WorkMilliseconds, Timings.WaitMilliseconds,
-      Timings.MergeMilliseconds, Timings.ValidateMilliseconds,
-      Timings.CommitMilliseconds,
-      CriticalPathMilliseconds,
-      LastBoundaryTransactionResult.Tasks.Num(),
-      BoundaryPendingFrameCount, BoundaryStaleResultCount,
-      BoundaryOrdinaryBlockWaitCount);
-  }
-  return LastBoundaryTransactionResult.bSucceeded;
-}
 
 bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedCombatBoundaryCommit(
   FCrowdDemoPreparedCombatBoundaryCommit&& Commit)
@@ -8199,11 +5786,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::FinishFixedStep()
 
 void UCrowdDemoRoundSimPipelineSubsystem::FailFixedStep()
 {
-  if (BoundaryOrchestrator.IsValid())
-  {
-    BoundaryOrchestrator->Fail();
-    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
-  }
   ++BoundaryGeneration;
   if (BoundaryGeneration == 0)
     BoundaryGeneration = 1;
@@ -8217,7 +5799,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::FailFixedStep()
   BoundaryFormationFacts.Reset();
   BoundaryFacingFacts.Reset();
   BoundaryBusinessFacts.Reset();
-  BoundaryOrchestrator.Reset();
   BoundaryFacingWorkState.Reset();
   PendingWorkerV2MovementExpectations.Reset();
   ClearPreparedRoundCommitPlan();
@@ -8236,8 +5817,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::
 InvalidateInFlightBoundaryForAuthoritativeState()
 {
   check(IsInGameThread());
-  const bool bDiscardedInFlight =
-    bStepInProgress && BoundaryOrchestrator.IsValid();
+  const bool bDiscardedInFlight = bStepInProgress;
   ++BoundaryGeneration;
   if (BoundaryGeneration == 0)
     BoundaryGeneration = 1;
@@ -8257,7 +5837,6 @@ InvalidateInFlightBoundaryForAuthoritativeState()
   BoundaryFormationFacts.Reset();
   BoundaryFacingFacts.Reset();
   BoundaryBusinessFacts.Reset();
-  BoundaryOrchestrator.Reset();
   BoundaryFacingWorkState.Reset();
   PendingWorkerV2MovementExpectations.Reset();
   ClearPreparedRoundCommitPlan();

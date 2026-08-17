@@ -87,10 +87,6 @@ struct FCrowdDemoRoundFacingFinalizeStage
   void BindQuery(FMassEntityQuery& Query);
   void UseQuery(FMassEntityQuery& Query) { EntityQuery = &Query; }
   void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context);
-  bool ValidatePreparedCommit(
-    UCrowdDemoRoundSimPipelineSubsystem& Pipeline);
-  void CommitValidatedSideEffects(
-    UCrowdDemoRoundSimPipelineSubsystem& Pipeline);
   FMassEntityQuery* EntityQuery = nullptr;
 };
 
