@@ -66,9 +66,7 @@ def transform_function(text, signature, new_signature, body_transform=None):
         block = body_transform(block)
     return text[:s] + block + text[e:]
 
-# ---------------------------------------------------------------------------
 # Header becomes a true processor header: only the two UMassProcessor types.
-# ---------------------------------------------------------------------------
 h = read(HEADER)
 start = h.find("class UCrowdDemoRoundSimPipelineSubsystem;\n")
 end = h.find("UCLASS()\n", start)
@@ -96,10 +94,9 @@ p = transform_function(
     "void FCrowdDemoRoundFacingFinalizeStage::BindQuery(\n  FMassEntityQuery& Query)",
     "static void ConfigureWorkerResultApplyQuery(\n  FMassEntityQuery& Query)",
     strip_query_member)
-# The old WorkerResult BindQuery only delegated to Facing.BindQuery.
 p = remove_function(
     p,
-    "void FCrowdDemoWorkerResultApplyStage::BindQuery(\n  FMassEntityQuery& Query)")
+    "void FCrowdDemoWorkerResultApplyStage::BindQuery(")
 
 # Plan Apply takes its query explicitly instead of owning a Stage object.
 def plan_execute_body(block):
@@ -124,8 +121,11 @@ p = transform_function(
 
 # Worker Result Apply also takes its query explicitly.
 def result_execute_body(block):
+    old = "  if (!EntityQuery\n    || !FCrowdDemoWorkerInputSync::PreparePublishedResults(\n"
+    if old not in block:
+        raise RuntimeError("WorkerResultApply query guard missing")
     block = block.replace(
-        "  if (!EntityQuery\n    || !FCrowdDemoWorkerInputSync::PreparePublishedResults(\n",
+        old,
         "  if (!FCrowdDemoWorkerInputSync::PreparePublishedResults(\n",
         1)
     block = block.replace("*EntityQuery", "EntityQuery")
@@ -133,8 +133,8 @@ def result_execute_body(block):
 
 p = transform_function(
     p,
-    "void FCrowdDemoWorkerResultApplyStage::Execute(\n  FMassEntityManager& EntityManager,\n  FMassExecutionContext& Context)",
-    "static void ExecuteWorkerResultApply(\n  FMassEntityQuery& EntityQuery,\n  FMassEntityManager& EntityManager,\n  FMassExecutionContext& Context)",
+    "void FCrowdDemoWorkerResultApplyStage::Execute(",
+    "static void ExecuteWorkerResultApply(\n  FMassEntityQuery& EntityQuery,",
     result_execute_body)
 
 # Simple stage methods become file-local functions.
@@ -153,56 +153,48 @@ simple = {
     "FCrowdDemoRoundCheckpointPublisherStage": "ExecuteRoundCheckpointPublisher",
 }
 for stage, func in simple.items():
-    signature = f"void {stage}::Execute(\n  FMassEntityManager& EntityManager,"
-    if signature not in p:
-        # some one-line signatures
-        signature = f"void {stage}::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)"
-        new = f"static void {func}(FMassEntityManager& EntityManager, FMassExecutionContext& Context)"
-    else:
-        new = f"static void {func}(\n  FMassEntityManager& EntityManager,"
-    p = transform_function(p, signature, new)
+    prefix = f"void {stage}::Execute("
+    pos = p.find(prefix)
+    if pos < 0:
+        raise RuntimeError(f"stage execute missing: {stage}")
+    # Only replace the qualified function name; parameter layout stays intact.
+    p = p[:pos] + p[pos:].replace(
+        f"void {stage}::Execute",
+        f"static void {func}",
+        1)
 
 # Movement needs one tiny piece of mutable stage state; make it an out value.
-def movement_body(block):
-    block = block.replace("LastGuidanceWorkMilliseconds", "OutGuidanceWorkMilliseconds")
-    return block
-p = transform_function(
-    p,
-    "void FCrowdDemoRoundMovementWorkStage::Execute(\n  FMassEntityManager& EntityManager, FMassExecutionContext& Context)",
-    "static void ExecuteRoundMovementWork(\n  FMassEntityManager& EntityManager,\n  FMassExecutionContext& Context,\n  float& OutGuidanceWorkMilliseconds)",
-    movement_body)
+move_sig = "void FCrowdDemoRoundMovementWorkStage::Execute("
+ms, me = function_span(p, move_sig)
+move = p[ms:me]
+move = move.replace(
+    move_sig,
+    "static void ExecuteRoundMovementWork(\n  float& OutGuidanceWorkMilliseconds, ",
+    1)
+move = move.replace("LastGuidanceWorkMilliseconds", "OutGuidanceWorkMilliseconds")
+p = p[:ms] + move + p[me:]
 
 # No live Worker-owned server path calls these legacy adapters anymore.
-for signature in [
-    "void FCrowdDemoRoundPostFinalizeMetricsStage::Execute(\n  FMassEntityManager& EntityManager, FMassExecutionContext& Context)",
-    "void FCrowdDemoRoundAuthorityCommitStage::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)",
-    "void FCrowdDemoRoundClientPredictionCommitStage::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)",
+for prefix in [
+    "void FCrowdDemoRoundPostFinalizeMetricsStage::Execute(",
+    "void FCrowdDemoRoundAuthorityCommitStage::Execute(",
+    "void FCrowdDemoRoundClientPredictionCommitStage::Execute(",
 ]:
-    p = remove_function(p, signature)
+    p = remove_function(p, prefix)
 
 # Processor wiring now calls helpers directly.
-p = p.replace(
-    "  FCrowdDemoRoundPlanApplyStage PlanApply;\n"
-    "  PlanApply.BindQuery(InputSyncQuery);\n",
-    "  ConfigureRoundPlanApplyQuery(InputSyncQuery);\n",
-    1)
-p = p.replace(
-    "  FCrowdDemoRoundPlanApplyStage PlanApply;\n"
-    "  PlanApply.UseQuery(InputSyncQuery);\n"
-    "  PlanApply.Execute(EntityManager, Context);\n",
-    "  ExecuteRoundPlanApply(InputSyncQuery, EntityManager, Context);\n",
-    1)
-p = p.replace(
-    "  FCrowdDemoWorkerResultApplyStage WorkerResultApply;\n"
-    "  WorkerResultApply.BindQuery(ResultCommitQuery);\n",
-    "  ConfigureWorkerResultApplyQuery(ResultCommitQuery);\n",
-    1)
-p = p.replace(
-    "  FCrowdDemoWorkerResultApplyStage WorkerResultApply;\n"
-    "  WorkerResultApply.UseQuery(ResultCommitQuery);\n"
-    "  WorkerResultApply.Execute(EntityManager, Context);\n",
-    "  ExecuteWorkerResultApply(ResultCommitQuery, EntityManager, Context);\n",
-    1)
+old = "  FCrowdDemoRoundPlanApplyStage PlanApply;\n  PlanApply.BindQuery(InputSyncQuery);\n"
+if old not in p: raise RuntimeError("PlanApply Configure wiring missing")
+p = p.replace(old, "  ConfigureRoundPlanApplyQuery(InputSyncQuery);\n", 1)
+old = "  FCrowdDemoRoundPlanApplyStage PlanApply;\n  PlanApply.UseQuery(InputSyncQuery);\n  PlanApply.Execute(EntityManager, Context);\n"
+if old not in p: raise RuntimeError("PlanApply Execute wiring missing")
+p = p.replace(old, "  ExecuteRoundPlanApply(InputSyncQuery, EntityManager, Context);\n", 1)
+old = "  FCrowdDemoWorkerResultApplyStage WorkerResultApply;\n  WorkerResultApply.BindQuery(ResultCommitQuery);\n"
+if old not in p: raise RuntimeError("WorkerResult Configure wiring missing")
+p = p.replace(old, "  ConfigureWorkerResultApplyQuery(ResultCommitQuery);\n", 1)
+old = "  FCrowdDemoWorkerResultApplyStage WorkerResultApply;\n  WorkerResultApply.UseQuery(ResultCommitQuery);\n  WorkerResultApply.Execute(EntityManager, Context);\n"
+if old not in p: raise RuntimeError("WorkerResult Execute wiring missing")
+p = p.replace(old, "  ExecuteWorkerResultApply(ResultCommitQuery, EntityManager, Context);\n", 1)
 
 # AdvanceRoundWorkerFrame: replace temporary Stage objects with direct helpers.
 old_decls = '''  FCrowdDemoRoundOpenSpawnRelaxationPhasePrepareStage
@@ -257,7 +249,7 @@ old_move = '''    const double MovementStart = FPlatformTime::Seconds();
 new_move = '''    const double MovementStart = FPlatformTime::Seconds();
     float GuidanceWorkMilliseconds = 0.0f;
     ExecuteRoundMovementWork(
-      EntityManager, Context, GuidanceWorkMilliseconds);
+      GuidanceWorkMilliseconds, EntityManager, Context);
     const float MovementMs = static_cast<float>(
       (FPlatformTime::Seconds() - MovementStart) * 1000.0);
     const float GuidanceMs = FMath::Clamp(
@@ -266,7 +258,6 @@ if old_move not in p:
     raise RuntimeError("movement call block missing")
 p = p.replace(old_move, new_move, 1)
 
-# The checkpoint object declaration is now unnecessary.
 p = p.replace(
     "      FCrowdDemoRoundCheckpointPublisherStage CheckpointPublisher;\n"
     "      ExecuteRoundCheckpointPublisher(EntityManager, Context);\n",
