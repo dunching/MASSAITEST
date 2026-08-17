@@ -512,26 +512,6 @@ namespace
     return Hash;
   }
 
-  uint64 CalculatePreparedTargetResourceHash(
-    TConstArrayView<FCrowdDemoBoundaryFacingWorkState::FTargetTopologySlot>
-      Slots)
-  {
-    uint64 Hash = 14695981039346656037ull;
-    Hash = FoldBoundaryHash(Hash, static_cast<uint64>(Slots.Num()) + 1);
-    for (const auto& Slot : Slots)
-    {
-      Hash = FoldBoundaryHash(Hash, Slot.CohortKey);
-      Hash = FoldBoundaryHash(Hash, Slot.Output.Topology.TopologyHash);
-      Hash = FoldBoundaryHash(Hash, Slot.DemandOutput.Demand.DemandHash);
-      Hash = FoldBoundaryHash(Hash, Slot.PlanOutput.Plan.TransportHash);
-      Hash = FoldBoundaryHash(Hash, Slot.PlanOutput.Execution.ExecutionHash);
-      Hash = FoldBoundaryHash(
-        Hash, Slot.PlanOutput.Validation.ValidationHash);
-      Hash = FoldBoundaryHash(
-        Hash, Slot.GuidanceOutput.Summary.GuidanceHash);
-    }
-    return Hash;
-  }
 
   uint64 CalculateHomogeneousTargetResourceStateHash(
     const FCrowdDemoTargetPolarTopology& Topology,
@@ -1998,23 +1978,11 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   LastWorkerV2TargetControlSemanticHash = 0;
   LastWorkerV2TargetObjectiveSemanticHash = 0;
   LastWorkerV2ProjectileControlSemanticHash = 0;
-  PreparedTargetResourceSlots.Reset();
-  PreparedMovementBoundaryCommit = {};
-  PreparedRuntimeSharedFlowOutputs.Reset();
   PreparedObstacleMaxReprojectDeltaCm = -1.0f;
   PreparedTargetRegionGuidanceCandidates.Reset();
   PreparedBusinessGuidanceCandidates.Reset();
   PreparedPlannerDecisionHash = 0;
   PreparedReactiveMotionSteps.Reset();
-  PreparedCombatBoundaryCommit = {};
-  PreparedRuntimeComposedGuidance.Reset();
-  PreparedRuntimePredictedMovements.Reset();
-  PreparedRuntimeParticleResults.Reset();
-  PreparedRuntimeFinalKinematics.Reset();
-  bPreparedRuntimeFinalKinematicsWorkerOwned = false;
-  PreparedRuntimeFacingResults.Reset();
-  PreparedFacingRollbackFacts.Reset();
-  PreparedParticleDiagnosticCommit = {};
   PreparedOpenSpawnBoundaryFacts.Reset();
   PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
   for (TArray<float>& Samples : RoundPerformanceStageMsSamples)
@@ -2364,22 +2332,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PublishBoundarySnapshot(
 void UCrowdDemoRoundSimPipelineSubsystem::
 ResetBoundaryDerivedStateAfterPublish()
 {
-  MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
   BoundaryFacingWorkState.Reset();
-  PreparedTargetResourceSlots.Reset();
-  PreparedMovementBoundaryCommit = {};
-  PreparedRuntimeSharedFlowOutputs.Reset();
   PreparedObstacleMaxReprojectDeltaCm = -1.0f;
   PreparedTargetRegionGuidanceCandidates.Reset();
   PreparedBusinessGuidanceCandidates.Reset();
   PreparedReactiveMotionSteps.Reset();
-  PreparedRuntimeComposedGuidance.Reset();
-  PreparedRuntimePredictedMovements.Reset();
-  PreparedRuntimeParticleResults.Reset();
-  PreparedRuntimeFinalKinematics.Reset();
-  bPreparedRuntimeFinalKinematicsWorkerOwned = false;
-  PreparedRuntimeFacingResults.Reset();
-  PreparedFacingRollbackFacts.Reset();
   PreparedOpenSpawnBoundaryFacts.Reset();
   PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
 }
@@ -2812,19 +2769,6 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryMovementWork(
   return true;
 }
 
-bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeBoundaryMovementWork(
-  FCrowdMassMovementPipelineWorkOutput& OutOutput)
-{
-  if (!IsInGameThread() || !BoundaryFacingWorkState.IsValid()
-    || !BoundaryFacingWorkState->bCompleted
-    || BoundaryFacingWorkState->bMovementConsumed
-    || !BoundaryFacingWorkState->GraphOutput.Movement.bCompleted
-)
-    return false;
-  OutOutput = MoveTemp(BoundaryFacingWorkState->GraphOutput.Movement);
-  BoundaryFacingWorkState->bMovementConsumed = true;
-  return true;
-}
 
 bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryParticleWork(
   FCrowdMassParticlePipelineWorkInput&& Input)
@@ -2857,19 +2801,6 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryObstacleWork(
   return true;
 }
 
-bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeBoundaryParticleWork(
-  FCrowdMassParticlePipelineWorkOutput& OutOutput)
-{
-  if (!IsInGameThread() || !BoundaryFacingWorkState.IsValid()
-    || !BoundaryFacingWorkState->bCompleted
-    || BoundaryFacingWorkState->bParticleConsumed
-    || !BoundaryFacingWorkState->GraphOutput.Particle.bCompleted
-)
-    return false;
-  OutOutput = MoveTemp(BoundaryFacingWorkState->GraphOutput.Particle);
-  BoundaryFacingWorkState->bParticleConsumed = true;
-  return true;
-}
 
 bool UCrowdDemoRoundSimPipelineSubsystem::
   SubmitWorkerV2BoundaryInput()
@@ -4625,472 +4556,14 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
 }
 
 
-bool FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
-  const FCrowdDemoTargetResourcePrepareValidationInput& Input)
-{
-  if (Input.OwnerId == 0 || Input.ResourceRevision == 0
-    || !Input.bResourceReferenceValid)
-    return false;
-  auto HasInvalidOrDuplicate = [](TConstArrayView<uint64> Values)
-  {
-    TSet<uint64> Unique;
-    Unique.Reserve(Values.Num());
-    for (const uint64 Value : Values)
-    {
-      if (Value == 0 || Unique.Contains(Value))
-        return true;
-      Unique.Add(Value);
-    }
-    return false;
-  };
-  return !HasInvalidOrDuplicate(Input.SlotKeys)
-    && !HasInvalidOrDuplicate(Input.EntityKeys)
-    && !HasInvalidOrDuplicate(Input.EntityFieldKeys);
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::PreparePendingTargetResourcePlan()
-{
-  check(IsInGameThread());
-  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
-    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
-               : nullptr;
-  if (!SharedFlowRuntimeSubsystem) return false;
-  const FCrowdMassSharedFlowResource& RuntimeSharedFlowResource =
-    SharedFlowRuntimeSubsystem->GetSharedFlowResource();
-  FCrowdDemoPreparedRoundCommitPlan* Pending =
-    PeekPreparedRoundCommitPlan();
-  if (!Pending || !Pending->PreparedTargetResourcePlan.IsValid())
-    return false;
-  FCrowdDemoPreparedTargetResourcePlan& Prepared =
-    *Pending->PreparedTargetResourcePlan;
-  if (Prepared.BuildCount != 0 || Prepared.bValid)
-    return false;
-  ++Prepared.BuildCount;
-
-  FCrowdDemoTargetResourcePrepareValidationInput ValidationInput;
-  ValidationInput.OwnerId = reinterpret_cast<uint64>(this);
-  ValidationInput.ResourceRevision =
-    static_cast<uint64>(
-      static_cast<uint32>(RuntimeSharedFlowResource.Field.Config.Revision))
-      + 1ull;
-  ValidationInput.bResourceReferenceValid = true;
-  for (const auto& Slot : PreparedTargetResourceSlots)
-  {
-    ValidationInput.SlotKeys.Add(
-      (static_cast<uint64>(Slot.CohortKey) << 1) | 1ull);
-    ValidationInput.bResourceReferenceValid =
-      ValidationInput.bResourceReferenceValid
-      && Slot.DemandInput.SharedFlowField == &RuntimeSharedFlowResource.Field;
-    if (!Slot.bDemandStaged || !Slot.bPlanStaged || !Slot.bGuidanceStaged
-      || Slot.PlanInput.FixedStepIndex != GetCurrentFixedStepIndex()
-      || Slot.PlanInput.TargetRevision != TargetFact.TargetRevision)
-      return false;
-    for (const auto& Agent : Slot.GuidanceInput.Agents)
-    {
-      if (Agent.AgentId == INDEX_NONE)
-        return false;
-      ValidationInput.EntityKeys.Add(
-        static_cast<uint64>(static_cast<uint32>(Agent.AgentId)) + 1ull);
-    }
-    for (const auto& Result : Slot.GuidanceOutput.Results)
-    {
-      if (Result.AgentId == INDEX_NONE)
-        return false;
-      const uint64 EntityKey =
-        static_cast<uint64>(static_cast<uint32>(Result.AgentId)) + 1ull;
-      ValidationInput.EntityFieldKeys.Add(
-        FoldBoundaryHash(EntityKey, 0x544152474554ull));
-    }
-  }
-  if (!FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
-      ValidationInput))
-    return false;
-
-  uint64 BaseStateHash = 14695981039346656037ull;
-  if (ActivePlan.Rules.bEnableHeterogeneousProfiles != 0)
-  {
-    for (const auto& Runtime : TargetRegionCapabilityCohorts)
-      BaseStateHash = FoldBoundaryHash(
-        BaseStateHash, CalculateTargetResourceCohortStateHash(Runtime));
-  }
-  else
-  {
-    BaseStateHash = CalculateHomogeneousTargetResourceStateHash(
-      PreparedTargetRegionTopology, PreparedTargetRegionDemand,
-      PreparedTargetRegionPlan, TargetRegionQuotaExecution,
-      TargetRegionPlanValidation, TargetRegionGuidanceSummary,
-      TargetRegionTopologyRoundHash, TargetRegionDemandRoundHash,
-      TargetRegionTransportRoundHash, TargetRegionGuidanceRoundHash,
-      TargetRegionValidationRoundHash, TargetRegionPlanRebuildCount,
-      TargetRegionInvalidStepCount);
-  }
-
-  for (const auto& Slot : PreparedTargetResourceSlots)
-  {
-    auto PublishTargetOutputs = [&Slot](auto& Runtime)
-    {
-      Runtime.Topology = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionTopology(Slot.Output.Topology);
-      Runtime.TopologySummary = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionTopologySummary(Slot.Output.Summary);
-      Runtime.Demand = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionDemand(Slot.DemandOutput.Demand);
-      Runtime.Plan = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionPlan(Slot.PlanOutput.Plan);
-      Runtime.QuotaExecution = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionExecution(Slot.GuidanceOutput.Execution);
-      Runtime.LastPlanReplacement = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionReplacement(Slot.PlanOutput.Replacement);
-      Runtime.Validation = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionValidation(Slot.PlanOutput.Validation);
-      Runtime.Guidance.Reset(Slot.GuidanceOutput.Results.Num());
-      for (const auto& Result : Slot.GuidanceOutput.Results)
-        Runtime.Guidance.Add(FCrowdDemoMassCrowdRuntimeAdapter::
-          BuildDemoTargetRegionGuidance(Result));
-      Runtime.GuidanceSummary = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionGuidanceSummary(Slot.GuidanceOutput.Summary);
-    };
-    if (ActivePlan.Rules.bEnableHeterogeneousProfiles != 0)
-    {
-      const int32 DestinationIndex =
-        TargetRegionCapabilityCohorts.IndexOfByPredicate(
-          [&Slot](const auto& Value)
-          {
-            return Value.Cohort.CapabilityProfileKey == Slot.CohortKey;
-          });
-      if (!TargetRegionCapabilityCohorts.IsValidIndex(DestinationIndex))
-        return false;
-      FCrowdDemoPreparedTargetResourceCohortApply& Apply =
-        Prepared.CohortApplies.AddDefaulted_GetRef();
-      Apply.DestinationIndex = DestinationIndex;
-      Apply.CohortKey = Slot.CohortKey;
-      Apply.BaseStateHash = CalculateTargetResourceCohortStateHash(
-        TargetRegionCapabilityCohorts[DestinationIndex]);
-      Apply.PreparedRuntime = TargetRegionCapabilityCohorts[DestinationIndex];
-
-      const FCrowdDemoTargetRegionFlowPlan PreviousPlan =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionPlan(
-          Slot.PlanInput.PreviousPlan);
-      const FCrowdDemoTargetRegionQuotaExecutionState PreviousExecution =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionExecution(
-          Slot.PlanInput.PreviousExecution);
-      const FCrowdDemoTargetRegionFlowPlan NewPlan =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionPlan(
-          Slot.PlanOutput.Plan);
-      const FCrowdDemoTargetRegionQuotaExecutionState NewPlanExecution =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionExecution(
-          Slot.PlanOutput.Execution);
-      const FCrowdDemoTargetRegionPlanValidationResult NewValidation =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionValidation(
-          Slot.PlanOutput.Validation);
-      FCrowdMassTargetRegionPlanInput PreviousValidationInput = Slot.PlanInput;
-      PreviousValidationInput.Topology = Slot.Output.Topology;
-      PreviousValidationInput.Demand = Slot.DemandOutput.Demand;
-      const FCrowdDemoTargetRegionPlanValidationResult PreviousValidation =
-        Slot.PlanOutput.RebuildReason != 0
-          ? FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionValidation(
-              FCrowdMassTargetRegionWork::ValidateExecution(
-                PreviousValidationInput))
-          : NewValidation;
-      PublishTargetOutputs(Apply.PreparedRuntime);
-      const uint32 Step = static_cast<uint32>(GetCurrentFixedStepIndex());
-      Apply.PreparedRuntime.TopologyRoundHash = FoldTargetDiagnosticHash(
-        FoldTargetDiagnosticHash(
-          Apply.PreparedRuntime.TopologyRoundHash, Step),
-        Apply.PreparedRuntime.Topology.TopologyHash);
-      Apply.PreparedRuntime.DemandRoundHash = FoldTargetDiagnosticHash(
-        FoldTargetDiagnosticHash(Apply.PreparedRuntime.DemandRoundHash, Step),
-        Apply.PreparedRuntime.Demand.DemandHash);
-      if (Slot.PlanOutput.RebuildReason != 0)
-      {
-        Apply.PreparedRuntime.SolverMillisecondsSamples.Add(
-          static_cast<float>(Slot.PlanOutput.SolverMilliseconds));
-        ++Apply.PreparedRuntime.PlanRebuildCount;
-      }
-      if (IsTargetRegionPlanLifecycleDiagnosticEnabled())
-      {
-        FCrowdDemoTargetRegionPlanLifecycleBoundaryInput DiagnosticInput;
-        DiagnosticInput.FixedStepIndex = GetCurrentFixedStepIndex();
-        DiagnosticInput.CapabilityProfileKey = Slot.CohortKey;
-        DiagnosticInput.PlanLifetimeSteps =
-          ActivePlan.Rules.TargetRegionTransportSettings.PlanLifetimeSteps;
-        DiagnosticInput.TargetRevision = TargetFact.TargetRevision;
-        DiagnosticInput.TargetLocation = FVector2f(
-          TargetFact.Location.X, TargetFact.Location.Y);
-        DiagnosticInput.SelectedReason = Slot.PlanOutput.RebuildReason;
-        DiagnosticInput.Topology = Apply.PreparedRuntime.Topology;
-        DiagnosticInput.Demand = Apply.PreparedRuntime.Demand;
-        DiagnosticInput.PreviousPlan = PreviousPlan;
-        DiagnosticInput.NewPlan = NewPlan;
-        DiagnosticInput.PreviousExecution = PreviousExecution;
-        DiagnosticInput.NewExecution = NewPlanExecution;
-        DiagnosticInput.PreviousValidation = PreviousValidation;
-        DiagnosticInput.Agents = Apply.PreparedRuntime.Agents;
-        const uint32 ConditionMask =
-          FCrowdDemoTargetRegionPlanLifecycleDiagnosticKernel::
-            ComputeConditionMask(DiagnosticInput);
-        const int32 SelectedByKernel = static_cast<int32>(
-          FCrowdDemoTargetRegionPlanLifecycleDiagnosticKernel::
-            SelectReason(ConditionMask));
-        if (SelectedByKernel != Slot.PlanOutput.RebuildReason)
-        {
-          UE_LOG(LogTemp, Error,
-            TEXT("VIOLATION CrowdDemoTargetRegionPlanLifecycleReason step=%d profile_key=%u commit=%d kernel=%d mask=%u"),
-            GetCurrentFixedStepIndex(), Slot.CohortKey,
-            Slot.PlanOutput.RebuildReason, SelectedByKernel, ConditionMask);
-        }
-        FCrowdDemoTargetRegionPlanLifecycleDiagnosticKernel::RecordBoundary(
-          DiagnosticInput, Apply.PreparedRuntime.PlanLifecycle);
-      }
-      Apply.PreparedRuntime.Validation = NewValidation;
-      Apply.PreparedRuntime.ValidationRoundHash = FoldTargetDiagnosticHash(
-        FoldTargetDiagnosticHash(
-          Apply.PreparedRuntime.ValidationRoundHash, Step),
-        NewValidation.ValidationHash);
-      Apply.PreparedRuntime.TransportRoundHash = FoldTargetDiagnosticHash(
-        FoldTargetDiagnosticHash(
-          Apply.PreparedRuntime.TransportRoundHash, Step),
-        FoldTargetDiagnosticHash(
-          NewPlan.TransportHash, NewPlanExecution.ExecutionHash));
-      Apply.PreparedRuntime.GuidanceRoundHash = FoldTargetDiagnosticHash(
-        FoldTargetDiagnosticHash(
-          Apply.PreparedRuntime.GuidanceRoundHash, Step),
-        Apply.PreparedRuntime.GuidanceSummary.GuidanceHash);
-      if (!NewPlan.bValid || !NewValidation.bValid
-        || !Apply.PreparedRuntime.GuidanceSummary.bValid)
-      {
-        Apply.PreparedRuntime.bRoundValid = false;
-        if (Apply.PreparedRuntime.LastInvalidStep
-          != GetCurrentFixedStepIndex())
-        {
-          ++Apply.PreparedRuntime.InvalidStepCount;
-          Apply.PreparedRuntime.LastInvalidStep = GetCurrentFixedStepIndex();
-        }
-        if (!NewValidation.bValid)
-          ++Apply.PreparedRuntime.ValidationFailureCount;
-        if (!Apply.PreparedRuntime.GuidanceSummary.bValid)
-          ++Apply.PreparedRuntime.GuidanceUnroutedStepCount;
-      }
-    }
-    else
-    {
-      if (Prepared.HomogeneousApply.bSet)
-        return false;
-      auto& Apply = Prepared.HomogeneousApply;
-      Apply.Topology = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionTopology(Slot.Output.Topology);
-      Apply.TopologySummary = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionTopologySummary(Slot.Output.Summary);
-      Apply.Demand = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionDemand(Slot.DemandOutput.Demand);
-      Apply.Plan = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionPlan(Slot.PlanOutput.Plan);
-      Apply.QuotaExecution = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionExecution(Slot.GuidanceOutput.Execution);
-      Apply.Validation = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionValidation(Slot.PlanOutput.Validation);
-      Apply.Guidance.Reserve(Slot.GuidanceOutput.Results.Num());
-      for (const auto& Result : Slot.GuidanceOutput.Results)
-        Apply.Guidance.Add(FCrowdDemoMassCrowdRuntimeAdapter::
-          BuildDemoTargetRegionGuidance(Result));
-      Apply.GuidanceSummary = FCrowdDemoMassCrowdRuntimeAdapter::
-        BuildDemoTargetRegionGuidanceSummary(Slot.GuidanceOutput.Summary);
-      Apply.SolverMilliseconds =
-        static_cast<float>(Slot.PlanOutput.SolverMilliseconds);
-      Apply.RebuildReason = Slot.PlanOutput.RebuildReason;
-      Apply.bSet = true;
-    }
-  }
-
-  Prepared.CommitToken.OwnerId = reinterpret_cast<uint64>(this);
-  Prepared.CommitToken.OwnerRevision = TargetResourceOwnerRevision;
-  Prepared.CommitToken.Generation = BoundaryGeneration;
-  Prepared.CommitToken.BaseStateHash = BaseStateHash;
-  Prepared.CommitToken.PreparedStateHash =
-    CalculatePreparedTargetResourceHash(PreparedTargetResourceSlots);
-  Prepared.CommitToken.ResourceId =
-    CrowdWorkerResourceIds::Environment;
-  Prepared.CommitToken.ResourceRevision =
-    RuntimeSharedFlowResource.Field.Config.Revision;
-  Prepared.CommitToken.ResourceBuildHash =
-    RuntimeSharedFlowResource.Field.BuildHash;
-  Prepared.CommitToken.ResourceRebuildCount =
-    RuntimeSharedFlowResource.FieldRebuildCount;
-  Prepared.CommitToken.PlanRevision = GetCurrentPlanRevision();
-  Prepared.CommitToken.FixedStepIndex = GetCurrentFixedStepIndex();
-  Prepared.CommitToken.TargetRevision = TargetFact.TargetRevision;
-  Prepared.bValid = Prepared.CommitToken.IsValid();
-  PreparedTargetResourceSlots.Reset();
-  return Prepared.bValid;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::
-  FinalValidatePreparedTargetResourcePlan(
-    const FCrowdDemoPreparedTargetResourcePlan& Prepared) const
-{
-  const UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
-    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
-               : nullptr;
-  if (!SharedFlowRuntimeSubsystem) return false;
-  const FCrowdMassSharedFlowResource& RuntimeSharedFlowResource =
-    SharedFlowRuntimeSubsystem->GetSharedFlowResource();
-  if (!Prepared.bValid || Prepared.BuildCount != 1
-    || Prepared.ApplyCount != 0 || !Prepared.CommitToken.IsValid()
-    || Prepared.CommitToken.OwnerId != reinterpret_cast<uint64>(this)
-    || Prepared.CommitToken.OwnerRevision != TargetResourceOwnerRevision
-    || Prepared.CommitToken.Generation != BoundaryGeneration
-    || Prepared.CommitToken.ResourceId
-      != CrowdWorkerResourceIds::Environment
-    || Prepared.CommitToken.ResourceRevision
-      != RuntimeSharedFlowResource.Field.Config.Revision
-    || Prepared.CommitToken.ResourceBuildHash
-      != RuntimeSharedFlowResource.Field.BuildHash
-    || Prepared.CommitToken.ResourceRebuildCount
-      != RuntimeSharedFlowResource.FieldRebuildCount
-    || Prepared.CommitToken.PlanRevision != GetCurrentPlanRevision()
-    || Prepared.CommitToken.FixedStepIndex != GetCurrentFixedStepIndex()
-    || Prepared.CommitToken.TargetRevision != TargetFact.TargetRevision)
-    return false;
-
-  uint64 CurrentStateHash = 14695981039346656037ull;
-  if (ActivePlan.Rules.bEnableHeterogeneousProfiles != 0)
-  {
-    for (const auto& Runtime : TargetRegionCapabilityCohorts)
-      CurrentStateHash = FoldBoundaryHash(
-        CurrentStateHash, CalculateTargetResourceCohortStateHash(Runtime));
-    for (const auto& Apply : Prepared.CohortApplies)
-    {
-      if (!TargetRegionCapabilityCohorts.IsValidIndex(Apply.DestinationIndex)
-        || TargetRegionCapabilityCohorts[Apply.DestinationIndex].Cohort.
-          CapabilityProfileKey != Apply.CohortKey
-        || CalculateTargetResourceCohortStateHash(
-          TargetRegionCapabilityCohorts[Apply.DestinationIndex])
-            != Apply.BaseStateHash)
-        return false;
-    }
-  }
-  else
-  {
-    CurrentStateHash = CalculateHomogeneousTargetResourceStateHash(
-      PreparedTargetRegionTopology, PreparedTargetRegionDemand,
-      PreparedTargetRegionPlan, TargetRegionQuotaExecution,
-      TargetRegionPlanValidation, TargetRegionGuidanceSummary,
-      TargetRegionTopologyRoundHash, TargetRegionDemandRoundHash,
-      TargetRegionTransportRoundHash, TargetRegionGuidanceRoundHash,
-      TargetRegionValidationRoundHash, TargetRegionPlanRebuildCount,
-      TargetRegionInvalidStepCount);
-  }
-  return CurrentStateHash == Prepared.CommitToken.BaseStateHash;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::
-  ApplyPreparedTargetResourcePlanNoFail(
-    FCrowdDemoPreparedTargetResourcePlan& Prepared)
-{
-  check(IsInGameThread());
-  checkf(Prepared.bValid && Prepared.BuildCount == 1
-      && Prepared.ApplyCount == 0,
-    TEXT("Target/resource prepared plan escaped owner barrier validation"));
-  for (auto& Apply : Prepared.CohortApplies)
-    TargetRegionCapabilityCohorts[Apply.DestinationIndex] =
-      MoveTemp(Apply.PreparedRuntime);
-  if (Prepared.HomogeneousApply.bSet)
-  {
-    auto& Apply = Prepared.HomogeneousApply;
-    PreparedTargetRegionTopology = MoveTemp(Apply.Topology);
-    TargetRegionTopologySummary = MoveTemp(Apply.TopologySummary);
-    PreparedTargetRegionDemand = MoveTemp(Apply.Demand);
-    PreparedTargetRegionPlan = MoveTemp(Apply.Plan);
-    TargetRegionQuotaExecution = MoveTemp(Apply.QuotaExecution);
-    TargetRegionPlanValidation = MoveTemp(Apply.Validation);
-    PreparedTargetRegionGuidance = MoveTemp(Apply.Guidance);
-    TargetRegionGuidanceSummary = MoveTemp(Apply.GuidanceSummary);
-    RecordTargetRegionTopologyStep();
-    RecordTargetRegionDemandStep();
-    RecordTargetRegionTransportStep(
-      Apply.SolverMilliseconds, Apply.RebuildReason);
-    RecordTargetRegionValidationStep();
-    RecordTargetRegionGuidanceStep();
-    RecordOpenCohortMovementGuidance(PreparedTargetRegionGuidance);
-  }
-  ++Prepared.ApplyCount;
-  ++TargetResourceOwnerRevision;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeBoundaryFacingWork(
-  FCrowdMassFacingFinalizeWorkOutput& OutOutput,
-  TMap<int32, int32>& OutConsecutiveSettleStepsByAgentId,
-  TMap<int32, bool>& OutFinalSettledByAgentId)
-{
-  if (!IsInGameThread() || !BoundaryFacingWorkState.IsValid()
-    || !BoundaryFacingWorkState->bCompleted
-)
-    return false;
-  OutOutput = MoveTemp(BoundaryFacingWorkState->Output);
-  OutConsecutiveSettleStepsByAgentId = MoveTemp(
-    BoundaryFacingWorkState->ConsecutiveSettleStepsByAgentId);
-  OutFinalSettledByAgentId = MoveTemp(
-    BoundaryFacingWorkState->FinalSettledByAgentId);
-  BoundaryFacingWorkState.Reset();
-  return true;
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedMovementBoundaryCommit(
-  FCrowdDemoPreparedMovementBoundaryCommit&& Commit)
-{
-  if (PreparedMovementBoundaryCommit.bValid
-    || !Commit.bValid
-    || Commit.StableHash == 0
-    || Commit.FixedStepIndex != GetCurrentFixedStepIndex()
-    || Commit.PlanRevision != GetCurrentPlanRevision()
-    || !Commit.Facing.bCompleted
-    || !Commit.Finalize.bCompleted
-    || !Commit.Finalize.CommitPlan.bValid
-    || Commit.Finalize.CommitPlan.FixedStepIndex
-      != GetCurrentFixedStepIndex()
-    || Commit.Finalize.CommitPlan.PlanRevision
-      != GetCurrentPlanRevision()
-    || Commit.Finalize.CommitPlan.Records.Num()
-      != BoundarySnapshot.Agents.Num()
-    || Commit.ConsecutiveSettleStepsByAgentId.Num()
-      != BoundarySnapshot.Agents.Num()
-    || Commit.FinalSettledByAgentId.Num()
-      != BoundarySnapshot.Agents.Num())
-    return false;
-  PreparedMovementBoundaryCommit = MoveTemp(Commit);
-  return true;
-}
 
 
 
-bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedCombatBoundaryCommit(
-  FCrowdDemoPreparedCombatBoundaryCommit&& Commit)
-{
-  if (PreparedCombatBoundaryCommit.bValid
-    || !Commit.bValid
-    || Commit.StableHash == 0
-    || Commit.FixedStepIndex != GetCurrentFixedStepIndex()
-    || Commit.PlanRevision != GetCurrentPlanRevision()
-    || Commit.Agents.Num() != BoundarySnapshot.Agents.Num())
-    return false;
-  Commit.Agents.Sort([](const auto& A, const auto& B)
-  {
-    return A.AgentId < B.AgentId;
-  });
-  for (int32 Index = 0; Index < Commit.Agents.Num(); ++Index)
-  {
-    if (Commit.Agents[Index].AgentId
-        != BoundarySnapshot.Agents[Index].Identity.AgentId
-      || static_cast<uint32>(Commit.Agents[Index].LifecycleSerial)
-        != BoundarySnapshot.Agents[Index].AgentFacts.StableEntityRef.LifecycleSerial
-      || (Index > 0
-        && Commit.Agents[Index - 1].AgentId
-          >= Commit.Agents[Index].AgentId))
-      return false;
-  }
-  PreparedCombatBoundaryCommit = MoveTemp(Commit);
-  return true;
-}
+
+
+
+
+
 
 const FCrowdDemoRoundBoundaryFormationFact*
 UCrowdDemoRoundSimPipelineSubsystem::FindBoundaryFormationFact(
@@ -5779,9 +5252,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::FinishFixedStep()
     ++PlanApplyBoundarySequence;
     bStepInProgress = false;
     CurrentBoundaryRequestStartSeconds = 0.0;
-    PreparedMovementBoundaryCommit = {};
-    PreparedCombatBoundaryCommit = {};
-  }
+      }
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::FailFixedStep()
@@ -5809,8 +5280,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::FailFixedStep()
   LastWorkerV2TargetControlSemanticHash = 0;
   LastWorkerV2TargetObjectiveSemanticHash = 0;
   LastWorkerV2ProjectileControlSemanticHash = 0;
-  PreparedMovementBoundaryCommit = {};
-  PreparedCombatBoundaryCommit = {};
 }
 
 void UCrowdDemoRoundSimPipelineSubsystem::
@@ -5847,21 +5316,9 @@ InvalidateInFlightBoundaryForAuthoritativeState()
   LastWorkerV2TargetControlSemanticHash = 0;
   LastWorkerV2TargetObjectiveSemanticHash = 0;
   LastWorkerV2ProjectileControlSemanticHash = 0;
-  PreparedTargetResourceSlots.Reset();
-  PreparedMovementBoundaryCommit = {};
-  PreparedCombatBoundaryCommit = {};
-  PreparedRuntimeSharedFlowOutputs.Reset();
   PreparedTargetRegionGuidanceCandidates.Reset();
   PreparedBusinessGuidanceCandidates.Reset();
   PreparedReactiveMotionSteps.Reset();
-  PreparedRuntimeComposedGuidance.Reset();
-  PreparedRuntimePredictedMovements.Reset();
-  PreparedRuntimeParticleResults.Reset();
-  PreparedRuntimeFinalKinematics.Reset();
-  bPreparedRuntimeFinalKinematicsWorkerOwned = false;
-  PreparedRuntimeFacingResults.Reset();
-  PreparedFacingRollbackFacts.Reset();
-  PreparedParticleDiagnosticCommit = {};
   PreparedOpenSpawnBoundaryFacts.Reset();
   PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
 
@@ -5879,53 +5336,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::IsRoundSimScenarioActive() const
   return bPlanActive && IsCrowdDemoRoundSimScenario(ActivePlan.Rules.Scenario);
 }
 
-bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedParticleDiagnosticCommit(
-  FCrowdDemoPreparedParticleDiagnosticCommit&& Commit)
-{
-  if (!Commit.bValid
-    || Commit.FixedStepIndex != GetCurrentFixedStepIndex()
-    || Commit.PlanRevision != GetCurrentPlanRevision()
-    || Commit.AgentCount != BoundarySnapshot.Agents.Num()
-    || PreparedParticleDiagnosticCommit.bValid)
-    return false;
-  PreparedParticleDiagnosticCommit = MoveTemp(Commit);
-  return true;
-}
 
-bool UCrowdDemoRoundSimPipelineSubsystem::CommitPreparedParticleDiagnostics()
-{
-  if (!IsMovementFinalizeAppliedCurrent()
-    || !IsPreparedParticleDiagnosticCommitCurrent())
-    return false;
-
-  FCrowdDemoPreparedParticleDiagnosticCommit Commit =
-    MoveTemp(PreparedParticleDiagnosticCommit);
-  PreparedParticleDiagnosticCommit = {};
-  if (Commit.bRecordStabilityStep)
-    RecordTargetStabilityStep(Commit.StabilityStep);
-  if (Commit.bFinalizeStabilityDiagnostic)
-    FinalizeTargetStabilityDiagnostic();
-  if (Commit.bRecordCrossProfileViolations)
-    RecordCrossProfileParticleViolations(
-      Commit.CrossProfileHardViolationCount,
-      Commit.CrossProfileSweptViolationCount);
-  if (Commit.bRecordRouteStep)
-    RecordSoftPressureRouteStep(Commit.RouteSamples);
-  if (Commit.bFinalizeRouteDiagnostic)
-    FinalizeSoftPressureRouteDiagnostic(Commit.RouteCounterfactual);
-  if (Commit.bRecordOpenSpawnStep)
-    RecordOpenSpawnRelaxationParticleStep(
-      Commit.OpenSpawnSoftPairInfluences,
-      Commit.OpenSpawnMaxAgentCorrectionCm,
-      Commit.OpenSpawnSoftErrorCmP95);
-  if (Commit.bRecordFailureFixture)
-    RecordParticleFailureFixture(Commit.FailureFixture);
-  RecordParticleConstraintSummary(
-    Commit.CandidateSummary, Commit.AppliedSummary,
-    Commit.AppliedStateHash, !Commit.CandidateSummary.bValid,
-    Commit.SolverMilliseconds);
-  return true;
-}
 
 
 void UCrowdDemoRoundSimPipelineSubsystem::RecordParticleConstraintSummary(
