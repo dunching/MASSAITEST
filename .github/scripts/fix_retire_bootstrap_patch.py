@@ -53,6 +53,23 @@ text = text.replace(
     gate + '    "CalculatePreparedTargetResourceHash",\n',
     1)
 
+# The prepared Combat *member/API* is retired, but the one-shot bootstrap
+# BusinessOutput still legitimately uses FCrowdDemoPreparedCombatBoundaryCommit
+# as a value type. Do not reject the type name itself.
+wide_gate = '    "PreparedCombatBoundaryCommit",\n'
+if wide_gate not in text:
+    raise RuntimeError("wide prepared combat gate missing")
+text = text.replace(wide_gate, "", 1)
+member_gate_anchor = 'if h.count("PreparedTargetResourcePlan") != 0:\n    raise RuntimeError("PreparedRoundCommitPlan still carries target resource plan")\n'
+if member_gate_anchor not in text:
+    raise RuntimeError("combat member gate anchor missing")
+text = text.replace(
+    member_gate_anchor,
+    member_gate_anchor
+    + 'if "FCrowdDemoPreparedCombatBoundaryCommit PreparedCombatBoundaryCommit;" in h:\n'
+      '    raise RuntimeError("prepared combat pipeline member remains")\n',
+    1)
+
 # The legacy PostFinalizeMinimalQuery test is the terminal automation test in
 # this file. Replace it through #endif instead of looking for a next test.
 old = '''e = t.find("IMPLEMENT_SIMPLE_AUTOMATION_TEST(", s + len(marker))
