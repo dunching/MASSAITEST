@@ -1326,8 +1326,6 @@ public:
     const FCrowdDemoSharedFlowFieldConfig& Config,
     const FVector& TargetLocation);
   const FCrowdDemoSharedFlowField& GetSharedFlowField() const { return SharedFlowField; }
-  const FCrowdSharedFlowField& GetRuntimeSharedFlowField() const
-  { return RuntimeSharedFlowResource.Field; }
   int32 GetDynamicFlowAnchorCellKey() const { return DynamicFlowAnchorCellKey; }
   int32 GetDynamicFlowIntegrationRebuildCount() const
   { return DynamicFlowIntegrationRebuildCount; }
@@ -1577,7 +1575,6 @@ private:
   FCrowdDemoProjectileMetrics ProjectileMetrics;
   TMap<int32, int32> FormationIndexByAgentId;
   FCrowdDemoSharedFlowField SharedFlowField;
-  FCrowdMassSharedFlowResource RuntimeSharedFlowResource;
   int32 DynamicFlowAnchorCellKey = INDEX_NONE;
   int32 DynamicFlowIntegrationRebuildCount = 0;
   uint32 DynamicFlowRoundHash = 2166136261u;

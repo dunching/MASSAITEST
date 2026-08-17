@@ -2082,8 +2082,11 @@ void UCrowdDemoRoundSimPipelineSubsystem::MarkBootstrapApplied(const int32 Agent
   RoundResetCount = 0;
   RoundTransitionOrderViolationCount = 0;
   DynamicFlowAnchorCellKey = INDEX_NONE;
-  RuntimeSharedFlowResource.DynamicAnchorCellKey = INDEX_NONE;
-  RuntimeSharedFlowResource.IntegrationRebuildCount = 0;
+  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+               : nullptr;
+  check(SharedFlowRuntimeSubsystem);
+  SharedFlowRuntimeSubsystem->ResetSharedFlowDynamicState();
   DynamicFlowIntegrationRebuildCount = 0;
   DynamicFlowRoundHash = 2166136261u;
   DynamicFlowRoundHashFixedStepIndex = INDEX_NONE;
@@ -2284,8 +2287,11 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   RoundResetCount = 0;
   RoundTransitionOrderViolationCount = 0;
   DynamicFlowAnchorCellKey = INDEX_NONE;
-  RuntimeSharedFlowResource.DynamicAnchorCellKey = INDEX_NONE;
-  RuntimeSharedFlowResource.IntegrationRebuildCount = 0;
+  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+               : nullptr;
+  check(SharedFlowRuntimeSubsystem);
+  SharedFlowRuntimeSubsystem->ResetSharedFlowDynamicState();
   DynamicFlowIntegrationRebuildCount = 0;
   DynamicFlowRoundHash = 2166136261u;
   DynamicFlowRoundHashFixedStepIndex = INDEX_NONE;
@@ -2459,10 +2465,16 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureSharedFlowField(
 {
   FCrowdMassSharedFlowBuildInput Input;
   Input.Config = FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreFlowConfig(Config);
-  const FCrowdMassSharedFlowBuildOutput Output =
-    FCrowdMassSharedFlowWork::EnsureResource(
-      Input, RuntimeSharedFlowResource);
-  if (!Output.bValid) return false;
+  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+               : nullptr;
+  if (!SharedFlowRuntimeSubsystem) return false;
+  FCrowdMassSharedFlowBuildOutput Output;
+  if (!SharedFlowRuntimeSubsystem->EnsureSharedFlowResource(
+      Input, Output))
+    return false;
+  const FCrowdMassSharedFlowResource& RuntimeSharedFlowResource =
+    SharedFlowRuntimeSubsystem->GetSharedFlowResource();
   if (Output.bFieldRebuilt)
   {
     SharedFlowField = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowField(
@@ -6759,6 +6771,12 @@ bool FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
 bool UCrowdDemoRoundSimPipelineSubsystem::PreparePendingTargetResourcePlan()
 {
   check(IsInGameThread());
+  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+               : nullptr;
+  if (!SharedFlowRuntimeSubsystem) return false;
+  const FCrowdMassSharedFlowResource& RuntimeSharedFlowResource =
+    SharedFlowRuntimeSubsystem->GetSharedFlowResource();
     FCrowdDemoPreparedRoundCommitPlan* Pending =
       PeekPreparedRoundCommitPlan();
   if (!Pending || !Pending->PreparedTargetResourcePlan.IsValid())
@@ -7010,8 +7028,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::PreparePendingTargetResourcePlan()
   Prepared.CommitToken.BaseStateHash = BaseStateHash;
   Prepared.CommitToken.PreparedStateHash =
     CalculatePreparedTargetResourceHash(PreparedTargetResourceSlots);
-  Prepared.CommitToken.ResourceId = reinterpret_cast<uint64>(
-    &RuntimeSharedFlowResource.Field);
+  Prepared.CommitToken.ResourceId =
+    CrowdWorkerResourceIds::Environment;
   Prepared.CommitToken.ResourceRevision =
     RuntimeSharedFlowResource.Field.Config.Revision;
   Prepared.CommitToken.ResourceBuildHash =
@@ -7030,13 +7048,19 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   FinalValidatePreparedTargetResourcePlan(
     const FCrowdDemoPreparedTargetResourcePlan& Prepared) const
 {
+  const UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+               : nullptr;
+  if (!SharedFlowRuntimeSubsystem) return false;
+  const FCrowdMassSharedFlowResource& RuntimeSharedFlowResource =
+    SharedFlowRuntimeSubsystem->GetSharedFlowResource();
   if (!Prepared.bValid || Prepared.BuildCount != 1
     || Prepared.ApplyCount != 0 || !Prepared.CommitToken.IsValid()
     || Prepared.CommitToken.OwnerId != reinterpret_cast<uint64>(this)
     || Prepared.CommitToken.OwnerRevision != TargetResourceOwnerRevision
     || Prepared.CommitToken.Generation != BoundaryGeneration
-    || Prepared.CommitToken.ResourceId != reinterpret_cast<uint64>(
-      &RuntimeSharedFlowResource.Field)
+    || Prepared.CommitToken.ResourceId
+      != CrowdWorkerResourceIds::Environment
     || Prepared.CommitToken.ResourceRevision
       != RuntimeSharedFlowResource.Field.Config.Revision
     || Prepared.CommitToken.ResourceBuildHash
@@ -7334,10 +7358,16 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureDynamicSharedFlowField(
   Input.TargetLocation = TargetLocation;
   Input.bDynamicTarget = true;
   Input.bForceIntegrationRefresh = bDynamicFlowIntegrationCacheInvalidated;
-  const FCrowdMassSharedFlowBuildOutput Output =
-    FCrowdMassSharedFlowWork::EnsureResource(
-      Input, RuntimeSharedFlowResource);
-  if (!Output.bValid) return false;
+  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+               : nullptr;
+  if (!SharedFlowRuntimeSubsystem) return false;
+  FCrowdMassSharedFlowBuildOutput Output;
+  if (!SharedFlowRuntimeSubsystem->EnsureSharedFlowResource(
+      Input, Output))
+    return false;
+  const FCrowdMassSharedFlowResource& RuntimeSharedFlowResource =
+    SharedFlowRuntimeSubsystem->GetSharedFlowResource();
   DynamicFlowAnchorCellKey = Output.DynamicAnchorCellKey;
   SharedFlowFieldRebuildCount = RuntimeSharedFlowResource.FieldRebuildCount;
   DynamicFlowIntegrationRebuildCount =
@@ -7721,11 +7751,15 @@ void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
   ValidCorridorTransitProgress = Snapshot.ValidCorridorTransitProgress;
   TargetFact = Snapshot.TargetFact;
   DynamicFlowAnchorCellKey = Snapshot.DynamicFlowAnchorCellKey;
-  RuntimeSharedFlowResource.DynamicAnchorCellKey =
-    Snapshot.DynamicFlowAnchorCellKey;
-  DynamicFlowIntegrationRebuildCount = Snapshot.DynamicFlowIntegrationRebuildCount;
-  RuntimeSharedFlowResource.IntegrationRebuildCount =
+  DynamicFlowIntegrationRebuildCount =
     Snapshot.DynamicFlowIntegrationRebuildCount;
+  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+               : nullptr;
+  check(SharedFlowRuntimeSubsystem);
+  check(SharedFlowRuntimeSubsystem->RestoreSharedFlowDynamicState(
+    Snapshot.DynamicFlowAnchorCellKey,
+    Snapshot.DynamicFlowIntegrationRebuildCount));
   DynamicFlowRoundHash = Snapshot.DynamicFlowRoundHash;
   DynamicFlowRoundHashFixedStepIndex =
     Snapshot.DynamicFlowRoundHashFixedStepIndex;
