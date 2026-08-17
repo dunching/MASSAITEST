@@ -1,190 +1,627 @@
-# MassCrowd 通用运行与生产复制合同
-
-## 2026-08-15 Worker Result Owner Commit 合同
-
-[COMPUTED][HIGH] Runtime Commit Token 只冻结 Prepared Result 的 Generation、Publish/Input/Event 水位与 Stable Entity View revision。Runtime Barrier 必须先匹配 Token、执行一次 Proxy Final Validate，再调用 Host FinalValidate；任何拒绝都不得调用 Host Apply、Proxy Commit 或 Host side-effect callback。
-
-[COMPUTED][HIGH] Host FinalValidate 成功后进入 no-fail 区：Host state apply → Proxy commit → Host state/Ordered Event/表现/网络 side effects。Dirty Batch ACK 不属于 Barrier 内写入，只能由成功提交后的消费者执行。Host-specific Mass、Target/Resource、Behavior、Round 或 Scenario 类型不得进入 Runtime 公共 API。
-
-[COMPUTED][HIGH] Demo 通过 `FCrowdDemoPreparedRoundCommitPlan` 冻结自己的 PlanRevision、FixedStepIndex、Mass Handle/Lifecycle/Fragment collection 与 Target/Resource Owner/Revision/引用 Token。Runtime 不提供旧 Demo Barrier 的 alias、wrapper 或 fallback。
-
-## 0. R版合同覆盖
-
-[INFERRED][HIGH] 2026-07-28起，本合同以开放Behavior Provider、通用Boundary Scheduler和Mass权威Projectile为目标；旧B0–B7只保留历史证据，不再要求StateTree业务链、具体Demo Source或动画Root Motion Clip作为框架完成条件。
-
-[INFERRED][HIGH] Core/Runtime只能拥有稳定ID、Schema、Source生命周期、六通道Resolver、通用Task/Patch调度和权威Mass数据合同；插件随包的`MassCrowdStandardSources`拥有通用运动/朝向/约束Evaluator；Demo Provider与宿主Adapter拥有目标选择、攻击、取货、交付等领域解释。
-
-[INFERRED][HIGH] 网络基线必须携带Behavior Registry Hash；Predictable Source要求双端Registry一致。Source Codec v3必须包含Context/State Schema和持久实例状态，旧Behavior Codec拒绝。
-
-[INFERRED][HIGH] Projectile的权威数据只存在于Mass Fragment；对象池仅负责实体复用，池外数组不得保存可独立推进的Projectile状态。
+# MassCrowd 通用 Runtime 与 Replication 合同
 
 ## 1. 文档职责
 
-[INFERRED][HIGH] 本文件是通用Agent能力组合、持续生命周期、生产复制、Demo宿主和模块边界的长期合同。行为Source的详细数据模型、阶段状态和专项缺口以`EntityBehaviorSourceArchitecture.md`为事实源。
+本文是 `TargetArchitecture.md` 的详细 Reference，定义持续 Agent、Behavior、Lifecycle、Worker Result、Networking、Late Join、Correction 和 Presentation 的长期数据合同。
 
-[INFERRED][HIGH] `CurrentArchitecture.md`只描述当前代码；`PhasePlan.md`只描述实施顺序；`FeatureChecklist.md`只记录已经满足的验收；`TestScenarioMatrix.md`只记录具体场景证据。旧设计文档中的日期快照不得覆盖这些现行文档。
-
-## 2. 统一Agent模型
+事实优先级：
 
 ```text
-FCrowdAgentFacts
-├── StableEntityRef = ProviderId + StableEntityId + LifecycleSerial
-├── Faction / Team
-├── CapabilityProfileKey
-├── bounded Capability Modifiers
-├── Capability Binding
-├── BusinessTaskRef
-├── TargetRef
-├── MovementProfile
-├── PresentationProfile
-└── non-authoritative DerivedBehaviorLabel
+当前实现
+→ CurrentArchitecture.md
 
-Runtime World Store[StableEntityRef]
-└── FCrowdBehaviorSourceSet
-    ├── Revision / StableHash
-    └── sorted Source Instances
+最终全局方向
+→ TargetArchitecture.md
+
+详细 Runtime / Replication contract
+→ 本文
+
+当前完成状态 / 证据
+→ FeatureChecklist.md / TestScenarioMatrix.md
 ```
 
-[INFERRED][HIGH] `ActiveBehavior`不属于权威Agent模型。多个Source可以同时贡献Movement、Facing、Constraint、Interaction、Business和Presentation。
+本文不得覆盖 `TargetArchitecture.md` 的 Full Worker Authority 原则。
 
-[INFERRED][HIGH] `LifecycleSerial`拒绝槽位复用后的过期Spawn、Correction、Hit、Cargo、Source Command和Despawn事实；只比较短AgentId不足以形成生产身份。
+---
 
-[INFERRED][HIGH] Faction只用于关系、权限、目标过滤、伤害和交互规则；Faction不得授予Capability，也不得选择Movement、Networking、Presentation或安全实现。
+## 2. 单一 Simulation Authority
 
-## 3. Capability与Behavior Source
+每 World 的 Persistent Worker Runtime 是日常模拟状态唯一权威。
 
-[INFERRED][HIGH] Capability Profile是不可变排序ID集合；实体使用Profile Key和最多8项Add/Remove Modifier。Boundary从Profile与Modifier生成有效Capability Binding。
-
-[INFERRED][HIGH] Source Handle固定为`StableEntityRef + ControllerId + SourceSequence`。Source Spec使用稳定数值TypeId、Schema、Required Capability、Channel Mask、Priority、Exclusive Group、Lifetime和Replication Policy。
-
-[INFERRED][HIGH] 每实体最多16个活动Source；Registry在首个Boundary前冻结；未知类型、Schema冲突、缺失Capability、重复Handle和超限必须整批拒绝。
-
-[INFERRED][HIGH] Evaluator只读取不可变Context并写入有界Contribution Writer；不得直接写Mass Fragment、Actor、业务账本、网络或表现状态。
-
-[INFERRED][HIGH] Recipe和StateTree只负责生成Start/Update/Stop Command，不直接拥有移动或业务权威。
-
-[INFERRED][HIGH] 通用`MoveToLocation`、`FollowEntity`、`PursueEntity`、`FleeFromEntity`、`MaintainDistance`、Facing和Constraint Source应由插件的`MassCrowdStandardSources`提供；它们不得判断敌我、选择攻击目标或提交伤害/物流业务。
-
-[INFERRED][HIGH] Escort、Combat和Logistics属于宿主Recipe：它们组合Standard Source与产品Business/Interaction Source，而不是在Runtime建立新的互斥Behavior中心。详细合同查阅`MassCrowdStandardSourcesDesign.md`。
-
-## 4. Resolver与通用运动链
+Worker 最终拥有：
 
 ```text
-Capability / SourceSet Snapshot
-→ Apply due Source Commands to staged copy
-→ Evaluate Sources
-→ Resolve Movement / Facing / Constraint / Interaction / Business / Presentation
-→ Shared Flow / Target Region / Guidance
-→ Local Predictive
-→ Movement Predict
-→ Particle / Obstacle / Bounds Safety
-→ Quantize
-→ Prepared Patches
-→ Validate complete set and hashes
-→ Final Apply
+Lifecycle
+Behavior
+Flow / Resource
+Target / Cohort
+Combat / Reactive
+Projectile Simulation
+Movement
+Particle / Interaction
+Facing
+Simulation Clock
 ```
 
-[INFERRED][HIGH] Resolver排序固定为`Priority降序 → SourceTypeId → ControllerId → SourceSequence`。
-
-[INFERRED][HIGH] Movement支持Override、Q15 WeightedAdd和Additive；Facing独立支持Override和Q15 WeightedAdd；Constraint合并min/max/lock/NavLayer交集；Interaction使用Exclusive Winner；Business冲突拒绝；Presentation按Property执行Override或Additive。
-
-[INFERRED][HIGH] Local Predictive、Particle、障碍、边界和最终量化是不可卸载安全阶段。它们消费Resolver结果，但不拥有Source生命周期权威。
-
-[INFERRED][HIGH] 所有阵营和行为复用同一安全链；Business决定“做什么和目标是什么”，Movement/Safety决定“如何安全执行”。
-
-## 5. Boundary原子性
-
-[INFERRED][HIGH] 跨 Worker Result Proxy、Mass 代理状态和宿主 side effect 的最终提交由 `MassCrowdRuntime` 通用 Owner Commit Barrier 协调：Prepare 产生不可变候选与 Commit Token，Final Validate 在首次写入前复核 Generation/Sequence/Stable View/Lifecycle 及宿主 Token，随后只调用预验证完成的 no-fail Host Apply；对外事件与 ACK 最后发布。Runtime 不解释 Demo Target、Combat、Round 或 Scenario 语义，宿主通过 Prepared Plan adapter 接入。
-
-[INFERRED][HIGH] 测试宿主不保留旧 Barrier、Transaction 或 rollback 数据结构的兼容路径；替代实现获得业务与故障门证据后，应在同一切片物理删除旧生产者、消费者、类型和绑定旧结构的测试断言。
-
-[INFERRED][HIGH] Boundary固定为一次不可变Gather、显式POD Overlay、依赖图WORK、稳定Merge、完整集合预验证和一次GT Final Apply。
-
-[INFERRED][HIGH] 所有可能失败的业务检查必须发生在Final Apply之前；Final Apply采用已经验证后不可失败的合同。不得以部分写入后的补偿回滚冒充失败零写入。
-
-[INFERRED][HIGH] WORK不得访问UObject、World或EntityManager；任何缺失、重复、stale lifecycle、错误revision、错误Hash或任务失败都必须整批零写入。
-
-[INFERRED][HIGH] Commit Envelope v3覆盖SourceSet Revision/Hash、Command Batch Hash、六通道Hash、Movement/Facing结果、排序后的Patch Descriptor和最终Stable Hash。
-
-## 6. Cohort与持续生命周期
-
-[INFERRED][HIGH] Cohort由共享运动事实形成，包括ObjectiveKey、NavigationLayer、MovementProfile、CapabilityProfile、MacroStrategy和EnvironmentRevision；Cohort不等同于Faction。
-
-[INFERRED][HIGH] Cohort membership支持fixed-step boundary增量加入、退出和迁移，不假设Round内完整Agent集合永久固定。
+以下状态都是代理或适配副本：
 
 ```text
-Initial Relevant Snapshot
-→ Spawn / Despawn / Membership batches
-→ Capability / SourceSet baseline
-→ Source Command deltas
-→ Resolved state
-→ Movement correction
-→ Reliable gameplay facts
-→ Presentation facts
+Mass Fragment
+Actor / Component
+Network cache
+ISM / VAT instance
+Presentation cache
 ```
 
-[INFERRED][HIGH] Spawn/Despawn在fixed-step boundary原子应用。Despawn区分死亡、相关性退出、业务回收和宿主销毁；客户端表现回收不得反向决定服务端Source或实体生命周期。
+它们不能与 Worker 同时独立推进同一模拟字段。
 
-[INFERRED][HIGH] 生产世界不得依赖Round reset，必须支持持续spawn/despawn、Lifecycle槽位复用、membership变化、late join和动态Relevant Set。
+特别是 Projectile：
 
-## 7. 生产复制合同
+> Projectile simulation authority 属于 Worker Projectile Domain；Engine-side Mass Projectile Entity / Fragment 只作为 Worker Result Apply 后的 Engine 集成代理，不再拥有第二套独立轨迹模拟权威。
 
-| 事实类别 | 生产传输合同 |
-|---|---|
-| 共享不可变资源 | [INFERRED][HIGH] Revision + Hash或资产引用。 |
-| 初始相关集 | [INFERRED][HIGH] v2 Snapshot Header + bounded Chunks。 |
-| 动态生命周期 | [INFERRED][HIGH] v2 Spawn/Despawn/Membership bounded batches。 |
-| Capability | [INFERRED][HIGH] Profile Key、Modifier Revision和有效Binding Hash。 |
-| 行为Source | [INFERRED][HIGH] SourceSet Revision/Hash、持久Source baseline和可靠Command delta。 |
-| 行为结果 | [INFERRED][HIGH] Resolved Hash及`ResolvedOnly`策略要求的结果。 |
-| 运动纠错 | [INFERRED][HIGH] 当前Relevant实体的latest-wins correction chunks。 |
-| 权威业务事实 | [INFERRED][HIGH] Stable Event/Commit Id + StableEntityRef/Lifecycle校验。 |
-| 表现事实 | [INFERRED][HIGH] 已解析的动画、Cargo、Hit、Projectile视觉状态。 |
+---
 
-[INFERRED][HIGH] Source复制策略只允许`ServerOnly`、`ResolvedOnly`和`Predictable`；StateTree不复制。
+## 3. Stable Entity Identity
 
-[INFERRED][HIGH] 命令缺口、Schema错误或SourceSet/Resolved Hash不一致触发SourceSet resync。客户端相关性退出只清理本地副本，不向服务端发送Stop。
+通用实体身份：
 
-[INFERRED][HIGH] 所有O(N)数组必须有有界chunk/batch；Navigation/Flow资源只复制Revision/Hash或资产引用，不复制整图。
+```text
+StableEntityRef
+= ProviderId
++ StableEntityId
++ LifecycleSerial
+```
 
-[INFERRED][HIGH] 复制频率和精度按Relevancy、Ownership、事实可靠性、变化率和预算决定，不按Faction硬编码。
+`LifecycleSerial` 必须拒绝槽位复用后的旧：
 
-## 8. 模块与宿主边界
+```text
+Spawn
+Despawn
+Behavior Command
+Correction
+Hit
+Projectile relation
+Presentation event
+```
 
-| 所有者 | 长期职责 |
-|---|---|
-| `MassCrowdCore` | [INFERRED][HIGH] 稳定POD、Source状态机、Resolver、Movement kernels、排序、量化、Hash。 |
-| `MassCrowdRuntime` | [INFERRED][HIGH] World Store、Registry、Mass生命周期、Gather/WORK/Merge/Prepared/Commit和Nav资源。 |
-| `MassCrowdStandardSources` | [INFERRED][HIGH] 随插件交付的通用Movement/Facing/Constraint Context、Spec与Evaluator；只单向依赖Core/Runtime。 |
-| `MassCrowdNetworking` | [INFERRED][HIGH] Snapshot、Lifecycle、Source状态/命令、Correction、assembly、resync。 |
-| `MassCrowdPresentation` | [INFERRED][HIGH] StableEntityRef实例生命周期、ISM/VAT、插值、Cargo和已解析视觉事实。 |
-| `MassCrowdStateTreeAdapter` | [INFERRED][HIGH] Source Command Task和Runtime Event等待；单向依赖Runtime。 |
-| 宿主Business | [INFERRED][HIGH] Combat、Logistics、Inventory、Warehouse、Damage、Loot及最终业务验证。 |
+短 AgentId、Mass Entity Handle、Actor pointer、数组下标都不能单独作为跨系统生产身份。
 
-[INFERRED][HIGH] Demo使用同一Runtime、Networking和Presentation，只增加Scenario输入、故障注入、Hash、指标和人工审片；Round/Testcase/端口不得进入插件公共产品API。
+---
 
-## 9. 测试合同
+## 4. 统一 Agent Facts
 
-[INFERRED][HIGH] 测试层次固定为：纯POD fixture → 最小Mass World → Production Networking loopback → Demo真实地图 → continuous Sandbox → 同一路径20/100/500 → 原工程最小宿主。
+通用 Agent 基线可以包含：
 
-[INFERRED][HIGH] Core专项至少覆盖所有Blend Mode、Q15、输入反序、16 Source与32 Contribution上限、命令幂等/冲突/缺口、过期、Capability撤销和Stable Hash。
+```text
+StableEntityRef
+Faction / Team relationship facts
+CapabilityProfileKey
+Capability Modifiers
+Effective Capability Binding
+TargetRef / ObjectiveRef
+MovementProfile
+PresentationProfile
+BusinessTaskRef or host business reference
+```
 
-[INFERRED][HIGH] Runtime专项至少覆盖staged不可见、Source/Movement/Business/Presentation跨通道原子性、失败零写入、Revision规则及HitReaction结束后任务精确恢复。
+其中：
 
-[INFERRED][HIGH] 网络专项至少覆盖v1拒绝、v2编解码、乱序/重复/缺口、late join、相关性进出、Predictable/ResolvedOnly、correction replay和Hash resync。
+- Faction 只表达关系、权限和目标过滤；
+- Capability 表达能做什么；
+- Behavior Source 表达当前做什么；
+- Cohort 表达共享宏观运动事实；
+- PresentationProfile 只控制表现，不授予业务能力。
 
-[INFERRED][HIGH] StateTree专项必须执行真实Task，覆盖物流完整链、Task中断/重入、重复Event和Command幂等；直接调用CommandBuilder不能替代该门。
+---
 
-[INFERRED][HIGH] 规模验收必须让同一Behavior Source生产路径依次通过20、100和500；旧Round 100/500结果只能作为基础运动、网络和安全基线。
+## 5. Behavior Source Contract
 
-## 10. 当前实现状态（2026-07-28）
+行为实例由 Runtime World Store 按 StableEntityRef 保存。
 
-[COMPUTED][HIGH] Relevant Snapshot、lifecycle、public channel、late join、correction、Presentation、World Store、Core Source状态机、Registry/Resolver数据结构、Envelope v3、v2 Codec和StateTree Adapter代码已经存在。
+Source Handle：
 
-[COMPUTED][HIGH] 生产Mixed Movement Goal/Facing/Constraint已消费Resolved Channels并接入`FCrowdMassMovementPipelineWork → Particle Constraint → Facing Finalize`；边界采用完整预验证后的不可失败Apply；Behavior Source Codec v3已接入可靠状态、late join与resync。S6已在该路径依次通过20/100/500服务端门及20实体双端late join。
+```text
+StableEntityRef
++ ControllerId
++ SourceSequence
+```
 
-[COMPUTED][HIGH] 20实体第三方Fixture与代表性并发Mass Projectile组合门、StandardSources自主Evaluator、完整Mixed Movement Pipeline、Business/Movement通道独立性、Presentation Additive以及Pursue/Wander/Escort组合验收均已通过。
+SourceSet 具有：
 
-[COMPUTED][HIGH] 公共生命周期、基础网络、R0–R7、P0–P5及S0–S6均可保持关闭结论；动画Root Motion、真实StateTree业务Task和原工程迁移仍不在本轮范围。
+```text
+Revision
+Stable Hash
+Sorted Source Instances
+Persistent Source State
+```
 
-[RULES I BROKE]：[COMPUTED][HIGH] 无。
+Behavior Registry 在正式模拟前冻结，并进入网络基线。
+
+具体 Source / Resolver 合同查看：
+
+```text
+EntityBehaviorSourceArchitecture.md
+MassCrowdStandardSourcesDesign.md
+```
+
+---
+
+## 6. GT / Network → Worker 输入合同
+
+正常输入只允许外部事实：
+
+```text
+Spawn
+Despawn
+Membership change
+Gameplay Command
+Behavior Source Command
+Objective Revision
+Resource / Environment Revision
+Authority Correction
+```
+
+GT 不得把刚从 Worker 应用出来的位置、速度、Facing、Combat、Projectile 状态作为普通输入再次 echo 回 Worker。
+
+显式 Authority Correction 是唯一正常覆盖 Worker 已拥有字段的外部入口。
+
+---
+
+## 7. Worker → 外部输出合同
+
+Worker 发布：
+
+```text
+Dirty State Patch
+Ordered Gameplay Event
+Checkpoint
+Digest
+Diagnostic / Metrics
+```
+
+### Dirty State
+
+同一实体同一可覆盖字段可以 latest-wins 合并。
+
+Key：
+
+```text
+StableEntityRef + Field
+```
+
+### Ordered Event
+
+以下事实不能被状态合并吞掉：
+
+```text
+Spawn
+Despawn
+Damage
+Death
+Projectile Impact
+Business Commit
+其他不可覆盖事件
+```
+
+Ordered Event 必须拥有连续或可验证的稳定 Sequence。
+
+---
+
+## 8. Worker Result 原子提交
+
+Result Apply 使用 Runtime Owner Commit Barrier。
+
+高层顺序：
+
+```text
+Prepared Worker Result
+        ↓
+Runtime Token Validate
+        ↓
+Generation / Publish / Input / Event Watermark Validate
+        ↓
+Stable Entity View Validate
+        ↓
+Host FinalValidate
+        ↓
+──────── first write boundary ────────
+        ↓
+Host no-fail state apply
+        ↓
+Proxy no-fail commit
+        ↓
+Ordered Event / Network / Presentation side effects
+        ↓
+后续 Dirty ACK
+```
+
+所有正常可失败检查必须发生在第一次状态写入前。
+
+不能使用“先部分写入，再靠完整 rollback 数组补偿”作为正常原子提交方案。
+
+Runtime Barrier 不解释 Demo Round、Scenario、Target Actor 或宿主 Damage 语义；Host-specific validation 通过 Prepared Plan / Adapter 接入。
+
+---
+
+## 9. 持续 Lifecycle
+
+生产世界不依赖 Round Reset。
+
+必须支持：
+
+```text
+Initial population
+Spawn
+Despawn
+Death removal
+Slot recycle
+Membership enter / exit
+Relevancy enter / exit
+Late Join
+持续运行
+```
+
+Spawn / Despawn 在安全 Simulation Boundary 原子应用。
+
+Despawn 原因可以区分：
+
+```text
+Death
+Host destroy
+Business recycle
+Relevancy exit
+```
+
+客户端 Presentation 回收不能反向决定服务端实体生命周期。
+
+---
+
+## 10. Cohort 与 Membership
+
+Cohort 由共享宏观运动事实形成，例如：
+
+```text
+Objective
+NavigationLayer
+MovementProfile
+CapabilityProfile
+Macro Strategy
+Environment Revision
+```
+
+Cohort 不等于 Faction。
+
+Membership 必须支持持续增量变化，不能假设一个 Round 内完整 Agent 集合永久固定。
+
+Cohort / Resource 变化通过 Worker DependencyIndex 唤醒受影响 Work；静态未受影响 Cohort 不应因为纯时钟推进而全量重算。
+
+---
+
+## 11. Replication Fact Categories
+
+网络按事实类别同步，而不是简单高频复制所有 Transform。
+
+### Initial / Relevant Snapshot
+
+包含进入客户端相关集时需要建立 Worker / Proxy baseline 的稳定事实。
+
+必须有明确：
+
+```text
+Protocol Version
+Generation
+Sequence
+Registry / Resource Hash
+Chunk identity
+```
+
+### Lifecycle Delta
+
+```text
+Spawn
+Despawn
+Membership change
+```
+
+必须使用有界 batch。
+
+### Behavior
+
+```text
+Capability Binding
+SourceSet baseline
+Reliable Source Command delta
+Persistent Source State
+Resolved Hash
+```
+
+### Intent
+
+表达服务端/宿主产生的可预测外部事实，不携带完整 Worker 世界状态。
+
+### Correction
+
+只修复确实不一致的 Scope / Entity / Field。
+
+Correction 必须携带：
+
+```text
+Generation
+CorrectionRevision
+StableEntityRef / Scope
+Source sequence / revision
+```
+
+### Checkpoint
+
+用于：
+
+```text
+Late Join baseline
+低频完整恢复
+严重 desync
+Round / scenario acceptance snapshot
+```
+
+Checkpoint 不是普通每帧 transform replication。
+
+### Digest
+
+用于廉价检测：
+
+```text
+Entity / Field / Scope Hash mismatch
+```
+
+发现 mismatch 后再请求明确 Correction / Resync。
+
+---
+
+## 12. 有界 Packet / Chunk
+
+所有可能达到 O(N) 的网络载荷必须：
+
+```text
+bounded batch
+bounded chunk
+bounded assembly
+assembly timeout
+duplicate handling
+sequence validation
+```
+
+不可通过无限增大可靠 RPC、partial bunch 或队列上限解决规模问题。
+
+Navigation / Shared Flow 等大型共享资源优先同步：
+
+```text
+Resource Revision
+Stable Hash
+Asset / Resource reference
+```
+
+而不是复制整张场。
+
+---
+
+## 13. Late Join
+
+最终 Late Join 顺序：
+
+```text
+Checkpoint / Relevant Baseline
+        ↓
+Resource Revisions
+        ↓
+Behavior / Source Baseline
+        ↓
+Ordered Event Baseline
+        ↓
+后续 Intent / Delta / Event
+```
+
+Baseline 未完成前，不允许把后续 Delta 当作已拥有完整前置状态来应用。
+
+缺失 Sequence、Schema、Resource Revision 或 Registry Hash 必须触发显式等待 / resync。
+
+---
+
+## 14. Predictable / ResolvedOnly / ServerOnly
+
+Behavior Source 的网络策略：
+
+### ServerOnly
+
+客户端不自行执行该 Source 的权威逻辑，只消费服务端结果 / 业务事实。
+
+### ResolvedOnly
+
+客户端接收已经解析的通道结果，不需要拥有完整 Source Evaluator 状态。
+
+### Predictable
+
+客户端只有在：
+
+```text
+Registry Hash 一致
+Schema 一致
+Resource Revision 一致
+Baseline 完整
+```
+
+时才能本地执行。
+
+任何条件不满足都不能静默继续预测。
+
+---
+
+## 15. Correction 与 Generation
+
+普通稀疏 Correction 不应该重建整个 World Generation。
+
+一般规则：
+
+```text
+普通 Scope Correction
+→ CorrectionRevision++
+→ invalidate affected work / result
+
+World switch / full resnapshot / teardown
+→ Generation++
+```
+
+Generation 变化使旧 Worker Result、旧 Event、旧 Packet、旧 Projectile / Lifecycle fact 整体失效。
+
+---
+
+## 16. Checkpoint / Replay
+
+Checkpoint 至少需要冻结：
+
+```text
+Generation
+Worker Epoch / Simulation Tick
+Last Applied Input Sequence
+Last Ordered Event Sequence
+Entity State Hash
+Resource Revision Hash
+Behavior / Source state
+必要的 Projectile / Combat / Movement state
+```
+
+恢复后 Worker 必须从同一个稳定事实继续推进。
+
+Replay 不能依赖线程完成顺序、墙钟时间或非确定性容器迭代。
+
+---
+
+## 17. Projectile Replication
+
+Projectile Gameplay Authority 在 Worker。
+
+网络只同步客户端恢复 / 表现所需事实：
+
+```text
+Projectile baseline when relevant
+Spawn
+Correction when required
+Impact
+Expire / Despawn
+Checkpoint state
+```
+
+客户端可以本地插值 / 预测视觉轨迹，但不能自己产生 Damage authority。
+
+具体 Projectile / Hit 机制查看：
+
+```text
+MassProjectileHitFrameworkDesign.md
+```
+
+---
+
+## 18. Presentation Contract
+
+Presentation 使用独立 StableEntityRef → Slot 映射。
+
+它消费：
+
+```text
+Presentation Profile
+Transform / movement proxy
+Visual State
+VAT timing facts
+Cargo facts
+Hit / Projectile visual events
+```
+
+Presentation 必须支持幂等：
+
+```text
+Spawn
+Update
+Despawn
+stale tombstone rejection
+```
+
+视觉实例数量、LOD、隐藏、插值或回收不能反向修改 Simulation / Lifecycle authority。
+
+---
+
+## 19. Networking 与 Faction 解耦
+
+网络频率、可靠性和精度由：
+
+```text
+Relevancy
+Ownership
+Fact reliability
+Change rate
+Budget
+Prediction policy
+```
+
+决定。
+
+不得因为 Faction = Enemy 就硬编码一套低精度网络，Faction = Friendly 就使用另一套 Simulation path。
+
+---
+
+## 20. Fail-Closed
+
+以下情况必须拒绝或 Resync：
+
+```text
+Protocol Version 不支持
+Generation mismatch
+Lifecycle mismatch
+Sequence gap
+Registry / Schema mismatch
+Resource Revision missing
+Stable Hash mismatch
+重复不可覆盖 Event
+Chunk assembly overflow / timeout
+非法字段 Owner
+容量溢出
+```
+
+不得通过静默丢 Spawn、Despawn、Damage、Projectile Impact、Behavior Command 或 Correction 制造“网络稳定”。
+
+---
+
+## 21. Demo 宿主边界
+
+Demo 使用同一套：
+
+```text
+Runtime
+Worker Domain
+Networking
+Presentation
+```
+
+额外增加：
+
+```text
+Scenario
+Round window
+Readiness
+Golden Hash
+Failure injection
+Metrics
+FFmpeg / manual review
+```
+
+这些测试设施不能成为生产 Agent Runtime 必需协议。
+
+`RoundPlan`、测试端口、Scenario 枚举等 Demo 数据不得进入插件通用 Replication API。
+
+---
+
+## 22. 文档状态规则
+
+本文只保留当前长期 Runtime / Replication 合同。
+
+旧 R0–R7、Boundary Scheduler、Mass Fragment Projectile Authority、旧协议迁移阶段和历史性能数据已经退出本文正文。
+
+任何历史段落若与 `TargetArchitecture.md` 冲突，以 TargetArchitecture 为准。
