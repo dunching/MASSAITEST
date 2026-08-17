@@ -16,7 +16,6 @@
 #include "CrowdDemoBusinessSourceProvider.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
-#include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 
 namespace CrowdDemoWorkerInputSyncPrivate
 {
@@ -241,7 +240,6 @@ namespace CrowdDemoWorkerInputSyncPrivate
   }
 
   bool BuildVersionedResources(
-    UWorld& World,
     UMassCrowdRuntimeSubsystem& RuntimeSubsystem,
     const TConstArrayView<FCrowdWorkerVersionedResourceInput>
       AdditionalResources,
@@ -279,39 +277,35 @@ namespace CrowdDemoWorkerInputSyncPrivate
           return false;
       }
     }
-    if (const UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
-      World.GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>())
+    const FCrowdSharedFlowField& FlowField =
+      RuntimeSubsystem.GetSharedFlowResource().Field;
+    if (FlowField.IsValid() && FlowField.Config.Revision > 0)
     {
-      const FCrowdSharedFlowField& FlowField =
-        Pipeline->GetRuntimeSharedFlowField();
-      if (FlowField.IsValid() && FlowField.Config.Revision > 0)
+      FCrowdWorkerPayload ContentIdentity;
+      if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
+          FlowField, ContentIdentity))
+        return false;
+      uint64 Revision = 0;
+      bool bNeedsPublication = false;
+      if (!RuntimeSubsystem.ResolveWorkerResourceRevision(
+          CrowdWorkerResourceIds::Environment,
+          static_cast<uint64>(FlowField.Config.Revision),
+          ContentIdentity.StableHash,
+          Revision, bNeedsPublication)
+        || Revision > static_cast<uint64>(MAX_int32))
+        return false;
+      if (bNeedsPublication)
       {
-        FCrowdWorkerPayload ContentIdentity;
+        FCrowdWorkerVersionedResourceInput& Input =
+          OutResources.AddDefaulted_GetRef();
+        Input.ResourceId = CrowdWorkerResourceIds::Environment;
+        Input.Revision = Revision;
+        FCrowdSharedFlowField PublishedFlowField = FlowField;
+        PublishedFlowField.Config.Revision =
+          static_cast<int32>(Input.Revision);
         if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
-            FlowField, ContentIdentity))
+            PublishedFlowField, Input.Payload))
           return false;
-        uint64 Revision = 0;
-        bool bNeedsPublication = false;
-        if (!RuntimeSubsystem.ResolveWorkerResourceRevision(
-            CrowdWorkerResourceIds::Environment,
-            static_cast<uint64>(FlowField.Config.Revision),
-            ContentIdentity.StableHash,
-            Revision, bNeedsPublication)
-          || Revision > static_cast<uint64>(MAX_int32))
-          return false;
-        if (bNeedsPublication)
-        {
-          FCrowdWorkerVersionedResourceInput& Input =
-            OutResources.AddDefaulted_GetRef();
-          Input.ResourceId = CrowdWorkerResourceIds::Environment;
-          Input.Revision = Revision;
-          FCrowdSharedFlowField PublishedFlowField = FlowField;
-          PublishedFlowField.Config.Revision =
-            static_cast<int32>(Input.Revision);
-          if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
-              PublishedFlowField, Input.Payload))
-            return false;
-        }
       }
     }
     for (const FCrowdWorkerVersionedResourceInput& Additional :
@@ -615,7 +609,7 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
   TArray<FCrowdWorkerVersionedResourceInput>
     VersionedResources;
   if (!BuildVersionedResources(
-      World, *RuntimeSubsystem, AdditionalResources,
+      *RuntimeSubsystem, AdditionalResources,
       VersionedResources))
     return false;
   FCrowdWorkerBehaviorAuthority& BehaviorAuthority =
@@ -899,7 +893,7 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
 
   TArray<FCrowdWorkerVersionedResourceInput> VersionedResources;
   if (!BuildVersionedResources(
-      World, *RuntimeSubsystem, ResourceRevisions,
+      *RuntimeSubsystem, ResourceRevisions,
       VersionedResources))
     return false;
 
