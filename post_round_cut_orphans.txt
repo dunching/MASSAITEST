@@ -1,0 +1,382 @@
+POST ROUND CUT ORPHAN AUDIT
+
+## FCrowdDemoPreparedMovementBoundaryCommit (6)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5039:FCrowdDemoPreparedMovementBoundaryCommit&& Commit)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3649:FCrowdDemoPreparedMovementBoundaryCommit PreparedMovementBoundaryCommit;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:391:struct FCrowdDemoPreparedMovementBoundaryCommit
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:741:FCrowdDemoPreparedMovementBoundaryCommit&& Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:742:const FCrowdDemoPreparedMovementBoundaryCommit&
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1282:FCrowdDemoPreparedMovementBoundaryCommit PreparedMovementBoundaryCommit;
+
+## PreparedMovementBoundaryCommit (35)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1210:"GetPreparedMovementBoundaryCommit()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1255:"GetPreparedMovementBoundaryCommit()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1327:"GetPreparedMovementBoundaryCommit()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2002:PreparedMovementBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2370:PreparedMovementBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5038:bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedMovementBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5039:FCrowdDemoPreparedMovementBoundaryCommit&& Commit)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5041:if (PreparedMovementBoundaryCommit.bValid
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5060:PreparedMovementBoundaryCommit = MoveTemp(Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5782:PreparedMovementBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5812:PreparedMovementBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5851:PreparedMovementBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3373:if (Pipeline->IsPreparedMovementBoundaryCommitCurrent())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3649:FCrowdDemoPreparedMovementBoundaryCommit PreparedMovementBoundaryCommit;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3650:PreparedMovementBoundaryCommit.FixedStepIndex =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3652:PreparedMovementBoundaryCommit.PlanRevision =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3654:PreparedMovementBoundaryCommit.Facing = WorkOutput;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3655:PreparedMovementBoundaryCommit.Finalize = FinalizeOutput;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3656:PreparedMovementBoundaryCommit.ConsecutiveSettleStepsByAgentId =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3658:PreparedMovementBoundaryCommit.FinalSettledByAgentId =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3660:PreparedMovementBoundaryCommit.StableHash = StableHash;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3661:PreparedMovementBoundaryCommit.bValid = StableHash != 0;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3662:if (!Pipeline->SetPreparedMovementBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3663:MoveTemp(PreparedMovementBoundaryCommit)))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:391:struct FCrowdDemoPreparedMovementBoundaryCommit
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:740:bool SetPreparedMovementBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:741:FCrowdDemoPreparedMovementBoundaryCommit&& Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:742:const FCrowdDemoPreparedMovementBoundaryCommit&
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:743:GetPreparedMovementBoundaryCommit() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:744:{ return PreparedMovementBoundaryCommit; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:745:bool IsPreparedMovementBoundaryCommitCurrent() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:747:return PreparedMovementBoundaryCommit.bValid
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:748:&& PreparedMovementBoundaryCommit.FixedStepIndex
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:750:&& PreparedMovementBoundaryCommit.PlanRevision
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1282:FCrowdDemoPreparedMovementBoundaryCommit PreparedMovementBoundaryCommit;
+
+## SetPreparedMovementBoundaryCommit (3)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5038:bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedMovementBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3662:if (!Pipeline->SetPreparedMovementBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:740:bool SetPreparedMovementBoundaryCommit(
+
+## GetPreparedMovementBoundaryCommit (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1210:"GetPreparedMovementBoundaryCommit()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1255:"GetPreparedMovementBoundaryCommit()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1327:"GetPreparedMovementBoundaryCommit()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:743:GetPreparedMovementBoundaryCommit() const
+
+## IsPreparedMovementBoundaryCommitCurrent (2)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3373:if (Pipeline->IsPreparedMovementBoundaryCommitCurrent())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:745:bool IsPreparedMovementBoundaryCommitCurrent() const
+
+## MovementFinalizeAppliedFixedStepIndex (4)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2367:MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:759:{ MovementFinalizeAppliedFixedStepIndex = GetCurrentFixedStepIndex(); }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:763:&& MovementFinalizeAppliedFixedStepIndex == GetCurrentFixedStepIndex();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1270:int32 MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
+
+## MarkMovementFinalizeApplied (1)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:758:void MarkMovementFinalizeApplied()
+
+## IsMovementFinalizeAppliedCurrent (2)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5897:if (!IsMovementFinalizeAppliedCurrent()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:760:bool IsMovementFinalizeAppliedCurrent() const
+
+## FCrowdDemoPreparedTargetResourcePlan (14)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:980:FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:992:FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(Invalid);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1996:"MakeShared<FCrowdDemoPreparedTargetResourcePlan>")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4628:bool FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4664:FCrowdDemoPreparedTargetResourcePlan& Prepared =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4705:if (!FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4929:const FCrowdDemoPreparedTargetResourcePlan& Prepared) const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4988:FCrowdDemoPreparedTargetResourcePlan& Prepared)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5783:MakeShared<FCrowdDemoPreparedTargetResourcePlan>();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:37:struct FCrowdDemoPreparedTargetResourcePlan;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:46:TSharedPtr<FCrowdDemoPreparedTargetResourcePlan>
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:308:struct FCrowdDemoPreparedTargetResourcePlan
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:755:const FCrowdDemoPreparedTargetResourcePlan& Plan) const;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:757:FCrowdDemoPreparedTargetResourcePlan& Plan);
+
+## PreparedTargetResourceSlots (9)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2041:OwnerBarrierBlock.Contains(TEXT("PreparedTargetResourceSlots"))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2001:PreparedTargetResourceSlots.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2369:PreparedTargetResourceSlots.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4677:for (const auto& Slot : PreparedTargetResourceSlots)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4728:for (const auto& Slot : PreparedTargetResourceSlots)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4910:CalculatePreparedTargetResourceHash(PreparedTargetResourceSlots);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4923:PreparedTargetResourceSlots.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5850:PreparedTargetResourceSlots.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1281:PreparedTargetResourceSlots;
+
+## PreparePendingTargetResourcePlan (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1998:PipelineSource.Contains(TEXT("PreparePendingTargetResourcePlan()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2048:"PreparePendingTargetResourcePlan();"))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4651:bool UCrowdDemoRoundSimPipelineSubsystem::PreparePendingTargetResourcePlan()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:753:bool PreparePendingTargetResourcePlan();
+
+## FinalValidatePreparedTargetResourcePlan (5)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2002:"FinalValidatePreparedTargetResourcePlan("))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2035:"FinalValidatePreparedTargetResourcePlan(")) != INDEX_NONE
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2037:"FinalValidatePreparedTargetResourcePlan("))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4928:FinalValidatePreparedTargetResourcePlan(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:754:bool FinalValidatePreparedTargetResourcePlan(
+
+## ApplyPreparedTargetResourcePlanNoFail (3)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2004:"ApplyPreparedTargetResourcePlanNoFail(")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4987:ApplyPreparedTargetResourcePlanNoFail(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:756:void ApplyPreparedTargetResourcePlanNoFail(
+
+## PreparedTargetResourcePlan (35)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:980:FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:992:FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(Invalid);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1106:const int32 PreparedTargetResourcePlanBuildCount = 1;
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1107:int32 PreparedTargetResourcePlanApplyCount = 0;
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1116:&& PreparedTargetResourcePlanBuildCount == 1;
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1123:++PreparedTargetResourcePlanApplyCount;
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1132:PreparedTargetResourcePlanBuildCount, 1);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1134:PreparedTargetResourcePlanApplyCount, 1);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1987:"PreparedTargetResourcePlan"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1994:"Pending.PreparedTargetResourcePlan ="))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1996:"MakeShared<FCrowdDemoPreparedTargetResourcePlan>")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2002:"FinalValidatePreparedTargetResourcePlan("))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2004:"ApplyPreparedTargetResourcePlanNoFail(")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2035:"FinalValidatePreparedTargetResourcePlan(")) != INDEX_NONE
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2037:"FinalValidatePreparedTargetResourcePlan("))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4628:bool FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4662:if (!Pending || !Pending->PreparedTargetResourcePlan.IsValid())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4664:FCrowdDemoPreparedTargetResourcePlan& Prepared =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4665:*Pending->PreparedTargetResourcePlan;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4705:if (!FCrowdDemoPreparedTargetResourcePlan::ValidatePrepareInput(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4928:FinalValidatePreparedTargetResourcePlan(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4929:const FCrowdDemoPreparedTargetResourcePlan& Prepared) const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4987:ApplyPreparedTargetResourcePlanNoFail(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4988:FCrowdDemoPreparedTargetResourcePlan& Prepared)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5782:Pending.PreparedTargetResourcePlan =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5783:MakeShared<FCrowdDemoPreparedTargetResourcePlan>();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:37:struct FCrowdDemoPreparedTargetResourcePlan;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:46:TSharedPtr<FCrowdDemoPreparedTargetResourcePlan>
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:47:PreparedTargetResourcePlan;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:57:&& PreparedTargetResourcePlan.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:308:struct FCrowdDemoPreparedTargetResourcePlan
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:754:bool FinalValidatePreparedTargetResourcePlan(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:755:const FCrowdDemoPreparedTargetResourcePlan& Plan) const;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:756:void ApplyPreparedTargetResourcePlanNoFail(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:757:FCrowdDemoPreparedTargetResourcePlan& Plan);
+
+## FCrowdDemoPreparedCombatBoundaryCommit (6)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5067:FCrowdDemoPreparedCombatBoundaryCommit&& Commit)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:150:struct FCrowdDemoPreparedCombatBoundaryCommit
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:377:FCrowdDemoPreparedCombatBoundaryCommit Commit;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:790:FCrowdDemoPreparedCombatBoundaryCommit&& Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:791:const FCrowdDemoPreparedCombatBoundaryCommit&
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1288:FCrowdDemoPreparedCombatBoundaryCommit PreparedCombatBoundaryCommit;
+
+## PreparedCombatBoundaryCommit (22)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1212:"GetPreparedCombatBoundaryCommit()")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1257:"GetPreparedCombatBoundaryCommit()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2009:PreparedCombatBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5066:bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedCombatBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5067:FCrowdDemoPreparedCombatBoundaryCommit&& Commit)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5069:if (PreparedCombatBoundaryCommit.bValid
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5091:PreparedCombatBoundaryCommit = MoveTemp(Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5783:PreparedCombatBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5813:PreparedCombatBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5852:PreparedCombatBoundaryCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:150:struct FCrowdDemoPreparedCombatBoundaryCommit
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:377:FCrowdDemoPreparedCombatBoundaryCommit Commit;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:789:bool SetPreparedCombatBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:790:FCrowdDemoPreparedCombatBoundaryCommit&& Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:791:const FCrowdDemoPreparedCombatBoundaryCommit&
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:792:GetPreparedCombatBoundaryCommit() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:793:{ return PreparedCombatBoundaryCommit; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:794:bool IsPreparedCombatBoundaryCommitCurrent() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:796:return PreparedCombatBoundaryCommit.bValid
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:797:&& PreparedCombatBoundaryCommit.FixedStepIndex
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:799:&& PreparedCombatBoundaryCommit.PlanRevision
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1288:FCrowdDemoPreparedCombatBoundaryCommit PreparedCombatBoundaryCommit;
+
+## SetPreparedCombatBoundaryCommit (2)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5066:bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedCombatBoundaryCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:789:bool SetPreparedCombatBoundaryCommit(
+
+## GetPreparedCombatBoundaryCommit (3)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1212:"GetPreparedCombatBoundaryCommit()")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1257:"GetPreparedCombatBoundaryCommit()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:792:GetPreparedCombatBoundaryCommit() const
+
+## IsPreparedCombatBoundaryCommitCurrent (1)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:794:bool IsPreparedCombatBoundaryCommitCurrent() const
+
+## PreparedRuntimeSharedFlowOutputs (12)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1330:"GetPreparedRuntimeSharedFlowOutputs()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2003:PreparedRuntimeSharedFlowOutputs.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2371:PreparedRuntimeSharedFlowOutputs.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5853:PreparedRuntimeSharedFlowOutputs.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2816:: Pipeline->GetPreparedRuntimeSharedFlowOutputs())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3695:Pipeline->GetPreparedRuntimeSharedFlowOutputs().Num());
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3697:: Pipeline->GetPreparedRuntimeSharedFlowOutputs())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:765:void SetPreparedRuntimeSharedFlowOutputs(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:767:{ PreparedRuntimeSharedFlowOutputs = MoveTemp(Values); }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:769:GetPreparedRuntimeSharedFlowOutputs() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:770:{ return PreparedRuntimeSharedFlowOutputs; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1283:TArray<FCrowdMassSharedFlowAgentOutput> PreparedRuntimeSharedFlowOutputs;
+
+## PreparedRuntimeComposedGuidance (11)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2010:PreparedRuntimeComposedGuidance.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2376:PreparedRuntimeComposedGuidance.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5857:PreparedRuntimeComposedGuidance.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2476:: Pipeline->GetPreparedRuntimeComposedGuidance())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3413:: Pipeline->GetPreparedRuntimeComposedGuidance())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:4017:Pipeline->SetPreparedRuntimeComposedGuidance(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:802:void SetPreparedRuntimeComposedGuidance(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:804:{ PreparedRuntimeComposedGuidance = MoveTemp(Values); }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:806:GetPreparedRuntimeComposedGuidance() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:807:{ return PreparedRuntimeComposedGuidance; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1289:TArray<FCrowdComposedGuidance> PreparedRuntimeComposedGuidance;
+
+## PreparedRuntimePredictedMovements (12)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2421:TEXT("GetPreparedRuntimePredictedMovements()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2011:PreparedRuntimePredictedMovements.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2377:PreparedRuntimePredictedMovements.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5858:PreparedRuntimePredictedMovements.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2471:: Pipeline->GetPreparedRuntimePredictedMovements())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2587:Pipeline->GetPreparedRuntimePredictedMovements();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:4028:Pipeline->SetPreparedRuntimePredictedMovements(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:808:void SetPreparedRuntimePredictedMovements(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:810:{ PreparedRuntimePredictedMovements = MoveTemp(Values); }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:812:GetPreparedRuntimePredictedMovements() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:813:{ return PreparedRuntimePredictedMovements; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1290:TArray<FCrowdMassPredictedMovement> PreparedRuntimePredictedMovements;
+
+## PreparedRuntimeParticleResults (13)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2012:PreparedRuntimeParticleResults.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2378:PreparedRuntimeParticleResults.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5859:PreparedRuntimeParticleResults.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2662:TArray<FCrowdParticleConstraintResult> PreparedRuntimeParticleResults =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2968:PreparedRuntimeParticleResults.Sort([](const auto& A, const auto& B)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2974:Pipeline->SetPreparedRuntimeParticleResults(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2975:MoveTemp(PreparedRuntimeParticleResults));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3417:: Pipeline->GetPreparedRuntimeParticleResults())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:814:void SetPreparedRuntimeParticleResults(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:816:{ PreparedRuntimeParticleResults = MoveTemp(Values); }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:818:GetPreparedRuntimeParticleResults() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:819:{ return PreparedRuntimeParticleResults; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1291:TArray<FCrowdParticleConstraintResult> PreparedRuntimeParticleResults;
+
+## PreparedRuntimeFinalKinematics (20)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2424:TEXT("SetPreparedRuntimeFinalKinematics")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2013:PreparedRuntimeFinalKinematics.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2014:bPreparedRuntimeFinalKinematicsWorkerOwned = false;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2379:PreparedRuntimeFinalKinematics.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2380:bPreparedRuntimeFinalKinematicsWorkerOwned = false;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5860:PreparedRuntimeFinalKinematics.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5861:bPreparedRuntimeFinalKinematicsWorkerOwned = false;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:2972:Pipeline->SetPreparedRuntimeFinalKinematics(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3425:: Pipeline->GetPreparedRuntimeFinalKinematics().IsEmpty());
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3510:CombinedInput.Kinematics = Pipeline->GetPreparedRuntimeFinalKinematics();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3544:: Pipeline->GetPreparedRuntimeFinalKinematics())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:820:void SetPreparedRuntimeFinalKinematics(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:823:if (!bPreparedRuntimeFinalKinematicsWorkerOwned)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:824:PreparedRuntimeFinalKinematics = MoveTemp(Values);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:827:GetPreparedRuntimeFinalKinematics() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:828:{ return PreparedRuntimeFinalKinematics; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:829:bool ArePreparedRuntimeFinalKinematicsWorkerOwned() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:830:{ return bPreparedRuntimeFinalKinematicsWorkerOwned; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1292:TArray<FCrowdMassFinalKinematicState> PreparedRuntimeFinalKinematics;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1293:bool bPreparedRuntimeFinalKinematicsWorkerOwned = false;
+
+## PreparedRuntimeFacingResults (8)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2015:PreparedRuntimeFacingResults.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2381:PreparedRuntimeFacingResults.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5862:PreparedRuntimeFacingResults.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:831:void SetPreparedRuntimeFacingResults(TArray<FCrowdFacingResult>&& Values)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:832:{ PreparedRuntimeFacingResults = MoveTemp(Values); }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:833:const TArray<FCrowdFacingResult>& GetPreparedRuntimeFacingResults() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:834:{ return PreparedRuntimeFacingResults; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1294:TArray<FCrowdFacingResult> PreparedRuntimeFacingResults;
+
+## PreparedFacingRollbackFacts (8)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2016:PreparedFacingRollbackFacts.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2382:PreparedFacingRollbackFacts.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5863:PreparedFacingRollbackFacts.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:835:void SetPreparedFacingRollbackFacts(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:837:{ PreparedFacingRollbackFacts = MoveTemp(Values); }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:839:GetPreparedFacingRollbackFacts() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:840:{ return PreparedFacingRollbackFacts; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1295:TArray<FCrowdDemoPreparedFacingRollbackFact> PreparedFacingRollbackFacts;
+
+## FCrowdDemoPreparedParticleDiagnosticCommit (6)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5883:FCrowdDemoPreparedParticleDiagnosticCommit&& Commit)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5901:FCrowdDemoPreparedParticleDiagnosticCommit Commit =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3005:FCrowdDemoPreparedParticleDiagnosticCommit DiagnosticCommit;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:164:struct FCrowdDemoPreparedParticleDiagnosticCommit
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:842:FCrowdDemoPreparedParticleDiagnosticCommit&& Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1296:FCrowdDemoPreparedParticleDiagnosticCommit PreparedParticleDiagnosticCommit;
+
+## PreparedParticleDiagnosticCommit (21)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2671:TEXT("SetPreparedParticleDiagnosticCommit(")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2017:PreparedParticleDiagnosticCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5864:PreparedParticleDiagnosticCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5882:bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedParticleDiagnosticCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5883:FCrowdDemoPreparedParticleDiagnosticCommit&& Commit)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5889:|| PreparedParticleDiagnosticCommit.bValid)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5891:PreparedParticleDiagnosticCommit = MoveTemp(Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5898:|| !IsPreparedParticleDiagnosticCommitCurrent())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5901:FCrowdDemoPreparedParticleDiagnosticCommit Commit =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5902:MoveTemp(PreparedParticleDiagnosticCommit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5903:PreparedParticleDiagnosticCommit = {};
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3005:FCrowdDemoPreparedParticleDiagnosticCommit DiagnosticCommit;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3291:if (!Pipeline->SetPreparedParticleDiagnosticCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:164:struct FCrowdDemoPreparedParticleDiagnosticCommit
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:841:bool SetPreparedParticleDiagnosticCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:842:FCrowdDemoPreparedParticleDiagnosticCommit&& Commit);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:844:bool IsPreparedParticleDiagnosticCommitCurrent() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:846:return PreparedParticleDiagnosticCommit.bValid
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:847:&& PreparedParticleDiagnosticCommit.FixedStepIndex
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:849:&& PreparedParticleDiagnosticCommit.PlanRevision
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1296:FCrowdDemoPreparedParticleDiagnosticCommit PreparedParticleDiagnosticCommit;
+
+## CommitPreparedParticleDiagnostics (3)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2677:TEXT("CommitPreparedParticleDiagnostics()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5895:bool UCrowdDemoRoundSimPipelineSubsystem::CommitPreparedParticleDiagnostics()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:843:bool CommitPreparedParticleDiagnostics();
+
+## SetPreparedParticleDiagnosticCommit (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2671:TEXT("SetPreparedParticleDiagnosticCommit(")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5882:bool UCrowdDemoRoundSimPipelineSubsystem::SetPreparedParticleDiagnosticCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3291:if (!Pipeline->SetPreparedParticleDiagnosticCommit(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:841:bool SetPreparedParticleDiagnosticCommit(
+
+## IsPreparedParticleDiagnosticCommitCurrent (2)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5898:|| !IsPreparedParticleDiagnosticCommitCurrent())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:844:bool IsPreparedParticleDiagnosticCommitCurrent() const
+
+## FCrowdDemoRoundPostFinalizeMetricsStage (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1179:TEXT("void FCrowdDemoRoundPostFinalizeMetricsStage::ConfigureQueries");
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1181:TEXT("void FCrowdDemoRoundPostFinalizeMetricsStage::Execute");
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2467:TEXT("void FCrowdDemoRoundPostFinalizeMetricsStage::Execute"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2675:TEXT("FCrowdDemoRoundPostFinalizeMetricsStage::Execute"))
+
+## FCrowdDemoRoundAuthorityCommitStage (2)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1183:"void FCrowdDemoRoundAuthorityCommitStage::Execute");
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1217:"void FCrowdDemoRoundAuthorityCommitStage::ConfigureQueries")));
+
+## FCrowdDemoRoundClientPredictionCommitStage (1)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1220:"void FCrowdDemoRoundClientPredictionCommitStage::ConfigureQueries")));
+
+## FCrowdDemoRoundCheckpointPublisherStage (2)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1227:"void FCrowdDemoRoundCheckpointPublisherStage::ConfigureQueries")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1229:"void FCrowdDemoRoundCheckpointPublisherStage::Execute");
+
+## FCrowdDemoRoundMovementWorkStage (2)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2459:"FCrowdDemoRoundMovementWorkStage::ConfigureQueries")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2465:TEXT("void FCrowdDemoRoundMovementWorkStage::Execute"));
+
+## FCrowdDemoRoundFacingFinalizeStage (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1271:TEXT("bool FCrowdDemoRoundFacingFinalizeStage::ValidatePreparedCommit");
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1274:"void FCrowdDemoRoundFacingFinalizeStage::CommitValidatedSideEffects");
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1278:TEXT("void FCrowdDemoRoundFacingFinalizeStage::Execute");
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2497:TEXT("FCrowdDemoRoundFacingFinalizeStage::"),
+
+## TryPrepareRoundApply (3)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2061:ProcessorSource.Contains(TEXT("Pipeline->TryPrepareRoundApply()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2062:&& PipelineHeader.Contains(TEXT("TryPrepareRoundApply()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2063:&& PipelineSource.Contains(TEXT("TryPrepareRoundApply()")));
+
+## BeginBoundaryTransaction (2)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1637:"Pipeline->BeginBoundaryTransaction(SnapshotApplyMilliseconds)"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2336:"bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction("),
+
+## FCrowdDemoRoundWorkBatch (0)
