@@ -2,53 +2,54 @@
 
 ## 1. 文档职责
 
-本文定义 MASSAITEST / MassCrowdSimulation 已经确定的最终产品方向与目标架构。
+本文定义 MASSAITEST / MassCrowdSimulation 已经确定的最终产品方向与终态架构。
 
-本文只回答三个问题：
+本文回答：
 
-1. 这个系统最终要做成什么。
-2. 最终由谁拥有模拟权威、各模块如何分工。
-3. 当前代码最终要收敛到什么结构才算完成。
+```text
+最终产品是什么
+最终模拟权威是谁
+模块怎么分工
+多实体怎么调度
+运动/战斗/网络/表现怎么分层
+什么条件下才算 10k 完成
+```
 
-本文不描述当前 main 已经实现到哪里；当前事实由 `CurrentArchitecture.md` 负责。
-
-本文不记录开发顺序；开发顺序由 `PhasePlan.md` 负责。
-
-本文不记录功能是否已经通过；完成状态与测试证据分别由 `FeatureChecklist.md` 和 `TestScenarioMatrix.md` 负责。
-
-专项算法的详细数据结构、公式和边界继续由对应 Design 文档负责。
+当前 `main` 实现到哪里看 `CurrentArchitecture.md`；当前实施顺序看 `PhasePlan.md`；测试状态看 `FeatureChecklist.md` / `TestScenarioMatrix.md`。
 
 ---
 
 ## 2. 最终产品定义
 
-最终产品不是一个“虫群 Demo”，而是一套可复用的 Unreal Engine Mass 大规模 Agent Simulation Runtime。
+最终产品不是“虫群 Demo”，而是一套可复用的 Unreal Engine Mass 大规模 Agent Simulation Runtime。
 
-它要支持持续存在的 Agent population，而不是依赖固定 Round、固定 Agent 集合或测试关卡才能运行。
-
-最终应能够长期处理：
+最终产品本体：
 
 ```text
-Spawn
-Despawn
+MassCrowdSimulation
++ 可选适配模块
+```
+
+`MassAICrowdDemo` 只作为验证宿主。
+
+Runtime 必须支持持续 Agent population：
+
+```text
+Spawn / Despawn
 Membership Change
-Behavior Change
-Target Change
-Navigation / Flow Change
-Movement
-Local Interaction
-Combat
-Projectile
-Hit / Damage / Death
+Capability / Behavior Change
+Objective / Target Change
+Navigation / Resource Revision
+Movement / Interaction
+Combat / Projectile
+Hit / Death
 Correction
 Late Join
 Relevancy Enter / Exit
 Presentation
 ```
 
-敌方追逐、友方搬运、中立游荡、近战、远程、重型、小型等都只是同一套 Agent Runtime 上不同的 Capability、Behavior、Objective、Movement Profile 和业务配置。
-
-最终产品本体是 `MassCrowdSimulation` 及其可选插件模块；`MassAICrowdDemo` 只作为生产架构的验证宿主。
+敌人追逐、友方物流、中立游荡、近战、远程、不同体型，只是同一个 Runtime 上不同的 Capability / Behavior / Objective / Profile / Host Business 配置。
 
 ---
 
@@ -58,25 +59,24 @@ Presentation
 
 同一个模拟字段在任意时刻只能有一个 Production Owner。
 
-最终所有日常模拟状态由每 World 的 Persistent Worker Runtime 持有唯一权威。
+最终每 World 的 Persistent Worker Runtime 是日常模拟状态的唯一权威。
 
-Mass Fragment、Actor、Network Cache、ISM/VAT 和其他表现数据只能是已消费 Worker 结果的代理、缓存或适配状态，不能与 Worker 同时成为同一字段的模拟权威。
+Mass Fragment、Actor、Network Cache、ISM/VAT、Presentation Slot 等只能是代理、宿主业务状态或表现状态，不能与 Worker 同时推进同一模拟字段。
 
 ### 3.2 单向事实流
 
-GT / Network / Scene 到 Worker 只输入外部事实：
+外部 → Worker：
 
 ```text
 Spawn
 Despawn
-Gameplay Command
-Behavior Command
+Gameplay / Behavior Command
 Objective / Resource Revision
 Environment Revision
 Authority Correction
 ```
 
-Worker 到外部只输出：
+Worker → 外部：
 
 ```text
 Dirty State Patch
@@ -85,178 +85,140 @@ Checkpoint
 Digest / Diagnostic
 ```
 
-GT 不得把刚从 Worker 应用出来的 Position、Velocity、Facing、Combat 等代理状态在下一帧作为普通输入重新回灌 Worker。
+刚由 Worker Result Apply 写到 Mass 的 Position / Velocity / Facing 不得在下一帧作为普通输入 Echo 回 Worker。
 
-只有显式 Authority Correction 才允许覆盖 Worker 状态。
+### 3.3 Work-driven
 
-### 3.3 Work 驱动，而不是全量 Entity Tick
+正常推进单位是 Work，不是“每实体每帧 Tick”。
 
-Worker 的基本调度单位是 Work，不是“每实体每帧 Tick”。
+只有状态、依赖、资源、时间或邻域变化需要重新计算时才产生 Work。
 
-实体只有在状态、依赖、资源、时间或邻域变化要求重新计算时才产生 Work。
+### 3.4 Deterministic
 
-最终系统不以每帧完整遍历 10k Agent 作为正常推进模型。
+线程完成顺序不得决定结果。
 
-### 3.4 确定性优先
-
-并行 Task 的完成顺序不得决定模拟结果。
-
-所有跨 Shard、跨 Pair、跨 Event 的合并必须使用稳定 Key、稳定排序和唯一 Owner Merge。
+跨 Shard / Pair / Event 的 merge 必须使用稳定 Key、稳定排序和唯一 Owner。
 
 ### 3.5 Fail-Closed
 
-缺失、重复、stale lifecycle、错误 revision、错误 hash、容量溢出、非法双 Writer、事件丢失或依赖漏标不能通过静默降级继续运行。
+stale lifecycle、错误 revision/hash、容量溢出、非法双 writer、事件序列破坏、依赖漏标等不得静默降级为成功。
 
-不确定时拒绝整批结果，而不是制造部分提交。
+### 3.6 Demo 不保留第二套产品 Runtime
 
-### 3.6 Demo 不保留第二套生产架构
+Demo 可以保留：
 
-当插件生产路径替代 Demo 旧路径后，旧 Runtime、Barrier、Transaction、rollback 数据源、fallback、alias 和双写入口必须物理删除。
+```text
+Scenario
+固定测试窗口
+fault injection
+Golden
+metrics
+录像 / human review
+```
 
-Demo 可以保留测试 fixture、故障注入、Golden、Round 窗口和录像工具，但不能为了旧测试永久维护第二套产品 Runtime。
+但不能长期保留：
+
+```text
+第二套 Worker Runtime
+第二套 Commit Barrier
+第二套 Simulation Clock
+第二套生产 rollback source
+重复通用 Kernel
+永久 compatibility writer
+```
 
 ---
 
-## 4. 最终产品与模块边界
+## 4. 模块边界与依赖方向
 
-最终依赖方向如下：
+这里明确约定：
+
+> **`A → B` 表示 A depends on B。**
+
+当前 Build.cs 主干已经接近最终边界，最终架构不得为了方便把依赖反向拉回 Demo。
 
 ```text
-MassCrowdCore
-      ↓
-MassCrowdRuntime
-   ↙      ↓       ↘        ↘
-Spatial  Combat  Networking Presentation
-   ↓       ↓
-Projectiles
-      \
-       \→ StandardSources
+MassCrowdSpatial         → MassCrowdCore
+MassCrowdCombat          → MassCrowdCore
 
-Optional:
-MassCrowdStateTreeAdapter
+MassCrowdRuntime         → MassCrowdCore
+MassCrowdRuntime         → MassCrowdSpatial
 
-Host / Demo
-      ↓
-MassCrowdSimulation public APIs
+MassCrowdNetworking      → MassCrowdRuntime + MassCrowdCore
+MassCrowdPresentation    → MassCrowdRuntime + MassCrowdCore
+MassCrowdStandardSources → MassCrowdRuntime + MassCrowdCore
+
+MassCrowdProjectiles     → MassCrowdRuntime
+                         + MassCrowdSpatial
+                         + MassCrowdCombat
+                         + MassCrowdCore
+
+Host / Demo              → plugin public modules
 ```
 
-### 4.1 MassCrowdCore
+这个图是**依赖方向**，不是 Domain execution order。
+
+### MassCrowdCore
 
 负责：
 
 ```text
-稳定 POD
-Stable ID
-Behavior Source 基础数据
-Resolver
-排序
-量化
-Hash
+稳定 POD / ID
+排序 / 量化 / Hash
+Behavior Source 基础模型
 Shared Flow kernel
 Target Region kernel
 Local Predictive kernel
-Particle / Safety kernel
-Facing kernel
-其他纯算法
+Particle Safety kernel
+Facing / Guidance pure logic
 ```
 
-Core 不得依赖：
+不得依赖 UWorld / Actor / Mass EntityManager / Replication / Rendering / Demo Scenario。
 
-```text
-UWorld
-Actor
-Component
-FMassEntityManager
-Replication
-Rendering
-Round
-Scenario
-Demo 业务语义
-```
+### MassCrowdSpatial
 
-### 4.2 MassCrowdRuntime
+负责稳定空间索引、候选查询、Broadphase 和通用空间事实。
+
+### MassCrowdCombat
+
+负责 Impact / Hit / Combat fact 与纯 resolver 边界。
+
+项目 Damage/Armor/Loot/Inventory 等属于 Host。
+
+### MassCrowdRuntime
 
 负责：
 
 ```text
-Persistent Worker Runtime
-Entity State Store
-Resource Store
-WorkRing
-TimeWheel
-DependencyIndex
-Spatial Runtime integration
+Persistent Worker state owner
+WorkRing / TimeWheel / DependencyIndex
+Entity / Resource / Dirty stores
 Domain Registry
-Shard dispatch
+Task dispatch
 Deterministic Merge
-Dirty State
-Ordered Event
-Checkpoint
+Checkpoint / Digest 基础
 Result Apply Proxy
 Owner Commit Barrier
 Runtime metrics
 ```
 
-Runtime 只认识通用 POD、稳定 ID、Domain 和版本合同，不解释 Demo 的 Boss、虫子、T5、T8、物流、测试地图等语义。
+Runtime 不解释 Boss、虫子、T5、T8、物流地图等 Demo 语义。
 
-### 4.3 MassCrowdSpatial
+### MassCrowdProjectiles
 
-负责稳定空间索引、邻域候选、Broadphase 和通用空间安全查询。
+负责 entity-native projectile simulation、trajectory、broadphase/sweep、lifecycle、Impact/Hit fact，并通过 Worker Domain 接入 Runtime。
 
-空间系统不得通过具体职业、Faction 或测试场景决定碰撞规则。
+### MassCrowdNetworking
 
-### 4.4 MassCrowdCombat
+负责 snapshot/lifecycle/intent/correction/checkpoint/digest/resync/relevancy/late join。
 
-负责通用 Combat Fact / Resolver / Hit Fact 机制。
+### MassCrowdPresentation
 
-伤害公式、护甲、掉落、任务、库存等具体业务属于宿主。
+负责 StableEntityRef → instance slot、视觉生命周期、ISM/VAT/interpolation/visual state。
 
-### 4.5 MassCrowdProjectiles
+### MassCrowdStandardSources
 
-负责 entity-native Projectile simulation、生命周期、轨迹、Broadphase、Swept hit 和通用 Impact / Hit Fact。
-
-Projectile simulation 属于 Worker 模拟域；宿主只消费命中事实并执行自己的业务结算。
-
-不得重新建立逐 Projectile Actor 作为大规模生产路径。
-
-### 4.6 MassCrowdNetworking
-
-负责：
-
-```text
-Relevant Snapshot
-Lifecycle Delta
-Intent
-Correction
-Checkpoint transport
-Source / Behavior replication
-Ordered Event transport
-Digest
-Resync
-Late Join
-Relevancy
-```
-
-Networking 消费 Worker 的版本化事实，不反向成为模拟 Owner。
-
-### 4.7 MassCrowdPresentation
-
-负责：
-
-```text
-StableEntityRef → Instance Slot
-Spawn / Update / Despawn
-ISM / VAT
-Interpolation
-Visual State
-Cargo / Hit / Projectile visual facts
-```
-
-Presentation 永远不是 Simulation Authority。
-
-### 4.8 MassCrowdStandardSources
-
-提供可复用的通用 Behavior Source，例如：
+提供可复用 Behavior Source，例如：
 
 ```text
 MoveToLocation
@@ -265,66 +227,39 @@ FollowEntity
 PursueEntity
 FleeFromEntity
 MaintainDistance
-FaceMovement
-FaceEntity
+FaceMovement / FaceEntity
 MovementLock
 SpeedLimit
 TimedImpulse
 ```
 
-Standard Source 不负责选择敌人、决定攻击合法性、提交伤害或解释具体业务。
+### Host / Demo
 
-### 4.9 Host / Demo Business
-
-宿主负责：
+负责：
 
 ```text
-Faction / Relationship 业务解释
+Faction / Relationship 解释
 目标选择
 攻击合法性
-Damage / Health
-Inventory
-Warehouse
-Logistics
-Loot
-Mission
+Damage / Health / Inventory / Logistics
 资产映射
-Scenario
-验收与故障注入
+Scenario / Acceptance
 ```
 
-宿主通过插件公开接口提供事实和消费结果，不能复制插件算法实现。
+Host 通过 public API 提供外部事实、业务规则和结果消费，不复制插件算法。
 
 ---
 
 ## 5. 最终统一 Agent 模型
 
-一个 Agent 是真实业务实体，不是纯视觉粒子。
-
-稳定身份固定为：
+稳定身份：
 
 ```text
 StableEntityRef
-= ProviderId
-+ StableEntityId
-+ LifecycleSerial
+= ProviderId + StableEntityId + LifecycleSerial
 ```
 
-`LifecycleSerial` 必须拒绝槽位复用后过期的：
-
-```text
-Spawn
-Despawn
-Command
-Correction
-Hit
-Damage
-Cargo
-Behavior Source
-Projectile reference
-```
-
-统一 Agent Facts 至少分离以下概念：
+统一概念必须分离：
 
 ```text
 Faction / Relationship
@@ -338,30 +273,24 @@ Combat Facts
 Presentation Profile
 ```
 
-其中：
+含义：
 
-- Faction 表示关系、权限和过滤。
-- Capability 表示“能做什么”。
-- Behavior Source 表示“当前有哪些行为意图在贡献”。
-- Objective / Target 表示业务目标。
-- Cohort 表示可共享宏观计算的一组实体。
-- Physical Profile 决定半径、HardGap、SoftMargin、Mobility 等物理事实。
+- Faction：关系/权限/过滤。
+- Capability：能做什么。
+- Behavior Source：当前哪些意图在贡献。
+- Objective/Target：业务目标。
+- Cohort：哪些 Agent 可以共享宏观计算。
+- Physical Profile：Radius / HardGap / SoftMargin / Mobility 等。
 
-Faction 不得直接选择 Movement、Networking、Presentation 或 Safety 实现。
+Faction 不直接选择运动算法、网络实现或 Particle 优先级。
 
 ---
 
 ## 6. Persistent Full Worker Authority
 
-最终每个 World 拥有一个长期存在的：
+最终每 World 拥有一个长期存在的 Worker logical owner。
 
-```text
-FCrowdAsyncSimulationRuntime
-```
-
-它是模拟状态的逻辑 Owner。
-
-最终 Worker Authority 覆盖：
+它拥有：
 
 ```text
 Simulation Clock
@@ -377,66 +306,43 @@ Particle / Interaction
 Facing / Finalize
 ```
 
-目标主链：
+主数据流：
 
 ```text
 GT / Network / Scene
-      │
-      │ External Facts
+      │ external facts
       ▼
 Worker Input Sync
-      │
       ▼
-Persistent Worker Runtime
-      │
-      │ Dirty State / Event / Checkpoint
+Persistent Worker
+      │ dirty patch / event / checkpoint
       ▼
 Worker Result Apply
-      │
-   ┌──┼───────────────┐
-   ▼  ▼               ▼
- Mass Network     Presentation
- Proxy Adapter       Proxy
+      ├── Mass Proxy
+      ├── Network Adapter
+      └── Presentation Proxy
 ```
 
-最终正常模拟 Processor 只保留：
+最终正常 Simulation Mass Processor 只保留：
 
 ```text
 Worker Input Sync
 Worker Result Apply
 ```
 
-测试、表现或非模拟 Adapter 可以拥有独立 Processor，但不重新建立第二套模拟 DAG。
+视觉/Test Adapter 可有自己的 Processor，但不能重新形成第二套模拟 DAG。
 
 ---
 
-## 7. Worker 多实体处理模型
+## 7. Entity → Work → Shard → Task
 
-最终 Worker 使用四层概念：
+### Entity
 
-```text
-Entity
-  ↓
-Work
-  ↓
-Shard
-  ↓
-Task
-```
+持久模拟对象，用 StableEntityRef + Lifecycle 管理。
 
-这四层必须保持清晰，不能把“64 Entity Shard”误解为“每 64 个实体固定开一个线程”。
+### Work
 
-### 7.1 Entity
-
-Entity 是持久模拟对象。
-
-它保存在 Worker Entity State Store 中，通过 StableEntityRef 和 Lifecycle 管理。
-
-### 7.2 Work
-
-Work 表示某项需要重新执行的计算。
-
-支持至少：
+需要重新执行的计算：
 
 ```text
 Entity Work
@@ -446,183 +352,91 @@ Cohort Work
 Timer Work
 ```
 
-例如：
+### WorkRing
 
-```text
-Agent17 Movement 变化
-A/B Interaction 需要重算
-Target Cohort 3 失效
-Environment Resource revision 更新
-Projectile cooldown 到期
-```
+Current / Next Epoch，有界容量，同 WorkKey 稳定去重/合并。
 
-### 7.3 WorkRing
+### DependencyIndex
 
-WorkRing 使用 Current / Next Epoch 双队列。
+记录 Entity / Resource / Cohort 变化会唤醒哪些 Work。
 
-相同 WorkKey 在同一 Epoch 内稳定去重，合并 priority、reason 和 revision。
+### TimeWheel
 
-容量必须有界；不能无界增长。
+管理未来 Simulation Tick 的 cooldown / wakeup / projectile / recovery / timer。
 
-### 7.4 DependencyIndex
+### Shard
 
-DependencyIndex 记录：
+同 Domain Work 先 stable sort，再拆成有界 WorkItem batch。
 
-```text
-Entity dependency
-Resource dependency
-Cohort dependency
-```
+Shard 容量不能被解释成固定 Agent 数量。
 
-当某个事实改变时，只唤醒闭合依赖集合。
+### Task
 
-例如：
+短生命周期 UE Task。只读冻结 Context，只写 shard-local output。
 
-```text
-Target Cohort A changed
-        ↓
-only Target / Guidance work for Cohort A
-```
+### Deterministic Merge
 
-而不是重新运行整个世界。
-
-### 7.5 TimeWheel
-
-TimeWheel 管理未来 Simulation Tick 才需要运行的 Work：
-
-```text
-Cooldown
-Movement wakeup
-Projectile
-Recovery
-Sleep / Wake
-Timer
-```
-
-没有到期的工作不参与普通扫描。
-
-### 7.6 Shard
-
-同 Domain 的 Work 先按稳定 Key 排序，再拆成有界 Shard。
-
-Shard 的容量表达的是 WorkItems 数量，不保证一一等同于实体数量。
-
-一个 Pair Work 涉及两个实体；一个 Cohort / Resource Work 可能代表大量实体。
-
-### 7.7 Task
-
-Shard 通过短生命周期 `UE::Tasks` 并行执行。
-
-Task 只读取冻结 Context，只写自己的 Shard-local Output。
-
-Task 不得直接并发修改全局 Worker State。
-
-### 7.8 Deterministic Merge
-
-多个 Task 完成后，由唯一 Owner 按稳定规则合并：
-
-```text
-Domain Rank
-Shard Ordinal
-StableEntityRef
-Pair Key
-Field Key
-Event order
-```
-
-线程完成顺序不得影响结果。
-
-状态字段允许按版本规则 latest-wins；Gameplay Event 不得被状态合并吞掉。
+Owner 按稳定 Domain rank / Shard / Entity / Pair / Field / Event 顺序合并。
 
 ---
 
-## 8. 最终 Domain DAG
+## 8. 最终 Domain Execution Rank
 
-稳定 Domain ID 与执行 Rank 必须分离。
+稳定 Domain ID 与 execution rank 分离。
 
-最终主执行顺序为：
+Canonical execution order：
 
 ```text
 Lifecycle / Input
-        ↓
-Behavior
-        ↓
-Flow / Resource
-        ↓
-Target
-        ↓
-Combat / Reactive
-        ↓
-Movement Planning
-        ↓
-Movement
-        ↓
-Particle / Interaction
-        ↓
-Facing / Finalize
-        ↓
-Publish
+→ Behavior
+→ Flow / Resource
+→ Target
+→ Combat / Reactive
+→ Movement Planning
+→ Movement
+→ Particle / Interaction
+→ Facing / Finalize
+→ Publish
 ```
 
-Domain Executor 是无 UObject 的纯 C++ 执行器。
+这里表示 Runtime stage ordering，不要求每个相邻节点都在 `GetDependencies()` 中形成一条直接 edge。
 
-一个 Epoch 内使用冻结的 Entity / Resource 版本。
+Executor 的显式 dependency 是 prerequisite contract；stage scheduler 的全局顺序由 execution rank 决定。
 
-达到传播轮数上限的 Work 延迟到 Next Epoch，并记录诊断；禁止递归自旋。
+一个 Epoch 达到传播轮数上限时，剩余 Work 延迟到 Next Epoch并记录诊断，不无限递归自旋。
 
 ---
 
-## 9. Behavior 与 Capability 最终模型
+## 9. Behavior / Capability
 
-最终不建立一个单一：
+最终不使用一个互斥 `ActiveBehavior` 承载所有语义。
 
-```text
-ActiveBehavior = Attack
-```
-
-作为所有行为的权威中心。
-
-一个实体允许同时存在多个 Behavior Source，例如：
+同一实体可同时有：
 
 ```text
-PursueTarget
-+ FaceTarget
+PursueEntity
 + MaintainDistance
-+ AvoidDanger
-+ HitReaction
++ FaceEntity
++ MovementLock
++ HitReaction / TimedImpulse
 ```
 
-Source 通过不同 Channel 贡献：
+Source 通过通用 Channel 贡献并由 Resolver 合并。
 
-```text
-Movement
-Facing
-Constraint
-Interaction
-Business
-Presentation
-```
+高层“为什么做”属于 Host Planner；通用 Source 只表达“怎么移动/朝向/约束”。
 
-最终由 Resolver 按稳定规则合并。
-
-Recipe、Controller 或 StateTree 负责维护期望 Source Set，产生 Start / Update / Stop Command；它们不直接拥有 Movement 或 Safety 权威。
-
-临时高优先级 Source 结束后，原持久 Source 和持久状态必须能够恢复，而不是 Stop-All / Start-All。
+临时高优先级 Source 到期后，持久任务实例和状态应精确恢复，不通过 Stop-All/Start-All 重建。
 
 ---
 
-## 10. 最终运动与群体导航分层
-
-整个运动链最终固定为：
+## 10. 最终群体移动分层
 
 ```text
 Behavior / Objective
         ↓
 Macro Guidance
-        │
-        ├── Shared Flow
-        ├── Target Region Transport
-        └── Other reusable guidance
+   ├── Shared Flow
+   └── Target Region Transport（可选）
         ↓
 Preferred Movement
         ↓
@@ -630,556 +444,285 @@ Local Predictive Interaction
         ↓
 Movement Predict
         ↓
-Particle / Obstacle / Bounds Safety
-        ↓
-Quantize
+Particle / Environment Safety
         ↓
 Facing / Finalize
 ```
 
-这些层不是互斥算法，而是解决不同尺度的问题。
+### Shared Flow
 
-### 10.1 Shared Flow
+解决世界空间大尺度通行和绕障。
 
-负责地图级宏观导航：
+### Target Region Transport
 
-```text
-从当前位置
-绕过环境障碍
-到达目标附近或下一宏观区域
-```
+解决接近目标后的目标相对宏观分布。
 
-大量同 Cohort Agent 应共享 Flow / Navigation facts，而不是每个 Agent 独立做完整路线规划。
+### Local Predictive
 
-### 10.2 Local Predictive Interaction
+解决短时间尺度局部速度冲突和公平让行。
 
-负责短时间尺度的局部可执行速度选择。
+### Particle
 
-它根据当前位置、速度、半径、邻居、Preferred 和环境判断短期轨迹冲突。
+最终保证 Hard / Swept / Obstacle / Bounds / Environment Safety。
 
-它不认识 T3、T5、Boss、窄口测试等场景语义。
-
-### 10.3 Particle Safety
-
-负责最后不可放宽的安全边界：
-
-```text
-Pair Hard Distance
-Swept Safety
-Obstacle
-Bounds
-Environment Hard Safety
-```
-
-Particle 不负责选择业务目标，也不负责宏观导航。
+这四层不能互相吞并职责。
 
 ---
 
-## 11. Target Region：目标附近的极坐标 Transport / Flow Field
+## 11. Target-relative Polar Transport Field
 
-Target Region Transport 是可选 Macro Guidance Provider。
+Target Region 是可选 Macro Guidance，不是统一导航层。
 
-它只在业务需要“大量实体围绕某个目标进行区域分布”时启用，不是普通移动、自由游荡或窄口通行的必经层。
-
-它的本质是：
-
-> 以目标为原点建立 Target-relative Polar Transport Field，用来引导大量实体在接近目标后从不同方向进入、流动、分散并形成合理人口分布。
-
-目标附近空间按：
+以目标为原点建立：
 
 ```text
-Radial Band
-+
-Angular Sector
+Radial Band × Angular Sector
+→ Polar Navigation Cells
 ```
 
-形成 Polar Navigation Cells。
-
-另外维护固定 Demand Regions，用于统计：
+维护：
 
 ```text
 Current Population
 Desired Population
-Deficit
-Surplus
-```
-
-Transport Solver 在可行 Cell Graph 上产生：
-
-```text
-Cell → Cell Flow
+Deficit / Surplus
+Transport Plan
 Edge Quota
-Plan Epoch
+Guidance
 ```
 
-最终 Guidance 将宏观运输意图转换成 Preferred Movement。
+设计原则：
 
-Target Region 不是永久 Slot 系统：
-
-```text
-没有 per-agent 永久站位
-没有 Region owner
-没有“一 Cell 只能站一个实体”
-```
-
-Navigation Cell 是共享空间区域，Cell Anchor 只是方向参考。
-
-完整链路：
-
-```text
-远离目标
-   ↓
-Shared Flow
-   ↓
-接近目标
-   ↓
-Target-relative Polar Transport Field
-   ↓
-Preferred Movement
-   ↓
-Local Predictive
-   ↓
-Particle Safety
-```
-
-不同攻击距离只决定各自合法 Target Distance Band / Terminal Region，不应该产生另一套碰撞或安全算法。
+- 无永久 Agent Slot；
+- Navigation Cell 可共享；
+- anchor 是引导参考，不是精确站位；
+- Cohort 来源于共享 Objective/NavigationLayer/MovementProfile/Capability/macro policy，不等于 Faction；
+- Local Predictive / Particle 始终拥有局部可执行性和安全最终裁决。
 
 ---
 
-## 12. Interaction 与 Particle 并行模型
+## 12. Particle 最终并行方向
 
-强交互 Domain 不能简单按连续 Entity ID 硬切 Shard。
+当前多岛分解与最终目标要区分。
 
-如果两个实体之间存在约束，它们必须在同一闭合交互语义中求解。
-
-首先通过 Spatial / Pair 关系建立 Interaction Graph，再形成闭合 Interaction Island。
-
-例如：
+终态应支持：
 
 ```text
-A-B-C-D       E-F       G-H-I
+Independent Interaction Islands
+        ↓
+可独立调度 / 并行
+
+Large Single Island
+        ↓
+Stable Spatial Cells
+        ↓
+Stable Cell-Pair Ownership
+        ↓
+Per-round work
+        ↓
+Deterministic barrier merge
+        ↓
+Global exact validation
 ```
 
-可以作为三个互不影响的 Island 并行处理。
-
-如果数千实体形成一个巨大连通 Island，则继续通过稳定 Cell / Cell-Pair ownership 和 round barrier 进行内部并行，而不能无视跨 Shard pair。
-
-最终每个并行阶段完成后必须进行稳定 Merge，并由全局 Applied-State Safety Validation 守门。
-
-最终目标不允许“大 Island 时自动退回整世界单线程 Solver”成为常态生产路径；monolithic fallback 只能用于诊断或保守失败路径。
+任何并行方案都不能以跨 Shard pair 漏约束为代价。
 
 ---
 
-## 13. Combat 与 Projectile 边界
+## 13. Combat / Projectile
 
-Combat 分为机制层和宿主业务层。
-
-插件机制层负责：
+最终：
 
 ```text
-Target / Hit reference
-Attack / Projectile simulation facts
-Spatial candidate
-Swept hit
-ImpactFact
-HitFact
-Reactive facts
-Stable event ordering
+Host Attack Intent
+→ Worker Combat/Projectile
+→ trajectory / broadphase / sweep
+→ ImpactFact
+→ HitFact
+→ Host business rule
+→ Worker Combat/Reactive state + Ordered Event
+→ Network / Presentation
 ```
 
-宿主业务层负责：
+大规模 gameplay projectile 不以逐 Actor 作为主路径。
 
-```text
-是否允许攻击
-伤害公式
-护甲
-Health
-Loot
-Inventory
-Mission
-具体业务状态
-```
+Worker-side Host extension 必须是纯 C++/POD，不访问 UWorld/Mass Fragment/UObject 隐式状态。
 
-Projectile simulation 必须保持 entity-native 和批量化。
-
-大规模远程单位不得退化成一 Projectile 一个 Actor 的主生产路径。
-
-命中后只输出通用 Hit / Impact Fact，宿主不重新执行 projectile trajectory 或碰撞查询。
+Damage formula、armor、loot、mission 等仍属于产品 Host。
 
 ---
 
-## 14. Result Apply 与最终原子提交
+## 14. Result Apply 终态
 
-Worker 不能直接写 Mass、Actor、Presentation 或 Networking UObject。
-
-Worker 输出 Prepared / Published Result 后，由 GT Result Apply 负责最终投影。
-
-最终提交协议：
+所有 fallible validation 在首次外部写入前完成。
 
 ```text
-Prepare immutable candidate
-        ↓
-Build Commit Token
-        ↓
-Runtime Final Validate
-        ↓
-Host Final Validate
-        ↓
---------- first write boundary ---------
-        ↓
-Host State Apply NoFail
-        ↓
-Proxy Commit NoFail
-        ↓
-Ordered Event / Behavior / Target / Resource
-Presentation / Network Side Effects NoFail
-        ↓
-ACK
+Prepared Result
+→ Runtime Commit Token Validate
+→ Proxy Validate
+→ Host FinalValidate
+──────── no-fail boundary ────────
+→ Host/Mass Apply
+→ Proxy Commit
+→ Host Side Effects
+→ Network / Presentation publish
+→ ACK
 ```
 
-所有正常可能失败的检查必须发生在第一次写入之前。
+禁止把“写一半后 rollback”当正常原子提交方案。
 
-禁止：
-
-```text
-先写 Mass
-→ 后面验证失败
-→ 再依靠 rollback 补偿
-```
-
-来伪装原子提交。
-
-Runtime Commit Barrier 只拥有通用 Generation / Sequence / Stable View 合同；Host-specific Target、Business、Mass Handle、Lifecycle、Revision 等通过 Host Prepared Plan 接入。
-
-Runtime 不引用 Demo 类型。
+Demo 不保留第二套 Barrier / Transaction。
 
 ---
 
-## 15. 最终网络模型
+## 15. Networking 终态
 
-生产网络同步的是模拟事实，不是简单高频广播全部 Transform。
+网络同步的是版本化模拟事实，不是默认高频复制全部 Transform。
 
-主结构：
+主要合同：
 
 ```text
-Server Worker Authority
-        ↓
-Relevant Set
-        ↓
-Checkpoint / Intent / Event / Digest
-        ↓
-Client Worker
-        ↓
-Local Prediction
-        ↓
-Sparse Correction / Resync
-        ↓
-Presentation
+Lifecycle
+Relevant Snapshot
+Intent
+Correction
+Checkpoint
+Ordered Event
+Digest
+Resync
+Late Join
 ```
 
-### 15.1 Late Join
-
-固定顺序：
+Late Join 顺序：
 
 ```text
 Checkpoint
 → Resource Revisions
 → Event Baseline
-→ Subsequent Delta
+→ later Delta
 ```
 
-Baseline 未完成前拒绝增量。
-
-### 15.2 Relevancy
-
-客户端只维护自己的 Relevant Set。
-
-Relevancy enter / exit 不等于 Server Spawn / Despawn。
-
-客户端表现退出不能反向决定 Server Entity 生命周期。
-
-### 15.3 Correction
-
-普通 Correction 是显式权威事实，并增加 CorrectionRevision。
-
-只有全量 Resnapshot、World 切换、teardown 等真正身份失效事件才需要新的 Generation。
-
-### 15.4 Behavior 网络
-
-Source replication 必须保留稳定 Registry / Schema / SourceSet / Command 序列和 Hash。
-
-Predictable Source 要求客户端与服务端 Registry 兼容。
-
-StateTree 本身不复制，只复制其产生的稳定 Source / Command / Result facts。
+Correction 增加 CorrectionRevision；真正 Full Resnapshot / world switch / teardown 才改变 Generation。
 
 ---
 
-## 16. Presentation 最终边界
+## 16. Presentation 终态
 
-Presentation 只负责“怎么显示”，不负责“世界真实发生了什么”。
-
-输入来自已提交模拟事实：
+Presentation 独立拥有：
 
 ```text
-Transform
-Visual State
-Animation / VAT State
-Hit Reaction
-Cargo
-Projectile Visual Fact
-Spawn / Despawn Visual Fact
+StableEntityRef → Slot
+Visual Profile
+ISM / VAT
+Interpolation
+Spawn / Update / Despawn
 ```
 
-表现层允许插值、LOD、ISM/VAT、实例复用和视觉缓存，但这些变化不能反向改变 Worker simulation。
+Simulation 只发布已解析的表现事实。
 
-客户端不得通过隐藏 Agent、视觉偏移或假位置来伪造模拟通过。
+客户端不能通过隐藏实体、视觉偏移或修改碰撞 footprint 伪装模拟正确性。
 
 ---
 
-## 17. 持续生命周期与 Cohort
+## 17. Demo 最终职责
 
-最终生产世界不依赖 Round Reset。
-
-必须支持：
+Demo 保留：
 
 ```text
-Continuous Spawn / Despawn
-Death removal
-Lifecycle slot reuse
-Membership migration
-Capability change
-Objective change
-Cohort change
-Late Join
-Relevancy enter / exit
-```
-
-Cohort 是共享宏观计算的分组，不等于 Faction。
-
-Cohort 可以由这些稳定事实组成：
-
-```text
-ObjectiveKey
-NavigationLayer
-MovementProfile
-CapabilityProfile
-MacroStrategy
-EnvironmentRevision
-```
-
-变化只失效相关 Cohort，不应无条件重建所有 Agent 的宏观 Guidance。
-
----
-
-## 18. Demo 最终角色
-
-`MassAICrowdDemo` 最终是 Production Architecture Verification Host。
-
-它保留：
-
-```text
-T1-T8 场景
+T1–T8 / 后续 Scenario
 测试地图
-固定 Round 验收窗口
-Scenario input
-readiness
-Golden Hash
-fixture
+固定 acceptance window
+readiness / hash / fixture
 fault injection
-VIOLATION
-performance logging
-录像
-FFmpeg
-人工审片
-Demo-specific Business Adapter
+performance metrics
+录像 / human review
+Demo-specific business adapter
 ```
 
-它不保留：
+Demo 不保留：
 
 ```text
-第二套 Runtime
-第二套 Target / Particle / Flow kernel
-第二套 Networking
-第二套 Presentation lifecycle
-Demo-local 通用 Commit Barrier
-旧 Round Transaction 生产路径
-插件算法 fallback
+产品第二 Runtime
+产品第二 Commit Barrier
+产品第二 rollback owner
+重复 generic kernel
+Round-specific production replication API
 ```
 
-Demo 必须直接验证与真实产品相同的 Runtime、Networking、Presentation 和 Worker path。
+Round 是测试工具，不是最终产品生命周期模型。
 
 ---
 
-## 19. 最终规模目标
+## 18. 10k 最终验收定义
 
-第一阶段产品规模目标为：
+“能 Spawn 10000 个实体”不算完成。
 
-```text
-1k
-2k
-5k
-10k
-```
-
-10k 验收不是只证明容器可以装下 10k Entity，也不是只跑一个 WorkRing 微基准。
-
-最终 10k 场景必须让同一生产路径同时覆盖：
+完整规模路径必须覆盖：
 
 ```text
-Lifecycle
 Behavior
-Flow
+Flow / Resource
 Target
+Combat / Projectile
 Movement
 Local Predictive
 Particle
-Combat
-Projectile
+Facing
 Networking
 Presentation
+Lifecycle / Late Join / Correction
 ```
 
-并覆盖至少：
+规模梯度：
 
 ```text
-开放移动
-目标围攻 / Target Region
-高密度 Interaction
-异构 Capability
-持续 Spawn / Despawn
-Server / Client
-Late Join
-Correction / Digest
+1k → 2k → 5k → 10k
+```
+
+终态性能门包括：
+
+```text
+Worker simulation lag p95 ≤ 66.667 ms
+Client frame p95         ≤ 33.333 ms
+Visual p95               ≤ 16.667 ms
+Realtime                 ≥ 0.95
+Propagation limit hit    = 0
+Ordered Event loss       = 0
+GT Result Apply p95      不相对同规模 baseline 回退
+```
+
+还必须满足：
+
+```text
+determinism
+server/client consistency
+lifecycle correctness
+no duplicate gameplay event
+hard safety
+late join correctness
+correction convergence
 ```
 
 ---
 
-## 20. 最终性能与正确性门
+## 19. 最终结构完成定义
 
-最终性能门至少要求：
-
-```text
-Worker simulation lag p95 <= 66.667 ms
-Client frame p95 <= 33.333 ms
-Visual p95 <= 16.667 ms
-Realtime >= 0.95
-Propagation limit hit = 0
-Ordered Event loss = 0
-GT Result Apply 不相对同规模基线明显回退
-```
-
-同时必须满足：
+结构上只有以下条件同时满足，才算 Full Worker Authority 收口：
 
 ```text
-No stale lifecycle apply
-No field double writer
-No silent queue drop
-No invalid hash acceptance
-No partial commit on failure
-No hidden visual workaround
-Deterministic replay / hash contract holds
+旧 four-node / Round Boundary production path = 0
+Frame/Round Transaction production authority  = 0
+普通帧 full Mass Gather                        = 0
+blocking Wait / CallExecute simulation path    = 0
+同字段 dual writer                             = 0
+Demo generic duplicate production kernel       = 0
+核心 simulation processors                     = InputSync + ResultApply
 ```
 
-算法专项、真实地图、网络、视觉和人工审片必须分别证明，不能用一个综合场景替代所有归因测试。
+这也是为什么当前 WA8 legacy cleanup 不能只看“测试已经通过”。
 
 ---
 
-## 21. 最终结构关闭门
+## 20. 最终一句话
 
-当项目达到目标架构时，以下生产结构必须为 0：
-
-```text
-旧四节点 Boundary 架构
-Frame Transaction
-Demo-local Round Transaction
-生产完整 Mass Gather 作为普通模拟输入
-Boundary Request / Result / Commit 主模拟链
-阻塞 Wait / WaitAndDrain / Future.Get
-同字段 GT + Worker 双 Writer
-Demo 内通用算法副本
-Demo-local 通用 Commit Barrier
-普通帧完整 rollback CPU 世界副本
-```
-
-正常模拟 Processor 应收敛为：
-
-```text
-Worker Input Sync
-Worker Result Apply
-```
-
-其他 Processor 只能属于表现、测试或明确非模拟 Adapter。
-
----
-
-## 22. 最终代码阅读和依赖方向
-
-最终代码理解顺序应是：
-
-```text
-TargetArchitecture.md
-        ↓
-CurrentArchitecture.md
-        ↓
-MassCrowdCore
-        ↓
-MassCrowdRuntime / WorkerRuntimeV2
-        ↓
-Worker Domains
-        ↓
-Networking / Presentation / Combat / Projectiles
-        ↓
-Host Adapter
-        ↓
-Demo scenarios and tests
-```
-
-开发依赖方向始终保持：
-
-```text
-Host / Demo
-    ↓
-Plugin Public API
-    ↓
-Runtime
-    ↓
-Core / Pure Kernels
-```
-
-任何插件反向依赖 Demo、Scenario、测试地图、端口、Round 类型或 Saved 路径都属于架构错误。
-
----
-
-## 23. 文档权责关系
-
-最终文档事实源关系固定为：
-
-```text
-README.md
-    项目入口
-
-CurrentArchitecture.md
-    当前 main 实际结构
-
-TargetArchitecture.md
-    最终已经决定的架构
-
-PhasePlan.md
-    Current → Target 的实施顺序
-
-FeatureChecklist.md
-    能力是否已经完成
-
-TestScenarioMatrix.md
-    完成结论的测试证据
-```
-
-详细专项继续由 Design / Reference 文档承载，但不得覆盖上述六份核心事实源的职责。
-
----
-
-## 24. 一句话定义
-
-MASSAITEST 最终要验证并交付的是：
-
-> 一套基于 Unreal Mass 的、可复用的、确定性的、持续运行的大规模 Agent Simulation Runtime；每 World 由 Persistent Worker 统一拥有 Lifecycle、Behavior、Target、Combat、Movement、Interaction 等模拟权威，通过 Work-driven 增量调度、Shard 并行和确定性 Merge 推进状态，再将版本化结果原子投影到 Mass、Network 和 Presentation；目标附近的群体分布通过 Target-relative Polar Transport Field 等共享宏观 Guidance 完成，而不是让每个 Agent 独立重复完整导航和决策。
+> **MassCrowdSimulation 的最终形态是一套 Work-driven、deterministic、Persistent Full Worker Authority 的大规模 Agent Simulation Runtime：Host 提供外部事实和业务规则，Worker 持有模拟权威，Mass/Network/Presentation 只做集成和结果消费；Demo 只负责验证这套生产架构。**
