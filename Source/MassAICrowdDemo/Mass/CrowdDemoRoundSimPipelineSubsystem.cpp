@@ -4003,7 +4003,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   }
 
   const uint64 SnapshotHash = BoundarySnapshot.StableHash;
-  const auto AddHashTask = [this, SnapshotHash](
+  const auto AddHashTask = [&BootstrapGraph, SnapshotHash](
     const FCrowdBootstrapTaskKey Key,
     const TConstArrayView<FCrowdBootstrapTaskKey> Prerequisites)
   {
