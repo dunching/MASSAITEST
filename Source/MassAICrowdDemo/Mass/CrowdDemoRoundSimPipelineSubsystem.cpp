@@ -2204,6 +2204,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   ActivePlan = Packet;
   bPlanActive = true;
   bStepInProgress = false;
+  bCurrentStepFullWorkerProductionFastPath = false;
+  CurrentStepFullWorkerInputSequence = 0;
   BoundarySnapshot = {};
   WorkerProxySnapshotBaselineHash = 0;
   BoundaryFormationFacts.Reset();
@@ -2326,7 +2328,6 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   LastCompareMetrics.CorrectionIntervalPositionErrorCmMax = -1.0f;
   if (IsFlowScenario(Packet.Rules.Scenario))
   {
-    SoftPressureRollbackHistory.Reset();
     SoftPressureRollbackSnapshotHitCount = 0;
     SoftPressureRollbackSnapshotMissCount = 0;
     SoftPressureRollbackAgentMismatchCount = 0;
@@ -4146,6 +4147,171 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       GetCurrentPlanRevision(),
       WorkerV2TargetObjectivePublishCount,
       WorkerV2TargetObjectiveReuseCount);
+  }
+  return true;
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::
+  CanUseFullWorkerProductionFastPath() const
+{
+  if (!IsFullWorkerProductionMode()
+    || !bPlanActive || !bStepInProgress
+    || bCurrentStepFullWorkerProductionFastPath
+    || CurrentStepFullWorkerInputSequence != 0
+    || !IsBoundarySnapshotCurrent() || !GetWorld()
+    || GetWorld()->GetNetMode() == NM_Client)
+    return false;
+
+  const UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>();
+  if (!RuntimeSubsystem)
+    return false;
+  const FCrowdWorkerBoundaryShadowSync& WorkerShadow =
+    RuntimeSubsystem->GetWorkerShadowSync();
+  if (!WorkerShadow.IsStarted()
+    || WorkerShadow.GetMetrics().FullResnapshotCount == 0
+    || LastWorkerV2MovementControlGeneration
+      != WorkerShadow.GetGeneration()
+    || LastWorkerV2MovementControlPlanRevision
+      != GetCurrentPlanRevision()
+    || RuntimeSubsystem->GetWorkerMovementAuthority().GetMode()
+      != ECrowdWorkerMovementAuthorityMode::Production
+    || RuntimeSubsystem->GetWorkerBehaviorAuthority().GetMode()
+      != ECrowdWorkerBehaviorAuthorityMode::Production)
+    return false;
+
+  const bool bTargetActive = IsTargetRegionExecutionActive();
+  const bool bProjectileActive =
+    ActivePlan.Rules.Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && ActivePlan.Rules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
+    && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
+  return (!bTargetActive || bWorkerV2TargetStateBootstrapped)
+    && (!bProjectileActive || bWorkerV2ProjectileStateBootstrapped);
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::
+  TrySubmitFullWorkerProductionIntent()
+{
+  check(IsInGameThread());
+  if (!CanUseFullWorkerProductionFastPath())
+    return false;
+
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+    GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>();
+  if (!RuntimeSubsystem)
+    return false;
+  const FCrowdWorkerBoundaryShadowSync& WorkerShadow =
+    RuntimeSubsystem->GetWorkerShadowSync();
+  const bool bTargetActive = IsTargetRegionExecutionActive();
+  const bool bProjectileActive =
+    ActivePlan.Rules.Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && ActivePlan.Rules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
+    && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
+
+  TArray<FCrowdWorkerObjectiveRevisionDelta> TargetObjectives;
+  const uint64 TargetObjectiveSemanticHash = bTargetActive
+    ? CalculateTargetObjectiveSemanticHash(GetTargetFact()) : 0;
+  const bool bPublishTargetObjective = bTargetActive
+    && TargetObjectiveSemanticHash
+      != LastWorkerV2TargetObjectiveSemanticHash;
+  if (bPublishTargetObjective)
+  {
+    FCrowdWorkerObjectiveRevisionDelta& Objective =
+      TargetObjectives.AddDefaulted_GetRef();
+    if (!BuildTargetObjectiveRevisionDelta(
+        GetTargetFact(), GetCurrentFixedStepIndex(),
+        NextWorkerV2TargetObjectiveRevision, Objective))
+      return false;
+  }
+
+  const uint64 PreviousInputSequence =
+    WorkerShadow.GetMetrics().LastSubmittedInputSequence;
+  CurrentBoundaryRequestStartSeconds = FPlatformTime::Seconds();
+  if (!FCrowdDemoWorkerInputSync::SubmitIntentBatch(
+      *GetWorld(), GetCurrentFixedStepIndex(),
+      GetCurrentPlanRevision(),
+      GetCurrentStepEndServerTimeSeconds(), {}, {}, {}, {}, nullptr,
+      TargetObjectives))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFullWorkerProductionIntentRejected step=%d previous_sequence=%llu"),
+      GetCurrentFixedStepIndex(), PreviousInputSequence);
+    return false;
+  }
+  const uint64 AcceptedInputSequence =
+    RuntimeSubsystem->GetWorkerShadowSync().GetMetrics().
+      LastSubmittedInputSequence;
+  if (AcceptedInputSequence == 0
+    || AcceptedInputSequence <= PreviousInputSequence)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFullWorkerProductionIntentSequence step=%d previous_sequence=%llu accepted_sequence=%llu"),
+      GetCurrentFixedStepIndex(), PreviousInputSequence,
+      AcceptedInputSequence);
+    return false;
+  }
+
+  CurrentStepFullWorkerInputSequence = AcceptedInputSequence;
+  bCurrentStepFullWorkerProductionFastPath = true;
+  ++WorkerV2MovementControlReuseCount;
+  if (bTargetActive)
+  {
+    ++WorkerV2TargetControlReuseCount;
+    if (bPublishTargetObjective)
+    {
+      LastWorkerV2TargetObjectiveSemanticHash =
+        TargetObjectiveSemanticHash;
+      ++WorkerV2TargetObjectivePublishCount;
+      ++NextWorkerV2TargetObjectiveRevision;
+      if (NextWorkerV2TargetObjectiveRevision == 0)
+        return false;
+    }
+    else
+    {
+      ++WorkerV2TargetObjectiveReuseCount;
+    }
+  }
+  if (bProjectileActive)
+    ++WorkerV2ProjectileControlReuseCount;
+  ++WorkerV2EarlyClockIntentCount;
+  if (WorkerV2EarlyClockIntentCount == 1
+    || WorkerV2EarlyClockIntentCount % 300 == 0)
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoFullWorkerProductionFastPathCheckpoint submitted=%llu input_sequence=%llu simulation_tick=%d generation=%llu plan_revision=%d objective_published=%llu objective_reused=%llu source=PersistentRuntimeAuthority"),
+      WorkerV2EarlyClockIntentCount, AcceptedInputSequence,
+      GetCurrentFixedStepIndex(), WorkerShadow.GetGeneration(),
+      GetCurrentPlanRevision(), WorkerV2TargetObjectivePublishCount,
+      WorkerV2TargetObjectiveReuseCount);
+  }
+  return true;
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::
+  MarkFullWorkerProductionResultCommitted(
+    const double CommitMilliseconds)
+{
+  check(IsInGameThread());
+  if (!bStepInProgress
+    || !bCurrentStepFullWorkerProductionFastPath
+    || CurrentStepFullWorkerInputSequence == 0
+    || !bCurrentStepWorkerDirtyMassApplied
+    || CurrentStepMassAccessCounts.CommitWriteCount != 1)
+    return false;
+  ++FullWorkerProductionFastPathStepCount;
+  if (FullWorkerProductionFastPathStepCount == 1
+    || FullWorkerProductionFastPathStepCount % 300 == 0)
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoFullWorkerProductionCommitCheckpoint count=%llu step=%d input_sequence=%llu publish_sequence=%llu dirty_entities=%d commit_ms=%.3f source=WorkerResultApply"),
+      FullWorkerProductionFastPathStepCount,
+      GetCurrentFixedStepIndex(), CurrentStepFullWorkerInputSequence,
+      CurrentStepWorkerDirtyMassPublishSequence,
+      CurrentStepWorkerDirtyMassEntityCount, CommitMilliseconds);
   }
   return true;
 }
@@ -7512,391 +7678,6 @@ int32 UCrowdDemoRoundSimPipelineSubsystem::GetCurrentFixedStepIndex() const
       - ActivePlan.StartServerTimeSeconds)
     / CurrentFixedStepSeconds));
 }
-void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
-  const int32 FixedStepIndex,
-  TArray<FCrowdDemoSoftPressureRollbackAgentState>&& Agents)
-{
-  if (!IsActive() || !IsFlowScenario(GetRules().Scenario))
-    return;
-  Agents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
-  FCrowdDemoSoftPressureRollbackSnapshot& Snapshot =
-    SoftPressureRollbackHistory.FindOrAdd(FixedStepIndex);
-  Snapshot.FixedStepIndex = FixedStepIndex;
-  Snapshot.bMovementFactsComplete = false;
-  Snapshot.bCombatFactsComplete = false;
-  Snapshot.bSnapshotReadyForReplay = false;
-  Snapshot.Agents = MoveTemp(Agents);
-  bool bAgentSetValid = Snapshot.Agents.Num() == BoundarySnapshot.Agents.Num();
-  if (!bAgentSetValid)
-  {
-    Snapshot.bMovementFactsComplete = false;
-    return;
-  }
-  for (int32 Index = 0; Index < Snapshot.Agents.Num(); ++Index)
-  {
-    bAgentSetValid &= Snapshot.Agents[Index].AgentId != INDEX_NONE
-      && Snapshot.Agents[Index].AgentId
-        == BoundarySnapshot.Agents[Index].Identity.AgentId
-      && (Index == 0
-        || Snapshot.Agents[Index - 1].AgentId < Snapshot.Agents[Index].AgentId);
-  }
-  Snapshot.bMovementFactsComplete = bAgentSetValid;
-  Snapshot.LocalPredictiveResults = PreparedLocalPredictiveResults;
-  Snapshot.LocalPredictiveGrantStates = LocalPredictiveGrantStates;
-  Snapshot.LocalPredictiveSummary = LastLocalPredictiveSummary;
-  Snapshot.LocalPredictiveRoundHash = LocalPredictiveRoundHash;
-  Snapshot.LocalPredictiveSampleCount = LocalPredictiveSampleCount;
-  Snapshot.LocalPredictiveInvalidStepCount = LocalPredictiveInvalidStepCount;
-  Snapshot.GuidanceCandidateRoundHash = GuidanceCandidateRoundHash;
-  Snapshot.GuidanceComposeRoundHash = GuidanceComposeRoundHash;
-  Snapshot.GuidanceComposeSampleCount = GuidanceComposeSampleCount;
-  Snapshot.ParticleCandidateSummary = LastParticleCandidateSummary;
-  Snapshot.ParticleAppliedSummary = LastParticleAppliedSummary;
-  Snapshot.ParticleSolverMsSampleCount = ParticleSolverMillisecondsSamples.Num();
-  Snapshot.ParticleCandidateStateHash = ParticleCandidateStateHash;
-  Snapshot.ParticleAppliedStateHash = ParticleAppliedStateHash;
-  Snapshot.ParticleInvalidStepCount = ParticleInvalidStepCount;
-  Snapshot.ParticleGlobalFallbackStepCount = ParticleGlobalFallbackStepCount;
-  Snapshot.ParticleStepCount = ParticleStepCount;
-  Snapshot.CrossProfileHardViolationCount = CrossProfileHardViolationCount;
-  Snapshot.CrossProfileSweptViolationCount = CrossProfileSweptViolationCount;
-  Snapshot.ParticleSettlingWindowCount = ParticleSettlingWindowCount;
-  Snapshot.ParticleSettlingSteps = ParticleSettlingSteps;
-  Snapshot.ParticlePreviousSoftErrorP95 = ParticlePreviousSoftErrorP95;
-  Snapshot.bParticleConstraintRunFailure = bParticleConstraintRunFailure;
-  Snapshot.ParticleFailureFixture = ParticleFailureFixture;
-  Snapshot.OpenSpawnRelaxationRuntime = OpenSpawnRelaxationRuntime;
-  Snapshot.OpenCohortMovementProgress = OpenCohortMovementProgress;
-  Snapshot.BidirectionalSwapProgress = BidirectionalSwapProgress;
-  Snapshot.ValidCorridorTransitProgress = ValidCorridorTransitProgress;
-  Snapshot.TargetFact = TargetFact;
-  Snapshot.DynamicFlowAnchorCellKey = DynamicFlowAnchorCellKey;
-  Snapshot.DynamicFlowIntegrationRebuildCount = DynamicFlowIntegrationRebuildCount;
-  Snapshot.DynamicFlowRoundHash = DynamicFlowRoundHash;
-  Snapshot.DynamicFlowRoundHashFixedStepIndex =
-    DynamicFlowRoundHashFixedStepIndex;
-  Snapshot.TargetRegionPlanResourceKey = PreparedTargetRegionPlan.bValid
-    ? MakeTargetPlanResourceKey(0, PreparedTargetRegionPlan)
-    : 0;
-  if (PreparedTargetRegionPlan.bValid)
-    TargetRegionPlanResources.FindOrAdd(Snapshot.TargetRegionPlanResourceKey) =
-      PreparedTargetRegionPlan;
-  Snapshot.TargetRegionQuotaExecution = TargetRegionQuotaExecution;
-  Snapshot.TargetRegionPlanValidation = TargetRegionPlanValidation;
-  Snapshot.TargetRegionTopologyRoundHash = TargetRegionTopologyRoundHash;
-  Snapshot.TargetRegionDemandRoundHash = TargetRegionDemandRoundHash;
-  Snapshot.TargetRegionTransportRoundHash = TargetRegionTransportRoundHash;
-  Snapshot.TargetRegionGuidanceRoundHash = TargetRegionGuidanceRoundHash;
-  Snapshot.TargetRegionPlanRebuildCount = TargetRegionPlanRebuildCount;
-  Snapshot.TargetRegionLifetimeRebuildCount = TargetRegionLifetimeRebuildCount;
-  Snapshot.TargetRegionTargetRebuildCount = TargetRegionTargetRebuildCount;
-  Snapshot.TargetRegionEnvironmentRebuildCount = TargetRegionEnvironmentRebuildCount;
-  Snapshot.TargetRegionMembershipRebuildCount = TargetRegionMembershipRebuildCount;
-  Snapshot.TargetRegionDemandSatisfiedRebuildCount = TargetRegionDemandSatisfiedRebuildCount;
-  Snapshot.TargetRegionPathInvalidRebuildCount = TargetRegionPathInvalidRebuildCount;
-  Snapshot.TargetRegionSolverMsSampleCount = TargetRegionSolverMillisecondsSamples.Num();
-  Snapshot.bTargetRegionRoundValid = bTargetRegionRoundValid;
-  Snapshot.TargetRegionInvalidStepCount = TargetRegionInvalidStepCount;
-  Snapshot.TargetRegionLastInvalidStep = TargetRegionLastInvalidStep;
-  Snapshot.TargetRegionValidationFailureCount = TargetRegionValidationFailureCount;
-  Snapshot.TargetRegionValidationRoundHash = TargetRegionValidationRoundHash;
-  Snapshot.TargetRegionGuidanceUnroutedStepCount = TargetRegionGuidanceUnroutedStepCount;
-  Snapshot.TargetRegionGuidanceUnroutedAgentSampleCount = TargetRegionGuidanceUnroutedAgentSampleCount;
-  Snapshot.TargetRegionGuidanceUnroutedAgentMax = TargetRegionGuidanceUnroutedAgentMax;
-  Snapshot.TargetRegionGuidanceFirstFailureStep = TargetRegionGuidanceFirstFailureStep;
-  Snapshot.TargetRegionGuidanceFirstFailureAgentId = TargetRegionGuidanceFirstFailureAgentId;
-  Snapshot.bTargetRegionFailureFixtureValid = bTargetRegionFailureFixtureValid;
-  Snapshot.TargetRegionFailureFixtureStep = TargetRegionFailureFixtureStep;
-  Snapshot.TargetRegionFailureFixtureKind = TargetRegionFailureFixtureKind;
-  Snapshot.TargetRegionFailureFixtureAgentId = TargetRegionFailureFixtureAgentId;
-  Snapshot.TargetRegionFailureFixtureCellKey = TargetRegionFailureFixtureCellKey;
-  Snapshot.TargetRegionFailureFixtureHash = TargetRegionFailureFixtureHash;
-  Snapshot.TargetRegionCapabilityCohorts.Reset(TargetRegionCapabilityCohorts.Num());
-  for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime
-    : TargetRegionCapabilityCohorts)
-  {
-    FCrowdDemoTargetRegionCapabilityCohortRollbackState& State =
-      Snapshot.TargetRegionCapabilityCohorts.AddDefaulted_GetRef();
-    State.Cohort = Runtime.Cohort;
-    State.DemandRegionPhaseOffset = Runtime.DemandRegionPhaseOffset;
-    State.PlanResourceKey = Runtime.Plan.bValid
-      ? MakeTargetPlanResourceKey(Runtime.Cohort.CapabilityProfileKey, Runtime.Plan)
-      : 0;
-    if (Runtime.Plan.bValid)
-      TargetRegionPlanResources.FindOrAdd(State.PlanResourceKey) = Runtime.Plan;
-    State.QuotaExecution = Runtime.QuotaExecution;
-    State.LastPlanReplacement = Runtime.LastPlanReplacement;
-    State.Validation = Runtime.Validation;
-    State.TopologyRoundHash = Runtime.TopologyRoundHash;
-    State.DemandRoundHash = Runtime.DemandRoundHash;
-    State.TransportRoundHash = Runtime.TransportRoundHash;
-    State.GuidanceRoundHash = Runtime.GuidanceRoundHash;
-    State.ValidationRoundHash = Runtime.ValidationRoundHash;
-    State.PlanRebuildCount = Runtime.PlanRebuildCount;
-    State.InvalidStepCount = Runtime.InvalidStepCount;
-    State.ValidationFailureCount = Runtime.ValidationFailureCount;
-    State.GuidanceUnroutedStepCount = Runtime.GuidanceUnroutedStepCount;
-    State.LastInvalidStep = Runtime.LastInvalidStep;
-    State.SolverMsSampleCount = Runtime.SolverMillisecondsSamples.Num();
-    State.PlanLifecycle = Runtime.PlanLifecycle;
-    State.TargetEngagedHoldAgentIds = Runtime.TargetEngagedHoldAgentIds;
-    State.TargetEngagementAcquireCount = Runtime.TargetEngagementAcquireCount;
-    State.TargetEngagementReleaseCount = Runtime.TargetEngagementReleaseCount;
-    State.TargetEngagementSuppressedRetreatCount =
-      Runtime.TargetEngagementSuppressedRetreatCount;
-    State.bRoundValid = Runtime.bRoundValid;
-  }
-  Snapshot.CapabilityProfileSummary = CapabilityProfileSummary;
-  Snapshot.CapabilityCohortRebuildCount = CapabilityCohortRebuildCount;
-  Snapshot.TargetRegionPlanLifecycleSummary = TargetRegionPlanLifecycleSummary;
-  Snapshot.TargetRegionPlanLifecycleFixture = TargetRegionPlanLifecycleFixture;
-  Snapshot.FlowGoalReachedAgentIds = FlowGoalReachedAgentIds;
-  Snapshot.FlowWallPassAgentIds = FlowWallPassAgentIds;
-  Snapshot.FlowCorridorExitAgentIds = FlowCorridorExitAgentIds;
-  Snapshot.FlowTurnExitAgentIds = FlowTurnExitAgentIds;
-  Snapshot.FlowLowSpeedSecondsByAgentId = FlowLowSpeedSecondsByAgentId;
-  Snapshot.FlowCorridorDeadlockAgentIds = FlowCorridorDeadlockAgentIds;
-  Snapshot.CompareMetrics = LastCompareMetrics;
-  const bool bProjectileSnapshotBuilt =
-    BuildProjectileSnapshot(Snapshot.Projectiles);
-  checkf(bProjectileSnapshotBuilt,
-    TEXT("Mass projectile authority unavailable during checkpoint"));
-  Snapshot.ProjectileMetrics = ProjectileMetrics;
-  if (IsSoftPressureRouteDiagnosticEnabled())
-    Snapshot.RouteDiagnosticCheckpoint =
-      FCrowdDemoSoftPressureRouteDiagnosticKernel::MakeCheckpoint(
-        SoftPressureRouteDiagnosticRuntime);
-  if (IsTargetStabilityDiagnosticEnabled())
-    Snapshot.TargetStabilityCheckpoint =
-      FCrowdDemoTargetStabilityDiagnosticKernel::MakeCheckpoint(
-        TargetStabilityRuntime);
-  SoftPressureRollbackHistory.Remove(FixedStepIndex - 128);
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::CompleteSoftPressureRollbackCombatState(
-  const int32 FixedStepIndex,
-  const TConstArrayView<FCrowdDemoPreparedCombatRollbackFact> CombatStates)
-{
-  FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
-    SoftPressureRollbackHistory.Find(FixedStepIndex);
-  if (!Snapshot || !Snapshot->bMovementFactsComplete
-    || Snapshot->bCombatFactsComplete || Snapshot->bSnapshotReadyForReplay
-    || Snapshot->Agents.Num() != CombatStates.Num())
-    return false;
-
-  TArray<FCrowdDemoPreparedCombatRollbackFact> SortedStates(CombatStates);
-  SortedStates.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
-  for (int32 Index = 0; Index < SortedStates.Num(); ++Index)
-  {
-    if (SortedStates[Index].AgentId == INDEX_NONE
-      || Snapshot->Agents[Index].AgentId != SortedStates[Index].AgentId
-      || (Index > 0 && SortedStates[Index - 1].AgentId == SortedStates[Index].AgentId))
-      return false;
-  }
-  for (int32 Index = 0; Index < SortedStates.Num(); ++Index)
-    Snapshot->Agents[Index].Combat = SortedStates[Index].Combat;
-  Snapshot->bCombatFactsComplete = true;
-  Snapshot->bSnapshotReadyForReplay = true;
-  return true;
-}
-
-const FCrowdDemoSoftPressureRollbackSnapshot*
-UCrowdDemoRoundSimPipelineSubsystem::FindSoftPressureRollbackSnapshot(
-  const int32 FixedStepIndex) const
-{
-  return SoftPressureRollbackHistory.Find(FixedStepIndex);
-}
-
-bool UCrowdDemoRoundSimPipelineSubsystem::IsSoftPressureRollbackSnapshotReadyForReplay(
-  const int32 FixedStepIndex) const
-{
-  const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
-    SoftPressureRollbackHistory.Find(FixedStepIndex);
-  return Snapshot && Snapshot->bMovementFactsComplete
-    && Snapshot->bCombatFactsComplete && Snapshot->bSnapshotReadyForReplay;
-}
-
-void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
-  const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot)
-{
-  PreparedLocalPredictiveResults = Snapshot.LocalPredictiveResults;
-  LocalPredictiveGrantStates = Snapshot.LocalPredictiveGrantStates;
-  LastLocalPredictiveSummary = Snapshot.LocalPredictiveSummary;
-  LocalPredictiveRoundHash = Snapshot.LocalPredictiveRoundHash;
-  LocalPredictiveSampleCount = Snapshot.LocalPredictiveSampleCount;
-  LocalPredictiveInvalidStepCount = Snapshot.LocalPredictiveInvalidStepCount;
-  GuidanceCandidateRoundHash = Snapshot.GuidanceCandidateRoundHash;
-  GuidanceComposeRoundHash = Snapshot.GuidanceComposeRoundHash;
-  GuidanceComposeSampleCount = Snapshot.GuidanceComposeSampleCount;
-  LastParticleCandidateSummary = Snapshot.ParticleCandidateSummary;
-  LastParticleAppliedSummary = Snapshot.ParticleAppliedSummary;
-  ParticleSolverMillisecondsSamples.SetNum(FMath::Min(
-    ParticleSolverMillisecondsSamples.Num(), Snapshot.ParticleSolverMsSampleCount));
-  ParticleCandidateStateHash = Snapshot.ParticleCandidateStateHash;
-  ParticleAppliedStateHash = Snapshot.ParticleAppliedStateHash;
-  ParticleInvalidStepCount = Snapshot.ParticleInvalidStepCount;
-  ParticleGlobalFallbackStepCount = Snapshot.ParticleGlobalFallbackStepCount;
-  ParticleStepCount = Snapshot.ParticleStepCount;
-  CrossProfileHardViolationCount = Snapshot.CrossProfileHardViolationCount;
-  CrossProfileSweptViolationCount = Snapshot.CrossProfileSweptViolationCount;
-  ParticleSettlingWindowCount = Snapshot.ParticleSettlingWindowCount;
-  ParticleSettlingSteps = Snapshot.ParticleSettlingSteps;
-  ParticlePreviousSoftErrorP95 = Snapshot.ParticlePreviousSoftErrorP95;
-  bParticleConstraintRunFailure = Snapshot.bParticleConstraintRunFailure;
-  ParticleFailureFixture = Snapshot.ParticleFailureFixture;
-  OpenSpawnRelaxationRuntime = Snapshot.OpenSpawnRelaxationRuntime;
-  PreparedOpenSpawnBoundaryFacts.Reset();
-  PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
-  OpenCohortMovementProgress = Snapshot.OpenCohortMovementProgress;
-  BidirectionalSwapProgress = Snapshot.BidirectionalSwapProgress;
-  ValidCorridorTransitProgress = Snapshot.ValidCorridorTransitProgress;
-  TargetFact = Snapshot.TargetFact;
-  DynamicFlowAnchorCellKey = Snapshot.DynamicFlowAnchorCellKey;
-  DynamicFlowIntegrationRebuildCount =
-    Snapshot.DynamicFlowIntegrationRebuildCount;
-  UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
-    GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
-               : nullptr;
-  check(SharedFlowRuntimeSubsystem);
-  check(SharedFlowRuntimeSubsystem->RestoreSharedFlowDynamicState(
-    Snapshot.DynamicFlowAnchorCellKey,
-    Snapshot.DynamicFlowIntegrationRebuildCount));
-  DynamicFlowRoundHash = Snapshot.DynamicFlowRoundHash;
-  DynamicFlowRoundHashFixedStepIndex =
-    Snapshot.DynamicFlowRoundHashFixedStepIndex;
-  bDynamicFlowIntegrationCacheInvalidated = true;
-  PreparedTargetRegionTopology = {};
-  TargetRegionTopologySummary = {};
-  PreparedTargetRegionAgents.Reset();
-  PreparedTargetRegionDemand = {};
-  PreparedTargetRegionPlan = {};
-  if (const FCrowdDemoTargetRegionFlowPlan* Resource =
-    TargetRegionPlanResources.Find(Snapshot.TargetRegionPlanResourceKey))
-  {
-    PreparedTargetRegionPlan = *Resource;
-  }
-  else if (Snapshot.TargetRegionPlanResourceKey != 0)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoRollbackPlanResourceMissing key=%llu step=%d"),
-      static_cast<unsigned long long>(Snapshot.TargetRegionPlanResourceKey),
-      Snapshot.FixedStepIndex);
-  }
-  TargetRegionQuotaExecution = Snapshot.TargetRegionQuotaExecution;
-  TargetRegionPlanValidation = Snapshot.TargetRegionPlanValidation;
-  PreparedTargetRegionGuidance.Reset();
-  TargetRegionGuidanceSummary = {};
-  TargetRegionTopologyRoundHash = Snapshot.TargetRegionTopologyRoundHash;
-  TargetRegionDemandRoundHash = Snapshot.TargetRegionDemandRoundHash;
-  TargetRegionTransportRoundHash = Snapshot.TargetRegionTransportRoundHash;
-  TargetRegionGuidanceRoundHash = Snapshot.TargetRegionGuidanceRoundHash;
-  TargetRegionPlanRebuildCount = Snapshot.TargetRegionPlanRebuildCount;
-  TargetRegionLifetimeRebuildCount = Snapshot.TargetRegionLifetimeRebuildCount;
-  TargetRegionTargetRebuildCount = Snapshot.TargetRegionTargetRebuildCount;
-  TargetRegionEnvironmentRebuildCount = Snapshot.TargetRegionEnvironmentRebuildCount;
-  TargetRegionMembershipRebuildCount = Snapshot.TargetRegionMembershipRebuildCount;
-  TargetRegionDemandSatisfiedRebuildCount = Snapshot.TargetRegionDemandSatisfiedRebuildCount;
-  TargetRegionPathInvalidRebuildCount = Snapshot.TargetRegionPathInvalidRebuildCount;
-  TargetRegionSolverMillisecondsSamples.SetNum(FMath::Min(
-    TargetRegionSolverMillisecondsSamples.Num(), Snapshot.TargetRegionSolverMsSampleCount));
-  bTargetRegionRoundValid = Snapshot.bTargetRegionRoundValid;
-  TargetRegionInvalidStepCount = Snapshot.TargetRegionInvalidStepCount;
-  TargetRegionLastInvalidStep = Snapshot.TargetRegionLastInvalidStep;
-  TargetRegionValidationFailureCount = Snapshot.TargetRegionValidationFailureCount;
-  TargetRegionValidationRoundHash = Snapshot.TargetRegionValidationRoundHash;
-  TargetRegionGuidanceUnroutedStepCount = Snapshot.TargetRegionGuidanceUnroutedStepCount;
-  TargetRegionGuidanceUnroutedAgentSampleCount = Snapshot.TargetRegionGuidanceUnroutedAgentSampleCount;
-  TargetRegionGuidanceUnroutedAgentMax = Snapshot.TargetRegionGuidanceUnroutedAgentMax;
-  TargetRegionGuidanceFirstFailureStep = Snapshot.TargetRegionGuidanceFirstFailureStep;
-  TargetRegionGuidanceFirstFailureAgentId = Snapshot.TargetRegionGuidanceFirstFailureAgentId;
-  bTargetRegionFailureFixtureValid = Snapshot.bTargetRegionFailureFixtureValid;
-  TargetRegionFailureFixtureStep = Snapshot.TargetRegionFailureFixtureStep;
-  TargetRegionFailureFixtureKind = Snapshot.TargetRegionFailureFixtureKind;
-  TargetRegionFailureFixtureAgentId = Snapshot.TargetRegionFailureFixtureAgentId;
-  TargetRegionFailureFixtureCellKey = Snapshot.TargetRegionFailureFixtureCellKey;
-  TargetRegionFailureFixtureHash = Snapshot.TargetRegionFailureFixtureHash;
-  TMap<uint32, TArray<float>> SolverSamplesByProfile;
-  for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Existing
-    : TargetRegionCapabilityCohorts)
-  {
-    SolverSamplesByProfile.Add(
-      Existing.Cohort.CapabilityProfileKey, Existing.SolverMillisecondsSamples);
-  }
-  TargetRegionCapabilityCohorts.Reset(Snapshot.TargetRegionCapabilityCohorts.Num());
-  for (const FCrowdDemoTargetRegionCapabilityCohortRollbackState& State
-    : Snapshot.TargetRegionCapabilityCohorts)
-  {
-    FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime =
-      TargetRegionCapabilityCohorts.AddDefaulted_GetRef();
-    Runtime.Cohort = State.Cohort;
-    Runtime.DemandRegionPhaseOffset = State.DemandRegionPhaseOffset;
-    if (const FCrowdDemoTargetRegionFlowPlan* Resource =
-      TargetRegionPlanResources.Find(State.PlanResourceKey))
-      Runtime.Plan = *Resource;
-    else if (State.PlanResourceKey != 0)
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoRollbackCohortPlanResourceMissing profile=%u key=%llu step=%d"),
-        State.Cohort.CapabilityProfileKey,
-        static_cast<unsigned long long>(State.PlanResourceKey),
-        Snapshot.FixedStepIndex);
-    Runtime.QuotaExecution = State.QuotaExecution;
-    Runtime.LastPlanReplacement = State.LastPlanReplacement;
-    Runtime.Validation = State.Validation;
-    Runtime.TopologyRoundHash = State.TopologyRoundHash;
-    Runtime.DemandRoundHash = State.DemandRoundHash;
-    Runtime.TransportRoundHash = State.TransportRoundHash;
-    Runtime.GuidanceRoundHash = State.GuidanceRoundHash;
-    Runtime.ValidationRoundHash = State.ValidationRoundHash;
-    Runtime.PlanRebuildCount = State.PlanRebuildCount;
-    Runtime.InvalidStepCount = State.InvalidStepCount;
-    Runtime.ValidationFailureCount = State.ValidationFailureCount;
-    Runtime.GuidanceUnroutedStepCount = State.GuidanceUnroutedStepCount;
-    Runtime.LastInvalidStep = State.LastInvalidStep;
-    if (TArray<float>* Samples = SolverSamplesByProfile.Find(
-      State.Cohort.CapabilityProfileKey))
-    {
-      Samples->SetNum(FMath::Min(Samples->Num(), State.SolverMsSampleCount));
-      Runtime.SolverMillisecondsSamples = MoveTemp(*Samples);
-    }
-    Runtime.PlanLifecycle = State.PlanLifecycle;
-    Runtime.TargetEngagedHoldAgentIds = State.TargetEngagedHoldAgentIds;
-    Runtime.TargetEngagementAcquireCount = State.TargetEngagementAcquireCount;
-    Runtime.TargetEngagementReleaseCount = State.TargetEngagementReleaseCount;
-    Runtime.TargetEngagementSuppressedRetreatCount =
-      State.TargetEngagementSuppressedRetreatCount;
-    Runtime.bRoundValid = State.bRoundValid;
-  }
-  CapabilityProfileSummary = Snapshot.CapabilityProfileSummary;
-  CapabilityCohortRebuildCount = Snapshot.CapabilityCohortRebuildCount;
-  TargetRegionPlanLifecycleSummary = Snapshot.TargetRegionPlanLifecycleSummary;
-  TargetRegionPlanLifecycleFixture = Snapshot.TargetRegionPlanLifecycleFixture;
-  FlowGoalReachedAgentIds = Snapshot.FlowGoalReachedAgentIds;
-  FlowWallPassAgentIds = Snapshot.FlowWallPassAgentIds;
-  FlowCorridorExitAgentIds = Snapshot.FlowCorridorExitAgentIds;
-  FlowTurnExitAgentIds = Snapshot.FlowTurnExitAgentIds;
-  FlowLowSpeedSecondsByAgentId = Snapshot.FlowLowSpeedSecondsByAgentId;
-  FlowCorridorDeadlockAgentIds = Snapshot.FlowCorridorDeadlockAgentIds;
-  LastCompareMetrics = Snapshot.CompareMetrics;
-  const bool bProjectileCapacityReady =
-    PrepareProjectileFinalApply(Snapshot.Projectiles.Num());
-  checkf(bProjectileCapacityReady,
-    TEXT("Mass projectile rollback capacity validation failed"));
-  ApplyProjectileFinalState(Snapshot.Projectiles);
-  ProjectileMetrics = Snapshot.ProjectileMetrics;
-  if (IsSoftPressureRouteDiagnosticEnabled())
-  {
-    FCrowdDemoSoftPressureRouteDiagnosticKernel::RestoreCheckpoint(
-      Snapshot.RouteDiagnosticCheckpoint, SoftPressureRouteDiagnosticRuntime);
-    SoftPressureRouteDiagnosticSummary = {};
-  }
-  if (IsTargetStabilityDiagnosticEnabled())
-  {
-    FCrowdDemoTargetStabilityDiagnosticKernel::RestoreCheckpoint(
-      Snapshot.TargetStabilityCheckpoint, TargetStabilityRuntime);
-    TargetStabilitySummary = {};
-  }
-}
-
 void UCrowdDemoRoundSimPipelineSubsystem::InitializeOpenSpawnRelaxation(
   const FCrowdDemoOpenSpawnRelaxationLayout& Layout)
 {
@@ -8307,6 +8088,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::TryBeginFixedStep(const float TargetSe
   bCurrentStepWorkerDirtyMassApplied = false;
   CurrentStepWorkerDirtyMassPublishSequence = 0;
   CurrentStepWorkerDirtyMassEntityCount = 0;
+  bCurrentStepFullWorkerProductionFastPath = false;
+  CurrentStepFullWorkerInputSequence = 0;
   CurrentStepMassDirtyEntityRefs.Reset();
   bStepInProgress = true;
   return true;
@@ -8426,6 +8209,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::FailFixedStep()
     BoundaryGeneration = 1;
   bStepInProgress = false;
   bPlanActive = false;
+  bCurrentStepFullWorkerProductionFastPath = false;
+  CurrentStepFullWorkerInputSequence = 0;
   CurrentBoundaryRequestStartSeconds = 0.0;
   BoundarySnapshot = {};
   WorkerProxySnapshotBaselineHash = 0;
@@ -8464,6 +8249,8 @@ InvalidateInFlightBoundaryForAuthoritativeState()
   // Their generation is no longer reachable from the current plan and their
   // eventual result therefore cannot be committed.
   bStepInProgress = false;
+  bCurrentStepFullWorkerProductionFastPath = false;
+  CurrentStepFullWorkerInputSequence = 0;
   CurrentBoundaryRequestStartSeconds = 0.0;
   BoundarySnapshot = {};
   WorkerProxySnapshotBaselineHash = 0;
