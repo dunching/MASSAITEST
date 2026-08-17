@@ -91,18 +91,16 @@ c = remove_function(
 c = remove_function(
     c,
     "bool UCrowdDemoRoundSimPipelineSubsystem::MarkRoundApplyCommitted(")
-# Remove the final orphan scheduler fail block from FailFixedStep.
-marker = "void UCrowdDemoRoundSimPipelineSubsystem::FailFixedStep()\n"
-ms = c.find(marker)
-if ms < 0: raise RuntimeError("FailFixedStep missing")
-mb = c.find("{", ms)
-me = function_span(c, marker)[1]
-body = c[mb:me]
-old = "  if (BoundaryOrchestrator.IsValid())\n  {\n    BoundaryOrchestrator->Fail();\n    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();\n  }\n"
-if old not in body:
+# The primary patch already strips the scheduler's Fail()/BuildResult() lines,
+# which can leave only an empty if block. Remove either form deterministically.
+full = "  if (BoundaryOrchestrator.IsValid())\n  {\n    BoundaryOrchestrator->Fail();\n    LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();\n  }\n"
+empty = "  if (BoundaryOrchestrator.IsValid())\n  {\n  }\n"
+if full in c:
+    c = c.replace(full, "", 1)
+elif empty in c:
+    c = c.replace(empty, "", 1)
+else:
     raise RuntimeError("orphan FailFixedStep scheduler block missing")
-body = body.replace(old, "", 1)
-c = c[:mb] + body + c[me:]
 write(CPP, c)
 
 production = read(HEADER) + read(CPP) + read(PROC_H) + read(PROC)
