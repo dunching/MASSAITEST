@@ -1,8 +1,8 @@
 retirement patch fixer applied
 Traceback (most recent call last):
-  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/apply_retire_bootstrap_second_pass.py", line 638, in <module>
+  File "/home/runner/work/MASSAITEST/MASSAITEST/.github/scripts/apply_retire_bootstrap_second_pass.py", line 637, in <module>
     raise RuntimeError(f"retired symbol remains {symbol}: {lines}")
-RuntimeError: retired symbol remains PreparedCombatBoundaryCommit: ['struct FCrowdDemoPreparedCombatBoundaryCommit', '  FCrowdDemoPreparedCombatBoundaryCommit Commit;']
+RuntimeError: retired symbol remains PreparedRuntimeComposedGuidance: ['  : Pipeline->GetPreparedRuntimeComposedGuidance())']
 
 ===== residual retired symbols =====
 Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1082:    TEXT("BeginBoundaryTransaction"),
