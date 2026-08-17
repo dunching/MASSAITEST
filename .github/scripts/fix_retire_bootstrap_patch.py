@@ -3,14 +3,112 @@ from pathlib import Path
 path = Path(".github/scripts/apply_retire_bootstrap_second_pass.py")
 text = path.read_text(encoding="utf-8")
 
-# Make Facing cleanup independent of historical formatting.
-start = text.find("old_dispatch = '''  if (bBuildingBoundaryGraph)")
-end_marker = 'facing = replace_once(facing, old_dispatch, new_dispatch, "facing dispatch collapse")\n'
-end = text.find(end_marker, start)
-if start < 0 or end < 0:
-    raise RuntimeError("old facing dispatch patch block missing")
-end += len(end_marker)
-new = r'''new_dispatch = ''' + "'''" + r'''  const bool bDispatched = bUsesParticle
+# Replace the entire historical Facing transformation with a deterministic
+# one-shot bootstrap function. It prepares only immutable facing input and then
+# dispatches the synchronous bootstrap graph; there is no second consume pass.
+facing_start = text.find(
+    'fs, fe = brace_span(p, "static void ExecuteRoundFacingBootstrap(")')
+facing_end_marker = 'p = p[:fs] + facing + p[fe:]\n'
+facing_end = text.find(facing_end_marker, facing_start)
+if facing_start < 0 or facing_end < 0:
+    raise RuntimeError("legacy Facing transformation block missing")
+facing_end += len(facing_end_marker)
+facing_patch = r'''fs, fe = brace_span(p, "static void ExecuteRoundFacingBootstrap(")
+facing = r''' + "'''" + r'''static void ExecuteRoundFacingBootstrap(
+  FMassEntityManager& EntityManager,
+  FMassExecutionContext& Context)
+{
+  UWorld* World = EntityManager.GetWorld();
+  auto* Pipeline = World
+    ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
+  if (!Pipeline || !Pipeline->IsActive()) return;
+  if (!Pipeline->IsBoundarySnapshotCurrent())
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFacingBoundarySnapshotInvalid step=%d"),
+      Pipeline->GetCurrentFixedStepIndex());
+    return;
+  }
+
+  TMap<int32, ECrowdDemoTargetRegionGuidanceMode> GuidanceModeByAgentId;
+  if (Pipeline->IsTargetRegionExecutionActive())
+  {
+    if (Pipeline->GetRules().bEnableHeterogeneousProfiles != 0)
+    {
+      for (const auto& Runtime : Pipeline->GetCapabilityCohorts())
+        for (const auto& Guidance : Runtime.Guidance)
+          GuidanceModeByAgentId.Add(Guidance.AgentId, Guidance.Mode);
+    }
+    else
+    {
+      for (const auto& Guidance : Pipeline->GetPreparedTargetRegionGuidance())
+        GuidanceModeByAgentId.Add(Guidance.AgentId, Guidance.Mode);
+    }
+  }
+
+  const bool bUsesParticle = Pipeline->GetRules().Scenario
+    == ECrowdDemoScenario::SimRoundSoftPressure;
+  TMap<int32, int32> PreviousSettleStepsByAgentId;
+  for (const FCrowdDemoRoundBoundaryFacingFact& Facing
+    : Pipeline->GetBoundaryFacingFacts())
+  {
+    PreviousSettleStepsByAgentId.Add(
+      Facing.AgentId, Facing.ConsecutiveFinalSettleSteps);
+  }
+
+  FCrowdMassFacingFinalizeWorkInput CombinedInput;
+  FCrowdMassFacingWorkInput& WorkInput = CombinedInput.Facing;
+  WorkInput.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
+  WorkInput.PlanRevision = Pipeline->GetCurrentPlanRevision();
+  WorkInput.Settings.FixedStepSeconds = Pipeline->GetCurrentFixedStepSeconds();
+  CombinedInput.Snapshot = Pipeline->GetBoundarySnapshot();
+
+  TMap<int32, int32> ConsecutiveSettleStepsByAgentId;
+  TMap<int32, bool> FinalSettledByAgentId;
+  TMap<int32, bool> TerminalOwnerByAgentId;
+  bool bGatherValid = true;
+  for (const FCrowdMassBoundaryAgentRecord& Base
+    : Pipeline->GetBoundarySnapshot().Agents)
+  {
+    if (!PreviousSettleStepsByAgentId.Contains(Base.Identity.AgentId))
+    {
+      bGatherValid = false;
+      continue;
+    }
+    const ECrowdDemoTargetRegionGuidanceMode* Mode =
+      GuidanceModeByAgentId.Find(Base.Identity.AgentId);
+    const bool bTerminalOwner = Mode
+      && (*Mode == ECrowdDemoTargetRegionGuidanceMode::TerminalSettle
+        || *Mode == ECrowdDemoTargetRegionGuidanceMode::EngagedHold);
+    TerminalOwnerByAgentId.Add(Base.Identity.AgentId, bTerminalOwner);
+    ConsecutiveSettleStepsByAgentId.Add(Base.Identity.AgentId, 0);
+    FinalSettledByAgentId.Add(Base.Identity.AgentId, false);
+
+    FCrowdFacingInput& Input = WorkInput.Agents.AddDefaulted_GetRef();
+    Input.AgentId = Base.Identity.AgentId;
+    Input.CurrentYawDegrees = Base.State.YawDegrees;
+    Input.AutonomousPreferredVelocity = FVector2f::ZeroVector;
+    Input.Location = FVector2f(Base.State.Position.X, Base.State.Position.Y);
+    Input.TargetLocation = FVector2f(
+      Pipeline->GetTargetFact().Location.X,
+      Pipeline->GetTargetFact().Location.Y);
+    Input.bHasTarget = Pipeline->IsTargetRegionExecutionActive();
+    Input.bFinalPositionSettled = false;
+  }
+  WorkInput.Agents.Sort([](const FCrowdFacingInput& A,
+    const FCrowdFacingInput& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
+  if (!bGatherValid || WorkInput.Agents.IsEmpty())
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFacingGatherInvalid step=%d agents=%d"),
+      Pipeline->GetCurrentFixedStepIndex(), WorkInput.Agents.Num());
+    return;
+  }
+
+  const bool bDispatched = bUsesParticle
     ? Pipeline->DispatchBoundarySoftPressureWorkGraph(
         MoveTemp(CombinedInput),
         MoveTemp(PreviousSettleStepsByAgentId),
@@ -25,15 +123,11 @@ new = r'''new_dispatch = ''' + "'''" + r'''  const bool bDispatched = bUsesParti
       TEXT("VIOLATION CrowdDemoBoundaryWorkGraphDispatchRejected step=%d"),
       Pipeline->GetCurrentFixedStepIndex());
   }
+}
 ''' + "'''" + r'''
-dispatch_token = "if (bBuildingBoundaryGraph)"
-dispatch_pos = facing.find(dispatch_token)
-if dispatch_pos < 0:
-    raise RuntimeError("facing legacy dispatch branch missing")
-dispatch_start = facing.rfind("\n", 0, dispatch_pos) + 1
-facing = facing[:dispatch_start] + new_dispatch + "}\n"
+p = p[:fs] + facing + p[fe:]
 '''
-text = text[:start] + new + text[end:]
+text = text[:facing_start] + facing_patch + text[facing_end:]
 
 # Remove the obsolete Target/Resource prepared hash helper too.
 needle = 'c = read(CPP)\nfor prefix in [\n'
@@ -53,9 +147,8 @@ text = text.replace(
     gate + '    "CalculatePreparedTargetResourceHash",\n',
     1)
 
-# The prepared Combat *member/API* is retired, but the one-shot bootstrap
-# BusinessOutput still legitimately uses FCrowdDemoPreparedCombatBoundaryCommit
-# as a value type. Do not reject the type name itself.
+# Retire only the Pipeline Combat member/API. The one-shot bootstrap
+# BusinessOutput still legitimately uses the value type.
 wide_gate = '    "PreparedCombatBoundaryCommit",\n'
 if wide_gate not in text:
     raise RuntimeError("wide prepared combat gate missing")
@@ -70,8 +163,7 @@ text = text.replace(
       '    raise RuntimeError("prepared combat pipeline member remains")\n',
     1)
 
-# The legacy PostFinalizeMinimalQuery test is the terminal automation test in
-# this file. Replace it through #endif instead of looking for a next test.
+# The legacy PostFinalizeMinimalQuery test is the terminal automation test.
 old = '''e = t.find("IMPLEMENT_SIMPLE_AUTOMATION_TEST(", s + len(marker))
 if e < 0: raise RuntimeError("next test after old structure test missing")
 '''
@@ -82,8 +174,7 @@ if old not in text:
     raise RuntimeError("old architecture test end finder missing")
 text = text.replace(old, new_test_end, 1)
 
-# The particle assertions are inside that same terminal legacy test and vanish
-# with it; do not try to patch them a second time.
+# Particle assertions were inside that same terminal test and vanish with it.
 section_start = text.find("# Update the final particle architecture assertions")
 section_end = text.find("write(TESTS, t)\n", section_start)
 if section_start < 0 or section_end < 0:
