@@ -18,8 +18,25 @@ jobs:
           ref: refactor/production-bypass-round-transaction
           fetch-depth: 0
       - name: Apply source refactor
-        run: python3 .github/scripts/apply_production_round_cut.py
+        id: patch
+        shell: bash
+        run: |
+          set +e
+          python3 .github/scripts/apply_production_round_cut.py > production_round_cut_run.txt 2>&1
+          status=$?
+          cat production_round_cut_run.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit patch diagnostic
+        if: steps.patch.outputs.status != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add production_round_cut_run.txt
+          git commit -m "chore: capture production round cut patch failure"
+          git push origin HEAD:refactor/production-bypass-round-transaction
       - name: Commit source refactor
+        if: steps.patch.outputs.status == '0'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
