@@ -1,0 +1,1340 @@
+ROUND TRANSACTION CUT AUDIT
+
+## SoftPressureRollbackHistory (7)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2329:SoftPressureRollbackHistory.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7523:SoftPressureRollbackHistory.FindOrAdd(FixedStepIndex);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7673:SoftPressureRollbackHistory.Remove(FixedStepIndex - 128);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7681:SoftPressureRollbackHistory.Find(FixedStepIndex);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7707:return SoftPressureRollbackHistory.Find(FixedStepIndex);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7714:SoftPressureRollbackHistory.Find(FixedStepIndex);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1630:TMap<int32, FCrowdDemoSoftPressureRollbackSnapshot> SoftPressureRollbackHistory;
+
+## RecordSoftPressureRollbackSnapshot (6)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:810:Pipeline->RecordSoftPressureRollbackSnapshot(Step, MoveTemp(MovementFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:902:Pipeline->RecordSoftPressureRollbackSnapshot(Step, MoveTemp(MovementFacts));
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:466:Pipeline->RecordSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7515:void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:4565:Pipeline->RecordSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1340:void RecordSoftPressureRollbackSnapshot(
+
+## CompleteSoftPressureRollbackCombatState (10)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:822:Pipeline->CompleteSoftPressureRollbackCombatState(Step, MissingFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:827:Pipeline->CompleteSoftPressureRollbackCombatState(Step, DuplicateFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:832:Pipeline->CompleteSoftPressureRollbackCombatState(Step, WrongFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:844:Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:853:Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:910:Pipeline->CompleteSoftPressureRollbackCombatState(Step, CombatFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1607:"CompleteSoftPressureRollbackCombatState(")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7676:bool UCrowdDemoRoundSimPipelineSubsystem::CompleteSoftPressureRollbackCombatState(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:4571:|| !Pipeline->CompleteSoftPressureRollbackCombatState(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1342:bool CompleteSoftPressureRollbackCombatState(
+
+## FindSoftPressureRollbackSnapshot (7)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:812:Pipeline->FindSoftPressureRollbackSnapshot(Step);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:847:Snapshot = Pipeline->FindSoftPressureRollbackSnapshot(Step);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:914:Pipeline->FindSoftPressureRollbackSnapshot(Step);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:928:Pipeline->FindSoftPressureRollbackSnapshot(Step));
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:469:Pipeline->FindSoftPressureRollbackSnapshot(12);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7704:UCrowdDemoRoundSimPipelineSubsystem::FindSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1345:const FCrowdDemoSoftPressureRollbackSnapshot* FindSoftPressureRollbackSnapshot(
+
+## IsSoftPressureRollbackSnapshotReadyForReplay (6)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:817:Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:846:Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:912:Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7710:bool UCrowdDemoRoundSimPipelineSubsystem::IsSoftPressureRollbackSnapshotReadyForReplay(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:4655:&& !Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1347:bool IsSoftPressureRollbackSnapshotReadyForReplay(int32 FixedStepIndex) const;
+
+## RestoreSoftPressureRuntime (4)
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:399:Pipeline->RestoreSoftPressureRuntime(Snapshot);
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:485:Pipeline->RestoreSoftPressureRuntime(*Snapshot);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7719:void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1348:void RestoreSoftPressureRuntime(const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot);
+
+## GetSoftPressureRollbackSnapshot (4)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5463:Pipeline->GetSoftPressureRollbackSnapshotHitCount();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5465:Pipeline->GetSoftPressureRollbackSnapshotMissCount();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1200:int32 GetSoftPressureRollbackSnapshotHitCount() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1202:int32 GetSoftPressureRollbackSnapshotMissCount() const
+
+## RollbackSnapshot (50)
+Source/MassAICrowdDemo/CrowdDemoTypes.h:1179:UPROPERTY() int32 RollbackSnapshotHitCount = 0;
+Source/MassAICrowdDemo/CrowdDemoTypes.h:1180:UPROPERTY() int32 RollbackSnapshotMissCount = 0;
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:810:Pipeline->RecordSoftPressureRollbackSnapshot(Step, MoveTemp(MovementFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:811:const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:812:Pipeline->FindSoftPressureRollbackSnapshot(Step);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:817:Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:846:Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:847:Snapshot = Pipeline->FindSoftPressureRollbackSnapshot(Step);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:902:Pipeline->RecordSoftPressureRollbackSnapshot(Step, MoveTemp(MovementFacts));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:912:Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(Step));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:913:const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:914:Pipeline->FindSoftPressureRollbackSnapshot(Step);
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:928:Pipeline->FindSoftPressureRollbackSnapshot(Step));
+Source/MassAICrowdDemo/CrowdDemoRoundSimCoordinator.cpp:1103:Particle.RollbackSnapshotHitCount, Particle.RollbackSnapshotMissCount,
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:377:FCrowdDemoSoftPressureRollbackSnapshot Snapshot;
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:466:Pipeline->RecordSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:468:const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+Source/MassAICrowdDemo/CrowdDemoLocalPredictiveInteractionTests.cpp:469:Pipeline->FindSoftPressureRollbackSnapshot(12);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2330:SoftPressureRollbackSnapshotHitCount = 0;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2331:SoftPressureRollbackSnapshotMissCount = 0;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7515:void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7522:FCrowdDemoSoftPressureRollbackSnapshot& Snapshot =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7680:FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7703:const FCrowdDemoSoftPressureRollbackSnapshot*
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7704:UCrowdDemoRoundSimPipelineSubsystem::FindSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7710:bool UCrowdDemoRoundSimPipelineSubsystem::IsSoftPressureRollbackSnapshotReadyForReplay(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7713:const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7720:const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8176:SoftPressureRollbackSnapshotHitCount += bHit ? 1 : 0;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8177:SoftPressureRollbackSnapshotMissCount += bHit ? 0 : 1;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8187:SoftPressureRollbackSnapshotHitCount, SoftPressureRollbackSnapshotMissCount,
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8195:SoftPressureRollbackSnapshotHitCount, SoftPressureRollbackSnapshotMissCount,
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:4565:Pipeline->RecordSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:4655:&& !Pipeline->IsSoftPressureRollbackSnapshotReadyForReplay(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5462:Result.ParticleMetrics.RollbackSnapshotHitCount =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5463:Pipeline->GetSoftPressureRollbackSnapshotHitCount();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5464:Result.ParticleMetrics.RollbackSnapshotMissCount =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5465:Pipeline->GetSoftPressureRollbackSnapshotMissCount();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:494:struct FCrowdDemoSoftPressureRollbackSnapshot
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1200:int32 GetSoftPressureRollbackSnapshotHitCount() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1201:{ return SoftPressureRollbackSnapshotHitCount; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1202:int32 GetSoftPressureRollbackSnapshotMissCount() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1203:{ return SoftPressureRollbackSnapshotMissCount; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1340:void RecordSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1345:const FCrowdDemoSoftPressureRollbackSnapshot* FindSoftPressureRollbackSnapshot(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1347:bool IsSoftPressureRollbackSnapshotReadyForReplay(int32 FixedStepIndex) const;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1348:void RestoreSoftPressureRuntime(const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1630:TMap<int32, FCrowdDemoSoftPressureRollbackSnapshot> SoftPressureRollbackHistory;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1632:int32 SoftPressureRollbackSnapshotHitCount = 0;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1633:int32 SoftPressureRollbackSnapshotMissCount = 0;
+
+## BeginRollbackReplay (2)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:9003:void UCrowdDemoRoundSimPipelineSubsystem::BeginRollbackReplayPerformance(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1222:void BeginRollbackReplayPerformance(
+
+## RollbackReplayed (11)
+Source/MassAICrowdDemo/CrowdDemoTypes.h:1182:UPROPERTY() int32 RollbackReplayedStepCount = 0;
+Source/MassAICrowdDemo/CrowdDemoRoundSimCoordinator.cpp:1104:Particle.RollbackAgentMismatchCount, Particle.RollbackReplayedStepCount);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2333:SoftPressureRollbackReplayedStepCount = 0;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8179:SoftPressureRollbackReplayedStepCount += FMath::Max(0, ReplayedSteps);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8188:SoftPressureRollbackAgentMismatchCount, SoftPressureRollbackReplayedStepCount);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8196:SoftPressureRollbackAgentMismatchCount, SoftPressureRollbackReplayedStepCount);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5468:Result.ParticleMetrics.RollbackReplayedStepCount =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:5469:Pipeline->GetSoftPressureRollbackReplayedStepCount();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1206:int32 GetSoftPressureRollbackReplayedStepCount() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1207:{ return SoftPressureRollbackReplayedStepCount; }
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1635:int32 SoftPressureRollbackReplayedStepCount = 0;
+
+## BeginBoundaryTransaction (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2484:"bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction("),
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2784:bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:6663:if (!Pipeline->BeginBoundaryTransaction(SnapshotApplyMilliseconds))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:951:bool BeginBoundaryTransaction(double GatherMilliseconds);
+
+## TryPrepareRoundApply (6)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2209:ProcessorSource.Contains(TEXT("Pipeline->TryPrepareRoundApply()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2210:&& PipelineHeader.Contains(TEXT("TryPrepareRoundApply()"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2211:&& PipelineSource.Contains(TEXT("TryPrepareRoundApply()")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4838:UCrowdDemoRoundSimPipelineSubsystem::TryPrepareRoundApply()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:6430:: Pipeline->TryPrepareRoundApply();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:992:ECrowdBoundaryPollResult TryPrepareRoundApply();
+
+## BoundaryOrchestrator (92)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1920:const FString BoundaryOrchestratorHeaderPath = FPaths::Combine(
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1922:TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Public/MassCrowdBoundaryOrchestrator.h"));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1923:const FString BoundaryOrchestratorSourcePath = FPaths::Combine(
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1925:TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Private/MassCrowdBoundaryOrchestrator.cpp"));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1926:const FString BoundaryOrchestratorTestsPath = FPaths::Combine(
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1928:TEXT("Plugins/MassCrowdSimulation/Source/MassCrowdTests/Private/MassCrowdBoundaryOrchestratorTests.cpp"));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1930:FPaths::FileExists(BoundaryOrchestratorHeaderPath));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1932:FPaths::FileExists(BoundaryOrchestratorSourcePath));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1934:FPaths::FileExists(BoundaryOrchestratorTestsPath));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1964:PipelineHeader.Contains(TEXT("MassCrowdBoundaryOrchestrator.h"))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1965:|| PipelineSource.Contains(TEXT("MassCrowdBoundaryOrchestrator.h")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:252:FCrowdBoundaryOrchestratorResult BuildResult() const
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:254:FCrowdBoundaryOrchestratorResult Result;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2212:BoundaryOrchestrator.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2590:BoundaryOrchestrator.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2788:|| BoundaryOrchestrator.IsValid())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2790:BoundaryOrchestrator =
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2792:if (!BoundaryOrchestrator->Begin(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2812:return BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2813:? BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2831:if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2832:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2918:if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2919:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2946:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:3035:if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:3036:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:3062:|| !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:3063:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:3109:|| !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:3110:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4253:if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4254:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4284:return BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4309:BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4320:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4368:bRegistered = BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4385:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4439:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4459:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4503:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4592:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4608:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4653:if (!bRegistered || !BoundaryOrchestrator->Dispatch())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4655:BoundaryOrchestrator->Fail();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4656:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4667:if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4668:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4700:BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4711:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4723:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4753:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4805:&& BoundaryOrchestrator->AddTask(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4828:if (!bRegistered || !BoundaryOrchestrator->Dispatch())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4830:BoundaryOrchestrator->Fail();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4831:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4846:BoundaryOrchestrator.IsValid() ? 1 : 0,
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4848:BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4849:? static_cast<int32>(BoundaryOrchestrator->GetState()) : -1);
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4852:if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4863:static_cast<int32>(BoundaryOrchestrator->GetState()),
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4873:if (!BoundaryOrchestrator->Matches(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4877:BoundaryOrchestrator->Fail();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4878:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4890:BoundaryOrchestrator->GetState();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4894:PollResult = BoundaryOrchestrator->Poll();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4908:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4937:BoundaryOrchestrator->Fail();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4939:BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5913:BoundaryOrchestrator->Fail();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:5915:BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:6134:BoundaryOrchestrator->Fail();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:6135:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7148:|| !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7149:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7190:if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7191:|| BoundaryOrchestrator->GetState()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7253:if (!BoundaryOrchestrator->MarkApplyPlanValidated(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7256:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7265:if (!BoundaryOrchestrator.IsValid()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7266:|| !BoundaryOrchestrator->MarkCommitted(CommitMilliseconds))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:7268:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8419:if (BoundaryOrchestrator.IsValid())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8421:BoundaryOrchestrator->Fail();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8422:LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8435:BoundaryOrchestrator.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8455:bStepInProgress && BoundaryOrchestrator.IsValid();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:8473:BoundaryOrchestrator.Reset();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:179:struct FCrowdBoundaryOrchestratorResult
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1021:const FCrowdBoundaryOrchestratorResult& GetLastBoundaryTransactionResult()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1551:TSharedPtr<FCrowdDemoRoundWorkBatch> BoundaryOrchestrator;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1557:FCrowdBoundaryOrchestratorResult LastBoundaryTransactionResult;
+
+## FCrowdDemoRoundWorkBatch (4)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:25:class FCrowdDemoRoundWorkBatch
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2791:MakeShared<FCrowdDemoRoundWorkBatch>();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:36:class FCrowdDemoRoundWorkBatch;
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:1551:TSharedPtr<FCrowdDemoRoundWorkBatch> BoundaryOrchestrator;
+
+## StageBoundaryBusinessWork (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1771:"bStageValid = Pipeline->StageBoundaryBusinessWork()"));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2817:bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:6686:bStageValid = Pipeline->StageBoundaryBusinessWork();
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:953:bool StageBoundaryBusinessWork();
+
+## DispatchBoundarySoftPressureWorkGraph (4)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1596:TEXT("DispatchBoundarySoftPressureWorkGraph(")));
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4248:DispatchBoundarySoftPressureWorkGraph(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3698:? Pipeline->DispatchBoundarySoftPressureWorkGraph(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:981:bool DispatchBoundarySoftPressureWorkGraph(
+
+## DispatchBoundaryFacingWork (5)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1594:FacingBlock.Contains(TEXT("DispatchBoundaryFacingWork("))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:4662:bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3702:: Pipeline->DispatchBoundaryFacingWork(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:3716:if (!Pipeline->DispatchBoundaryFacingWork(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:985:bool DispatchBoundaryFacingWork(
+
+## TrySubmitWorkerV2ClockIntentEarly (5)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1773:"Pipeline->TrySubmitWorkerV2ClockIntentEarly()"),
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:1786:"TrySubmitWorkerV2ClockIntentEarly()"))
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:3997:TrySubmitWorkerV2ClockIntentEarly()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:6705:if (!Pipeline->TrySubmitWorkerV2ClockIntentEarly())
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.h:991:bool TrySubmitWorkerV2ClockIntentEarly();
+
+## IsFullWorkerProductionMode (2)
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:527:bool IsFullWorkerProductionMode()
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp:2745:const bool bFullSnapshotHash = !IsFullWorkerProductionMode()
+
+## AdvanceRoundWorkerFrame (7)
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2034:ProcessorSource.Contains(TEXT("bool AdvanceRoundWorkerFrame("))
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2038:"AdvanceRoundWorkerFrame(")));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2040:"const bool bMassCommitted = AdvanceRoundWorkerFrame("));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2042:"bool AdvanceRoundWorkerFrame("));
+Source/MassAICrowdDemo/CrowdDemoCombatStateTests.cpp:2125:TestFalse(TEXT("AdvanceRoundWorkerFrame never rebuilds Dirty Mass Plan"),
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:6406:bool AdvanceRoundWorkerFrame(
+Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp:6891:const bool bMassCommitted = AdvanceRoundWorkerFrame(
+
+
+===== CONTEXT Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimProcessors.cpp :: bool AdvanceRoundWorkerFrame =====
+06398: enum class ECrowdDemoRoundFrameStageResult : uint8
+06399: {
+06400:   Empty = 0,
+06401:   Pending,
+06402:   Committed,
+06403:   Failed
+06404: };
+06405: 
+06406: bool AdvanceRoundWorkerFrame(
+06407:   FMassEntityQuery& ResultCommitQuery,
+06408:   FMassEntityManager& EntityManager,
+06409:   FMassExecutionContext& Context)
+06410: {
+06411:   UWorld* World = EntityManager.GetWorld();
+06412:   auto* Pipeline = World
+06413:     ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>()
+06414:     : nullptr;
+06415:   if (!World || !Pipeline)
+06416:     return false;
+06417:   FCrowdDemoRoundMovementWorkStage CommitMovementWork;
+06418:   FCrowdDemoRoundParticleConstraintStage CommitParticleConstraint;
+06419:   FCrowdDemoRoundFacingFinalizeStage CommitFacingFinalize;
+06420:   CommitFacingFinalize.UseQuery(ResultCommitQuery);
+06421:   const auto Commit = [&]() -> ECrowdDemoRoundFrameStageResult
+06422:   {
+06423:     if (!Pipeline->IsStepInProgress())
+06424:       return ECrowdDemoRoundFrameStageResult::Empty;
+06425:     const ECrowdBoundaryPollResult PollResult =
+06426:       Pipeline->IsPreparedMovementBoundaryCommitCurrent()
+06427:         || Pipeline->GetRoundWorkState()
+06428:           == ECrowdBoundaryTransactionState::ReadyToCommit
+06429:         ? ECrowdBoundaryPollResult::Ready
+06430:         : Pipeline->TryPrepareRoundApply();
+06431:     if (PollResult == ECrowdBoundaryPollResult::Pending)
+06432:     {
+06433:       Pipeline->RecordPipelineFramePerformance(
+06434:         0,
+06435:         GetRoundPipelineServerTime(*World),
+06436:         false, false);
+06437:       return ECrowdDemoRoundFrameStageResult::Pending;
+06438:     }
+06439:     if (PollResult == ECrowdBoundaryPollResult::Failed)
+06440:     {
+06441:       UE_LOG(LogTemp, Error,
+06442:         TEXT("VIOLATION CrowdDemoBoundaryPollFailed step=%d prepare_checkpoint=%d"),
+06443:         Pipeline->GetCurrentFixedStepIndex(),
+06444:         Pipeline->GetLastBoundaryPrepareCheckpoint());
+06445:       Pipeline->FailFixedStep();
+06446:       return ECrowdDemoRoundFrameStageResult::Failed;
+06447:     }
+06448: 
+06449:     const double FinalizeStart = FPlatformTime::Seconds();
+06450:     if (!Pipeline->IsPreparedMovementBoundaryCommitCurrent())
+06451:     {
+06452:       if (Pipeline->GetRules().Scenario
+06453:         == ECrowdDemoScenario::SimRoundSoftPressure)
+06454:       {
+06455:         CommitMovementWork.Execute(EntityManager, Context);
+06456:         CommitParticleConstraint.Execute(EntityManager, Context);
+06457:       }
+06458:       CommitFacingFinalize.Execute(EntityManager, Context);
+06459:     }
+06460:     const float FinalizeMs = static_cast<float>(
+06461:       (FPlatformTime::Seconds() - FinalizeStart) * 1000.0);
+06462:     Pipeline->RecordPerformanceStage(
+06463:       ECrowdDemoRoundPerformanceStage::FacingFinalize,
+06464:       FinalizeMs);
+06465: 
+06466:     const bool bRequiresCombatCommit =
+06467:       Pipeline->IsRangedProjectileCombat()
+06468:       || (Pipeline->GetRules().Scenario
+06469:           == ECrowdDemoScenario::SimRoundSoftPressure
+06470:         && Pipeline->GetRules().SoftPressureTestCase
+06471:           == ECrowdDemoSoftPressureTestCase::
+06472:             MultiStateVatHitResponse);
+06473:     if ((bRequiresCombatCommit
+06474:         && !Pipeline->IsPreparedCombatBoundaryCommitCurrent())
+06475:       || !Pipeline->IsPreparedMovementBoundaryCommitCurrent())
+06476:     {
+06477:       UE_LOG(LogTemp, Error,
+06478:         TEXT("VIOLATION CrowdDemoBoundaryPreparedCommitMissing step=%d combat=%d"),
+06479:         Pipeline->GetCurrentFixedStepIndex(),
+06480:         bRequiresCombatCommit ? 1 : 0);
+06481:       Pipeline->FailFixedStep();
+06482:       return ECrowdDemoRoundFrameStageResult::Failed;
+06483:     }
+06484: 
+06485:     FCrowdDemoPreparedRoundCommitPlan* PendingWorkerResult =
+06486:       Pipeline->PeekPreparedRoundCommitPlan();
+06487:     UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+06488:       World->GetSubsystem<UMassCrowdRuntimeSubsystem>();
+06489:     if (!RuntimeSubsystem)
+06490:     {
+06491:       UE_LOG(LogTemp, Error,
+06492:         TEXT("VIOLATION CrowdDemoWorkerOwnerBarrierRuntimeMissing step=%d"),
+06493:         Pipeline->GetCurrentFixedStepIndex());
+06494:       Pipeline->FailFixedStep();
+06495:       return ECrowdDemoRoundFrameStageResult::Failed;
+06496:     }
+06497:     if (!PendingWorkerResult)
+06498:     {
+06499:       Pipeline->RecordPipelineFramePerformance(
+06500:         0, GetRoundPipelineServerTime(*World), false, false);
+06501:       return ECrowdDemoRoundFrameStageResult::Pending;
+06502:     }
+06503:     if (!PendingWorkerResult->IsValid())
+06504:     {
+06505:       UE_LOG(LogTemp, Error,
+06506:         TEXT("VIOLATION CrowdDemoWorkerOwnerBarrierPendingInvalid step=%d publish=%llu"),
+06507:         Pipeline->GetCurrentFixedStepIndex(),
+06508:         PendingWorkerResult->WorkerCommitToken.PublishSequence);
+06509:       Pipeline->FailFixedStep();
+06510:       return ECrowdDemoRoundFrameStageResult::Failed;
+06511:     }
+06512: 
+06513:     const double CommitStart = FPlatformTime::Seconds();
+06514:     FCrowdDemoPreparedWorkerMassApplyPlan& MassPlan =
+06515:       *PendingWorkerResult->PreparedMassPlan;
+06516:     FCrowdWorkerResultApplyProxy& Proxy =
+06517:       RuntimeSubsystem->GetWorkerResultApplyProxy();
+06518:     FCrowdDemoPreparedWorkerResultSideEffects PreparedSideEffects;
+06519:     const ECrowdWorkerResultOwnerCommitResult BarrierResult =
+06520:       FCrowdWorkerResultOwnerCommitBarrier::Commit(
+06521:         Proxy, PendingWorkerResult->PreparedProxyResult,
+06522:         PendingWorkerResult->WorkerCommitToken,
+06523:         [&]()
+06524:         {
+06525:           return FCrowdDemoWorkerInputSync::
+06526:               PrepareCommittedResultSideEffects(
+06527:                 *World, PendingWorkerResult->PreparedProxyResult,
+06528:                 PreparedSideEffects)
+06529:             && Pipeline->FinalValidatePreparedTargetResourcePlan(
+06530:               *PendingWorkerResult->PreparedTargetResourcePlan)
+06531:             && CommitFacingFinalize.ValidatePreparedCommit(*Pipeline)
+06532:             && FinalValidatePreparedWorkerMassDirtyPlan(
+06533:               PendingWorkerResult->PreparedProxyResult,
+06534:               PendingWorkerResult->WorkerCommitToken,
+06535:               PendingWorkerResult->PlanRevision,
+06536:               PendingWorkerResult->FixedStepIndex, MassPlan,
+06537:               *Pipeline, ResultCommitQuery, EntityManager);
+06538:         },
+06539:         [&]()
+06540:         {
+06541:           ApplyValidatedWorkerMassDirtyPlan(
+06542:             MassPlan, *Pipeline, ResultCommitQuery, Context);
+06543:         },
+06544:         [&]()
+06545:         {
+06546:           CommitValidatedWorkerMassSideEffects(MassPlan, *Pipeline);
+06547:           Pipeline->ApplyPreparedTargetResourcePlanNoFail(
+06548:             *PendingWorkerResult->PreparedTargetResourcePlan);
+06549:           CommitFacingFinalize.CommitValidatedSideEffects(*Pipeline);
+06550:           checkf(Pipeline->MarkRoundApplyCommitted(
+06551:               (FPlatformTime::Seconds() - CommitStart) * 1000.0),
+06552:             TEXT("Validated Round owner commit unexpectedly failed"));
+06553:           FCrowdDemoWorkerInputSync::
+06554:             CommitPreparedResultSideEffectsNoFail(
+06555:               *World, PendingWorkerResult->PreparedProxyResult,
+06556:               PreparedSideEffects,
+06557:               (FPlatformTime::Seconds()
+06558:                 - PendingWorkerResult->ApplyStartSeconds)
+06559:                 * 1000.0);
+06560:         });
+06561:     const bool bApplied = BarrierResult
+06562:         == ECrowdWorkerResultOwnerCommitResult::Committed
+06563:       && Pipeline->IsMovementFinalizeAppliedCurrent();
+06564:     if (!bApplied)
+06565:     {
+06566:       UE_LOG(LogTemp, Error,
+06567:         TEXT("VIOLATION CrowdDemoWorkerOwnerBarrierRejected step=%d publish=%llu result=%u"),
+06568:         Pipeline->GetCurrentFixedStepIndex(),
+06569:         PendingWorkerResult->WorkerCommitToken.PublishSequence,
+06570:         static_cast<uint32>(BarrierResult));
+06571:       Pipeline->FailFixedStep();
+06572:       return ECrowdDemoRoundFrameStageResult::Failed;
+06573:     }
+06574:     const float CommitMs = static_cast<float>(
+06575:       (FPlatformTime::Seconds() - CommitStart) * 1000.0);
+06576:     Pipeline->RecordPerformanceStage(
+06577:       ECrowdDemoRoundPerformanceStage::Commit, CommitMs);
+06578:     return ECrowdDemoRoundFrameStageResult::Committed;
+06579:   };
+06580:   const ECrowdDemoRoundFrameStageResult CommitResult = Commit();
+06581:   if (CommitResult == ECrowdDemoRoundFrameStageResult::Failed
+06582:     || CommitResult == ECrowdDemoRoundFrameStageResult::Pending)
+06583:     return false;
+06584:   const bool bCommitted =
+06585:     CommitResult == ECrowdDemoRoundFrameStageResult::Committed;
+06586:   if (bCommitted && World->GetNetMode() == NM_Client)
+06587:   {
+06588:     FCrowdDemoRoundClientPredictionCommitStage
+06589:       ClientPredictionCommit;
+06590:     ClientPredictionCommit.Execute(EntityManager, Context);
+06591:   }
+06592:   else if (bCommitted)
+06593:   {
+06594:     FCrowdDemoRoundAuthorityCommitStage AuthorityCommit;
+06595:     AuthorityCommit.Execute(EntityManager, Context);
+06596:   }
+06597:   if (bCommitted)
+06598:   {
+06599:     FCrowdDemoRoundPostFinalizeMetricsStage PostFinalizeMetrics;
+06600:     PostFinalizeMetrics.Execute(EntityManager, Context);
+06601:     if (World->GetNetMode() != NM_Client)
+06602:     {
+06603:       FCrowdDemoRoundCheckpointPublisherStage CheckpointPublisher;
+06604:       CheckpointPublisher.Execute(EntityManager, Context);
+06605:     }
+06606:     Pipeline->RecordFixedStepPerformance(
+06607:       Pipeline->GetCurrentBoundaryWallMilliseconds());
+06608:     Pipeline->FinishFixedStep();
+06609:   }
+06610:   const int32 ExecutedSteps = bCommitted ? 1 : 0;
+06611:   FCrowdDemoRoundOpenSpawnRelaxationPhasePrepareStage
+06612:     OpenSpawnRelaxationPhasePrepare;
+06613:   FCrowdDemoRoundTargetFactApplyStage TargetFactApply;
+06614:   FCrowdDemoRoundTargetPolarTopologyBuildStage
+06615:     TargetPolarTopologyBuild;
+06616:   FCrowdDemoRoundTargetRegionPopulationBuildStage
+06617:     TargetRegionPopulationBuild;
+06618:   FCrowdDemoRoundTargetRegionTransportSolveStage
+06619:     TargetRegionTransportSolve;
+06620:   FCrowdDemoRoundTargetRegionGuidanceStage TargetRegionGuidance;
+06621:   FCrowdDemoRoundSharedFlowFieldBuildStage SharedFlowFieldBuild;
+06622:   FCrowdDemoRoundFlowPreferredVelocityStage
+06623:     FlowPreferredVelocity;
+06624:   FCrowdDemoRoundMovementWorkStage MovementWork;
+06625:   FCrowdDemoRoundParticleConstraintStage ParticleConstraint;
+06626:   FCrowdDemoRoundObstacleConstraintStage ObstacleConstraint;
+06627:   FCrowdDemoRoundFacingFinalizeStage FacingFinalize;
+06628:   const auto Submit = [&]() -> bool
+06629:   {
+06630:     const float TargetServerTime = GetRoundPipelineServerTime(*World);
+06631:     if (Pipeline->IsStepInProgress())
+06632:       return false;
+06633:     if (Pipeline->HasDueRoundPlan(
+06634:         Pipeline->GetSimulatedServerTimeSeconds()))
+06635:     {
+06636:       Pipeline->RecordPipelineFramePerformance(
+06637:         ExecutedSteps, TargetServerTime,
+06638:         false, false);
+06639:       return false;
+06640:     }
+06641:     if (!Pipeline->TryBeginFixedStep(TargetServerTime))
+06642:     {
+06643:       Pipeline->RecordPipelineFramePerformance(
+06644:         ExecutedSteps, TargetServerTime,
+06645:         false, false);
+06646:       return false;
+06647:     }
+06648: 
+06649:     const double SnapshotApplyStartSeconds = FPlatformTime::Seconds();
+06650:     const bool bSnapshotReady = Pipeline->TryUseBootstrapBoundarySnapshot()
+06651:       || Pipeline->TryPublishWorkerProxyBoundarySnapshot();
+06652:     if (!bSnapshotReady || !Pipeline->IsBoundarySnapshotCurrent())
+06653:     {
+06654:       UE_LOG(LogTemp, Error,
+06655:         TEXT("VIOLATION CrowdDemoDirtyBoundaryMissing step=%d revision=%d"),
+06656:         Pipeline->GetCurrentFixedStepIndex(),
+06657:         Pipeline->GetCurrentPlanRevision());
+06658:       Pipeline->FailFixedStep();
+06659:       return false;
+06660:     }
+06661:     const double SnapshotApplyMilliseconds =
+06662:       (FPlatformTime::Seconds() - SnapshotApplyStartSeconds) * 1000.0;
+06663:     if (!Pipeline->BeginBoundaryTransaction(SnapshotApplyMilliseconds))
+06664:     {
+06665:       UE_LOG(LogTemp, Error,
+
+
+===== CONTEXT Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp :: UCrowdDemoRoundSimPipelineSubsystem::TryPrepareRoundApply =====
+04830:     BoundaryOrchestrator->Fail();
+04831:     LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+04832:     return false;
+04833:   }
+04834:   return true;
+04835: }
+04836: 
+04837: ECrowdBoundaryPollResult
+04838: UCrowdDemoRoundSimPipelineSubsystem::TryPrepareRoundApply()
+04839: {
+04840:   LastBoundaryPrepareCheckpoint = 1;
+04841:   const auto RejectPrepare = [this](const TCHAR* Reason)
+04842:   {
+04843:     UE_LOG(LogTemp, Error,
+04844:       TEXT("VIOLATION CrowdDemoBoundaryPrepareRejected step=%d reason=%s orchestrator=%d facing_state=%d transaction_state=%d"),
+04845:       GetCurrentFixedStepIndex(), Reason,
+04846:       BoundaryOrchestrator.IsValid() ? 1 : 0,
+04847:       BoundaryFacingWorkState.IsValid() ? 1 : 0,
+04848:       BoundaryOrchestrator.IsValid()
+04849:         ? static_cast<int32>(BoundaryOrchestrator->GetState()) : -1);
+04850:     return ECrowdBoundaryPollResult::Failed;
+04851:   };
+04852:   if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+04853:     || !BoundaryFacingWorkState.IsValid())
+04854:     return RejectPrepare(TEXT("entry_state"));
+04855:   if (!DrainWorkerV2MovementShadowComparisons())
+04856:     return RejectPrepare(TEXT("movement_shadow_drain"));
+04857:   if (BoundaryPendingFrameCount > 0
+04858:     && BoundaryPendingFrameCount % 120 == 0)
+04859:   {
+04860:     UE_LOG(LogTemp, Display,
+04861:       TEXT("CrowdDemoBoundaryPendingProbe step=%d state=%d pending_frames=%d worker_v2_submitted=%d movement_tail_submitted=%d movement_tail_completed=%d movement_tail_consumed=%d"),
+04862:       GetCurrentFixedStepIndex(),
+04863:       static_cast<int32>(BoundaryOrchestrator->GetState()),
+04864:       BoundaryPendingFrameCount,
+04865:       BoundaryFacingWorkState->bWorkerV2InputSubmitted ? 1 : 0,
+04866:       BoundaryFacingWorkState->bWorkerMovementTailSubmitted ? 1 : 0,
+04867:       BoundaryFacingWorkState->WorkerMovementTail.IsValid()
+04868:         && BoundaryFacingWorkState->WorkerMovementTail->
+04869:           bCompleted.Load() ? 1 : 0,
+04870:       BoundaryFacingWorkState->bWorkerMovementTailConsumed ? 1 : 0);
+04871:   }
+04872: 
+04873:   if (!BoundaryOrchestrator->Matches(
+04874:       BoundarySnapshot, BoundaryGeneration))
+04875:   {
+04876:     ++BoundaryStaleResultCount;
+04877:     BoundaryOrchestrator->Fail();
+04878:     LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+04879:     UE_LOG(LogTemp, Error,
+04880:       TEXT("VIOLATION CrowdDemoBoundaryTransactionStale step=%d generation=%llu stale_count=%d"),
+04881:       GetCurrentFixedStepIndex(),
+04882:       static_cast<unsigned long long>(BoundaryGeneration),
+04883:       BoundaryStaleResultCount);
+04884:     return ECrowdBoundaryPollResult::Failed;
+04885:   }
+04886: 
+04887:   ECrowdBoundaryPollResult PollResult =
+04888:     ECrowdBoundaryPollResult::Failed;
+04889:   const ECrowdBoundaryTransactionState TransactionState =
+04890:     BoundaryOrchestrator->GetState();
+04891:   if (TransactionState
+04892:       == ECrowdBoundaryTransactionState::Working)
+04893:   {
+04894:     PollResult = BoundaryOrchestrator->Poll();
+04895:   }
+04896:   else if (TransactionState
+04897:       == ECrowdBoundaryTransactionState::Merging)
+04898:   {
+04899:     PollResult = ECrowdBoundaryPollResult::Ready;
+04900:   }
+04901:   if (PollResult == ECrowdBoundaryPollResult::Pending)
+04902:   {
+04903:     ++BoundaryPendingFrameCount;
+04904:     return PollResult;
+04905:   }
+04906:   if (PollResult == ECrowdBoundaryPollResult::Failed)
+04907:   {
+04908:     LastBoundaryTransactionResult = BoundaryOrchestrator->BuildResult();
+04909:     UE_LOG(LogTemp, Error,
+04910:       TEXT("VIOLATION CrowdDemoBoundaryWorkFailed step=%d state=%d tasks=%d"),
+04911:       GetCurrentFixedStepIndex(),
+04912:       static_cast<int32>(LastBoundaryTransactionResult.State),
+04913:       LastBoundaryTransactionResult.Tasks.Num());
+04914:     for (const FCrowdBoundaryCompletedTask& Task
+04915:       : LastBoundaryTransactionResult.Tasks)
+04916:     {
+04917:       UE_LOG(LogTemp, Error,
+04918:         TEXT("VIOLATION CrowdDemoBoundaryTaskFailed step=%d stage=%d task_type=%d scope=%llu succeeded=%d off_gt=%d hash=%llu"),
+04919:         GetCurrentFixedStepIndex(),
+04920:         static_cast<int32>(Task.Key.StageId.Value),
+04921:         static_cast<int32>(Task.Key.TaskTypeId.Value),
+04922:         static_cast<unsigned long long>(Task.Key.ScopeKey),
+04923:         Task.Result.bSucceeded ? 1 : 0,
+04924:         Task.Result.bRanOffGameThread ? 1 : 0,
+04925:         static_cast<unsigned long long>(Task.Result.StableHash));
+04926:     }
+04927:     return PollResult;
+04928:   }
+04929:   LastBoundaryPrepareCheckpoint = 2;
+04930:   if (!BoundaryFacingWorkState->bWorkerV2InputSubmitted)
+04931:   {
+04932:     if (!SubmitWorkerV2BoundaryInput())
+04933:     {
+04934:       UE_LOG(LogTemp, Error,
+04935:         TEXT("VIOLATION CrowdDemoWorkerV2PreparedInputSubmitFailed step=%d"),
+04936:         GetCurrentFixedStepIndex());
+04937:       BoundaryOrchestrator->Fail();
+04938:       LastBoundaryTransactionResult =
+04939:         BoundaryOrchestrator->BuildResult();
+04940:       return ECrowdBoundaryPollResult::Failed;
+04941:     }
+04942:   }
+04943:   UMassCrowdRuntimeSubsystem* WorkerV2RuntimeSubsystem =
+04944:     GetWorld()
+04945:       ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+04946:       : nullptr;
+04947:   if (!WorkerV2RuntimeSubsystem)
+04948:     return RejectPrepare(TEXT("worker_runtime_missing"));
+04949:   TMap<FCrowdWorkerDirtyStateKey, FCrowdWorkerDomainProxyState>
+04950:     PendingPreparedDomains;
+04951:   uint64 PendingAppliedInputSequence = 0;
+04952:   if (const FCrowdDemoPreparedRoundCommitPlan* Pending =
+04953:       PeekPreparedRoundCommitPlan())
+04954:   {
+04955:     const FCrowdWorkerPreparedResultApply& Prepared =
+04956:       Pending->PreparedProxyResult;
+04957:     PendingAppliedInputSequence =
+04958:       Prepared.Batch.LastAppliedInputSequence;
+04959:     PendingPreparedDomains.Reserve(
+04960:       Prepared.Batch.StatePatches.Num());
+04961:     for (int32 PatchIndex = 0;
+04962:       PatchIndex < Prepared.Batch.StatePatches.Num(); ++PatchIndex)
+04963:     {
+04964:       if (!Prepared.StatePatchStableSlots.IsValidIndex(PatchIndex)
+04965:         || Prepared.StatePatchStableSlots[PatchIndex] == INDEX_NONE)
+04966:         continue;
+04967:       const FCrowdWorkerStatePatch& Patch =
+04968:         Prepared.Batch.StatePatches[PatchIndex];
+04969:       if (Patch.StateFieldId == 0)
+04970:         continue;
+04971:       const ECrowdWorkerField Field =
+04972:         static_cast<ECrowdWorkerField>(Patch.StateFieldId - 1);
+04973:       if (Field >= ECrowdWorkerField::Count)
+04974:         continue;
+04975:       FCrowdWorkerDomainProxyState State;
+04976:       State.EntityRef = Patch.EntityRef;
+04977:       State.Field = Field;
+04978:       State.State = Patch.State;
+04979:       State.WorkerEpoch = Patch.WorkerEpoch;
+04980:       State.SourceInputSequence = Patch.SourceInputSequence;
+04981:       State.PublishSequence = Prepared.Batch.PublishSequence;
+04982:       PendingPreparedDomains.Add(
+04983:         {Patch.EntityRef, Field}, MoveTemp(State));
+04984:     }
+04985:   }
+04986:   const auto FindResultDomain = [&PendingPreparedDomains](
+04987:     const FCrowdWorkerResultApplyProxy& Proxy,
+04988:     const FCrowdStableEntityRef& EntityRef,
+04989:     const ECrowdWorkerField Field)
+04990:       -> const FCrowdWorkerDomainProxyState*
+04991:   {
+04992:     if (const FCrowdWorkerDomainProxyState* Pending =
+04993:         PendingPreparedDomains.Find({EntityRef, Field}))
+04994:       return Pending;
+04995:     return Proxy.FindDomain(EntityRef, Field);
+04996:   };
+04997:   const ECrowdWorkerMovementAuthorityMode
+04998:     ConfiguredMovementMode =
+04999:       WorkerV2RuntimeSubsystem->GetWorkerMovementAuthority().GetMode();
+05000:   ECrowdDemoWorkerParticleAuthorityMode ParticleMode =
+05001:     ECrowdDemoWorkerParticleAuthorityMode::Shadow;
+05002:   TSet<FCrowdStableEntityRef> ParticleCanaries;
+05003:   ECrowdDemoWorkerTargetAuthorityMode TargetMode =
+05004:     ECrowdDemoWorkerTargetAuthorityMode::Shadow;
+05005:   TSet<FCrowdStableEntityRef> TargetCanaries;
+05006:   ECrowdDemoWorkerProjectileAuthorityMode ProjectileMode =
+05007:     ECrowdDemoWorkerProjectileAuthorityMode::Shadow;
+05008:   ECrowdDemoWorkerCombatAuthorityMode CombatMode =
+05009:     ECrowdDemoWorkerCombatAuthorityMode::Shadow;
+05010:   if (!ResolveWorkerParticleAuthority(
+05011:       BoundarySnapshot, ParticleMode, ParticleCanaries)
+05012:     || !ResolveWorkerTargetAuthority(
+05013:       BoundarySnapshot, TargetMode, TargetCanaries)
+05014:     || !ResolveWorkerProjectileAuthority(ProjectileMode)
+05015:     || !ResolveWorkerCombatAuthority(CombatMode)
+05016:     || (ParticleMode
+05017:         != ECrowdDemoWorkerParticleAuthorityMode::Shadow
+05018:       && ConfiguredMovementMode
+05019:         != ECrowdWorkerMovementAuthorityMode::Production)
+05020:     || (TargetMode
+05021:         != ECrowdDemoWorkerTargetAuthorityMode::Shadow
+05022:       && ConfiguredMovementMode
+05023:         != ECrowdWorkerMovementAuthorityMode::Production))
+05024:   {
+05025:     UE_LOG(LogTemp, Error,
+05026:       TEXT("VIOLATION CrowdDemoWorkerDomainAuthorityConfig movement_mode=%d particle_mode=%d particle_canaries=%d target_mode=%d target_canaries=%d projectile_mode=%d combat_mode=%d"),
+05027:       static_cast<int32>(ConfiguredMovementMode),
+05028:       static_cast<int32>(ParticleMode),
+05029:       ParticleCanaries.Num(),
+05030:       static_cast<int32>(TargetMode),
+05031:       TargetCanaries.Num(),
+05032:       static_cast<int32>(ProjectileMode),
+05033:       static_cast<int32>(CombatMode));
+05034:     return ECrowdBoundaryPollResult::Failed;
+05035:   }
+05036:   const bool bRequireWorkerV2MovementReady =
+05037:     ConfiguredMovementMode
+05038:       != ECrowdWorkerMovementAuthorityMode::Shadow;
+05039:   const uint64 ExpectedWorkerV2Sequence =
+05040:     BoundaryFacingWorkState->WorkerV2InputSequence;
+05041:   bool bWorkerV2MovementReady = !bRequireWorkerV2MovementReady
+05042:     || ExpectedWorkerV2Sequence != 0;
+05043:   if (bRequireWorkerV2MovementReady)
+05044:   {
+05045:     const FCrowdWorkerResultApplyProxy& Proxy =
+05046:       WorkerV2RuntimeSubsystem->GetWorkerResultApplyProxy();
+05047:     if (FMath::Max(
+05048:         Proxy.GetMetrics().LastAppliedInputSequence,
+05049:         PendingAppliedInputSequence)
+05050:         < ExpectedWorkerV2Sequence)
+05051:       bWorkerV2MovementReady = false;
+05052:     for (const FCrowdMassBoundaryAgentRecord& Agent :
+05053:       BoundarySnapshot.Agents)
+05054:     {
+05055:       const FCrowdWorkerDomainProxyState* Movement =
+05056:         FindResultDomain(Proxy,
+05057:             Agent.AgentFacts.StableEntityRef,
+
+
+===== CONTEXT Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp :: UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction =====
+02776:       WorkerProxyGatherBypassCount, WorkerProxyInPlaceRefreshCount,
+02777:       FullBoundarySnapshotPublishCount, FullBoundarySnapshotHashCount,
+02778:       BoundarySnapshotEpochTokenCount, GetCurrentFixedStepIndex(),
+02779:       BoundarySnapshot.Agents.Num());
+02780:   }
+02781:   return true;
+02782: }
+02783: 
+02784: bool UCrowdDemoRoundSimPipelineSubsystem::BeginBoundaryTransaction(
+02785:   const double GatherMilliseconds)
+02786: {
+02787:   if (!IsInGameThread() || !IsBoundarySnapshotCurrent()
+02788:     || BoundaryOrchestrator.IsValid())
+02789:     return false;
+02790:   BoundaryOrchestrator =
+02791:     MakeShared<FCrowdDemoRoundWorkBatch>();
+02792:   if (!BoundaryOrchestrator->Begin(
+02793:       BoundarySnapshot, GatherMilliseconds, BoundaryGeneration))
+02794:     return false;
+02795:   CurrentBoundaryRequestStartSeconds = FPlatformTime::Seconds();
+02796:   return true;
+02797: }
+02798: 
+02799: float UCrowdDemoRoundSimPipelineSubsystem::
+02800:   GetCurrentBoundaryWallMilliseconds() const
+02801: {
+02802:   return CurrentBoundaryRequestStartSeconds > 0.0
+02803:     ? static_cast<float>(
+02804:         (FPlatformTime::Seconds()
+02805:           - CurrentBoundaryRequestStartSeconds) * 1000.0)
+02806:     : 0.0f;
+02807: }
+02808: 
+02809: ECrowdBoundaryTransactionState
+02810: UCrowdDemoRoundSimPipelineSubsystem::GetRoundWorkState() const
+02811: {
+02812:   return BoundaryOrchestrator.IsValid()
+02813:     ? BoundaryOrchestrator->GetState()
+02814:     : ECrowdBoundaryTransactionState::Idle;
+02815: }
+02816: 
+02817: bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
+02818: {
+02819:   const auto RejectBusinessStage =
+02820:     [this](const TCHAR* Reason)
+02821:   {
+02822:     UE_LOG(LogTemp, Error,
+02823:       TEXT("CrowdDemoBusinessWorkStageDetail reason=%s step=%d plan_revision=%d snapshot_agents=%d snapshot_valid=%d"),
+02824:       Reason,
+02825:       GetCurrentFixedStepIndex(),
+02826:       GetCurrentPlanRevision(),
+02827:       BoundarySnapshot.Agents.Num(),
+02828:       BoundarySnapshot.bValid ? 1 : 0);
+02829:     return false;
+02830:   };
+02831:   if (!IsInGameThread() || !BoundaryOrchestrator.IsValid()
+02832:     || BoundaryOrchestrator->GetState()
+02833:       != ECrowdBoundaryTransactionState::Gathering
+02834:     || !IsBoundarySnapshotCurrent())
+02835:     return RejectBusinessStage(TEXT("invalid_boundary_state"));
+02836:   if (!BoundaryFacingWorkState.IsValid())
+02837:   {
+02838:     BoundaryFacingWorkState =
+02839:       MakeShared<FCrowdDemoBoundaryFacingWorkState,
+02840:         ESPMode::ThreadSafe>();
+02841:   }
+02842:   if (BoundaryFacingWorkState->bBusinessStaged)
+02843:     return RejectBusinessStage(TEXT("already_staged"));
+02844:   FCrowdDemoBoundaryBusinessWorkInput& Input =
+02845:     BoundaryFacingWorkState->BusinessInput;
+02846:   Input.Snapshot = BoundarySnapshot;
+02847:   Input.Facts = BoundaryBusinessFacts;
+02848:   Input.Rules = ActivePlan.Rules;
+02849:   if (!BuildProjectileSnapshot(Input.Projectiles))
+02850:     return RejectBusinessStage(TEXT("projectile_snapshot"));
+02851:   Input.RoundId = GetCurrentRoundId();
+02852:   Input.FixedStepIndex = GetCurrentFixedStepIndex();
+02853:   Input.PlanRevision = GetCurrentPlanRevision();
+02854:   Input.StepEndServerTimeSeconds =
+02855:     GetCurrentStepEndServerTimeSeconds();
+02856:   Input.FixedStepSeconds = GetCurrentFixedStepSeconds();
+02857:   Input.SimulationTimeSeconds =
+02858:     CalculateCanonicalSimulationTimeSeconds(
+02859:       Input.StepEndServerTimeSeconds,
+02860:       Input.FixedStepSeconds);
+02861:   const bool bVatShowcase =
+02862:     ActivePlan.Rules.Scenario
+02863:       == ECrowdDemoScenario::SimRoundSoftPressure
+
+
+===== CONTEXT Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp :: UCrowdDemoRoundSimPipelineSubsystem::TrySubmitWorkerV2ClockIntentEarly =====
+MISSING NEEDLE
+
+
+===== CONTEXT Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp :: UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot =====
+07507:   {
+07508:     return INDEX_NONE;
+07509:   }
+07510:   return FMath::Max(0, FMath::RoundToInt(
+07511:     ((bStepInProgress ? CurrentStepStartServerTimeSeconds : SimulatedServerTimeSeconds)
+07512:       - ActivePlan.StartServerTimeSeconds)
+07513:     / CurrentFixedStepSeconds));
+07514: }
+07515: void UCrowdDemoRoundSimPipelineSubsystem::RecordSoftPressureRollbackSnapshot(
+07516:   const int32 FixedStepIndex,
+07517:   TArray<FCrowdDemoSoftPressureRollbackAgentState>&& Agents)
+07518: {
+07519:   if (!IsActive() || !IsFlowScenario(GetRules().Scenario))
+07520:     return;
+07521:   Agents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+07522:   FCrowdDemoSoftPressureRollbackSnapshot& Snapshot =
+07523:     SoftPressureRollbackHistory.FindOrAdd(FixedStepIndex);
+07524:   Snapshot.FixedStepIndex = FixedStepIndex;
+07525:   Snapshot.bMovementFactsComplete = false;
+07526:   Snapshot.bCombatFactsComplete = false;
+07527:   Snapshot.bSnapshotReadyForReplay = false;
+07528:   Snapshot.Agents = MoveTemp(Agents);
+07529:   bool bAgentSetValid = Snapshot.Agents.Num() == BoundarySnapshot.Agents.Num();
+07530:   if (!bAgentSetValid)
+07531:   {
+07532:     Snapshot.bMovementFactsComplete = false;
+07533:     return;
+07534:   }
+07535:   for (int32 Index = 0; Index < Snapshot.Agents.Num(); ++Index)
+07536:   {
+07537:     bAgentSetValid &= Snapshot.Agents[Index].AgentId != INDEX_NONE
+07538:       && Snapshot.Agents[Index].AgentId
+07539:         == BoundarySnapshot.Agents[Index].Identity.AgentId
+07540:       && (Index == 0
+07541:         || Snapshot.Agents[Index - 1].AgentId < Snapshot.Agents[Index].AgentId);
+07542:   }
+07543:   Snapshot.bMovementFactsComplete = bAgentSetValid;
+07544:   Snapshot.LocalPredictiveResults = PreparedLocalPredictiveResults;
+07545:   Snapshot.LocalPredictiveGrantStates = LocalPredictiveGrantStates;
+07546:   Snapshot.LocalPredictiveSummary = LastLocalPredictiveSummary;
+07547:   Snapshot.LocalPredictiveRoundHash = LocalPredictiveRoundHash;
+07548:   Snapshot.LocalPredictiveSampleCount = LocalPredictiveSampleCount;
+07549:   Snapshot.LocalPredictiveInvalidStepCount = LocalPredictiveInvalidStepCount;
+07550:   Snapshot.GuidanceCandidateRoundHash = GuidanceCandidateRoundHash;
+07551:   Snapshot.GuidanceComposeRoundHash = GuidanceComposeRoundHash;
+07552:   Snapshot.GuidanceComposeSampleCount = GuidanceComposeSampleCount;
+07553:   Snapshot.ParticleCandidateSummary = LastParticleCandidateSummary;
+07554:   Snapshot.ParticleAppliedSummary = LastParticleAppliedSummary;
+07555:   Snapshot.ParticleSolverMsSampleCount = ParticleSolverMillisecondsSamples.Num();
+07556:   Snapshot.ParticleCandidateStateHash = ParticleCandidateStateHash;
+07557:   Snapshot.ParticleAppliedStateHash = ParticleAppliedStateHash;
+07558:   Snapshot.ParticleInvalidStepCount = ParticleInvalidStepCount;
+07559:   Snapshot.ParticleGlobalFallbackStepCount = ParticleGlobalFallbackStepCount;
+07560:   Snapshot.ParticleStepCount = ParticleStepCount;
+07561:   Snapshot.CrossProfileHardViolationCount = CrossProfileHardViolationCount;
+07562:   Snapshot.CrossProfileSweptViolationCount = CrossProfileSweptViolationCount;
+07563:   Snapshot.ParticleSettlingWindowCount = ParticleSettlingWindowCount;
+07564:   Snapshot.ParticleSettlingSteps = ParticleSettlingSteps;
+07565:   Snapshot.ParticlePreviousSoftErrorP95 = ParticlePreviousSoftErrorP95;
+07566:   Snapshot.bParticleConstraintRunFailure = bParticleConstraintRunFailure;
+07567:   Snapshot.ParticleFailureFixture = ParticleFailureFixture;
+07568:   Snapshot.OpenSpawnRelaxationRuntime = OpenSpawnRelaxationRuntime;
+07569:   Snapshot.OpenCohortMovementProgress = OpenCohortMovementProgress;
+07570:   Snapshot.BidirectionalSwapProgress = BidirectionalSwapProgress;
+07571:   Snapshot.ValidCorridorTransitProgress = ValidCorridorTransitProgress;
+07572:   Snapshot.TargetFact = TargetFact;
+07573:   Snapshot.DynamicFlowAnchorCellKey = DynamicFlowAnchorCellKey;
+07574:   Snapshot.DynamicFlowIntegrationRebuildCount = DynamicFlowIntegrationRebuildCount;
+07575:   Snapshot.DynamicFlowRoundHash = DynamicFlowRoundHash;
+07576:   Snapshot.DynamicFlowRoundHashFixedStepIndex =
+07577:     DynamicFlowRoundHashFixedStepIndex;
+07578:   Snapshot.TargetRegionPlanResourceKey = PreparedTargetRegionPlan.bValid
+07579:     ? MakeTargetPlanResourceKey(0, PreparedTargetRegionPlan)
+07580:     : 0;
+07581:   if (PreparedTargetRegionPlan.bValid)
+07582:     TargetRegionPlanResources.FindOrAdd(Snapshot.TargetRegionPlanResourceKey) =
+07583:       PreparedTargetRegionPlan;
+07584:   Snapshot.TargetRegionQuotaExecution = TargetRegionQuotaExecution;
+07585:   Snapshot.TargetRegionPlanValidation = TargetRegionPlanValidation;
+07586:   Snapshot.TargetRegionTopologyRoundHash = TargetRegionTopologyRoundHash;
+07587:   Snapshot.TargetRegionDemandRoundHash = TargetRegionDemandRoundHash;
+07588:   Snapshot.TargetRegionTransportRoundHash = TargetRegionTransportRoundHash;
+07589:   Snapshot.TargetRegionGuidanceRoundHash = TargetRegionGuidanceRoundHash;
+07590:   Snapshot.TargetRegionPlanRebuildCount = TargetRegionPlanRebuildCount;
+07591:   Snapshot.TargetRegionLifetimeRebuildCount = TargetRegionLifetimeRebuildCount;
+07592:   Snapshot.TargetRegionTargetRebuildCount = TargetRegionTargetRebuildCount;
+07593:   Snapshot.TargetRegionEnvironmentRebuildCount = TargetRegionEnvironmentRebuildCount;
+07594:   Snapshot.TargetRegionMembershipRebuildCount = TargetRegionMembershipRebuildCount;
+07595:   Snapshot.TargetRegionDemandSatisfiedRebuildCount = TargetRegionDemandSatisfiedRebuildCount;
+07596:   Snapshot.TargetRegionPathInvalidRebuildCount = TargetRegionPathInvalidRebuildCount;
+07597:   Snapshot.TargetRegionSolverMsSampleCount = TargetRegionSolverMillisecondsSamples.Num();
+07598:   Snapshot.bTargetRegionRoundValid = bTargetRegionRoundValid;
+07599:   Snapshot.TargetRegionInvalidStepCount = TargetRegionInvalidStepCount;
+07600:   Snapshot.TargetRegionLastInvalidStep = TargetRegionLastInvalidStep;
+07601:   Snapshot.TargetRegionValidationFailureCount = TargetRegionValidationFailureCount;
+07602:   Snapshot.TargetRegionValidationRoundHash = TargetRegionValidationRoundHash;
+07603:   Snapshot.TargetRegionGuidanceUnroutedStepCount = TargetRegionGuidanceUnroutedStepCount;
+07604:   Snapshot.TargetRegionGuidanceUnroutedAgentSampleCount = TargetRegionGuidanceUnroutedAgentSampleCount;
+07605:   Snapshot.TargetRegionGuidanceUnroutedAgentMax = TargetRegionGuidanceUnroutedAgentMax;
+07606:   Snapshot.TargetRegionGuidanceFirstFailureStep = TargetRegionGuidanceFirstFailureStep;
+07607:   Snapshot.TargetRegionGuidanceFirstFailureAgentId = TargetRegionGuidanceFirstFailureAgentId;
+07608:   Snapshot.bTargetRegionFailureFixtureValid = bTargetRegionFailureFixtureValid;
+07609:   Snapshot.TargetRegionFailureFixtureStep = TargetRegionFailureFixtureStep;
+07610:   Snapshot.TargetRegionFailureFixtureKind = TargetRegionFailureFixtureKind;
+07611:   Snapshot.TargetRegionFailureFixtureAgentId = TargetRegionFailureFixtureAgentId;
+07612:   Snapshot.TargetRegionFailureFixtureCellKey = TargetRegionFailureFixtureCellKey;
+07613:   Snapshot.TargetRegionFailureFixtureHash = TargetRegionFailureFixtureHash;
+07614:   Snapshot.TargetRegionCapabilityCohorts.Reset(TargetRegionCapabilityCohorts.Num());
+07615:   for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime
+07616:     : TargetRegionCapabilityCohorts)
+07617:   {
+07618:     FCrowdDemoTargetRegionCapabilityCohortRollbackState& State =
+07619:       Snapshot.TargetRegionCapabilityCohorts.AddDefaulted_GetRef();
+07620:     State.Cohort = Runtime.Cohort;
+07621:     State.DemandRegionPhaseOffset = Runtime.DemandRegionPhaseOffset;
+07622:     State.PlanResourceKey = Runtime.Plan.bValid
+07623:       ? MakeTargetPlanResourceKey(Runtime.Cohort.CapabilityProfileKey, Runtime.Plan)
+07624:       : 0;
+07625:     if (Runtime.Plan.bValid)
+07626:       TargetRegionPlanResources.FindOrAdd(State.PlanResourceKey) = Runtime.Plan;
+07627:     State.QuotaExecution = Runtime.QuotaExecution;
+07628:     State.LastPlanReplacement = Runtime.LastPlanReplacement;
+07629:     State.Validation = Runtime.Validation;
+07630:     State.TopologyRoundHash = Runtime.TopologyRoundHash;
+07631:     State.DemandRoundHash = Runtime.DemandRoundHash;
+07632:     State.TransportRoundHash = Runtime.TransportRoundHash;
+07633:     State.GuidanceRoundHash = Runtime.GuidanceRoundHash;
+07634:     State.ValidationRoundHash = Runtime.ValidationRoundHash;
+07635:     State.PlanRebuildCount = Runtime.PlanRebuildCount;
+07636:     State.InvalidStepCount = Runtime.InvalidStepCount;
+07637:     State.ValidationFailureCount = Runtime.ValidationFailureCount;
+07638:     State.GuidanceUnroutedStepCount = Runtime.GuidanceUnroutedStepCount;
+07639:     State.LastInvalidStep = Runtime.LastInvalidStep;
+07640:     State.SolverMsSampleCount = Runtime.SolverMillisecondsSamples.Num();
+07641:     State.PlanLifecycle = Runtime.PlanLifecycle;
+07642:     State.TargetEngagedHoldAgentIds = Runtime.TargetEngagedHoldAgentIds;
+07643:     State.TargetEngagementAcquireCount = Runtime.TargetEngagementAcquireCount;
+07644:     State.TargetEngagementReleaseCount = Runtime.TargetEngagementReleaseCount;
+07645:     State.TargetEngagementSuppressedRetreatCount =
+07646:       Runtime.TargetEngagementSuppressedRetreatCount;
+07647:     State.bRoundValid = Runtime.bRoundValid;
+07648:   }
+07649:   Snapshot.CapabilityProfileSummary = CapabilityProfileSummary;
+07650:   Snapshot.CapabilityCohortRebuildCount = CapabilityCohortRebuildCount;
+07651:   Snapshot.TargetRegionPlanLifecycleSummary = TargetRegionPlanLifecycleSummary;
+07652:   Snapshot.TargetRegionPlanLifecycleFixture = TargetRegionPlanLifecycleFixture;
+07653:   Snapshot.FlowGoalReachedAgentIds = FlowGoalReachedAgentIds;
+07654:   Snapshot.FlowWallPassAgentIds = FlowWallPassAgentIds;
+07655:   Snapshot.FlowCorridorExitAgentIds = FlowCorridorExitAgentIds;
+07656:   Snapshot.FlowTurnExitAgentIds = FlowTurnExitAgentIds;
+07657:   Snapshot.FlowLowSpeedSecondsByAgentId = FlowLowSpeedSecondsByAgentId;
+07658:   Snapshot.FlowCorridorDeadlockAgentIds = FlowCorridorDeadlockAgentIds;
+07659:   Snapshot.CompareMetrics = LastCompareMetrics;
+07660:   const bool bProjectileSnapshotBuilt =
+07661:     BuildProjectileSnapshot(Snapshot.Projectiles);
+07662:   checkf(bProjectileSnapshotBuilt,
+07663:     TEXT("Mass projectile authority unavailable during checkpoint"));
+07664:   Snapshot.ProjectileMetrics = ProjectileMetrics;
+07665:   if (IsSoftPressureRouteDiagnosticEnabled())
+07666:     Snapshot.RouteDiagnosticCheckpoint =
+07667:       FCrowdDemoSoftPressureRouteDiagnosticKernel::MakeCheckpoint(
+07668:         SoftPressureRouteDiagnosticRuntime);
+07669:   if (IsTargetStabilityDiagnosticEnabled())
+07670:     Snapshot.TargetStabilityCheckpoint =
+07671:       FCrowdDemoTargetStabilityDiagnosticKernel::MakeCheckpoint(
+07672:         TargetStabilityRuntime);
+07673:   SoftPressureRollbackHistory.Remove(FixedStepIndex - 128);
+07674: }
+07675: 
+07676: bool UCrowdDemoRoundSimPipelineSubsystem::CompleteSoftPressureRollbackCombatState(
+07677:   const int32 FixedStepIndex,
+07678:   const TConstArrayView<FCrowdDemoPreparedCombatRollbackFact> CombatStates)
+07679: {
+07680:   FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+07681:     SoftPressureRollbackHistory.Find(FixedStepIndex);
+07682:   if (!Snapshot || !Snapshot->bMovementFactsComplete
+07683:     || Snapshot->bCombatFactsComplete || Snapshot->bSnapshotReadyForReplay
+07684:     || Snapshot->Agents.Num() != CombatStates.Num())
+07685:     return false;
+07686: 
+07687:   TArray<FCrowdDemoPreparedCombatRollbackFact> SortedStates(CombatStates);
+07688:   SortedStates.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
+07689:   for (int32 Index = 0; Index < SortedStates.Num(); ++Index)
+07690:   {
+07691:     if (SortedStates[Index].AgentId == INDEX_NONE
+07692:       || Snapshot->Agents[Index].AgentId != SortedStates[Index].AgentId
+07693:       || (Index > 0 && SortedStates[Index - 1].AgentId == SortedStates[Index].AgentId))
+07694:       return false;
+07695:   }
+07696:   for (int32 Index = 0; Index < SortedStates.Num(); ++Index)
+07697:     Snapshot->Agents[Index].Combat = SortedStates[Index].Combat;
+07698:   Snapshot->bCombatFactsComplete = true;
+07699:   Snapshot->bSnapshotReadyForReplay = true;
+07700:   return true;
+07701: }
+07702: 
+07703: const FCrowdDemoSoftPressureRollbackSnapshot*
+07704: UCrowdDemoRoundSimPipelineSubsystem::FindSoftPressureRollbackSnapshot(
+07705:   const int32 FixedStepIndex) const
+07706: {
+07707:   return SoftPressureRollbackHistory.Find(FixedStepIndex);
+07708: }
+07709: 
+07710: bool UCrowdDemoRoundSimPipelineSubsystem::IsSoftPressureRollbackSnapshotReadyForReplay(
+07711:   const int32 FixedStepIndex) const
+07712: {
+07713:   const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+07714:     SoftPressureRollbackHistory.Find(FixedStepIndex);
+07715:   return Snapshot && Snapshot->bMovementFactsComplete
+07716:     && Snapshot->bCombatFactsComplete && Snapshot->bSnapshotReadyForReplay;
+07717: }
+07718: 
+07719: void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
+07720:   const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot)
+07721: {
+07722:   PreparedLocalPredictiveResults = Snapshot.LocalPredictiveResults;
+07723:   LocalPredictiveGrantStates = Snapshot.LocalPredictiveGrantStates;
+07724:   LastLocalPredictiveSummary = Snapshot.LocalPredictiveSummary;
+07725:   LocalPredictiveRoundHash = Snapshot.LocalPredictiveRoundHash;
+07726:   LocalPredictiveSampleCount = Snapshot.LocalPredictiveSampleCount;
+07727:   LocalPredictiveInvalidStepCount = Snapshot.LocalPredictiveInvalidStepCount;
+07728:   GuidanceCandidateRoundHash = Snapshot.GuidanceCandidateRoundHash;
+07729:   GuidanceComposeRoundHash = Snapshot.GuidanceComposeRoundHash;
+07730:   GuidanceComposeSampleCount = Snapshot.GuidanceComposeSampleCount;
+07731:   LastParticleCandidateSummary = Snapshot.ParticleCandidateSummary;
+07732:   LastParticleAppliedSummary = Snapshot.ParticleAppliedSummary;
+07733:   ParticleSolverMillisecondsSamples.SetNum(FMath::Min(
+07734:     ParticleSolverMillisecondsSamples.Num(), Snapshot.ParticleSolverMsSampleCount));
+
+
+===== CONTEXT Source/MassAICrowdDemo/Mass/CrowdDemoRoundSimPipelineSubsystem.cpp :: UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime =====
+07711:   const int32 FixedStepIndex) const
+07712: {
+07713:   const FCrowdDemoSoftPressureRollbackSnapshot* Snapshot =
+07714:     SoftPressureRollbackHistory.Find(FixedStepIndex);
+07715:   return Snapshot && Snapshot->bMovementFactsComplete
+07716:     && Snapshot->bCombatFactsComplete && Snapshot->bSnapshotReadyForReplay;
+07717: }
+07718: 
+07719: void UCrowdDemoRoundSimPipelineSubsystem::RestoreSoftPressureRuntime(
+07720:   const FCrowdDemoSoftPressureRollbackSnapshot& Snapshot)
+07721: {
+07722:   PreparedLocalPredictiveResults = Snapshot.LocalPredictiveResults;
+07723:   LocalPredictiveGrantStates = Snapshot.LocalPredictiveGrantStates;
+07724:   LastLocalPredictiveSummary = Snapshot.LocalPredictiveSummary;
+07725:   LocalPredictiveRoundHash = Snapshot.LocalPredictiveRoundHash;
+07726:   LocalPredictiveSampleCount = Snapshot.LocalPredictiveSampleCount;
+07727:   LocalPredictiveInvalidStepCount = Snapshot.LocalPredictiveInvalidStepCount;
+07728:   GuidanceCandidateRoundHash = Snapshot.GuidanceCandidateRoundHash;
+07729:   GuidanceComposeRoundHash = Snapshot.GuidanceComposeRoundHash;
+07730:   GuidanceComposeSampleCount = Snapshot.GuidanceComposeSampleCount;
+07731:   LastParticleCandidateSummary = Snapshot.ParticleCandidateSummary;
+07732:   LastParticleAppliedSummary = Snapshot.ParticleAppliedSummary;
+07733:   ParticleSolverMillisecondsSamples.SetNum(FMath::Min(
+07734:     ParticleSolverMillisecondsSamples.Num(), Snapshot.ParticleSolverMsSampleCount));
+07735:   ParticleCandidateStateHash = Snapshot.ParticleCandidateStateHash;
+07736:   ParticleAppliedStateHash = Snapshot.ParticleAppliedStateHash;
+07737:   ParticleInvalidStepCount = Snapshot.ParticleInvalidStepCount;
+07738:   ParticleGlobalFallbackStepCount = Snapshot.ParticleGlobalFallbackStepCount;
+07739:   ParticleStepCount = Snapshot.ParticleStepCount;
+07740:   CrossProfileHardViolationCount = Snapshot.CrossProfileHardViolationCount;
+07741:   CrossProfileSweptViolationCount = Snapshot.CrossProfileSweptViolationCount;
+07742:   ParticleSettlingWindowCount = Snapshot.ParticleSettlingWindowCount;
+07743:   ParticleSettlingSteps = Snapshot.ParticleSettlingSteps;
+07744:   ParticlePreviousSoftErrorP95 = Snapshot.ParticlePreviousSoftErrorP95;
+07745:   bParticleConstraintRunFailure = Snapshot.bParticleConstraintRunFailure;
+07746:   ParticleFailureFixture = Snapshot.ParticleFailureFixture;
+07747:   OpenSpawnRelaxationRuntime = Snapshot.OpenSpawnRelaxationRuntime;
+07748:   PreparedOpenSpawnBoundaryFacts.Reset();
+07749:   PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
+07750:   OpenCohortMovementProgress = Snapshot.OpenCohortMovementProgress;
+07751:   BidirectionalSwapProgress = Snapshot.BidirectionalSwapProgress;
+07752:   ValidCorridorTransitProgress = Snapshot.ValidCorridorTransitProgress;
+07753:   TargetFact = Snapshot.TargetFact;
+07754:   DynamicFlowAnchorCellKey = Snapshot.DynamicFlowAnchorCellKey;
+07755:   DynamicFlowIntegrationRebuildCount =
+07756:     Snapshot.DynamicFlowIntegrationRebuildCount;
+07757:   UMassCrowdRuntimeSubsystem* SharedFlowRuntimeSubsystem =
+07758:     GetWorld() ? GetWorld()->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+07759:                : nullptr;
+07760:   check(SharedFlowRuntimeSubsystem);
+07761:   check(SharedFlowRuntimeSubsystem->RestoreSharedFlowDynamicState(
+07762:     Snapshot.DynamicFlowAnchorCellKey,
+07763:     Snapshot.DynamicFlowIntegrationRebuildCount));
+07764:   DynamicFlowRoundHash = Snapshot.DynamicFlowRoundHash;
+07765:   DynamicFlowRoundHashFixedStepIndex =
+07766:     Snapshot.DynamicFlowRoundHashFixedStepIndex;
+07767:   bDynamicFlowIntegrationCacheInvalidated = true;
+07768:   PreparedTargetRegionTopology = {};
+07769:   TargetRegionTopologySummary = {};
+07770:   PreparedTargetRegionAgents.Reset();
+07771:   PreparedTargetRegionDemand = {};
+07772:   PreparedTargetRegionPlan = {};
+07773:   if (const FCrowdDemoTargetRegionFlowPlan* Resource =
+07774:     TargetRegionPlanResources.Find(Snapshot.TargetRegionPlanResourceKey))
+07775:   {
+07776:     PreparedTargetRegionPlan = *Resource;
+07777:   }
+07778:   else if (Snapshot.TargetRegionPlanResourceKey != 0)
+07779:   {
+07780:     UE_LOG(LogTemp, Error,
+07781:       TEXT("VIOLATION CrowdDemoRollbackPlanResourceMissing key=%llu step=%d"),
+07782:       static_cast<unsigned long long>(Snapshot.TargetRegionPlanResourceKey),
+07783:       Snapshot.FixedStepIndex);
+07784:   }
+07785:   TargetRegionQuotaExecution = Snapshot.TargetRegionQuotaExecution;
+07786:   TargetRegionPlanValidation = Snapshot.TargetRegionPlanValidation;
+07787:   PreparedTargetRegionGuidance.Reset();
+07788:   TargetRegionGuidanceSummary = {};
+07789:   TargetRegionTopologyRoundHash = Snapshot.TargetRegionTopologyRoundHash;
+07790:   TargetRegionDemandRoundHash = Snapshot.TargetRegionDemandRoundHash;
+07791:   TargetRegionTransportRoundHash = Snapshot.TargetRegionTransportRoundHash;
+07792:   TargetRegionGuidanceRoundHash = Snapshot.TargetRegionGuidanceRoundHash;
+07793:   TargetRegionPlanRebuildCount = Snapshot.TargetRegionPlanRebuildCount;
+07794:   TargetRegionLifetimeRebuildCount = Snapshot.TargetRegionLifetimeRebuildCount;
+07795:   TargetRegionTargetRebuildCount = Snapshot.TargetRegionTargetRebuildCount;
+07796:   TargetRegionEnvironmentRebuildCount = Snapshot.TargetRegionEnvironmentRebuildCount;
+07797:   TargetRegionMembershipRebuildCount = Snapshot.TargetRegionMembershipRebuildCount;
+07798:   TargetRegionDemandSatisfiedRebuildCount = Snapshot.TargetRegionDemandSatisfiedRebuildCount;
+07799:   TargetRegionPathInvalidRebuildCount = Snapshot.TargetRegionPathInvalidRebuildCount;
+07800:   TargetRegionSolverMillisecondsSamples.SetNum(FMath::Min(
+07801:     TargetRegionSolverMillisecondsSamples.Num(), Snapshot.TargetRegionSolverMsSampleCount));
+07802:   bTargetRegionRoundValid = Snapshot.bTargetRegionRoundValid;
+07803:   TargetRegionInvalidStepCount = Snapshot.TargetRegionInvalidStepCount;
+07804:   TargetRegionLastInvalidStep = Snapshot.TargetRegionLastInvalidStep;
+07805:   TargetRegionValidationFailureCount = Snapshot.TargetRegionValidationFailureCount;
+07806:   TargetRegionValidationRoundHash = Snapshot.TargetRegionValidationRoundHash;
+07807:   TargetRegionGuidanceUnroutedStepCount = Snapshot.TargetRegionGuidanceUnroutedStepCount;
+07808:   TargetRegionGuidanceUnroutedAgentSampleCount = Snapshot.TargetRegionGuidanceUnroutedAgentSampleCount;
+07809:   TargetRegionGuidanceUnroutedAgentMax = Snapshot.TargetRegionGuidanceUnroutedAgentMax;
+07810:   TargetRegionGuidanceFirstFailureStep = Snapshot.TargetRegionGuidanceFirstFailureStep;
+07811:   TargetRegionGuidanceFirstFailureAgentId = Snapshot.TargetRegionGuidanceFirstFailureAgentId;
+07812:   bTargetRegionFailureFixtureValid = Snapshot.bTargetRegionFailureFixtureValid;
+07813:   TargetRegionFailureFixtureStep = Snapshot.TargetRegionFailureFixtureStep;
+07814:   TargetRegionFailureFixtureKind = Snapshot.TargetRegionFailureFixtureKind;
+07815:   TargetRegionFailureFixtureAgentId = Snapshot.TargetRegionFailureFixtureAgentId;
+07816:   TargetRegionFailureFixtureCellKey = Snapshot.TargetRegionFailureFixtureCellKey;
+07817:   TargetRegionFailureFixtureHash = Snapshot.TargetRegionFailureFixtureHash;
+07818:   TMap<uint32, TArray<float>> SolverSamplesByProfile;
+07819:   for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Existing
+07820:     : TargetRegionCapabilityCohorts)
+07821:   {
+07822:     SolverSamplesByProfile.Add(
+07823:       Existing.Cohort.CapabilityProfileKey, Existing.SolverMillisecondsSamples);
+07824:   }
+07825:   TargetRegionCapabilityCohorts.Reset(Snapshot.TargetRegionCapabilityCohorts.Num());
+07826:   for (const FCrowdDemoTargetRegionCapabilityCohortRollbackState& State
+07827:     : Snapshot.TargetRegionCapabilityCohorts)
+07828:   {
+07829:     FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime =
+07830:       TargetRegionCapabilityCohorts.AddDefaulted_GetRef();
+07831:     Runtime.Cohort = State.Cohort;
+07832:     Runtime.DemandRegionPhaseOffset = State.DemandRegionPhaseOffset;
+07833:     if (const FCrowdDemoTargetRegionFlowPlan* Resource =
+07834:       TargetRegionPlanResources.Find(State.PlanResourceKey))
+07835:       Runtime.Plan = *Resource;
+07836:     else if (State.PlanResourceKey != 0)
+07837:       UE_LOG(LogTemp, Error,
+07838:         TEXT("VIOLATION CrowdDemoRollbackCohortPlanResourceMissing profile=%u key=%llu step=%d"),
+07839:         State.Cohort.CapabilityProfileKey,
+07840:         static_cast<unsigned long long>(State.PlanResourceKey),
+07841:         Snapshot.FixedStepIndex);
+07842:     Runtime.QuotaExecution = State.QuotaExecution;
+07843:     Runtime.LastPlanReplacement = State.LastPlanReplacement;
+07844:     Runtime.Validation = State.Validation;
+07845:     Runtime.TopologyRoundHash = State.TopologyRoundHash;
+07846:     Runtime.DemandRoundHash = State.DemandRoundHash;
+07847:     Runtime.TransportRoundHash = State.TransportRoundHash;
+07848:     Runtime.GuidanceRoundHash = State.GuidanceRoundHash;
+07849:     Runtime.ValidationRoundHash = State.ValidationRoundHash;
+07850:     Runtime.PlanRebuildCount = State.PlanRebuildCount;
+07851:     Runtime.InvalidStepCount = State.InvalidStepCount;
+07852:     Runtime.ValidationFailureCount = State.ValidationFailureCount;
+07853:     Runtime.GuidanceUnroutedStepCount = State.GuidanceUnroutedStepCount;
+07854:     Runtime.LastInvalidStep = State.LastInvalidStep;
+07855:     if (TArray<float>* Samples = SolverSamplesByProfile.Find(
+07856:       State.Cohort.CapabilityProfileKey))
+07857:     {
+07858:       Samples->SetNum(FMath::Min(Samples->Num(), State.SolverMsSampleCount));
+07859:       Runtime.SolverMillisecondsSamples = MoveTemp(*Samples);
+07860:     }
+07861:     Runtime.PlanLifecycle = State.PlanLifecycle;
+07862:     Runtime.TargetEngagedHoldAgentIds = State.TargetEngagedHoldAgentIds;
+07863:     Runtime.TargetEngagementAcquireCount = State.TargetEngagementAcquireCount;
+07864:     Runtime.TargetEngagementReleaseCount = State.TargetEngagementReleaseCount;
+07865:     Runtime.TargetEngagementSuppressedRetreatCount =
+07866:       State.TargetEngagementSuppressedRetreatCount;
+07867:     Runtime.bRoundValid = State.bRoundValid;
+07868:   }
+07869:   CapabilityProfileSummary = Snapshot.CapabilityProfileSummary;
+07870:   CapabilityCohortRebuildCount = Snapshot.CapabilityCohortRebuildCount;
+07871:   TargetRegionPlanLifecycleSummary = Snapshot.TargetRegionPlanLifecycleSummary;
+07872:   TargetRegionPlanLifecycleFixture = Snapshot.TargetRegionPlanLifecycleFixture;
+07873:   FlowGoalReachedAgentIds = Snapshot.FlowGoalReachedAgentIds;
+07874:   FlowWallPassAgentIds = Snapshot.FlowWallPassAgentIds;
+07875:   FlowCorridorExitAgentIds = Snapshot.FlowCorridorExitAgentIds;
+07876:   FlowTurnExitAgentIds = Snapshot.FlowTurnExitAgentIds;
+07877:   FlowLowSpeedSecondsByAgentId = Snapshot.FlowLowSpeedSecondsByAgentId;
+07878:   FlowCorridorDeadlockAgentIds = Snapshot.FlowCorridorDeadlockAgentIds;
+07879:   LastCompareMetrics = Snapshot.CompareMetrics;
+07880:   const bool bProjectileCapacityReady =
+07881:     PrepareProjectileFinalApply(Snapshot.Projectiles.Num());
+07882:   checkf(bProjectileCapacityReady,
+07883:     TEXT("Mass projectile rollback capacity validation failed"));
+07884:   ApplyProjectileFinalState(Snapshot.Projectiles);
+07885:   ProjectileMetrics = Snapshot.ProjectileMetrics;
+07886:   if (IsSoftPressureRouteDiagnosticEnabled())
+07887:   {
+07888:     FCrowdDemoSoftPressureRouteDiagnosticKernel::RestoreCheckpoint(
+07889:       Snapshot.RouteDiagnosticCheckpoint, SoftPressureRouteDiagnosticRuntime);
+07890:     SoftPressureRouteDiagnosticSummary = {};
+07891:   }
+07892:   if (IsTargetStabilityDiagnosticEnabled())
+07893:   {
+07894:     FCrowdDemoTargetStabilityDiagnosticKernel::RestoreCheckpoint(
+07895:       Snapshot.TargetStabilityCheckpoint, TargetStabilityRuntime);
+07896:     TargetStabilitySummary = {};
+07897:   }
+07898: }
+07899: 
+07900: void UCrowdDemoRoundSimPipelineSubsystem::InitializeOpenSpawnRelaxation(
+07901:   const FCrowdDemoOpenSpawnRelaxationLayout& Layout)
+07902: {
+07903:   OpenSpawnRelaxationLayout = Layout;
+07904:   OpenSpawnRelaxationRuntime =
+07905:     FCrowdDemoOpenSpawnRelaxationKernel::InitializeRuntime(Layout);
+07906: }
+07907: 
+07908: bool UCrowdDemoRoundSimPipelineSubsystem::PrepareOpenSpawnRelaxationBoundary()
+07909: {
+07910:   if (!IsOpenSpawnRelaxation())
+07911:     return false;
+07912:   FCrowdDemoOpenSpawnRelaxationKernel::PrepareBoundary(
+07913:     GetCurrentFixedStepIndex(), OpenSpawnRelaxationLayout, OpenSpawnRelaxationRuntime);
+07914:   TArray<int32> ExpectedAgentIds;
+07915:   ExpectedAgentIds.Reserve(BoundarySnapshot.Agents.Num());
+07916:   for (const FCrowdMassBoundaryAgentRecord& Agent : BoundarySnapshot.Agents)
+07917:     ExpectedAgentIds.Add(Agent.Identity.AgentId);
+07918:   if (!FCrowdDemoOpenSpawnRelaxationKernel::BuildPreparedBoundaryFacts(
+07919:       GetCurrentFixedStepIndex(), ExpectedAgentIds, OpenSpawnRelaxationRuntime,
+07920:       PreparedOpenSpawnBoundaryFacts))
+07921:   {
+07922:     PreparedOpenSpawnBoundaryFacts.Reset();
+07923:     PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
+07924:     return false;
+07925:   }
+07926:   PreparedOpenSpawnBoundaryFixedStepIndex = GetCurrentFixedStepIndex();
+07927:   return true;
+07928: }
+07929: 
+07930: bool UCrowdDemoRoundSimPipelineSubsystem::ConsumeOpenSpawnBoundaryResets(
+07931:   const TConstArrayView<int32> AgentIds)
+07932: {
+07933:   if (!ArePreparedOpenSpawnBoundaryFactsCurrent()) return false;
+07934:   for (const int32 AgentId : AgentIds)
+07935:   {
+07936:     const FCrowdDemoPreparedOpenSpawnBoundaryFact* Fact =
+07937:       FindPreparedOpenSpawnBoundaryFact(AgentId);
+07938:     if (!Fact || !Fact->bPendingBoundaryReset) return false;
