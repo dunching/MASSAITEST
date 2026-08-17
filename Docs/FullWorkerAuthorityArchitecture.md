@@ -1,91 +1,21 @@
-# MassAI 全面 Worker 权威架构
+# Full Worker Authority 架构（已退休）
 
-## 0. 文档状态
+> 状态：**Retired / Historical**
 
-[INFERRED][HIGH] 本文是 WA0–WA9 的目标架构事实源，并正式取代“四个 GT Boundary Processor”作为终态。`AB5FourNodeBoundaryContract.md`及下方四节点描述只保留迁移历史；四节点、公共 Runner/Orchestrator/WorkGraph 与 Round Poll shell 已从当前生产结构删除。
+本文曾是 WA0–WA9 阶段的目标架构事实源。随着文档收敛完成，它不再定义当前或最终架构。
 
-[COMPUTED][HIGH] 当前所有模拟域均已有 Worker Production Owner：Movement、Particle/Interaction、Target/Cohort、Combat/Projectile、Lifecycle 与 Behavior 均由 Worker 持有。WA7-R Intent/Correction/Checkpoint/Late Join 主合同已关闭，Digest 也已对齐为 Unreliable 自覆盖传输。
+现行事实源：
 
-[COMPUTED][HIGH] WA8 已删除 `FCrowdDemoRoundBoundaryGatherStage`、`RequestSubmitQuery` 和普通 Result Apply 全查询 fallback；稳定实体视图和 Dirty Batch 使普通 Proxy refresh 只验证/应用 Dirty Slot。9779 T8/900 Golden 与 9781 T5/600 通过。
+- 当前代码结构：[`CurrentArchitecture.md`](CurrentArchitecture.md)
+- 最终目标架构：[`TargetArchitecture.md`](TargetArchitecture.md)
+- 字段/Writer 所有权：[`Reference/WorkerOwnershipMatrix.md`](Reference/WorkerOwnershipMatrix.md)
+- 当前实施顺序：[`PhasePlan.md`](PhasePlan.md)
+- 完成状态与测试证据：[`FeatureChecklist.md`](FeatureChecklist.md)、[`TestScenarioMatrix.md`](TestScenarioMatrix.md)
 
-[COMPUTED][HIGH] 持久 StableEntityRef→Mass Handle 索引和最终 Dirty Mass Apply Plan 已完成；普通 Mass 写入只遍历已验证 Dirty EntityCollection。
+## 历史价值
 
-[COMPUTED][HIGH] 通用 Worker Result Owner Commit Barrier/Token 已下沉到 `MassCrowdRuntime`，Demo 只保留 Prepared Round Commit Plan 与 Host adapter；旧 Demo Barrier 文件/类型/消费者已物理删除且无兼容包装。Runtime Final Validate 覆盖 Token/Generation/Publish/Input/Event/Stable View，Host FinalValidate 覆盖 Mass/Target/Resource/Behavior/Event 的 Handle、Lifecycle、Owner 与 Revision；写后只执行 no-fail commit。
+本文原先记录了 Full Worker Authority 从四节点 Boundary 迁移到 Persistent Worker 的 WA 阶段设计、Domain DAG、迁移原则和性能门。其有效终态原则已经收敛进入 `TargetArchitecture.md`；当前实现状态已经收敛进入 `CurrentArchitecture.md`。
 
-[INFERRED][HIGH] 当前下一结构门是删除 Demo-local 普通帧完整 rollback/DAG CPU 数组及旧数据源，随后删除 `TryPrepareRoundApply` 与 Demo-local Round Transaction。9780 的 T5 step 886 Target Demand 拒绝也必须在 WA9 前单独关闭；不得直接开始三个 10k 场景。
+旧 WA 阶段的具体措辞、日期状态和中间迁移判断不得覆盖上述现行事实源。
 
-## 1. 唯一权威与方向
-
-[INFERRED][HIGH] 每 World 的持久 `FCrowdAsyncSimulationRuntime`最终持有 Lifecycle、Behavior、Flow/Resource、Target/Cohort、Combat/Reactive、Movement、Particle/Interaction、Facing 和 Simulation Clock 的唯一模拟权威。Mass Fragment、Actor、ISM/VAT与网络缓存只保存已消费的代理版本。
-
-```text
-GT / Network / Scene
-  └─ Spawn | Despawn | Command | Resource Revision | Correction
-       ↓
-Persistent Worker Runtime
-  └─ Dirty State Patch | Ordered Event | Checkpoint | Diagnostic
-       ↓
-Mass Proxy | Network Adapter | Presentation
-```
-
-[INFERRED][HIGH] GT不得把刚应用的Worker状态作为普通输入回送。普通Correction只递增`CorrectionRevision`并在Owner barrier失效相关工作；全量Resnapshot、World切换和teardown才递增`Generation`。
-
-## 2. Runtime v2 调度基础设施
-
-| 组件 | 冻结合同 |
-|---|---|
-| `FCrowdWorkerWorkRing` | [INFERRED][HIGH] Current/Next Epoch双队列；同Epoch稳定键去重；显式优先级和公平游标；容量有界。 |
-| `FCrowdWorkerTimeWheel` | [INFERRED][HIGH] 按绝对Simulation Tick排序Movement、Projectile、Cooldown、恢复和睡眠唤醒；取消以StableEntityRef/Lifecycle为边界。 |
-| `FCrowdWorkerDependencyIndex` | [INFERRED][HIGH] 记录空间邻居、Target/Cohort、Resource订阅和显式实体依赖；变更只唤醒闭合依赖集合。 |
-| `FCrowdWorkerResourceStore` | [INFERRED][HIGH] Current与Building Revision分离；Building旁路验证成功后只在Epoch边界原子交换。 |
-| `FCrowdWorkerDirtyStateStore` | [INFERRED][HIGH] 同实体/字段状态latest-wins；Damage、Death、Spawn、Despawn等事实必须进入不可覆盖Ordered Event。 |
-
-[INFERRED][HIGH] 生产10k预设为Work=`80000`、Wakeup=`40000`、Dependency Edge=`320000`、Dirty Entity=`16000`、Ordered Event=`64000`、每Epoch最多8轮传播、Shard=`64`实体；所有容量可配置但运行时禁止无界扩容。
-
-## 3. Domain DAG
-
-[INFERRED][HIGH] Domain Executor是无UObject的纯C++实例，在Runtime启动前注册。Runtime冻结DAG后固定执行：
-
-```text
-Lifecycle/Input
-→ Behavior
-→ Flow/Resource
-→ Target
-→ Combat/Reactive
-→ Movement
-→ Particle/Interaction
-→ Facing/Finalize
-→ Publish
-```
-
-[INFERRED][HIGH] 每个Epoch读取冻结的Entity与Resource版本；Shard只写独立输出槽。Interaction Pair键固定为`min(StableRefA, StableRefB), max(...)`，Owner按Domain、StableEntityRef和Pair Key稳定归并。
-
-[INFERRED][HIGH] 达到传播轮数上限的工作延期到Next Epoch并计数，不递归自旋；容量不足、开放Interaction Island、事件丢失、依赖漏标或双Writer均fail-closed。
-
-## 4. 公共与项目模块边界
-
-[INFERRED][HIGH] `MassCrowdRuntime`拥有通用调度、队列、Resource、Checkpoint、指标和`ICrowdWorkerDomainExecutor`接口。Particle/Target等可复用Executor位于插件对应模块；`MassAICrowdDemo`只保留Demo规则转换、Demo专用Combat规则及视觉/网络Adapter。
-
-[INFERRED][HIGH] Runtime不依赖项目模块，也不因Projectile依赖Runtime而反向依赖Projectile。业务Executor通过启动前注册接入，Runtime只消费POD输入并产出POD结果。
-
-## 5. 迁移原则
-
-[INFERRED][HIGH] 每个域严格执行`Shadow → 封闭实体Canary → Production → 关闭Legacy Writer`。同一字段在任意时刻只能有一个Production Writer；迁移状态以`FullWorkerAuthorityOwnershipMatrix.md`逐字段审计。
-
-[INFERRED][HIGH] 上述 Shadow/Canary 只用于证明算法或字段权威切换，不授权在 Demo 中长期保留兼容框架。基础件完成生产验证后，同一切片必须删除旧 Barrier/Transaction/fallback/alias；测试改为验证插件生产路径，而不是冻结旧类型名称。
-
-[INFERRED][HIGH] 四节点在WA8前原样承担未迁移域，不先合并、不继续结构优化。WA8删除四节点、完整Mass Gather、Boundary Request/Result/Commit、Frame Transaction和旧Mailbox；最终模拟Processor只保留Worker Input Sync与Worker Result Apply。
-
-## 6. 外部合同稳定性
-
-[INFERRED][HIGH] Behavior Codec v3、HitFact、Projectile和Replication外部载荷语义保持不变。网络Adapter从Worker Checkpoint/Patch/Event编码既有载荷，不再从Mass Fragment构造模拟权威。
-
-[INFERRED][HIGH] Late Join固定顺序为Checkpoint→Resource Revisions→Event Baseline→后续Delta；baseline完成前拒绝增量。Checkpoint与Ordered Event Sequence共同构成rollback/replay边界。
-
-## 7. 验收定义
-
-[INFERRED][HIGH] 最终结构门要求四节点类、Frame Transaction、生产完整Mass Gather、Boundary Commit、`CallExecute()`、阻塞Wait和字段双Writer均为0；模拟Processor恰为Input Sync和Result Apply。
-
-[INFERRED][HIGH] 最终性能门为Worker simulation lag p95≤`66.667ms`、client frame p95≤`33.333ms`、visual p95≤`16.667ms`、realtime≥`0.95`、GT Result Apply p95相对同规模基线不回退、propagation limit hit=`0`、Ordered Event loss=`0`。
-
-[RULES I BROKE]：[COMPUTED][HIGH] 无。
+需要追溯完整旧正文时，请使用 Git 历史查看本文件在本次 retirement 之前的版本。
