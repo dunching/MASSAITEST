@@ -724,9 +724,8 @@ namespace
 
 }
 
-void FCrowdDemoRoundPlanApplyStage::BindQuery(FMassEntityQuery& Query)
+static void ConfigureRoundPlanApplyQuery(FMassEntityQuery& Query)
 {
-  EntityQuery = &Query;
   Query.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
   Query.AddRequirement<FCrowdDemoMassMovementFragment>(EMassFragmentAccess::ReadOnly);
   Query.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadWrite);
@@ -753,14 +752,11 @@ void FCrowdDemoRoundPlanApplyStage::BindQuery(FMassEntityQuery& Query)
   Query.AddTagRequirement<FCrowdMassAgentTag>(EMassFragmentPresence::All);
 }
 
-void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+static void ExecuteRoundPlanApply(
+  FMassEntityQuery& EntityQuery,
+  FMassEntityManager& EntityManager,
+  FMassExecutionContext& Context)
 {
-  if (!EntityQuery)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoAuthorityInputQueryUnbound"));
-    return;
-  }
   UWorld* World = EntityManager.GetWorld();
   UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
   if (!World || !Pipeline)
@@ -780,7 +776,7 @@ void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, F
   TArray<int32> AgentIds;
   TMap<int32, int32> LifecycleByAgentId;
   TMap<int32, float> RadiusByAgentId;
-  EntityQuery->ForEachEntityChunk(Context, [&EntityCount, &AgentIds, &LifecycleByAgentId,
+  EntityQuery.ForEachEntityChunk(Context, [&EntityCount, &AgentIds, &LifecycleByAgentId,
       &RadiusByAgentId](FMassExecutionContext& ChunkContext)
   {
     const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
@@ -816,7 +812,7 @@ void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, F
     {
       BootstrapById.Add(Agent.AgentId, &Agent);
     }
-    EntityQuery->ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+    EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
     {
       const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
       const TConstArrayView<FCrowdDemoMassMovementFragment> Movements = ChunkContext.GetFragmentView<FCrowdDemoMassMovementFragment>();
@@ -1020,7 +1016,7 @@ void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, F
         TEXT("VIOLATION CrowdDemoRoundInitialStateInvalid round_id=%d revision=%d agents=%d"),
         DuePlan.RoundId, DuePlan.Revision, AgentIds.Num());
     }
-    EntityQuery->ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+    EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
     {
       const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
       const auto RuntimeIdentities =
@@ -1212,7 +1208,7 @@ void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, F
     {
       TArray<FCrowdDemoRoundInitialStateResult> ActualInitialStates;
       ActualInitialStates.Reserve(AgentIds.Num());
-      EntityQuery->ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+      EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
       {
         const auto Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
         const auto Formations = ChunkContext.GetFragmentView<FCrowdDemoRoundFormationFragment>();
@@ -1250,7 +1246,7 @@ void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, F
   {
     TArray<FCrowdDemoRoundAgentState> StatesOut;
     StatesOut.Reserve(EntityCount);
-    EntityQuery->ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+    EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
     {
       const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
       const TConstArrayView<FCrowdDemoRoundSimStateFragment> States = ChunkContext.GetFragmentView<FCrowdDemoRoundSimStateFragment>();
@@ -1309,7 +1305,7 @@ void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, F
     {
       ResultById.Add(Agent.AgentId, &Agent);
     }
-    EntityQuery->ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
+    EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
     {
       const TConstArrayView<FCrowdDemoMassIdentityFragment> Identities = ChunkContext.GetFragmentView<FCrowdDemoMassIdentityFragment>();
       const TArrayView<FCrowdDemoRoundSimStateFragment> States = ChunkContext.GetMutableFragmentView<FCrowdDemoRoundSimStateFragment>();
@@ -1375,7 +1371,7 @@ void FCrowdDemoRoundPlanApplyStage::Execute(FMassEntityManager& EntityManager, F
   Pipeline->LogStageOnce(TEXT("01_round_plan_apply"), EntityCount);
 }
 
-void FCrowdDemoRoundSharedFlowFieldBuildStage::Execute(
+static void ExecuteRoundSharedFlowFieldBuild(
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
@@ -1415,7 +1411,7 @@ void FCrowdDemoRoundSharedFlowFieldBuildStage::Execute(
   Pipeline->LogStageOnce(TEXT("02_shared_flow_field_build"), 0);
 }
 
-void FCrowdDemoRoundFlowPreferredVelocityStage::Execute(
+static void ExecuteRoundFlowPreferredVelocity(
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
@@ -1634,7 +1630,7 @@ bool PublishBootstrapBoundarySnapshotFromMass(
 }
 }
 
-void FCrowdDemoRoundOpenSpawnRelaxationPhasePrepareStage::Execute(
+static void ExecuteRoundOpenSpawnRelaxationPrepare(
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
@@ -1650,7 +1646,7 @@ void FCrowdDemoRoundOpenSpawnRelaxationPhasePrepareStage::Execute(
   }
 }
 
-void FCrowdDemoRoundTargetFactApplyStage::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+static void ExecuteRoundTargetFactApply(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
   UWorld* World = EntityManager.GetWorld();
   auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
@@ -1686,7 +1682,7 @@ void FCrowdDemoRoundTargetFactApplyStage::Execute(FMassEntityManager& EntityMana
   }
 }
 
-void FCrowdDemoRoundTargetPolarTopologyBuildStage::Execute(
+static void ExecuteRoundTargetPolarTopologyBuild(
   FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
   UWorld* World = EntityManager.GetWorld();
@@ -1803,7 +1799,7 @@ void FCrowdDemoRoundTargetPolarTopologyBuildStage::Execute(
     Pipeline->GetTargetRegionTopologySummary().FeasibleCellCount);
 }
 
-void FCrowdDemoRoundTargetRegionPopulationBuildStage::Execute(
+static void ExecuteRoundTargetRegionPopulationBuild(
   FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
   UWorld* World = EntityManager.GetWorld();
@@ -2031,7 +2027,7 @@ void FCrowdDemoRoundTargetRegionPopulationBuildStage::Execute(
   Pipeline->LogStageOnce(TEXT("05_target_region_population_build"), Agents.Num());
 }
 
-void FCrowdDemoRoundTargetRegionTransportSolveStage::Execute(
+static void ExecuteRoundTargetRegionTransportSolve(
   FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
   UWorld* World = EntityManager.GetWorld();
@@ -2210,7 +2206,7 @@ void FCrowdDemoRoundTargetRegionTransportSolveStage::Execute(
   Pipeline->LogStageOnce(TEXT("06_target_region_transport_solve"), Plan.RoutedAgentCount);
 }
 
-void FCrowdDemoRoundTargetRegionGuidanceStage::Execute(
+static void ExecuteRoundTargetRegionGuidance(
   FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
   UWorld* World = EntityManager.GetWorld();
@@ -2441,7 +2437,7 @@ void FCrowdDemoRoundTargetRegionGuidanceStage::Execute(
 }
 
 
-void FCrowdDemoRoundParticleConstraintStage::Execute(
+static void ExecuteRoundParticleConstraint(
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
@@ -2470,40 +2466,14 @@ void FCrowdDemoRoundParticleConstraintStage::Execute(
       Pipeline->GetCurrentFixedStepIndex());
     return;
   }
-  TMap<int32, const FCrowdMassPredictedMovement*> PredictedByAgentId;
-  for (const FCrowdMassPredictedMovement& Value
-    : Pipeline->GetPreparedRuntimePredictedMovements())
-    PredictedByAgentId.Add(Value.AgentId, &Value);
-  const bool bBuildingWorkerTemplate = PredictedByAgentId.IsEmpty();
-  TMap<int32, const FCrowdComposedGuidance*> ComposedByAgentId;
-  for (const FCrowdComposedGuidance& Value
-    : Pipeline->GetPreparedRuntimeComposedGuidance())
-    ComposedByAgentId.Add(Value.AgentId, &Value);
-  TMap<int32, const FCrowdDemoLocalPredictiveResult*> LocalByAgentId;
-  for (const FCrowdDemoLocalPredictiveResult& Value
-    : Pipeline->GetPreparedLocalPredictiveResults())
-    LocalByAgentId.Add(Value.AgentId, &Value);
   bool bGatherValid = true;
   for (const FCrowdMassBoundaryAgentRecord& Base
     : Pipeline->GetBoundarySnapshot().Agents)
   {
-    const FCrowdMassPredictedMovement* const* Predicted =
-      PredictedByAgentId.Find(Base.Identity.AgentId);
-    if (!bBuildingWorkerTemplate && (!Predicted || !(*Predicted)->bValid))
-    {
-      bGatherValid = false;
-      continue;
-    }
     bool bParticleActive = true;
-    FVector StartPosition = Base.State.Position;
-    FVector PredictedPosition = Base.State.Position;
-    if (Predicted)
-    {
-      bParticleActive = (*Predicted)->bParticleActive;
-      StartPosition = (*Predicted)->StartPosition;
-      PredictedPosition = (*Predicted)->PredictedPosition;
-    }
-    else if (Pipeline->IsOpenSpawnRelaxation())
+    const FVector StartPosition = Base.State.Position;
+    const FVector PredictedPosition = Base.State.Position;
+    if (Pipeline->IsOpenSpawnRelaxation())
     {
       const FCrowdDemoPreparedOpenSpawnBoundaryFact* OpenSpawnFact =
         Pipeline->FindPreparedOpenSpawnBoundaryFact(Base.Identity.AgentId);
@@ -2587,723 +2557,17 @@ void FCrowdDemoRoundParticleConstraintStage::Execute(
   ParticleWorkInput.Agents = CoreAgents;
   ParticleWorkInput.bCaptureTrace = bCaptureParticleTrace;
   ParticlePipelineInput.Snapshot = Pipeline->GetBoundarySnapshot();
-  ParticlePipelineInput.PredictedMovements =
-    Pipeline->GetPreparedRuntimePredictedMovements();
   ParticlePipelineInput.ExpectedExternalAgentCount =
     bHasTargetParticle ? 1 : 0;
-  const double StartSeconds = FPlatformTime::Seconds();
-  FCrowdMassParticlePipelineWorkOutput ParticlePipelineOutput;
-  if (!Pipeline->ConsumeBoundaryParticleWork(ParticlePipelineOutput))
-  {
-    if (!Pipeline->StageBoundaryParticleWork(MoveTemp(ParticlePipelineInput)))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoParticleWorkStageRejected step=%d"),
-        Pipeline->GetCurrentFixedStepIndex());
-    }
-    return;
-  }
-  const FCrowdMassParticleWorkOutput& WorkOutput =
-    ParticlePipelineOutput.Particle;
-  const FCrowdMassParticlePublishPlan& PublishPlan =
-    ParticlePipelineOutput.PublishPlan;
-  const float SolverMilliseconds = static_cast<float>(
-    (FPlatformTime::Seconds() - StartSeconds) * 1000.0);
-  if (!ParticlePipelineOutput.bCompleted || !WorkOutput.bCompleted
-    || !PublishPlan.bValid)
+  if (!Pipeline->StageBoundaryParticleWork(MoveTemp(ParticlePipelineInput)))
   {
     UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoParticleRuntimeWorkIncomplete step=%d agents=%d"),
-      Pipeline->GetCurrentFixedStepIndex(), CoreAgents.Num());
-    return;
-  }
-  TArray<FCrowdDemoParticleConstraintAgent> Agents;
-  Agents.Reserve(CoreAgents.Num());
-  for (const auto& Agent : CoreAgents)
-    Agents.Add(FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleAgent(Agent));
-  TArray<FCrowdDemoParticleConstraintPair> Pairs;
-  Pairs.Reserve(WorkOutput.Pairs.Num());
-  for (const auto& Pair : WorkOutput.Pairs)
-    Pairs.Add(FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticlePair(Pair));
-  TArray<FCrowdDemoParticleConstraintResult> Results;
-  Results.Reserve(WorkOutput.Results.Num());
-  for (const auto& Result : WorkOutput.Results)
-    Results.Add(FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleResult(Result));
-  FCrowdDemoParticleConstraintSummary Summary =
-    FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleSummary(
-      WorkOutput.Summary);
-  FCrowdDemoParticleConstraintTrace Trace =
-    FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleTrace(WorkOutput.Trace);
-  if (WorkOutput.bFailureTraceReplayAttempted)
-    bParticleTraceCaptured = true;
-
-  TMap<int32, const FCrowdDemoParticleConstraintResult*> ResultsByAgentId;
-  for (const auto& Result : Results) ResultsByAgentId.Add(Result.AgentId, &Result);
-  TMap<int32, const FCrowdMassParticlePublishRecord*> PublishByAgentId;
-  int32 ActiveEntityCount = 0;
-  for (const FCrowdMassParticlePublishRecord& Record : PublishPlan.Records)
-  {
-    PublishByAgentId.Add(Record.AgentId, &Record);
-    if (Record.bParticleActive) ++ActiveEntityCount;
-  }
-  TMap<int32, int32> TraceIndexByAgentId;
-  if (Settings.bCaptureRouteDiagnostic)
-    for (int32 TraceIndex = 0; TraceIndex < Trace.AgentIds.Num(); ++TraceIndex)
-      TraceIndexByAgentId.Add(Trace.AgentIds[TraceIndex], TraceIndex);
-  bool bResultIdentityValid = PublishByAgentId.Num()
-    == Pipeline->GetBoundarySnapshot().Agents.Num();
-  if (!bResultIdentityValid
-    || ActiveEntityCount + (bHasTargetParticle ? 1 : 0) != Results.Num()
-    || PublishPlan.FinalKinematics.Num()
-      != Pipeline->GetBoundarySnapshot().Agents.Num())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoParticleRuntimeIdentityInvalid step=%d active=%d results=%d target=%d"),
-      Pipeline->GetCurrentFixedStepIndex(), ActiveEntityCount, Results.Num(),
-      bHasTargetParticle ? 1 : 0);
-    return;
-  }
-  TArray<FCrowdParticleConstraintResult> PreparedRuntimeParticleResults =
-    PublishPlan.PreparedResults;
-  TArray<FCrowdDemoParticleAppliedState> AppliedStates;
-  TArray<FCrowdDemoSoftPressureRouteStepSample> RouteSamples;
-  FCrowdDemoTargetStabilityStepSample StabilityStep;
-  TMap<int32, const FCrowdDemoTargetRegionGuidanceResult*> StabilityGuidanceByAgentId;
-  TMap<int32, const FCrowdDemoTargetRegionAgentDemandState*> StabilityDemandByAgentId;
-  TMap<int32, int32> StabilitySurplusByAgentId;
-  if (bStabilityDiagnostic)
-  {
-    StabilityStep.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-    StabilityStep.TargetRevision = Pipeline->GetTargetFact().TargetRevision;
-    StabilityStep.FixedStepSeconds = Settings.FixedStepSeconds;
-    uint32 GraphHash = 2166136261u;
-    auto FoldGraphHash = [&GraphHash](const uint32 Value)
-    {
-      GraphHash ^= Value;
-      GraphHash *= 16777619u;
-    };
-    auto AddRuntime = [&](const uint32 CohortKey,
-      const FCrowdDemoTargetPolarTopology& Topology,
-      const FCrowdDemoTargetRegionDemandResult& Demand,
-      const FCrowdDemoTargetRegionFlowPlan& Plan,
-      const TConstArrayView<FCrowdDemoTargetRegionGuidanceResult> Guidance,
-      const FCrowdDemoTargetRegionGuidanceSummary& GuidanceSummary)
-    {
-      FoldGraphHash(Topology.FeasibleGraphHash);
-      StabilityStep.InsideBandCount += Demand.CurrentTerminalPopulation;
-      StabilityStep.RequiredCoverageCount += FMath::Min(
-        Demand.AgentStates.Num(), Demand.FeasibleRegionCount);
-      TSet<int32> CoveredRegions;
-      TMap<int32, int32> SurplusByRegion;
-      TMap<int32, FCrowdDemoTargetStabilityRegionSample*> RegionSamples;
-      const int32 FirstRegionSample = StabilityStep.Regions.Num();
-      for (const auto& Region : Demand.Regions)
-      {
-        SurplusByRegion.Add(Region.StableRegionKey, Region.Surplus);
-        FCrowdDemoTargetStabilityRegionSample& Sample =
-          StabilityStep.Regions.AddDefaulted_GetRef();
-        Sample.CohortKey = CohortKey;
-        Sample.RegionKey = Region.StableRegionKey;
-        Sample.AvailableCapacity = Region.AvailableCapacity;
-        Sample.CurrentPopulation = Region.CurrentPopulation;
-        Sample.DesiredPopulation = Region.DesiredPopulation;
-        Sample.Deficit = Region.Deficit;
-        Sample.Surplus = Region.Surplus;
-        Sample.bFeasible = Region.bFeasible;
-      }
-      for (int32 Index = FirstRegionSample; Index < StabilityStep.Regions.Num(); ++Index)
-        RegionSamples.Add(StabilityStep.Regions[Index].RegionKey,
-          &StabilityStep.Regions[Index]);
-      for (const auto& State : Demand.AgentStates)
-      {
-        StabilityDemandByAgentId.Add(State.AgentId, &State);
-        StabilitySurplusByAgentId.Add(State.AgentId,
-          SurplusByRegion.FindRef(State.CurrentRegionKey));
-        if (State.bTerminal && State.CurrentRegionKey != INDEX_NONE)
-        {
-          CoveredRegions.Add(State.CurrentRegionKey);
-          if (FCrowdDemoTargetStabilityRegionSample* const* Sample =
-            RegionSamples.Find(State.CurrentRegionKey))
-            (*Sample)->TerminalAgentIds.Add(State.AgentId);
-        }
-        if (State.bSupply && State.CurrentRegionKey != INDEX_NONE)
-          if (FCrowdDemoTargetStabilityRegionSample* const* Sample =
-            RegionSamples.Find(State.CurrentRegionKey))
-            (*Sample)->SupplyAgentIds.Add(State.AgentId);
-      }
-      StabilityStep.CoverageCount += CoveredRegions.Num();
-      for (const auto& Item : Guidance)
-      {
-        StabilityGuidanceByAgentId.Add(Item.AgentId, &Item);
-        if (Item.Mode == ECrowdDemoTargetRegionGuidanceMode::TerminalSettle
-          && Item.DemandRegionKey != INDEX_NONE)
-          if (FCrowdDemoTargetStabilityRegionSample* const* Sample =
-            RegionSamples.Find(Item.DemandRegionKey))
-            (*Sample)->TerminalSettleAgentIds.Add(Item.AgentId);
-        if (Item.Mode == ECrowdDemoTargetRegionGuidanceMode::Transport
-          && Topology.Cells.IsValidIndex(Item.NextCellKey))
-        {
-          const auto& Cell = Topology.Cells[Item.NextCellKey];
-          if (Cell.bTerminal)
-            if (FCrowdDemoTargetStabilityRegionSample* const* Sample =
-              RegionSamples.Find(Cell.PrimaryDemandRegionKey))
-              ++(*Sample)->GuidanceTargetCount;
-        }
-      }
-      TMap<int64, int32> ConsumedByEdge;
-      for (const auto& Consumption : GuidanceSummary.Consumption)
-      {
-        const int64 EdgeKey = (static_cast<int64>(Consumption.FromCellKey) << 32)
-          | static_cast<uint32>(Consumption.ToCellKey);
-        ConsumedByEdge.Add(EdgeKey, Consumption.ConsumedQuota);
-      }
-      for (const auto& Flow : Plan.EdgeFlows)
-      {
-        if (!Topology.Cells.IsValidIndex(Flow.FromCellKey)
-          || !Topology.Cells.IsValidIndex(Flow.ToCellKey)) continue;
-        const auto& FromCell = Topology.Cells[Flow.FromCellKey];
-        const auto& Cell = Topology.Cells[Flow.ToCellKey];
-        const int64 EdgeKey = (static_cast<int64>(Flow.FromCellKey) << 32)
-          | static_cast<uint32>(Flow.ToCellKey);
-        FCrowdDemoTargetStabilityEdgeSample& Edge =
-          StabilityStep.Edges.AddDefaulted_GetRef();
-        Edge.CohortKey = CohortKey;
-        Edge.FromCellKey = Flow.FromCellKey;
-        Edge.ToCellKey = Flow.ToCellKey;
-        Edge.FromRegionKey = FromCell.PrimaryDemandRegionKey;
-        Edge.ToRegionKey = Cell.PrimaryDemandRegionKey;
-        Edge.AgentQuota = Flow.AgentQuota;
-        Edge.ConsumedQuota = ConsumedByEdge.FindRef(EdgeKey);
-        Edge.bToTerminal = Cell.bTerminal;
-        if (Cell.bTerminal)
-          if (FCrowdDemoTargetStabilityRegionSample* const* Sample =
-            RegionSamples.Find(Cell.PrimaryDemandRegionKey))
-            (*Sample)->PrimaryIncomingPlanQuota += Flow.AgentQuota;
-      }
-      for (const auto& Consumption : GuidanceSummary.Consumption)
-      {
-        if (!Topology.Cells.IsValidIndex(Consumption.ToCellKey)) continue;
-        const auto& Cell = Topology.Cells[Consumption.ToCellKey];
-        if (!Cell.bTerminal) continue;
-        if (FCrowdDemoTargetStabilityRegionSample* const* Sample =
-          RegionSamples.Find(Cell.PrimaryDemandRegionKey))
-          (*Sample)->PrimaryIncomingConsumedQuota += Consumption.ConsumedQuota;
-      }
-    };
-    if (Pipeline->GetRules().bEnableHeterogeneousProfiles != 0)
-    {
-      TArray<const FCrowdDemoTargetRegionCapabilityCohortRuntime*> Cohorts;
-      for (const auto& Runtime : Pipeline->GetCapabilityCohorts()) Cohorts.Add(&Runtime);
-      Cohorts.Sort([](const auto& A, const auto& B)
-      {
-        return A.Cohort.CapabilityProfileKey < B.Cohort.CapabilityProfileKey;
-      });
-      for (const auto* Runtime : Cohorts)
-        AddRuntime(Runtime->Cohort.CapabilityProfileKey, Runtime->Topology,
-          Runtime->Demand, Runtime->Plan, Runtime->Guidance,
-          Runtime->GuidanceSummary);
-    }
-    else
-    {
-      AddRuntime(0, Pipeline->GetPreparedTargetRegionTopology(),
-        Pipeline->GetPreparedTargetRegionDemand(),
-        Pipeline->GetPreparedTargetRegionPlan(),
-        Pipeline->GetPreparedTargetRegionGuidance(),
-        Pipeline->GetTargetRegionGuidanceSummary());
-    }
-    StabilityStep.FeasibleGraphHash = GraphHash;
-  }
-  TMap<int32, FVector> FlowDirectionByAgentId;
-  AppliedStates.Reserve(Agents.Num());
-  TMap<int32, const FCrowdMassSharedFlowAgentOutput*> FlowByAgentId;
-  for (const FCrowdMassSharedFlowAgentOutput& Value
-    : Pipeline->GetPreparedRuntimeSharedFlowOutputs())
-    FlowByAgentId.Add(Value.AgentId, &Value);
-
-  for (const FCrowdMassParticlePublishRecord& Publish : PublishPlan.Records)
-  {
-    const FCrowdMassPredictedMovement* const* Predicted =
-      PredictedByAgentId.Find(Publish.AgentId);
-    if (!Predicted)
-    {
-      bResultIdentityValid = false;
-      continue;
-    }
-    if (Publish.bAppliedStateSample)
-    {
-      FCrowdDemoParticleAppliedState& Applied =
-        AppliedStates.AddDefaulted_GetRef();
-      Applied.AgentId = Publish.AgentId;
-      Applied.Position = Publish.Result.CorrectedPosition;
-      Applied.Velocity = Publish.Result.CorrectedVelocity;
-    }
-    if (!Publish.bUsedSolverResult)
-      continue;
-
-    if (bRouteDiagnostic)
-    {
-      const FCrowdMassSharedFlowAgentOutput* const* Flow =
-        FlowByAgentId.Find(Publish.AgentId);
-      if (!Flow)
-      {
-        bResultIdentityValid = false;
-      }
-      else
-      {
-        const FCrowdDemoSharedFlowSample FlowSample =
-          FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowSample(
-            (*Flow)->Sample);
-        FCrowdDemoSoftPressureRouteStepSample& Route =
-          RouteSamples.AddDefaulted_GetRef();
-        Route.AgentId = Publish.AgentId;
-        Route.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-        Route.PredictStartLocation = (*Predicted)->StartPosition;
-        Route.Location = Publish.Result.CorrectedPosition;
-        Route.Goal = FVector(Pipeline->GetRules().FlowFieldConfig.GoalLocation);
-        Route.FlowCellIndex = FlowSample.CellIndex;
-        Route.FlowStableCellKey = FlowSample.StableCellKey;
-        Route.FlowStatus = FlowSample.Status;
-        Route.IntegrationCost = FlowSample.IntegrationCost;
-        Route.FlowDirection = FlowSample.FlowDirection;
-        if (const FCrowdComposedGuidance* const* Composed =
-          ComposedByAgentId.Find(Route.AgentId))
-          Route.DesiredVelocity = (*Composed)->AutonomousPreferredVelocity;
-        Route.PredictedVelocity = (*Predicted)->Velocity;
-        Route.AppliedVelocity = Publish.Result.CorrectedVelocity;
-        Route.TotalParticleCorrection = Publish.Result.RealizedCorrection;
-        Route.FixedStepSeconds = Settings.FixedStepSeconds;
-        Route.MaxSpeedCmps = Pipeline->GetRules().MaxSpeedCmPerSecond;
-        Route.bFlowGuidanceOwner = !Pipeline->IsOpenCohortMovement();
-        if (const int32* TraceIndex = TraceIndexByAgentId.Find(Route.AgentId))
-        {
-          if (Trace.PairSoftRequestedCorrections.IsValidIndex(*TraceIndex))
-            Route.PairSoftRequestedCorrection =
-              Trace.PairSoftRequestedCorrections[*TraceIndex];
-          if (Trace.PairSoftRealizedCorrections.IsValidIndex(*TraceIndex))
-            Route.PairSoftRealizedCorrection =
-              Trace.PairSoftRealizedCorrections[*TraceIndex];
-          if (Trace.EnvironmentSoftRequestedCorrections.IsValidIndex(*TraceIndex))
-            Route.EnvironmentSoftRequestedCorrection =
-              Trace.EnvironmentSoftRequestedCorrections[*TraceIndex];
-          if (Trace.EnvironmentSoftRealizedCorrections.IsValidIndex(*TraceIndex))
-            Route.EnvironmentSoftRealizedCorrection =
-              Trace.EnvironmentSoftRealizedCorrections[*TraceIndex];
-          if (Trace.UnifiedHardCorrections.IsValidIndex(*TraceIndex))
-            Route.UnifiedHardCorrection =
-              Trace.UnifiedHardCorrections[*TraceIndex];
-          if (Trace.ActiveNeighborAgentIds.IsValidIndex(*TraceIndex))
-            Route.ActiveNeighborAgentIds =
-              Trace.ActiveNeighborAgentIds[*TraceIndex];
-        }
-        FlowDirectionByAgentId.Add(Route.AgentId, Route.FlowDirection);
-      }
-    }
-    if (bStabilityDiagnostic)
-    {
-      FCrowdDemoTargetStabilityAgentSample& Sample =
-        StabilityStep.Agents.AddDefaulted_GetRef();
-      Sample.AgentId = Publish.AgentId;
-      Sample.CohortKey = CapabilityProfileKeyByAgentId.FindRef(Sample.AgentId);
-      Sample.Location = FVector2f(Publish.Result.CorrectedPosition.X,
-        Publish.Result.CorrectedPosition.Y);
-      Sample.Velocity = FVector2f(Publish.Result.CorrectedVelocity.X,
-        Publish.Result.CorrectedVelocity.Y);
-      Sample.AppliedVelocity = Sample.Velocity;
-      Sample.TargetLocation = Pipeline->GetTargetFact().Location;
-      Sample.TargetVelocity = Pipeline->GetTargetFact().Velocity;
-      Sample.TotalParticleCorrection = FVector2f(
-        Publish.Result.RealizedCorrection.X,
-        Publish.Result.RealizedCorrection.Y);
-      Sample.PredictedVelocity = FVector2f(
-        (*Predicted)->Velocity.X, (*Predicted)->Velocity.Y);
-      if (const FCrowdDemoLocalPredictiveResult* const* Local =
-        LocalByAgentId.Find(Sample.AgentId))
-      {
-        Sample.LocalVelocity = (*Local)->Velocity;
-        Sample.LocalNeighborCount = (*Local)->NeighborCount;
-        Sample.LocalConstraintCount = (*Local)->ConstraintCount;
-        Sample.LocalBlockedAgeSteps = (*Local)->NextBlockedAgeSteps;
-        Sample.bLocalValid = (*Local)->bValid;
-        Sample.bLocalGranted = (*Local)->bGranted;
-        Sample.bLocalYielding = (*Local)->bYielding;
-      }
-      if (const auto* const* Guidance =
-        StabilityGuidanceByAgentId.Find(Sample.AgentId))
-      {
-        Sample.CurrentCellKey = (*Guidance)->CurrentCellKey;
-        Sample.NextCellKey = (*Guidance)->NextCellKey;
-        Sample.CurrentRegionKey = (*Guidance)->DemandRegionKey;
-        Sample.GuidanceMode = (*Guidance)->Mode;
-        Sample.DesiredVelocity = (*Guidance)->DesiredVelocity;
-      }
-      else if (const FCrowdComposedGuidance* const* Composed =
-        ComposedByAgentId.Find(Sample.AgentId))
-      {
-        Sample.DesiredVelocity = FVector2f(
-          (*Composed)->AutonomousPreferredVelocity.X,
-          (*Composed)->AutonomousPreferredVelocity.Y);
-      }
-      if (const auto* const* Demand =
-        StabilityDemandByAgentId.Find(Sample.AgentId))
-      {
-        Sample.CurrentRegionKey = (*Demand)->CurrentRegionKey;
-        Sample.bTerminal = (*Demand)->bTerminal;
-        Sample.bTerminalStay = (*Demand)->bTerminalStay;
-        Sample.bSupply = (*Demand)->bSupply;
-        Sample.RegionSurplusCount =
-          StabilitySurplusByAgentId.FindRef(Sample.AgentId);
-      }
-      if (const int32* TraceIndex =
-        TraceIndexByAgentId.Find(Sample.AgentId))
-        if (Trace.PairSoftRealizedCorrections.IsValidIndex(*TraceIndex))
-          Sample.PairSoftCorrection = FVector2f(
-            Trace.PairSoftRealizedCorrections[*TraceIndex].X,
-            Trace.PairSoftRealizedCorrections[*TraceIndex].Y);
-    }
-  }
-  if (!bResultIdentityValid)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoParticlePreparedDiagnosticInputInvalid step=%d"),
+      TEXT("VIOLATION CrowdDemoParticleBootstrapStageRejected step=%d"),
       Pipeline->GetCurrentFixedStepIndex());
-    return;
   }
-
-  PreparedRuntimeParticleResults.Sort([](const auto& A, const auto& B)
-  {
-    return A.AgentId < B.AgentId;
-  });
-  Pipeline->SetPreparedRuntimeFinalKinematics(
-    TArray<FCrowdMassFinalKinematicState>(PublishPlan.FinalKinematics));
-  Pipeline->SetPreparedRuntimeParticleResults(
-    MoveTemp(PreparedRuntimeParticleResults));
-  if (bHasTargetParticle)
-  {
-    FCrowdDemoParticleAppliedState& Applied = AppliedStates.AddDefaulted_GetRef();
-    Applied.AgentId = TargetParticleId;
-    if (Summary.bValid)
-    {
-      if (const FCrowdDemoParticleConstraintResult* const* TargetResult =
-        ResultsByAgentId.Find(TargetParticleId))
-      {
-        Applied.Position = (*TargetResult)->CorrectedPosition;
-        Applied.Velocity = (*TargetResult)->CorrectedVelocity;
-      }
-      else
-      {
-        Applied.Position = Agents.Last().StartPosition;
-        Applied.Velocity = FVector::ZeroVector;
-      }
-    }
-    else
-    {
-      Applied.Position = Agents.Last().StartPosition;
-      Applied.Velocity = FVector::ZeroVector;
-    }
-  }
-  FCrowdDemoParticleConstraintSummary AppliedSummary;
-  const uint32 AppliedStateHash = WorkOutput.AppliedStateHash;
-  AppliedSummary =
-    FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleSummary(
-      WorkOutput.AppliedSummary);
-  FCrowdDemoPreparedParticleDiagnosticCommit DiagnosticCommit;
-  DiagnosticCommit.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-  DiagnosticCommit.PlanRevision = Pipeline->GetCurrentPlanRevision();
-  DiagnosticCommit.AppliedStateHash = AppliedStateHash;
-  DiagnosticCommit.SolverMilliseconds = SolverMilliseconds;
-  DiagnosticCommit.AgentCount = Pipeline->GetBoundarySnapshot().Agents.Num();
-  if (bStabilityDiagnostic)
-  {
-    StabilityStep.ParticleSoftErrorCmP95 = AppliedSummary.SoftErrorCmP95;
-    StabilityStep.ParticleMaxActualCorrectionCm = AppliedSummary.MaxAgentCorrectionCm;
-    DiagnosticCommit.bRecordStabilityStep = true;
-    DiagnosticCommit.bFinalizeStabilityDiagnostic =
-      Pipeline->ShouldBuildRoundResult();
-    DiagnosticCommit.StabilityStep = MoveTemp(StabilityStep);
-  }
-  if (Pipeline->GetRules().bEnableHeterogeneousProfiles != 0)
-  {
-    TMap<int32, const FCrowdDemoParticleAppliedState*> AppliedByAgentId;
-    for (const FCrowdDemoParticleAppliedState& Applied : AppliedStates)
-      AppliedByAgentId.Add(Applied.AgentId, &Applied);
-    int32 CrossProfileHardViolations = 0;
-    int32 CrossProfileSweptViolations = 0;
-    for (int32 AIndex = 0; AIndex < Agents.Num(); ++AIndex)
-    {
-      const FCrowdDemoParticleConstraintAgent& A = Agents[AIndex];
-      const uint32* AKey = CapabilityProfileKeyByAgentId.Find(A.AgentId);
-      const FCrowdDemoParticleAppliedState* const* AApplied =
-        AppliedByAgentId.Find(A.AgentId);
-      if (!AKey || !AApplied) continue;
-      for (int32 BIndex = AIndex + 1; BIndex < Agents.Num(); ++BIndex)
-      {
-        const FCrowdDemoParticleConstraintAgent& B = Agents[BIndex];
-        const uint32* BKey = CapabilityProfileKeyByAgentId.Find(B.AgentId);
-        const FCrowdDemoParticleAppliedState* const* BApplied =
-          AppliedByAgentId.Find(B.AgentId);
-        if (!BKey || !BApplied || *AKey == *BKey) continue;
-        const float HardDistance = A.PhysicalRadiusCm + B.PhysicalRadiusCm
-          + FMath::Max(A.HardSafetyGapCm, B.HardSafetyGapCm);
-        const FVector EndRelative = (*AApplied)->Position - (*BApplied)->Position;
-        if (EndRelative.Size() + 0.01f < HardDistance)
-          ++CrossProfileHardViolations;
-        const FVector StartRelative = A.StartPosition - B.StartPosition;
-        const FVector RelativeDelta = EndRelative - StartRelative;
-        const float DeltaSizeSquared = RelativeDelta.SizeSquared();
-        const float Time = DeltaSizeSquared > UE_SMALL_NUMBER
-          ? FMath::Clamp(-FVector::DotProduct(StartRelative, RelativeDelta)
-            / DeltaSizeSquared, 0.0f, 1.0f)
-          : 0.0f;
-        const float SweptDistance = (StartRelative + RelativeDelta * Time).Size();
-        if (SweptDistance + 0.01f < HardDistance)
-          ++CrossProfileSweptViolations;
-      }
-    }
-    DiagnosticCommit.bRecordCrossProfileViolations = true;
-    DiagnosticCommit.CrossProfileHardViolationCount =
-      CrossProfileHardViolations;
-    DiagnosticCommit.CrossProfileSweptViolationCount =
-      CrossProfileSweptViolations;
-  }
-  if (bRouteDiagnostic)
-  {
-    DiagnosticCommit.bRecordRouteStep = true;
-    if (Pipeline->ShouldBuildRoundResult())
-    {
-      if (Pipeline->GetRules().bEnableHeterogeneousProfiles != 0)
-      {
-        TArray<int32> TerminalSupplyAgentIds;
-        for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime
-          : Pipeline->GetCapabilityCohorts())
-          for (const FCrowdDemoTargetRegionAgentDemandState& State : Runtime.Demand.AgentStates)
-            if (!State.bTerminal || State.bSupply)
-              TerminalSupplyAgentIds.AddUnique(State.AgentId);
-        TerminalSupplyAgentIds.Sort();
-        for (const int32 AgentId : TerminalSupplyAgentIds)
-        {
-          const int32* TraceIndex = TraceIndexByAgentId.Find(AgentId);
-          if (!TraceIndex) continue;
-          FString Neighbors;
-          if (Trace.ActiveNeighborAgentIds.IsValidIndex(*TraceIndex))
-            for (const int32 NeighborId : Trace.ActiveNeighborAgentIds[*TraceIndex])
-            {
-              if (!Neighbors.IsEmpty()) Neighbors += TEXT(",");
-              Neighbors += FString::FromInt(NeighborId);
-            }
-          FString Influences;
-          for (const FCrowdDemoParticleSoftPairInfluence& Influence : Trace.SoftPairInfluences)
-          {
-            if (Influence.MinAgentId != AgentId && Influence.MaxAgentId != AgentId)
-              continue;
-            if (!Influences.IsEmpty()) Influences += TEXT(";");
-            const int32 OtherAgentId = Influence.MinAgentId == AgentId
-              ? Influence.MaxAgentId : Influence.MinAgentId;
-            const FVector Realized = Influence.MinAgentId == AgentId
-              ? Influence.RealizedCorrectionA : Influence.RealizedCorrectionB;
-            Influences += FString::Printf(TEXT("%d:%.2f:%.2f"),
-              OtherAgentId, Realized.X, Realized.Y);
-          }
-          const FVector PairSoft = Trace.PairSoftRealizedCorrections.IsValidIndex(*TraceIndex)
-            ? Trace.PairSoftRealizedCorrections[*TraceIndex] : FVector::ZeroVector;
-          const FVector UnifiedHard = Trace.UnifiedHardCorrections.IsValidIndex(*TraceIndex)
-            ? Trace.UnifiedHardCorrections[*TraceIndex] : FVector::ZeroVector;
-          UE_LOG(LogTemp, Display,
-            TEXT("CrowdDemoT6ParticleSupplyWitness agent_id=%d pair_soft=(%.2f,%.2f) unified_hard=(%.2f,%.2f) active_neighbors=[%s] soft_influences=[%s] influence_fields=other_agent,realized_x,realized_y source=MassPipeline"),
-            AgentId, PairSoft.X, PairSoft.Y, UnifiedHard.X, UnifiedHard.Y,
-            *Neighbors, *Influences);
-        }
-      }
-      FCrowdDemoSoftPressureRouteCounterfactual Counterfactual;
-      TSet<int32> EverReached;
-      FCrowdDemoSoftPressureRouteDiagnosticRuntime ProjectedRouteRuntime =
-        Pipeline->GetSoftPressureRouteDiagnosticRuntime();
-      FCrowdDemoSoftPressureRouteDiagnosticKernel::RecordStep(
-        RouteSamples, ProjectedRouteRuntime);
-      for (const auto& Agent : ProjectedRouteRuntime.Agents)
-        if (Agent.bEverReachedGoal) EverReached.Add(Agent.AgentId);
-      auto SumNeverReachedForward = [&](const TConstArrayView<FCrowdDemoParticleConstraintResult> Values)
-      {
-        float Sum = 0.0f;
-        for (const auto& Value : Values)
-          if (!EverReached.Contains(Value.AgentId))
-          {
-            const FVector Direction = FlowDirectionByAgentId.FindRef(Value.AgentId).GetSafeNormal2D();
-            Sum += FVector::DotProduct(Value.CorrectedVelocity, Direction);
-          }
-        return Sum;
-      };
-      Counterfactual.BaselineNeverReachedForwardCmps = SumNeverReachedForward(Results);
-
-      TArray<FCrowdParticleConstraintAgent> StickyAgents = CoreAgents;
-      for (auto& Agent : StickyAgents)
-        if (EverReached.Contains(Agent.AgentId)) Agent.PredictedPosition = Agent.StartPosition;
-      TArray<FCrowdDemoParticleConstraintResult> StickyResults;
-      FCrowdDemoParticleConstraintSummary StickySummary;
-      FCrowdDemoParticleConstraintSettings CounterfactualSettings = Settings;
-      CounterfactualSettings.bCaptureRouteDiagnostic = false;
-      FCrowdMassParticleWorkInput CounterfactualInput;
-      CounterfactualInput.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-      CounterfactualInput.PlanRevision = Pipeline->GetCurrentPlanRevision();
-      CounterfactualInput.Environment =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreParticleEnvironment(Environment);
-      CounterfactualInput.Settings =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreParticleSettings(
-          CounterfactualSettings);
-      CounterfactualInput.Agents = StickyAgents;
-      FCrowdMassParticleWorkOutput CounterfactualOutput =
-        FCrowdMassParticleWork::Solve(CounterfactualInput);
-      if (CounterfactualOutput.bCompleted)
-      {
-        StickySummary =
-          FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleSummary(
-            CounterfactualOutput.Summary);
-        for (const auto& Result : CounterfactualOutput.Results)
-          StickyResults.Add(
-            FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleResult(Result));
-      }
-      Counterfactual.bStickyValid = StickySummary.bValid;
-      Counterfactual.StickyNeverReachedForwardCmps = SumNeverReachedForward(StickyResults);
-
-      TArray<FCrowdDemoParticleConstraintResult> SoftDisabledResults;
-      FCrowdDemoParticleConstraintSummary SoftDisabledSummary;
-      CounterfactualSettings.SoftResponsePerSecond = 0.0f;
-      CounterfactualInput.Settings =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreParticleSettings(
-          CounterfactualSettings);
-      CounterfactualInput.Agents = CoreAgents;
-      CounterfactualOutput = FCrowdMassParticleWork::Solve(CounterfactualInput);
-      if (CounterfactualOutput.bCompleted)
-      {
-        SoftDisabledSummary =
-          FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleSummary(
-            CounterfactualOutput.Summary);
-        for (const auto& Result : CounterfactualOutput.Results)
-          SoftDisabledResults.Add(
-            FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleResult(Result));
-      }
-      Counterfactual.bSoftDisabledValid = SoftDisabledSummary.bValid;
-      Counterfactual.SoftDisabledNeverReachedForwardCmps =
-        SumNeverReachedForward(SoftDisabledResults);
-      DiagnosticCommit.bFinalizeRouteDiagnostic = true;
-      DiagnosticCommit.RouteCounterfactual = Counterfactual;
-    }
-    DiagnosticCommit.RouteSamples = MoveTemp(RouteSamples);
-  }
-  if (Summary.bValid)
-  {
-    AppliedSummary.PressureInfluencedAgentCount = Summary.PressureInfluencedAgentCount;
-    AppliedSummary.FirstInfluencedIterationMax = Summary.FirstInfluencedIterationMax;
-  }
-  if (Pipeline->IsOpenSpawnRelaxation())
-  {
-    auto& Runtime = Pipeline->GetOpenSpawnRelaxationRuntime();
-    Summary.CandidateHash = FoldTargetHash(Summary.CandidateHash, Runtime.ParticipationHash);
-    Summary.CandidateHash = FoldTargetHash(Summary.CandidateHash, Runtime.PhaseHash);
-    DiagnosticCommit.bRecordOpenSpawnStep = true;
-    DiagnosticCommit.OpenSpawnSoftPairInfluences =
-      Trace.SoftPairInfluences;
-    DiagnosticCommit.OpenSpawnMaxAgentCorrectionCm =
-      AppliedSummary.MaxAgentCorrectionCm;
-    DiagnosticCommit.OpenSpawnSoftErrorCmP95 =
-      AppliedSummary.SoftErrorCmP95;
-  }
-  else if (Pipeline->IsOpenCohortMovement())
-  {
-    Summary.CandidateHash = FoldTargetHash(
-      Summary.CandidateHash,
-      Pipeline->GetOpenCohortMovementLayout().LayoutHash);
-  }
-  else if (Pipeline->IsBidirectionalSwap())
-  {
-    Summary.CandidateHash = FoldTargetHash(
-      Summary.CandidateHash,
-      Pipeline->GetBidirectionalSwapLayout().LayoutHash);
-    for (int32 CohortId = 0; CohortId < 2; ++CohortId)
-      if (const FCrowdDemoSharedFlowField* Field =
-        Pipeline->FindBidirectionalSwapFlowField(CohortId * 10))
-        Summary.CandidateHash = FoldTargetHash(Summary.CandidateHash, Field->BuildHash);
-  }
-  else if (Pipeline->IsCorridorTransitProgressScenario())
-  {
-    Summary.CandidateHash = FoldTargetHash(
-      Summary.CandidateHash,
-      Pipeline->GetValidCorridorTransitLayout().LayoutHash);
-    Summary.CandidateHash = FoldTargetHash(
-      Summary.CandidateHash, Pipeline->GetSharedFlowField().BuildHash);
-  }
-  if (!Summary.bValid || !AppliedSummary.bValid)
-  {
-    // The Runtime work boundary captures a failure trace from its exact
-    // immutable input. Only legacy/direct callers without that contract reach
-    // this fallback reconstruction path.
-    if (WorkOutput.bFailureTraceReplayAttempted
-      && !WorkOutput.bFailureTraceReplayMatched)
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoParticleFailureTraceReplayMismatch step=%d candidate_hash=%u/%u valid=%d/%d"),
-        WorkOutput.FixedStepIndex, Summary.CandidateHash,
-        WorkOutput.FailureTraceReplayCandidateHash, Summary.bValid ? 1 : 0,
-        WorkOutput.bFailureTraceReplayValid ? 1 : 0);
-    }
-    if (!bParticleTraceCaptured)
-    {
-      FCrowdDemoParticleConstraintSettings DiagnosticSettings = Settings;
-      DiagnosticSettings.bCaptureRouteDiagnostic = true;
-      FCrowdMassParticleWorkInput DiagnosticInput;
-      DiagnosticInput.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-      DiagnosticInput.PlanRevision = Pipeline->GetCurrentPlanRevision();
-      DiagnosticInput.Environment =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreParticleEnvironment(Environment);
-      DiagnosticInput.Settings =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreParticleSettings(
-          DiagnosticSettings);
-      DiagnosticInput.Agents = CoreAgents;
-      DiagnosticInput.bCaptureTrace = true;
-      const FCrowdMassParticleWorkOutput DiagnosticOutput =
-        FCrowdMassParticleWork::Solve(DiagnosticInput);
-      FCrowdDemoParticleConstraintSummary DiagnosticSummary;
-      if (DiagnosticOutput.bCompleted)
-      {
-        DiagnosticSummary =
-          FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleSummary(
-            DiagnosticOutput.Summary);
-        Trace = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoParticleTrace(
-          DiagnosticOutput.Trace);
-      }
-      bParticleTraceCaptured = true;
-      if (!DiagnosticOutput.bCompleted
-        || DiagnosticSummary.CandidateHash != Summary.CandidateHash
-        || DiagnosticSummary.bValid != Summary.bValid)
-      {
-        UE_LOG(LogTemp, Error,
-          TEXT("VIOLATION CrowdDemoParticleFailureTraceReplayMismatch step=%d candidate_hash=%u/%u valid=%d/%d"),
-          Pipeline->GetCurrentFixedStepIndex(), Summary.CandidateHash,
-          DiagnosticSummary.CandidateHash, Summary.bValid ? 1 : 0,
-          DiagnosticSummary.bValid ? 1 : 0);
-      }
-    }
-    FCrowdDemoParticleFailureFixture Fixture;
-    FCrowdDemoParticleConstraintKernel::BuildFailureFixture(
-      Agents, AppliedStates, Trace, Pipeline->GetCurrentFixedStepIndex(),
-      Summary.CandidateHash, AppliedStateHash, Fixture);
-    DiagnosticCommit.bRecordFailureFixture = true;
-    DiagnosticCommit.FailureFixture = MoveTemp(Fixture);
-  }
-  DiagnosticCommit.CandidateSummary = Summary;
-  DiagnosticCommit.AppliedSummary = AppliedSummary;
-  DiagnosticCommit.bValid = true;
-  if (!Pipeline->SetPreparedParticleDiagnosticCommit(
-    MoveTemp(DiagnosticCommit)))
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoParticleDiagnosticCommitPrepareInvalid step=%d"),
-      Pipeline->GetCurrentFixedStepIndex());
-    return;
-  }
-  Pipeline->LogStageOnce(TEXT("05_particle_constraint"), Agents.Num());
 }
 
-void FCrowdDemoRoundObstacleConstraintStage::Execute(
+static void ExecuteRoundObstacleConstraint(
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
@@ -3335,10 +2599,9 @@ void FCrowdDemoRoundObstacleConstraintStage::Execute(
   }
 }
 
-void FCrowdDemoRoundFacingFinalizeStage::BindQuery(
+static void ConfigureWorkerResultApplyQuery(
   FMassEntityQuery& Query)
 {
-  EntityQuery = &Query;
   Query.AddRequirement<FCrowdDemoMassIdentityFragment>(EMassFragmentAccess::ReadOnly);
   Query.AddRequirement<FCrowdDemoRoundSimStateFragment>(EMassFragmentAccess::ReadWrite);
   Query.AddRequirement<FCrowdMassAgentFragment>(EMassFragmentAccess::ReadOnly);
@@ -3365,191 +2628,9 @@ void FCrowdDemoRoundFacingFinalizeStage::BindQuery(
   Query.AddTagRequirement<FCrowdMassAgentTag>(EMassFragmentPresence::All);
 }
 
-bool FCrowdDemoRoundFacingFinalizeStage::ValidatePreparedCommit(
-  UCrowdDemoRoundSimPipelineSubsystem& Pipeline)
-{
-  if (!Pipeline.IsPreparedMovementBoundaryCommitCurrent()
-    || Pipeline.IsMovementFinalizeAppliedCurrent())
-    return false;
 
-  const FCrowdDemoPreparedMovementBoundaryCommit& Prepared =
-    Pipeline.GetPreparedMovementBoundaryCommit();
-  const FCrowdMassFacingWorkOutput& WorkOutput = Prepared.Facing;
-  const FCrowdMassMovementFinalizeWorkOutput& FinalizeOutput =
-    Prepared.Finalize;
-  TMap<int32, const FCrowdFacingResult*> ById;
-  for (const FCrowdFacingResult& Result : WorkOutput.Summary.Results)
-    ById.Add(Result.AgentId, &Result);
-  TMap<int32, const FCrowdMassCommitRecord*> CommitByAgentId;
-  for (const FCrowdMassCommitRecord& Record
-    : FinalizeOutput.CommitPlan.Records)
-    CommitByAgentId.Add(Record.Movement.AgentId, &Record);
-  TMap<int32, const FCrowdDemoRoundBoundaryFormationFact*> FormationByAgentId;
-  for (const FCrowdDemoRoundBoundaryFormationFact& Formation
-    : Pipeline.GetBoundaryFormationFacts())
-    FormationByAgentId.Add(Formation.AgentId, &Formation);
-  TMap<int32, const FCrowdDemoRoundBoundaryBusinessFact*> BusinessByAgentId;
-  for (const FCrowdDemoRoundBoundaryBusinessFact& Business
-    : Pipeline.GetBoundaryBusinessFacts())
-    BusinessByAgentId.Add(Business.AgentId, &Business);
-  TMap<int32, const FCrowdMassSharedFlowAgentOutput*> SharedFlowByAgentId;
-  for (const FCrowdMassSharedFlowAgentOutput& Value
-    : Pipeline.GetPreparedRuntimeSharedFlowOutputs())
-    SharedFlowByAgentId.Add(Value.AgentId, &Value);
-  const bool bRequiresCombatCommit = Pipeline.IsRangedProjectileCombat()
-    || (Pipeline.GetRules().Scenario
-        == ECrowdDemoScenario::SimRoundSoftPressure
-      && Pipeline.GetRules().SoftPressureTestCase
-        == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse);
-  const FCrowdDemoPreparedCombatBoundaryCommit* CombatCommit =
-    bRequiresCombatCommit
-      ? &Pipeline.GetPreparedCombatBoundaryCommit() : nullptr;
-  TMap<int32, const FCrowdDemoRangedCombatAgent*> CombatByAgentId;
-  if (CombatCommit)
-  {
-    if (!Pipeline.IsPreparedCombatBoundaryCommitCurrent()
-      || !CombatCommit->bValid
-      || CombatCommit->Agents.Num()
-        != Pipeline.GetBoundarySnapshot().Agents.Num())
-    {
-      return false;
-    }
-    for (const FCrowdDemoRangedCombatAgent& Agent : CombatCommit->Agents)
-    {
-      if (CombatByAgentId.Contains(Agent.AgentId))
-        return false;
-      CombatByAgentId.Add(Agent.AgentId, &Agent);
-    }
-  }
 
-  bool bTargetSetValid = WorkOutput.bCompleted
-    && FinalizeOutput.bCompleted
-    && ById.Num() == Pipeline.GetBoundarySnapshot().Agents.Num()
-    && CommitByAgentId.Num() == ById.Num()
-    && FormationByAgentId.Num() == ById.Num()
-    && BusinessByAgentId.Num() == ById.Num()
-    && Prepared.ConsecutiveSettleStepsByAgentId.Num() == ById.Num()
-    && Prepared.FinalSettledByAgentId.Num() == ById.Num();
-  bTargetSetValid = bTargetSetValid
-    && SharedFlowByAgentId.Num() == ById.Num();
-  TArray<FCrowdMassCommitTarget> ResolvedTargets;
-  ResolvedTargets.Reserve(Pipeline.GetBoundarySnapshot().Agents.Num());
-  for (const FCrowdMassBoundaryAgentRecord& Base
-    : Pipeline.GetBoundarySnapshot().Agents)
-  {
-    const int32 AgentId = Base.Identity.AgentId;
-    const FCrowdFacingResult* const* Facing = ById.Find(AgentId);
-    const FCrowdMassCommitRecord* const* Record =
-      CommitByAgentId.Find(AgentId);
-    const FCrowdMovementOutput* Movement = Record
-      ? &(*Record)->Movement : nullptr;
-    FCrowdMassCommitTarget& ResolvedTarget =
-      ResolvedTargets.AddDefaulted_GetRef();
-    ResolvedTarget.EntityRef =
-      Base.Identity.GetStableEntityRef();
-    ResolvedTarget.AgentId = Base.Identity.AgentId;
-    ResolvedTarget.LifecycleSerial =
-      Base.Identity.LifecycleSerial;
-    bTargetSetValid = bTargetSetValid && Facing && Movement
-      && SharedFlowByAgentId.Contains(AgentId)
-      && (!CombatCommit || CombatByAgentId.Contains(AgentId))
-      && Movement->bValid
-      && Movement->LifecycleSerial
-        == Base.Identity.LifecycleSerial
-      && (!CombatCommit
-        || (*CombatByAgentId.Find(AgentId))->LifecycleSerial
-          == static_cast<int32>(Base.Identity.LifecycleSerial))
-      && Prepared.ConsecutiveSettleStepsByAgentId.Contains(AgentId)
-      && Prepared.FinalSettledByAgentId.Contains(AgentId)
-      && FormationByAgentId.Contains(AgentId)
-      && BusinessByAgentId.Contains(AgentId)
-      && FMath::IsNearlyEqual(
-        Movement->YawDegrees, (*Facing)->ResolvedYawDegrees, 0.01f);
-  }
-  if (!bTargetSetValid)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoFacingFinalizePreparedTargetSetInvalid step=%d facing=%d commits=%d"),
-      Pipeline.GetCurrentFixedStepIndex(), ById.Num(),
-      CommitByAgentId.Num());
-    return false;
-  }
-  const double ValidateStartSeconds = FPlatformTime::Seconds();
-  if (!Pipeline.ValidateRoundApplyPlan(ResolvedTargets))
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoBoundaryEnvelopeRejected step=%d targets=%d"),
-      Pipeline.GetCurrentFixedStepIndex(), ResolvedTargets.Num());
-    return false;
-  }
-  const double ValidateMilliseconds =
-    (FPlatformTime::Seconds() - ValidateStartSeconds) * 1000.0;
-  if (ValidateMilliseconds > 2.0)
-  {
-    UE_LOG(LogTemp, Verbose,
-      TEXT("CrowdDemoBoundaryPrevalidation step=%d ms=%.3f"),
-      Pipeline.GetCurrentFixedStepIndex(), ValidateMilliseconds);
-  }
-
-  return true;
-}
-
-void FCrowdDemoRoundFacingFinalizeStage::CommitValidatedSideEffects(
-  UCrowdDemoRoundSimPipelineSubsystem& Pipeline)
-{
-  checkf(Pipeline.IsPreparedMovementBoundaryCommitCurrent()
-      && !Pipeline.IsMovementFinalizeAppliedCurrent()
-      && Pipeline.GetRoundWorkState()
-        == ECrowdBoundaryTransactionState::ReadyToCommit,
-    TEXT("Round side effects escaped the validated owner barrier"));
-  const FCrowdDemoPreparedMovementBoundaryCommit& Prepared =
-    Pipeline.GetPreparedMovementBoundaryCommit();
-  const FCrowdMassFacingWorkOutput& WorkOutput = Prepared.Facing;
-  const bool bRequiresCombatCommit = Pipeline.IsRangedProjectileCombat()
-    || (Pipeline.GetRules().Scenario
-        == ECrowdDemoScenario::SimRoundSoftPressure
-      && Pipeline.GetRules().SoftPressureTestCase
-        == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse);
-
-  int32 AppliedCount =
-    Pipeline.GetCurrentStepWorkerDirtyMassEntityCount();
-  if (bRequiresCombatCommit)
-  {
-    Pipeline.LogStageOnce(
-      TEXT("03_combat_boundary_transaction"), AppliedCount);
-  }
-  TArray<FCrowdFacingResult> PreparedFacingResults =
-    WorkOutput.Summary.Results;
-  PreparedFacingResults.Sort([](const auto& A, const auto& B)
-  {
-    return A.AgentId < B.AgentId;
-  });
-  TArray<FCrowdDemoPreparedFacingRollbackFact> PreparedFacingRollbackFacts;
-  PreparedFacingRollbackFacts.Reserve(PreparedFacingResults.Num());
-  for (const FCrowdFacingResult& Result : PreparedFacingResults)
-  {
-    FCrowdDemoPreparedFacingRollbackFact& Fact =
-      PreparedFacingRollbackFacts.AddDefaulted_GetRef();
-    Fact.AgentId = Result.AgentId;
-    Fact.Facing.Value = Result;
-    Fact.Facing.PlanRevision = WorkOutput.PlanRevision;
-    Fact.Facing.ConsecutiveFinalSettleSteps =
-      Prepared.ConsecutiveSettleStepsByAgentId.FindRef(Result.AgentId);
-    Fact.Facing.bFinalPositionSettled =
-      Prepared.FinalSettledByAgentId.FindRef(Result.AgentId);
-  }
-  Pipeline.SetPreparedRuntimeFacingResults(MoveTemp(PreparedFacingResults));
-  Pipeline.SetPreparedFacingRollbackFacts(
-    MoveTemp(PreparedFacingRollbackFacts));
-  Pipeline.MarkMovementFinalizeApplied();
-  Pipeline.LogStageOnce(
-    Pipeline.GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
-      ? TEXT("09_movement_finalize")
-      : TEXT("06_movement_finalize"),
-    AppliedCount);
-}
-
-void FCrowdDemoRoundFacingFinalizeStage::Execute(
+static void ExecuteRoundFacingBootstrap(
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
@@ -3557,17 +2638,15 @@ void FCrowdDemoRoundFacingFinalizeStage::Execute(
   auto* Pipeline = World
     ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
   if (!Pipeline || !Pipeline->IsActive()) return;
-  if (Pipeline->IsPreparedMovementBoundaryCommitCurrent())
-    return;
-
-  FCrowdMassFacingFinalizeWorkOutput CombinedOutput;
-  TMap<int32, int32> ConsecutiveSettleStepsByAgentId;
-  TMap<int32, bool> FinalSettledByAgentId;
-  if (!Pipeline->ConsumeBoundaryFacingWork(
-      CombinedOutput, ConsecutiveSettleStepsByAgentId,
-      FinalSettledByAgentId))
+  if (!Pipeline->IsBoundarySnapshotCurrent())
   {
-    TMap<int32, ECrowdDemoTargetRegionGuidanceMode> GuidanceModeByAgentId;
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFacingBoundarySnapshotInvalid step=%d"),
+      Pipeline->GetCurrentFixedStepIndex());
+    return;
+  }
+
+  TMap<int32, ECrowdDemoTargetRegionGuidanceMode> GuidanceModeByAgentId;
   if (Pipeline->IsTargetRegionExecutionActive())
   {
     if (Pipeline->GetRules().bEnableHeterogeneousProfiles != 0)
@@ -3583,50 +2662,31 @@ void FCrowdDemoRoundFacingFinalizeStage::Execute(
     }
   }
 
+  const bool bUsesParticle = Pipeline->GetRules().Scenario
+    == ECrowdDemoScenario::SimRoundSoftPressure;
+  TMap<int32, int32> PreviousSettleStepsByAgentId;
+  for (const FCrowdDemoRoundBoundaryFacingFact& Facing
+    : Pipeline->GetBoundaryFacingFacts())
+  {
+    PreviousSettleStepsByAgentId.Add(
+      Facing.AgentId, Facing.ConsecutiveFinalSettleSteps);
+  }
+
   FCrowdMassFacingFinalizeWorkInput CombinedInput;
   FCrowdMassFacingWorkInput& WorkInput = CombinedInput.Facing;
   WorkInput.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
   WorkInput.PlanRevision = Pipeline->GetCurrentPlanRevision();
   WorkInput.Settings.FixedStepSeconds = Pipeline->GetCurrentFixedStepSeconds();
-  if (!Pipeline->IsBoundarySnapshotCurrent())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoFacingBoundarySnapshotInvalid step=%d"),
-      Pipeline->GetCurrentFixedStepIndex());
-    return;
-  }
-  TMap<int32, const FCrowdComposedGuidance*> ComposedByAgentId;
-  for (const FCrowdComposedGuidance& Value
-    : Pipeline->GetPreparedRuntimeComposedGuidance())
-    ComposedByAgentId.Add(Value.AgentId, &Value);
-  TMap<int32, const FCrowdParticleConstraintResult*> ParticleByAgentId;
-  for (const FCrowdParticleConstraintResult& Value
-    : Pipeline->GetPreparedRuntimeParticleResults())
-    ParticleByAgentId.Add(Value.AgentId, &Value);
-  const bool bUsesParticle = Pipeline->GetRules().Scenario
-    == ECrowdDemoScenario::SimRoundSoftPressure;
-  const bool bBuildingBoundaryGraph =
-    ComposedByAgentId.IsEmpty()
-    && (bUsesParticle
-      ? ParticleByAgentId.IsEmpty()
-      : Pipeline->GetPreparedRuntimeFinalKinematics().IsEmpty());
-  TMap<int32, int32> PreviousSettleStepsByAgentId;
-  for (const FCrowdDemoRoundBoundaryFacingFact& Facing
-    : Pipeline->GetBoundaryFacingFacts())
-    PreviousSettleStepsByAgentId.Add(
-      Facing.AgentId, Facing.ConsecutiveFinalSettleSteps);
+  CombinedInput.Snapshot = Pipeline->GetBoundarySnapshot();
+
+  TMap<int32, int32> ConsecutiveSettleStepsByAgentId;
+  TMap<int32, bool> FinalSettledByAgentId;
   TMap<int32, bool> TerminalOwnerByAgentId;
   bool bGatherValid = true;
   for (const FCrowdMassBoundaryAgentRecord& Base
     : Pipeline->GetBoundarySnapshot().Agents)
   {
-    const FCrowdComposedGuidance* const* Composed =
-      ComposedByAgentId.Find(Base.Identity.AgentId);
-    const FCrowdParticleConstraintResult* const* Particle =
-      ParticleByAgentId.Find(Base.Identity.AgentId);
-    if ((!bBuildingBoundaryGraph && !Composed)
-      || (bUsesParticle && !bBuildingBoundaryGraph && !Particle)
-      || !PreviousSettleStepsByAgentId.Contains(Base.Identity.AgentId))
+    if (!PreviousSettleStepsByAgentId.Contains(Base.Identity.AgentId))
     {
       bGatherValid = false;
       continue;
@@ -3637,35 +2697,25 @@ void FCrowdDemoRoundFacingFinalizeStage::Execute(
       && (*Mode == ECrowdDemoTargetRegionGuidanceMode::TerminalSettle
         || *Mode == ECrowdDemoTargetRegionGuidanceMode::EngagedHold);
     TerminalOwnerByAgentId.Add(Base.Identity.AgentId, bTerminalOwner);
-    const bool bSettledThisStep = !bBuildingBoundaryGraph
-      && bTerminalOwner && bUsesParticle
-      && FVector2f((*Particle)->CorrectedVelocity.X,
-        (*Particle)->CorrectedVelocity.Y).Size() <= 20.0f
-      && (*Particle)->RealizedCorrection.Size2D() <= 1.0f;
-    const int32 ConsecutiveSettleSteps = bSettledThisStep
-      ? PreviousSettleStepsByAgentId.FindRef(Base.Identity.AgentId) + 1 : 0;
-    const bool bFinalPositionSettled = ConsecutiveSettleSteps >= 15;
-    ConsecutiveSettleStepsByAgentId.Add(
-      Base.Identity.AgentId, ConsecutiveSettleSteps);
-    FinalSettledByAgentId.Add(
-      Base.Identity.AgentId, bFinalPositionSettled);
+    ConsecutiveSettleStepsByAgentId.Add(Base.Identity.AgentId, 0);
+    FinalSettledByAgentId.Add(Base.Identity.AgentId, false);
 
     FCrowdFacingInput& Input = WorkInput.Agents.AddDefaulted_GetRef();
     Input.AgentId = Base.Identity.AgentId;
     Input.CurrentYawDegrees = Base.State.YawDegrees;
-    Input.AutonomousPreferredVelocity = bBuildingBoundaryGraph
-      ? FVector2f::ZeroVector
-      : FVector2f((*Composed)->AutonomousPreferredVelocity.X,
-          (*Composed)->AutonomousPreferredVelocity.Y);
-    const FVector FacingLocation = bUsesParticle
-      && !bBuildingBoundaryGraph
-      ? (*Particle)->CorrectedPosition : Base.State.Position;
-    Input.Location = FVector2f(FacingLocation.X, FacingLocation.Y);
-    Input.TargetLocation = FVector2f(Pipeline->GetTargetFact().Location.X,
+    Input.AutonomousPreferredVelocity = FVector2f::ZeroVector;
+    Input.Location = FVector2f(Base.State.Position.X, Base.State.Position.Y);
+    Input.TargetLocation = FVector2f(
+      Pipeline->GetTargetFact().Location.X,
       Pipeline->GetTargetFact().Location.Y);
     Input.bHasTarget = Pipeline->IsTargetRegionExecutionActive();
-    Input.bFinalPositionSettled = bFinalPositionSettled;
+    Input.bFinalPositionSettled = false;
   }
+  WorkInput.Agents.Sort([](const FCrowdFacingInput& A,
+    const FCrowdFacingInput& B)
+  {
+    return A.AgentId < B.AgentId;
+  });
   if (!bGatherValid || WorkInput.Agents.IsEmpty())
   {
     UE_LOG(LogTemp, Error,
@@ -3673,193 +2723,29 @@ void FCrowdDemoRoundFacingFinalizeStage::Execute(
       Pipeline->GetCurrentFixedStepIndex(), WorkInput.Agents.Num());
     return;
   }
-  CombinedInput.Snapshot = Pipeline->GetBoundarySnapshot();
-  if (bBuildingBoundaryGraph)
-  {
-    const bool bDispatched = bUsesParticle
-      ? Pipeline->DispatchBoundarySoftPressureWorkGraph(
-          MoveTemp(CombinedInput),
-          MoveTemp(PreviousSettleStepsByAgentId),
-          MoveTemp(TerminalOwnerByAgentId))
-      : Pipeline->DispatchBoundaryFacingWork(
-          MoveTemp(CombinedInput),
-          MoveTemp(ConsecutiveSettleStepsByAgentId),
-          MoveTemp(FinalSettledByAgentId));
-    if (!bDispatched)
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoBoundaryWorkGraphDispatchRejected step=%d"),
-        Pipeline->GetCurrentFixedStepIndex());
-    }
-  }
-  else
-  {
-    CombinedInput.Kinematics = Pipeline->GetPreparedRuntimeFinalKinematics();
-    if (!Pipeline->DispatchBoundaryFacingWork(
-          MoveTemp(CombinedInput),
-          MoveTemp(ConsecutiveSettleStepsByAgentId),
-          MoveTemp(FinalSettledByAgentId)))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoFacingWorkDispatchRejected step=%d"),
-        Pipeline->GetCurrentFixedStepIndex());
-    }
-  }
-    return;
-  }
-  const FCrowdMassFacingWorkOutput& WorkOutput = CombinedOutput.Facing;
-  const FCrowdMassMovementFinalizeWorkOutput& FinalizeOutput =
-    CombinedOutput.Finalize;
-  if (!CombinedOutput.bCompleted || !WorkOutput.bCompleted
-    || !FinalizeOutput.bCompleted)
+
+  const bool bDispatched = bUsesParticle
+    ? Pipeline->DispatchBoundarySoftPressureWorkGraph(
+        MoveTemp(CombinedInput),
+        MoveTemp(PreviousSettleStepsByAgentId),
+        MoveTemp(TerminalOwnerByAgentId))
+    : Pipeline->DispatchBoundaryFacingWork(
+        MoveTemp(CombinedInput),
+        MoveTemp(ConsecutiveSettleStepsByAgentId),
+        MoveTemp(FinalSettledByAgentId));
+  if (!bDispatched)
   {
     UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoFacingFinalizeWorkInvalid step=%d inputs=%d results=%d commits=%d"),
-      Pipeline->GetCurrentFixedStepIndex(),
-      ConsecutiveSettleStepsByAgentId.Num(), WorkOutput.Summary.Results.Num(),
-      FinalizeOutput.CommitPlan.Records.Num());
-    return;
-  }
-  TMap<int32, const FCrowdFacingResult*> ById;
-  for (const auto& Result : WorkOutput.Summary.Results)
-    ById.Add(Result.AgentId, &Result);
-  TMap<int32, const FCrowdMassCommitRecord*> CommitByAgentId;
-  for (const FCrowdMassCommitRecord& Record : FinalizeOutput.CommitPlan.Records)
-    CommitByAgentId.Add(Record.Movement.AgentId, &Record);
-  TMap<int32, const FCrowdMassFinalKinematicState*> KinematicByAgentId;
-  for (const FCrowdMassFinalKinematicState& Kinematic
-    : Pipeline->GetPreparedRuntimeFinalKinematics())
-    KinematicByAgentId.Add(Kinematic.AgentId, &Kinematic);
-  TMap<int32, const FCrowdDemoRoundBoundaryFormationFact*> FormationByAgentId;
-  for (const FCrowdDemoRoundBoundaryFormationFact& Formation
-    : Pipeline->GetBoundaryFormationFacts())
-    FormationByAgentId.Add(Formation.AgentId, &Formation);
-  bool bResultSetValid =
-    ById.Num() == ConsecutiveSettleStepsByAgentId.Num()
-    && CommitByAgentId.Num() == ById.Num()
-    && KinematicByAgentId.Num() == ById.Num()
-    && FormationByAgentId.Num() == ById.Num();
-  int32 FirstInvalidAgentId = INDEX_NONE;
-  bool bFirstCommitValid = true;
-  bool bFirstMovementValid = true;
-  bool bFirstMovementPayloadValid = true;
-  bool bFirstLifecycleValid = true;
-  bool bFirstSettleValid = true;
-  bool bFirstFinalSettledValid = true;
-  bool bFirstFormationValid = true;
-  bool bFirstFacingValid = true;
-  bool bFirstKinematicValid = true;
-  for (const FCrowdMassBoundaryAgentRecord& Base
-    : Pipeline->GetBoundarySnapshot().Agents)
-  {
-    const int32 AgentId = Base.Identity.AgentId;
-    const FCrowdFacingResult* const* Facing = ById.Find(AgentId);
-    const FCrowdMassCommitRecord* const* Commit =
-      CommitByAgentId.Find(AgentId);
-    const FCrowdMassFinalKinematicState* const* Kinematic =
-      KinematicByAgentId.Find(AgentId);
-    const FCrowdDemoRoundBoundaryFormationFact* const* Formation =
-      FormationByAgentId.Find(AgentId);
-    const FCrowdMovementOutput* Movement = Commit
-      ? &(*Commit)->Movement : nullptr;
-    const bool bFacingValid = Facing && Movement
-      && (*Facing)->AgentId == AgentId
-      && FMath::IsNearlyEqual(
-        Movement->YawDegrees, (*Facing)->ResolvedYawDegrees, 0.01f);
-    const bool bKinematicValid = Movement && Kinematic
-      && (*Kinematic)->bValid
-      && (*Kinematic)->AgentId == AgentId
-      && Movement->Position.Equals((*Kinematic)->Position, 0.01f)
-      && Movement->Velocity.Equals((*Kinematic)->Velocity, 0.01f);
-    const bool bLifecycleValid = Movement
-      && Movement->LifecycleSerial == Base.Identity.LifecycleSerial;
-    const bool bSettleValid =
-      ConsecutiveSettleStepsByAgentId.Contains(AgentId);
-    const bool bFinalSettledValid =
-      FinalSettledByAgentId.Contains(AgentId);
-    const bool bAgentValid = Commit && Movement && Movement->bValid
-      && bLifecycleValid && bSettleValid && bFinalSettledValid
-      && Formation && bFacingValid && bKinematicValid;
-    if (!bAgentValid && FirstInvalidAgentId == INDEX_NONE)
-    {
-      FirstInvalidAgentId = AgentId;
-      bFirstCommitValid = Commit != nullptr;
-      bFirstMovementValid = Movement != nullptr;
-      bFirstMovementPayloadValid = Movement && Movement->bValid;
-      bFirstLifecycleValid = bLifecycleValid;
-      bFirstSettleValid = bSettleValid;
-      bFirstFinalSettledValid = bFinalSettledValid;
-      bFirstFormationValid = Formation != nullptr;
-      bFirstFacingValid = bFacingValid;
-      bFirstKinematicValid = bKinematicValid;
-    }
-    bResultSetValid = bResultSetValid && bAgentValid;
-  }
-  if (!bResultSetValid)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoFacingFinalizeAtomicSetInvalid step=%d facing=%d commits=%d kinematics=%d formations=%d first_agent=%d commit=%d movement=%d movement_valid=%d lifecycle=%d settle=%d final_settled=%d formation=%d facing_valid=%d kinematic_valid=%d"),
-      Pipeline->GetCurrentFixedStepIndex(), ById.Num(), CommitByAgentId.Num(),
-      KinematicByAgentId.Num(), FormationByAgentId.Num(),
-      FirstInvalidAgentId, bFirstCommitValid ? 1 : 0,
-      bFirstMovementValid ? 1 : 0,
-      bFirstMovementPayloadValid ? 1 : 0,
-      bFirstLifecycleValid ? 1 : 0, bFirstSettleValid ? 1 : 0,
-      bFirstFinalSettledValid ? 1 : 0, bFirstFormationValid ? 1 : 0,
-      bFirstFacingValid ? 1 : 0, bFirstKinematicValid ? 1 : 0);
-    return;
-  }
-  TArray<int32> StableAgentIds;
-  ConsecutiveSettleStepsByAgentId.GetKeys(StableAgentIds);
-  StableAgentIds.Sort();
-  uint64 StableHash = 14695981039346656037ull;
-  const auto Fold = [&StableHash](const uint64 Value)
-  {
-    for (int32 Shift = 0; Shift < 64; Shift += 8)
-    {
-      StableHash ^= static_cast<uint8>(Value >> Shift);
-      StableHash *= 1099511628211ull;
-    }
-  };
-  Fold(1);
-  Fold(Pipeline->GetBoundarySnapshot().StableHash);
-  Fold(WorkOutput.StableHash);
-  Fold(FinalizeOutput.StableHash);
-  Fold(FinalizeOutput.CommitPlan.StableHash);
-  for (const int32 AgentId : StableAgentIds)
-  {
-    Fold(static_cast<uint32>(AgentId));
-    Fold(static_cast<uint32>(
-      ConsecutiveSettleStepsByAgentId.FindRef(AgentId)));
-    Fold(FinalSettledByAgentId.FindRef(AgentId) ? 1u : 0u);
-  }
-  FCrowdDemoPreparedMovementBoundaryCommit PreparedMovementBoundaryCommit;
-  PreparedMovementBoundaryCommit.FixedStepIndex =
-    Pipeline->GetCurrentFixedStepIndex();
-  PreparedMovementBoundaryCommit.PlanRevision =
-    Pipeline->GetCurrentPlanRevision();
-  PreparedMovementBoundaryCommit.Facing = WorkOutput;
-  PreparedMovementBoundaryCommit.Finalize = FinalizeOutput;
-  PreparedMovementBoundaryCommit.ConsecutiveSettleStepsByAgentId =
-    MoveTemp(ConsecutiveSettleStepsByAgentId);
-  PreparedMovementBoundaryCommit.FinalSettledByAgentId =
-    MoveTemp(FinalSettledByAgentId);
-  PreparedMovementBoundaryCommit.StableHash = StableHash;
-  PreparedMovementBoundaryCommit.bValid = StableHash != 0;
-  if (!Pipeline->SetPreparedMovementBoundaryCommit(
-      MoveTemp(PreparedMovementBoundaryCommit)))
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoMovementPreparedCommitRejected step=%d records=%d"),
-      Pipeline->GetCurrentFixedStepIndex(),
-      FinalizeOutput.CommitPlan.Records.Num());
+      TEXT("VIOLATION CrowdDemoBoundaryWorkGraphDispatchRejected step=%d"),
+      Pipeline->GetCurrentFixedStepIndex());
   }
 }
 
-void FCrowdDemoRoundMovementWorkStage::Execute(
+static void ExecuteRoundMovementWork(
+  float& OutGuidanceWorkMilliseconds, 
   FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-  LastGuidanceWorkMilliseconds = 0.0f;
+  OutGuidanceWorkMilliseconds = 0.0f;
   UWorld* World = EntityManager.GetWorld();
   auto* Pipeline = World
     ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
@@ -3877,27 +2763,18 @@ void FCrowdDemoRoundMovementWorkStage::Execute(
   WorkInput.Guidance.PlanRevision = Pipeline->GetCurrentPlanRevision();
   WorkInput.FixedStepSeconds = Pipeline->GetCurrentFixedStepSeconds();
   TArray<FCrowdGuidanceCandidate> FlowCandidates;
-  FlowCandidates.Reserve(
-    Pipeline->GetPreparedRuntimeSharedFlowOutputs().Num());
-  for (const FCrowdMassSharedFlowAgentOutput& Value
-    : Pipeline->GetPreparedRuntimeSharedFlowOutputs())
-    FlowCandidates.Add(Value.Candidate);
-  if (FlowCandidates.IsEmpty())
+  FlowCandidates.Reserve(Pipeline->GetBoundarySnapshot().Agents.Num());
+  for (const FCrowdMassBoundaryAgentRecord& Record
+    : Pipeline->GetBoundarySnapshot().Agents)
   {
-    FlowCandidates.Reserve(
-      Pipeline->GetBoundarySnapshot().Agents.Num());
-    for (const FCrowdMassBoundaryAgentRecord& Record
-      : Pipeline->GetBoundarySnapshot().Agents)
-    {
-      FlowCandidates.Add(
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreGuidanceCandidate(
-          FCrowdDemoGuidanceComposeKernel::BuildCandidate(
-            Record.Identity.AgentId,
-            ECrowdDemoGuidanceProvider::SharedFlow,
-            Pipeline->GetCurrentPlanRevision(),
-            FVector::ZeroVector, Record.State.Position,
-            Record.State.YawDegrees, true)));
-    }
+    FlowCandidates.Add(
+      FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreGuidanceCandidate(
+        FCrowdDemoGuidanceComposeKernel::BuildCandidate(
+          Record.Identity.AgentId,
+          ECrowdDemoGuidanceProvider::SharedFlow,
+          Pipeline->GetCurrentPlanRevision(),
+          FVector::ZeroVector, Record.State.Position,
+          Record.State.YawDegrees, true)));
   }
   const bool bGuidanceGatherValid =
     FCrowdMassRuntimeBridge::BuildGuidanceRecords(
@@ -4042,529 +2919,18 @@ void FCrowdDemoRoundMovementWorkStage::Execute(
     return;
   }
 
-  const TArray<FCrowdMassGatherRecord> GatherRecords =
-    WorkInput.Guidance.Records;
-  FCrowdMassMovementPipelineWorkOutput WorkOutput;
-  if (!Pipeline->ConsumeBoundaryMovementWork(WorkOutput))
-  {
-    if (!Pipeline->StageBoundaryMovementWork(MoveTemp(WorkInput)))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoMovementWorkStageRejected step=%d"),
-        Pipeline->GetCurrentFixedStepIndex());
-    }
-    return;
-  }
-  LastGuidanceWorkMilliseconds = WorkOutput.GuidanceWorkMilliseconds;
-  if (!WorkOutput.bCompleted)
+  if (!Pipeline->StageBoundaryMovementWork(MoveTemp(WorkInput)))
   {
     UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoMovementWorkIncomplete step=%d composed=%d local=%d predicted=%d"),
-      Pipeline->GetCurrentFixedStepIndex(),
-      WorkOutput.Guidance.ComposedGuidance.Num(),
-      WorkOutput.LocalPredictive.Results.Num(),
-      WorkOutput.MovementPredict.Results.Num());
-    return;
-  }
-
-  TMap<int32, const FCrowdMassGatherRecord*> GatheredById;
-  for (const FCrowdMassGatherRecord& Record : GatherRecords)
-    GatheredById.Add(Record.Identity.AgentId, &Record);
-  TMap<int32, const FCrowdComposedGuidance*> ComposedById;
-  for (const FCrowdComposedGuidance& Value
-    : WorkOutput.Guidance.ComposedGuidance)
-    ComposedById.Add(Value.AgentId, &Value);
-  TMap<int32, const FCrowdLocalPredictiveResult*> LocalById;
-  for (const FCrowdLocalPredictiveResult& Value
-    : WorkOutput.LocalPredictive.Results)
-    LocalById.Add(Value.AgentId, &Value);
-  TMap<int32, const FCrowdMassPredictedMovement*> PredictedById;
-  for (const FCrowdMassPredictedMovement& Value
-    : WorkOutput.MovementPredict.Results)
-    PredictedById.Add(Value.AgentId, &Value);
-  bool bResultSetValid = GatheredById.Num()
-      == WorkOutput.Guidance.ComposedGuidance.Num()
-    && PredictedById.Num() == GatheredById.Num()
-    && (!bUseLocal || LocalById.Num() == GatheredById.Num());
-  int32 ValidatedCount = 0;
-  for (const FCrowdMassGatherRecord& Record : GatherRecords)
-  {
-    const int32 AgentId = Record.Identity.AgentId;
-    if (!GatheredById.Contains(AgentId)
-      || !ComposedById.Contains(AgentId)
-      || !PredictedById.Contains(AgentId)
-      || (bUseLocal && !LocalById.Contains(AgentId)))
-    {
-      bResultSetValid = false;
-      continue;
-    }
-    ++ValidatedCount;
-  }
-  if (!bResultSetValid || ValidatedCount != GatheredById.Num())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoMovementWorkResultSetInvalid step=%d validated=%d records=%d"),
-      Pipeline->GetCurrentFixedStepIndex(), ValidatedCount,
-      GatheredById.Num());
-    return;
-  }
-
-  TArray<FCrowdDemoComposedGuidance> DemoComposed;
-  DemoComposed.Reserve(WorkOutput.Guidance.ComposedGuidance.Num());
-  for (const FCrowdComposedGuidance& Value
-    : WorkOutput.Guidance.ComposedGuidance)
-    DemoComposed.Add(
-      FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoComposedGuidance(Value));
-  TArray<FCrowdDemoLocalPredictivePair> ConflictPairs;
-  TArray<FCrowdDemoLocalPredictiveGrantState> GrantStates;
-  TArray<FCrowdDemoLocalPredictiveResult> DemoLocalResults;
-  FCrowdDemoLocalPredictiveSummary DemoLocalSummary;
-  if (bUseLocal)
-  {
-    for (const auto& Value : WorkOutput.LocalPredictive.ConflictPairs)
-      ConflictPairs.Add(
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoLocalPredictivePair(Value));
-    for (const auto& Value : WorkOutput.LocalPredictive.GrantStates)
-      GrantStates.Add(
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoLocalPredictiveGrant(Value));
-    for (const auto& Value : WorkOutput.LocalPredictive.Results)
-      DemoLocalResults.Add(
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoLocalPredictiveResult(Value));
-    DemoLocalSummary =
-      FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoLocalPredictiveSummary(
-        WorkOutput.LocalPredictive.Summary);
-    if (bCaptureDiagnostic
-      || WorkOutput.LocalPredictive.bFailureTraceReplayAttempted)
-    {
-      FCrowdDemoLocalPredictiveSettings DiagnosticSettings;
-      const FCrowdDemoLocalPredictiveRuleSettings& Rule =
-        Pipeline->GetRules().LocalPredictiveSettings;
-      DiagnosticSettings.FixedStepSeconds =
-        Pipeline->GetCurrentFixedStepSeconds();
-      DiagnosticSettings.TimeHorizonSeconds = Rule.TimeHorizonSeconds;
-      DiagnosticSettings.SpatialCellSizeCm = Rule.SpatialCellSizeCm;
-      DiagnosticSettings.VelocityQuantumCmps =
-        Pipeline->GetRules().ParticleVelocityQuantumCmps;
-      DiagnosticSettings.ConstraintEpsilonCmps =
-        Rule.ConstraintEpsilonCmps;
-      DiagnosticSettings.RequestedProgressThresholdCmps =
-        Rule.RequestedProgressThresholdCmps;
-      DiagnosticSettings.BlockedProgressThresholdCmps =
-        Rule.BlockedProgressThresholdCmps;
-      DiagnosticSettings.GrantedResponsibility = Rule.GrantedResponsibility;
-      DiagnosticSettings.GrantDurationSteps = Rule.GrantDurationSteps;
-      DiagnosticSettings.JointIterationCount = Rule.JointIterationCount;
-      FCrowdDemoLocalPredictiveDiagnosticFrame Frame;
-      Frame.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
-      Frame.Settings = DiagnosticSettings;
-      for (const FCrowdLocalPredictiveAgent& Agent
-        : WorkOutput.LocalPredictiveAgents)
-        Frame.Agents.Add(
-          FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoLocalPredictiveAgent(Agent));
-      Frame.PreviousGrantStates = PreviousGrantStates;
-      Frame.ConflictPairs = ConflictPairs;
-      Frame.GrantStates = GrantStates;
-      Frame.Results = DemoLocalResults;
-      Frame.Summary = DemoLocalSummary;
-      Frame.Trace =
-        FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoLocalPredictiveTrace(
-          WorkOutput.LocalPredictive.DiagnosticTrace);
-      Pipeline->RecordLocalPredictiveDiagnosticFrame(MoveTemp(Frame));
-    }
-    if (!WorkOutput.LocalPredictive.Summary.bValid
-      && WorkOutput.LocalPredictive.bFailureTraceReplayAttempted)
-    {
-      UE_LOG(LogTemp, Display,
-        TEXT("CrowdDemoLocalPredictiveFailureTraceReplay fixed_step=%d attempted=%d matched=%d valid=%d candidate_hash=%u replay_hash=%u trace_initial=%d trace_completed=%d trace_components=%d%s"),
-        Pipeline->GetCurrentFixedStepIndex(),
-        WorkOutput.LocalPredictive.bFailureTraceReplayAttempted ? 1 : 0,
-        WorkOutput.LocalPredictive.bFailureTraceReplayMatched ? 1 : 0,
-        WorkOutput.LocalPredictive.bFailureTraceReplayValid ? 1 : 0,
-        WorkOutput.LocalPredictive.Summary.CandidateHash,
-        WorkOutput.LocalPredictive.FailureTraceReplayCandidateHash,
-        WorkOutput.LocalPredictive.DiagnosticTrace.InitialIndependentResults.Num(),
-        WorkOutput.LocalPredictive.DiagnosticTrace.CompletedIndependentResults.Num(),
-        WorkOutput.LocalPredictive.DiagnosticTrace.Components.Num(),
-        WorkOutput.LocalPredictive.bFailureTraceReplayValid
-          ? TEXT("") : TEXT(" VIOLATION"));
-      if (!WorkOutput.LocalPredictive.bFailureTraceReplayValid)
-      {
-        UE_LOG(LogTemp, Error,
-          TEXT("CrowdDemoLocalPredictiveFailureTraceReplayMismatch fixed_step=%d candidate_hash=%u replay_hash=%u VIOLATION"),
-          Pipeline->GetCurrentFixedStepIndex(),
-          WorkOutput.LocalPredictive.Summary.CandidateHash,
-          WorkOutput.LocalPredictive.FailureTraceReplayCandidateHash);
-      }
-    }
-  }
-
-  const int32 AppliedCount = GatheredById.Num();
-
-  Pipeline->SetPreparedRuntimeComposedGuidance(
-    TArray<FCrowdComposedGuidance>(
-      WorkOutput.Guidance.ComposedGuidance));
-  Pipeline->RecordGuidanceComposeStep(MoveTemp(DemoComposed));
-  if (bUseLocal)
-  {
-    Pipeline->RecordLocalPredictiveStep(
-      MoveTemp(DemoLocalResults), MoveTemp(GrantStates), DemoLocalSummary);
-    Pipeline->LogStageOnce(
-      TEXT("05_local_predictive_interaction"), AppliedCount);
-  }
-  Pipeline->SetPreparedRuntimePredictedMovements(
-    MoveTemp(WorkOutput.MovementPredict.Results));
-  if (bOpenSpawnRelaxation)
-  {
-    TArray<int32> PendingResetAgentIds;
-    for (const FCrowdDemoPreparedOpenSpawnBoundaryFact& Fact
-      : Pipeline->GetPreparedOpenSpawnBoundaryFacts())
-      if (Fact.bPendingBoundaryReset)
-        PendingResetAgentIds.Add(Fact.AgentId);
-    if (!PendingResetAgentIds.IsEmpty()
-      && !Pipeline->ConsumeOpenSpawnBoundaryResets(PendingResetAgentIds))
-    {
-      UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoMovementWorkT1ResetConsumeInvalid step=%d resets=%d"),
-        Pipeline->GetCurrentFixedStepIndex(), PendingResetAgentIds.Num());
-      return;
-    }
-  }
-  Pipeline->LogStageOnce(TEXT("08_guidance_compose"), AppliedCount);
-  Pipeline->LogStageOnce(
-    Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
-      ? TEXT("05_movement_predict") : TEXT("04_movement_predict"),
-    AppliedCount);
-}
-
-void FCrowdDemoRoundPostFinalizeMetricsStage::Execute(
-  FMassEntityManager& EntityManager,
-  FMassExecutionContext& Context)
-{
-  UWorld* World = EntityManager.GetWorld();
-  UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World
-    ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>()
-    : nullptr;
-  if (!World || !Pipeline || !Pipeline->IsActive()) return;
-  if (!Pipeline->IsMovementFinalizeAppliedCurrent()) return;
-  if (Pipeline->GetRules().Scenario
-      == ECrowdDemoScenario::SimRoundSoftPressure
-    && !Pipeline->CommitPreparedParticleDiagnostics())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoParticleDiagnosticCommitMissing step=%d"),
+      TEXT("VIOLATION CrowdDemoMovementBootstrapStageRejected step=%d"),
       Pipeline->GetCurrentFixedStepIndex());
-    return;
-  }
-
-  UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
-    World->GetSubsystem<UMassCrowdRuntimeSubsystem>();
-  if (!RuntimeSubsystem)
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoPostFinalizeRetainedViewMissing step=%d"),
-      Pipeline->GetCurrentFixedStepIndex());
-    return;
-  }
-  const FCrowdWorkerResultApplyProxy& Proxy =
-    RuntimeSubsystem->GetWorkerResultApplyProxy();
-  const FCrowdWorkerResultApplyMetrics& ProxyMetrics = Proxy.GetMetrics();
-  const TConstArrayView<FCrowdStableEntityRef> StableEntities =
-    Proxy.GetStableEntityView();
-
-  TMap<int32, const FCrowdMassBoundaryAgentRecord*> BoundaryByAgentId;
-  for (const FCrowdMassBoundaryAgentRecord& Value
-    : Pipeline->GetBoundarySnapshot().Agents)
-  {
-    BoundaryByAgentId.Add(Value.Identity.AgentId, &Value);
-  }
-  TMap<int32, const FCrowdDemoRoundBoundaryFormationFact*> FormationByAgentId;
-  for (const FCrowdDemoRoundBoundaryFormationFact& Value
-    : Pipeline->GetBoundaryFormationFacts())
-  {
-    FormationByAgentId.Add(Value.AgentId, &Value);
-  }
-  TMap<int32, const FCrowdMassSharedFlowAgentOutput*> FlowOutputByAgentId;
-  for (const FCrowdMassSharedFlowAgentOutput& Value
-    : Pipeline->GetPreparedRuntimeSharedFlowOutputs())
-  {
-    FlowOutputByAgentId.Add(Value.AgentId, &Value);
-  }
-  TMap<int32, const FCrowdDemoPreparedFacingRollbackFact*> FacingByAgentId;
-  for (const FCrowdDemoPreparedFacingRollbackFact& Value
-    : Pipeline->GetPreparedFacingRollbackFacts())
-  {
-    FacingByAgentId.Add(Value.AgentId, &Value);
-  }
-  TMap<int32, const FCrowdDemoRoundBoundaryBusinessFact*> BusinessByAgentId;
-  for (const FCrowdDemoRoundBoundaryBusinessFact& Value
-    : Pipeline->GetBoundaryBusinessFacts())
-    BusinessByAgentId.Add(Value.AgentId, &Value);
-  bool bPreparedSetValid = ProxyMetrics.Generation != 0
-    && ProxyMetrics.LastConsumedPublishSequence != 0
-    && BoundaryByAgentId.Num()
-      == Pipeline->GetBoundarySnapshot().Agents.Num()
-    && BoundaryByAgentId.Num() == StableEntities.Num()
-    && FormationByAgentId.Num() == Pipeline->GetBoundaryFormationFacts().Num()
-    && FlowOutputByAgentId.Num()
-      == Pipeline->GetPreparedRuntimeSharedFlowOutputs().Num()
-    && FacingByAgentId.Num()
-      == Pipeline->GetPreparedFacingRollbackFacts().Num()
-    && BoundaryByAgentId.Num() == FormationByAgentId.Num()
-    && BoundaryByAgentId.Num() == FlowOutputByAgentId.Num()
-    && BoundaryByAgentId.Num() == FacingByAgentId.Num()
-    && BoundaryByAgentId.Num() == BusinessByAgentId.Num();
-
-  TArray<FCrowdDemoRoundFlowAgentSample> MetricSamples;
-  TArray<int32> OpenSpawnAgentIds;
-  TArray<FVector> OpenSpawnLocations;
-  TArray<FCrowdDemoBidirectionalSwapStepAgent> BidirectionalSwapAgents;
-  TArray<FCrowdDemoValidCorridorTransitStepAgent> ValidCorridorTransitAgents;
-  TArray<FCrowdDemoParticleAppliedRoundSimState> ParticleAppliedStates;
-  if (Pipeline->GetRules().Scenario
-    == ECrowdDemoScenario::SimRoundSoftPressure)
-    ParticleAppliedStates.Reserve(BoundaryByAgentId.Num());
-  for (const FCrowdMassBoundaryAgentRecord& BoundaryRecord
-    : Pipeline->GetBoundarySnapshot().Agents)
-  {
-      const int32 AgentId = BoundaryRecord.Identity.AgentId;
-      const int32 LifecycleSerial = static_cast<int32>(
-        BoundaryRecord.Identity.LifecycleSerial);
-      const FCrowdMassBoundaryAgentRecord* const* Boundary =
-        BoundaryByAgentId.Find(AgentId);
-      const FCrowdDemoRoundBoundaryFormationFact* const* Formation =
-        FormationByAgentId.Find(AgentId);
-      const FCrowdMassSharedFlowAgentOutput* const* FlowOutput =
-        FlowOutputByAgentId.Find(AgentId);
-      const FCrowdDemoPreparedFacingRollbackFact* const* Facing =
-        FacingByAgentId.Find(AgentId);
-      const FCrowdDemoRoundBoundaryBusinessFact* const* Business =
-        BusinessByAgentId.Find(AgentId);
-      const FCrowdStableEntityRef EntityRef =
-        BoundaryRecord.Identity.GetStableEntityRef();
-      const FCrowdWorkerDomainProxyState* MovementDomain =
-        Proxy.FindDomain(EntityRef, ECrowdWorkerField::Facing);
-      FCrowdWorkerMovementState WorkerMovement;
-      bool bRetainedStateValid =
-        Proxy.FindStableEntitySlot(EntityRef) != INDEX_NONE
-        && MovementDomain
-        && MovementDomain->PublishSequence
-          <= ProxyMetrics.LastConsumedPublishSequence
-        && MovementDomain->SourceInputSequence
-          <= ProxyMetrics.LastAppliedInputSequence
-        && FCrowdWorkerMovementStateCodec::Decode(
-          MovementDomain->State.Payload, WorkerMovement);
-      FCrowdMovementOutput CommittedMovement;
-      if (bRetainedStateValid)
-      {
-        CommittedMovement.AgentId = AgentId;
-        CommittedMovement.LifecycleSerial = LifecycleSerial;
-        CommittedMovement.Position = WorkerMovement.Position;
-        CommittedMovement.Velocity = WorkerMovement.Velocity;
-        CommittedMovement.YawDegrees = WorkerMovement.YawDegrees;
-        CommittedMovement.bValid = true;
-      }
-      FCrowdDemoCombatAgentState WorkerCombat;
-      const FCrowdDemoCombatAgentState* WorkerCombatState = nullptr;
-      if (const FCrowdWorkerDomainProxyState* CombatDomain =
-          Proxy.FindDomain(EntityRef, ECrowdWorkerField::Combat))
-      {
-        FCrowdWorkerCombatState EncodedCombat;
-        bRetainedStateValid = bRetainedStateValid
-          && CombatDomain->PublishSequence
-            <= ProxyMetrics.LastConsumedPublishSequence
-          && CombatDomain->SourceInputSequence
-            <= ProxyMetrics.LastAppliedInputSequence
-          && FCrowdWorkerCombatStateCodec::Decode(
-            CombatDomain->State.Payload, EncodedCombat)
-          && FCrowdDemoWorkerCombatStatePayloadCodec::Decode(
-            EncodedCombat.HostState, WorkerCombat)
-          && WorkerCombat.AgentId == AgentId
-          && WorkerCombat.LifecycleSerial == LifecycleSerial;
-        if (bRetainedStateValid)
-          WorkerCombatState = &WorkerCombat;
-      }
-      else if (Business && (*Business)->bHasCombatCapability)
-      {
-        bRetainedStateValid = false;
-      }
-      if (!Boundary || !Formation || !FlowOutput || !Facing
-        || !Business || !bRetainedStateValid
-        || static_cast<int32>((*Boundary)->Identity.LifecycleSerial)
-          != LifecycleSerial)
-      {
-        bPreparedSetValid = false;
-        continue;
-      }
-      FCrowdDemoRoundSimStateFragment State;
-      State.Location = CommittedMovement.Position;
-      State.Velocity = CommittedMovement.Velocity;
-      State.YawDegrees = CommittedMovement.YawDegrees;
-      State.SimulatedServerTimeSeconds =
-        Pipeline->GetCurrentStepEndServerTimeSeconds();
-      State.PlanRevision = Pipeline->GetCurrentPlanRevision();
-      State.bInitialized = true;
-      const FCrowdDemoRoundBoundaryBusinessFact FinalBusiness =
-        BuildFinalBusinessFactFromState(
-          *Pipeline, **Business, CommittedMovement, WorkerCombatState);
-      const FCrowdDemoCombatNetState CombatState = MakeCombatNetState(
-        FinalBusiness.Stats, FinalBusiness.Business, FinalBusiness.Attack,
-        FinalBusiness.ReactiveMotion, FinalBusiness.HitFlash,
-        FinalBusiness.Visual);
-      if (Pipeline->IsOpenSpawnRelaxation())
-      {
-        OpenSpawnAgentIds.Add(AgentId);
-        OpenSpawnLocations.Add(State.Location);
-      }
-
-      FCrowdDemoRoundFlowAgentSample& Metric = MetricSamples.AddDefaulted_GetRef();
-      Metric.AgentId = AgentId;
-      Metric.Location = State.Location;
-      Metric.Velocity = State.Velocity;
-      const FCrowdDemoSharedFlowField* FinalField = &Pipeline->GetSharedFlowField();
-      if (Pipeline->IsBidirectionalSwap())
-        FinalField = Pipeline->FindBidirectionalSwapFlowField(
-          (*Formation)->FormationIndex);
-      if (!FinalField) FinalField = &Pipeline->GetSharedFlowField();
-      const FCrowdDemoSharedFlowSample FinalFlowSample =
-        FCrowdDemoSharedFlowFieldKernel::Sample(*FinalField, State.Location);
-      Metric.bUnreachable = FinalFlowSample.Status
-        != ECrowdDemoFlowLocationStatus::Reachable;
-      FCrowdDemoSharedFlowFieldConfig PhysicalObstacleConfig = FinalField->Config;
-      if (Pipeline->GetRules().Scenario
-        == ECrowdDemoScenario::SimRoundSoftPressure)
-      {
-        PhysicalObstacleConfig.AgentInflateCm = FMath::Max(
-          (*Boundary)->Properties.PhysicalRadiusCm
-            + (*Boundary)->Properties.HardSafetyGapCm,
-          Pipeline->GetRules().bEnableHeterogeneousProfiles != 0
-            ? Pipeline->GetRules().FlowFieldConfig.AgentInflateCm
-            : 0.0f);
-      }
-      const bool bStartPenetrating = Pipeline->GetRules().Scenario
-          != ECrowdDemoScenario::SimRoundSoftPressure
-        && FCrowdDemoSharedFlowFieldKernel::IsInsideInflatedObstacle(
-          PhysicalObstacleConfig, (*Boundary)->State.Position);
-      Metric.bPenetrating = bStartPenetrating
-        || FCrowdDemoSharedFlowFieldKernel::IsInsideInflatedObstacle(
-          PhysicalObstacleConfig, State.Location);
-      if (Pipeline->IsBidirectionalSwap())
-      {
-        auto& SwapAgent = BidirectionalSwapAgents.AddDefaulted_GetRef();
-        SwapAgent.AgentId = AgentId;
-        SwapAgent.FormationIndex = (*Formation)->FormationIndex;
-        SwapAgent.Location = State.Location;
-        SwapAgent.Velocity = State.Velocity;
-        SwapAgent.FlowStatus = FinalFlowSample.Status;
-      }
-      if (Pipeline->IsCorridorTransitProgressScenario())
-      {
-        auto& TransitAgent = ValidCorridorTransitAgents.AddDefaulted_GetRef();
-        TransitAgent.AgentId = AgentId;
-        TransitAgent.Location = State.Location;
-        TransitAgent.Velocity = State.Velocity;
-        TransitAgent.FlowStatus = FinalFlowSample.Status;
-      }
-      if (Pipeline->GetRules().Scenario
-        == ECrowdDemoScenario::SimRoundSoftPressure)
-      {
-        FCrowdDemoParticleAppliedRoundSimState& Applied =
-          ParticleAppliedStates.AddDefaulted_GetRef();
-        Applied.AgentId = AgentId;
-        Applied.LifecycleSerial = LifecycleSerial;
-        Applied.Position = State.Location;
-        Applied.Velocity = State.Velocity;
-        Applied.YawDegrees = State.YawDegrees;
-        Applied.RadiusCm = (*Formation)->RadiusCm;
-        Applied.bInitialized = State.bInitialized;
-        Applied.Combat = CombatState;
-      }
-  }
-  if (!bPreparedSetValid
-    || MetricSamples.Num() != Pipeline->GetBoundarySnapshot().Agents.Num())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoPostFinalizePreparedSetInvalid step=%d snapshot=%d metrics=%d formations=%d flow=%d facing=%d"),
-      Pipeline->GetCurrentFixedStepIndex(),
-      Pipeline->GetBoundarySnapshot().Agents.Num(), MetricSamples.Num(),
-      FormationByAgentId.Num(), FlowOutputByAgentId.Num(),
-      FacingByAgentId.Num());
-    return;
-  }
-  if (Pipeline->IsOpenSpawnRelaxation())
-  {
-    FCrowdDemoOpenSpawnRelaxationKernel::RecordFinalLocations(
-      OpenSpawnAgentIds, OpenSpawnLocations,
-      Pipeline->GetOpenSpawnRelaxationRuntime());
-  }
-  if (Pipeline->IsBidirectionalSwap())
-    Pipeline->RecordBidirectionalSwapStep(BidirectionalSwapAgents);
-  if (Pipeline->IsCorridorTransitProgressScenario())
-    Pipeline->RecordValidCorridorTransitStep(ValidCorridorTransitAgents);
-  Pipeline->RecordFlowAgentSamples(
-    MetricSamples, World->GetNetMode() == NM_Client);
-  if (Pipeline->GetRules().Scenario
-    == ECrowdDemoScenario::SimRoundSoftPressure)
-  {
-    Pipeline->RecordParticleAppliedStateHash(
-      FCrowdDemoParticleConstraintKernel::HashAppliedRoundSimState(
-        Pipeline->GetCurrentRoundId(), Pipeline->GetCurrentPlanRevision(),
-        Pipeline->GetCurrentFixedStepIndex(),
-        Pipeline->GetCurrentStepEndServerTimeSeconds(),
-        ParticleAppliedStates));
   }
 }
 
-void FCrowdDemoRoundAuthorityCommitStage::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
-{
-  UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
-    EntityManager.GetWorld()->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>();
-  if (!Pipeline || !Pipeline->IsMovementFinalizeAppliedCurrent())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoAuthorityCommitBeforeMovementFinalize"));
-    return;
-  }
-  const int32 Count = Pipeline->GetPreparedMovementBoundaryCommit().
-    Finalize.CommitPlan.Records.Num();
-  if (Count != Pipeline->GetBoundarySnapshot().Agents.Num())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoAuthorityCommitRuntimeOutputInvalid"));
-    return;
-  }
-  Pipeline->LogStageOnce(
-    Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
-      ? TEXT("10_authority_commit")
-      : TEXT("07_authority_commit"),
-    Count);
-}
 
-void FCrowdDemoRoundClientPredictionCommitStage::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
-{
-  UCrowdDemoRoundSimPipelineSubsystem* Pipeline =
-    EntityManager.GetWorld()->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>();
-  if (!Pipeline || !Pipeline->IsMovementFinalizeAppliedCurrent())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoClientCommitBeforeMovementFinalize"));
-    return;
-  }
-  const int32 Count = Pipeline->GetPreparedMovementBoundaryCommit().
-    Finalize.CommitPlan.Records.Num();
-  if (Count != Pipeline->GetBoundarySnapshot().Agents.Num())
-  {
-    UE_LOG(LogTemp, Error,
-      TEXT("VIOLATION CrowdDemoClientPredictionCommitRuntimeOutputInvalid"));
-    return;
-  }
-  Pipeline->LogStageOnce(
-    Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure
-      ? TEXT("10_client_prediction_commit")
-      : TEXT("07_client_prediction_commit"),
-    Count);
-}
 
-void FCrowdDemoRoundCheckpointPublisherStage::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+
+static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
   UWorld* World = EntityManager.GetWorld();
   UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
@@ -5692,13 +4058,6 @@ void FCrowdDemoRoundCheckpointPublisherStage::Execute(FMassEntityManager& Entity
     States.Num());
 }
 
-void FCrowdDemoWorkerResultApplyStage::BindQuery(
-  FMassEntityQuery& Query)
-{
-  EntityQuery = &Query;
-  FCrowdDemoRoundFacingFinalizeStage FacingFinalize;
-  FacingFinalize.BindQuery(Query);
-}
 
 struct FCrowdDemoPreparedWorkerMassRecord
 {
@@ -6238,7 +4597,8 @@ void CommitValidatedWorkerMassSideEffects(
 }
 }
 
-void FCrowdDemoWorkerResultApplyStage::Execute(
+static void ExecuteWorkerResultApply(
+  FMassEntityQuery& EntityQuery,
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
@@ -6266,8 +4626,7 @@ void FCrowdDemoWorkerResultApplyStage::Execute(
   TSharedPtr<FCrowdDemoPreparedWorkerMassApplyPlan> PreparedMassPlan;
   bool bHasBatch = false;
   const double ApplyStartSeconds = FPlatformTime::Seconds();
-  if (!EntityQuery
-    || !FCrowdDemoWorkerInputSync::PreparePublishedResults(
+  if (!FCrowdDemoWorkerInputSync::PreparePublishedResults(
       *World, ConsumerFrameSequence, Prepared, bHasBatch))
   {
     UE_LOG(LogTemp, Error,
@@ -6281,7 +4640,7 @@ void FCrowdDemoWorkerResultApplyStage::Execute(
       MakeShared<FCrowdDemoPreparedWorkerMassApplyPlan>();
     if (!PreparedMassPlan.IsValid()
       || !BuildPreparedWorkerMassApplyPlan(
-        Prepared, *EntityQuery, EntityManager, *PreparedMassPlan)
+        Prepared, EntityQuery, EntityManager, *PreparedMassPlan)
       || !EnrichPreparedWorkerMassApplyPlan(
         *Pipeline, EntityManager, *PreparedMassPlan))
     {
@@ -6297,8 +4656,6 @@ void FCrowdDemoWorkerResultApplyStage::Execute(
     Pending.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
     Pending.PreparedProxyResult = MoveTemp(Prepared);
     Pending.PreparedMassPlan = MoveTemp(PreparedMassPlan);
-    Pending.PreparedTargetResourcePlan =
-      MakeShared<FCrowdDemoPreparedTargetResourcePlan>();
     Pending.ApplyStartSeconds = ApplyStartSeconds;
     if (!Pipeline->QueuePreparedRoundCommitPlan(MoveTemp(Pending)))
     {
@@ -6330,77 +4687,17 @@ bool AdvanceRoundWorkerFrame(
     : nullptr;
   if (!World || !Pipeline)
     return false;
-  FCrowdDemoRoundMovementWorkStage CommitMovementWork;
-  FCrowdDemoRoundParticleConstraintStage CommitParticleConstraint;
-  FCrowdDemoRoundFacingFinalizeStage CommitFacingFinalize;
-  CommitFacingFinalize.UseQuery(ResultCommitQuery);
-  const bool bFullProductionFastPath =
-    Pipeline->IsCurrentStepFullWorkerProductionFastPath();
   const auto Commit = [&]() -> ECrowdDemoRoundFrameStageResult
   {
     if (!Pipeline->IsStepInProgress())
       return ECrowdDemoRoundFrameStageResult::Empty;
-    if (!bFullProductionFastPath)
+    if (!Pipeline->IsCurrentStepFullWorkerProductionFastPath())
     {
-      const ECrowdBoundaryPollResult PollResult =
-        Pipeline->IsPreparedMovementBoundaryCommitCurrent()
-          || Pipeline->GetRoundWorkState()
-            == ECrowdBoundaryTransactionState::ReadyToCommit
-          ? ECrowdBoundaryPollResult::Ready
-          : Pipeline->TryPrepareRoundApply();
-      if (PollResult == ECrowdBoundaryPollResult::Pending)
-      {
-        Pipeline->RecordPipelineFramePerformance(
-          0,
-          GetRoundPipelineServerTime(*World),
-          false, false);
-        return ECrowdDemoRoundFrameStageResult::Pending;
-      }
-      if (PollResult == ECrowdBoundaryPollResult::Failed)
-      {
-        UE_LOG(LogTemp, Error,
-          TEXT("VIOLATION CrowdDemoBoundaryPollFailed step=%d prepare_checkpoint=%d"),
-          Pipeline->GetCurrentFixedStepIndex(),
-          Pipeline->GetLastBoundaryPrepareCheckpoint());
-        Pipeline->FailFixedStep();
-        return ECrowdDemoRoundFrameStageResult::Failed;
-      }
-
-      const double FinalizeStart = FPlatformTime::Seconds();
-      if (!Pipeline->IsPreparedMovementBoundaryCommitCurrent())
-      {
-        if (Pipeline->GetRules().Scenario
-          == ECrowdDemoScenario::SimRoundSoftPressure)
-        {
-          CommitMovementWork.Execute(EntityManager, Context);
-          CommitParticleConstraint.Execute(EntityManager, Context);
-        }
-        CommitFacingFinalize.Execute(EntityManager, Context);
-      }
-      const float FinalizeMs = static_cast<float>(
-        (FPlatformTime::Seconds() - FinalizeStart) * 1000.0);
-      Pipeline->RecordPerformanceStage(
-        ECrowdDemoRoundPerformanceStage::FacingFinalize,
-        FinalizeMs);
-
-      const bool bRequiresCombatCommit =
-        Pipeline->IsRangedProjectileCombat()
-        || (Pipeline->GetRules().Scenario
-            == ECrowdDemoScenario::SimRoundSoftPressure
-          && Pipeline->GetRules().SoftPressureTestCase
-            == ECrowdDemoSoftPressureTestCase::
-              MultiStateVatHitResponse);
-      if ((bRequiresCombatCommit
-          && !Pipeline->IsPreparedCombatBoundaryCommitCurrent())
-        || !Pipeline->IsPreparedMovementBoundaryCommitCurrent())
-      {
-        UE_LOG(LogTemp, Error,
-          TEXT("VIOLATION CrowdDemoBoundaryPreparedCommitMissing step=%d combat=%d"),
-          Pipeline->GetCurrentFixedStepIndex(),
-          bRequiresCombatCommit ? 1 : 0);
-        Pipeline->FailFixedStep();
-        return ECrowdDemoRoundFrameStageResult::Failed;
-      }
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoServerStepMissingWorkerAuthority step=%d"),
+        Pipeline->GetCurrentFixedStepIndex());
+      Pipeline->FailFixedStep();
+      return ECrowdDemoRoundFrameStageResult::Failed;
     }
 
     FCrowdDemoPreparedRoundCommitPlan* PendingWorkerResult =
@@ -6430,7 +4727,6 @@ bool AdvanceRoundWorkerFrame(
       Pipeline->FailFixedStep();
       return ECrowdDemoRoundFrameStageResult::Failed;
     }
-    if (bFullProductionFastPath)
     {
       const uint64 ExpectedInputSequence =
         Pipeline->GetCurrentStepFullWorkerInputSequence();
@@ -6474,11 +4770,6 @@ bool AdvanceRoundWorkerFrame(
               PrepareCommittedResultSideEffects(
                 *World, PendingWorkerResult->PreparedProxyResult,
                 PreparedSideEffects)
-            && (bFullProductionFastPath
-              || (Pipeline->FinalValidatePreparedTargetResourcePlan(
-                    *PendingWorkerResult->PreparedTargetResourcePlan)
-                && CommitFacingFinalize.ValidatePreparedCommit(
-                  *Pipeline)))
             && FinalValidatePreparedWorkerMassDirtyPlan(
               PendingWorkerResult->PreparedProxyResult,
               PendingWorkerResult->WorkerCommitToken,
@@ -6494,21 +4785,9 @@ bool AdvanceRoundWorkerFrame(
         [&]()
         {
           CommitValidatedWorkerMassSideEffects(MassPlan, *Pipeline);
-          if (bFullProductionFastPath)
-          {
-            checkf(Pipeline->MarkFullWorkerProductionResultCommitted(
-                (FPlatformTime::Seconds() - CommitStart) * 1000.0),
-              TEXT("Validated Full Worker Production commit unexpectedly failed"));
-          }
-          else
-          {
-            Pipeline->ApplyPreparedTargetResourcePlanNoFail(
-              *PendingWorkerResult->PreparedTargetResourcePlan);
-            CommitFacingFinalize.CommitValidatedSideEffects(*Pipeline);
-            checkf(Pipeline->MarkRoundApplyCommitted(
-                (FPlatformTime::Seconds() - CommitStart) * 1000.0),
-              TEXT("Validated Round owner commit unexpectedly failed"));
-          }
+          checkf(Pipeline->MarkFullWorkerProductionResultCommitted(
+              (FPlatformTime::Seconds() - CommitStart) * 1000.0),
+            TEXT("Validated Full Worker Production commit unexpectedly failed"));
           FCrowdDemoWorkerInputSync::
             CommitPreparedResultSideEffectsNoFail(
               *World, PendingWorkerResult->PreparedProxyResult,
@@ -6519,9 +4798,7 @@ bool AdvanceRoundWorkerFrame(
         });
     const bool bApplied = BarrierResult
         == ECrowdWorkerResultOwnerCommitResult::Committed
-      && (bFullProductionFastPath
-        ? Pipeline->IsCurrentStepWorkerDirtyMassApplied()
-        : Pipeline->IsMovementFinalizeAppliedCurrent());
+      && Pipeline->IsCurrentStepWorkerDirtyMassApplied();
     if (!bApplied)
     {
       UE_LOG(LogTemp, Error,
@@ -6544,51 +4821,17 @@ bool AdvanceRoundWorkerFrame(
     return false;
   const bool bCommitted =
     CommitResult == ECrowdDemoRoundFrameStageResult::Committed;
-  if (bCommitted && World->GetNetMode() == NM_Client)
-  {
-    FCrowdDemoRoundClientPredictionCommitStage
-      ClientPredictionCommit;
-    ClientPredictionCommit.Execute(EntityManager, Context);
-  }
-  else if (bCommitted && !bFullProductionFastPath)
-  {
-    FCrowdDemoRoundAuthorityCommitStage AuthorityCommit;
-    AuthorityCommit.Execute(EntityManager, Context);
-  }
   if (bCommitted)
   {
-    if (!bFullProductionFastPath)
-    {
-      FCrowdDemoRoundPostFinalizeMetricsStage PostFinalizeMetrics;
-      PostFinalizeMetrics.Execute(EntityManager, Context);
-    }
     if (World->GetNetMode() != NM_Client)
     {
-      FCrowdDemoRoundCheckpointPublisherStage CheckpointPublisher;
-      CheckpointPublisher.Execute(EntityManager, Context);
+      ExecuteRoundCheckpointPublisher(EntityManager, Context);
     }
     Pipeline->RecordFixedStepPerformance(
       Pipeline->GetCurrentBoundaryWallMilliseconds());
     Pipeline->FinishFixedStep();
   }
   const int32 ExecutedSteps = bCommitted ? 1 : 0;
-  FCrowdDemoRoundOpenSpawnRelaxationPhasePrepareStage
-    OpenSpawnRelaxationPhasePrepare;
-  FCrowdDemoRoundTargetFactApplyStage TargetFactApply;
-  FCrowdDemoRoundTargetPolarTopologyBuildStage
-    TargetPolarTopologyBuild;
-  FCrowdDemoRoundTargetRegionPopulationBuildStage
-    TargetRegionPopulationBuild;
-  FCrowdDemoRoundTargetRegionTransportSolveStage
-    TargetRegionTransportSolve;
-  FCrowdDemoRoundTargetRegionGuidanceStage TargetRegionGuidance;
-  FCrowdDemoRoundSharedFlowFieldBuildStage SharedFlowFieldBuild;
-  FCrowdDemoRoundFlowPreferredVelocityStage
-    FlowPreferredVelocity;
-  FCrowdDemoRoundMovementWorkStage MovementWork;
-  FCrowdDemoRoundParticleConstraintStage ParticleConstraint;
-  FCrowdDemoRoundObstacleConstraintStage ObstacleConstraint;
-  FCrowdDemoRoundFacingFinalizeStage FacingFinalize;
   const auto Submit = [&]() -> bool
   {
     const float TargetServerTime = GetRoundPipelineServerTime(*World);
@@ -6626,7 +4869,7 @@ bool AdvanceRoundWorkerFrame(
       (FPlatformTime::Seconds() - SnapshotApplyStartSeconds) * 1000.0;
     if (Pipeline->CanUseFullWorkerProductionFastPath())
     {
-      TargetFactApply.Execute(EntityManager, Context);
+      ExecuteRoundTargetFactApply(EntityManager, Context);
       if (!Pipeline->TrySubmitFullWorkerProductionIntent())
       {
         UE_LOG(LogTemp, Error,
@@ -6642,10 +4885,11 @@ bool AdvanceRoundWorkerFrame(
         ExecutedSteps, TargetServerTime, false, false);
       return true;
     }
-    if (!Pipeline->BeginBoundaryTransaction(SnapshotApplyMilliseconds))
+    if (!Pipeline->BeginWorkerBootstrapPreparation(
+        SnapshotApplyMilliseconds))
     {
       UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoDirtyBoundaryBeginFailed step=%d"),
+        TEXT("VIOLATION CrowdDemoWorkerBootstrapBeginFailed step=%d"),
         Pipeline->GetCurrentFixedStepIndex());
       Pipeline->FailFixedStep();
       return false;
@@ -6668,14 +4912,14 @@ bool AdvanceRoundWorkerFrame(
       bStageValid = Pipeline->StageBoundaryBusinessWork();
       if (!bStageValid) return;
       if (Pipeline->IsOpenSpawnRelaxation())
-        OpenSpawnRelaxationPhasePrepare.Execute(
+        ExecuteRoundOpenSpawnRelaxationPrepare(
           EntityManager, Context);
       if (Pipeline->GetRules().Scenario
           == ECrowdDemoScenario::SimRoundSoftPressure
         && Pipeline->GetRules().TargetDistanceBandSettings.bEnabled
           != 0)
       {
-        TargetFactApply.Execute(
+        ExecuteRoundTargetFactApply(
           EntityManager, Context);
       }
     });
@@ -6684,16 +4928,11 @@ bool AdvanceRoundWorkerFrame(
       Pipeline->FailFixedStep();
       return false;
     }
-    if (!Pipeline->TrySubmitWorkerV2ClockIntentEarly())
-    {
-      Pipeline->FailFixedStep();
-      return false;
-    }
     MeasureStage(ECrowdDemoRoundPerformanceStage::SharedFlow, [&]
     {
-      SharedFlowFieldBuild.Execute(
+      ExecuteRoundSharedFlowFieldBuild(
         EntityManager, Context);
-      FlowPreferredVelocity.Execute(
+      ExecuteRoundFlowPreferredVelocity(
         EntityManager, Context);
     });
     if (Pipeline->GetRules().Scenario
@@ -6703,36 +4942,37 @@ bool AdvanceRoundWorkerFrame(
       MeasureStage(
         ECrowdDemoRoundPerformanceStage::TargetTopology, [&]
       {
-        TargetPolarTopologyBuild.Execute(
+        ExecuteRoundTargetPolarTopologyBuild(
           EntityManager, Context);
       });
       MeasureStage(
         ECrowdDemoRoundPerformanceStage::TargetDemand, [&]
       {
-        TargetRegionPopulationBuild.Execute(
+        ExecuteRoundTargetRegionPopulationBuild(
           EntityManager, Context);
       });
       MeasureStage(
         ECrowdDemoRoundPerformanceStage::TargetPlan, [&]
       {
-        TargetRegionTransportSolve.Execute(
+        ExecuteRoundTargetRegionTransportSolve(
           EntityManager, Context);
       });
       MeasureStage(
         ECrowdDemoRoundPerformanceStage::TargetGuidance, [&]
       {
-        TargetRegionGuidance.Execute(
+        ExecuteRoundTargetRegionGuidance(
           EntityManager, Context);
       });
     }
 
     const double MovementStart = FPlatformTime::Seconds();
-    MovementWork.Execute(EntityManager, Context);
+    float GuidanceWorkMilliseconds = 0.0f;
+    ExecuteRoundMovementWork(
+      GuidanceWorkMilliseconds, EntityManager, Context);
     const float MovementMs = static_cast<float>(
       (FPlatformTime::Seconds() - MovementStart) * 1000.0);
     const float GuidanceMs = FMath::Clamp(
-      MovementWork.GetLastGuidanceWorkMilliseconds(),
-      0.0f, MovementMs);
+      GuidanceWorkMilliseconds, 0.0f, MovementMs);
     Pipeline->RecordPerformanceStage(
       ECrowdDemoRoundPerformanceStage::GuidanceCompose,
       GuidanceMs);
@@ -6745,28 +4985,25 @@ bool AdvanceRoundWorkerFrame(
       if (Pipeline->GetRules().Scenario
         == ECrowdDemoScenario::SimRoundSoftPressure)
       {
-        ParticleConstraint.Execute(
+        ExecuteRoundParticleConstraint(
           EntityManager, Context);
       }
       else
       {
-        ObstacleConstraint.Execute(
+        ExecuteRoundObstacleConstraint(
           EntityManager, Context);
       }
     });
     MeasureStage(
       ECrowdDemoRoundPerformanceStage::FacingFinalize, [&]
     {
-      FacingFinalize.Execute(EntityManager, Context);
+      ExecuteRoundFacingBootstrap(EntityManager, Context);
     });
-    if (Pipeline->GetRoundWorkState()
-      != ECrowdBoundaryTransactionState::Working)
+    if (!Pipeline->SubmitPreparedWorkerBootstrapInput())
     {
       UE_LOG(LogTemp, Error,
-        TEXT("VIOLATION CrowdDemoBoundaryDispatchDidNotEnterWorking step=%d state=%d"),
-        Pipeline->GetCurrentFixedStepIndex(),
-        static_cast<int32>(
-          Pipeline->GetRoundWorkState()));
+        TEXT("VIOLATION CrowdDemoWorkerBootstrapSubmitFailed step=%d"),
+        Pipeline->GetCurrentFixedStepIndex());
       Pipeline->FailFixedStep();
       return false;
     }
@@ -6803,8 +5040,7 @@ UCrowdDemoWorkerInputSyncProcessor()
 void UCrowdDemoWorkerInputSyncProcessor::ConfigureQueries(
   const TSharedRef<FMassEntityManager>& EntityManager)
 {
-  FCrowdDemoRoundPlanApplyStage PlanApply;
-  PlanApply.BindQuery(InputSyncQuery);
+  ConfigureRoundPlanApplyQuery(InputSyncQuery);
 }
 
 void UCrowdDemoWorkerInputSyncProcessor::Execute(
@@ -6817,9 +5053,7 @@ void UCrowdDemoWorkerInputSyncProcessor::Execute(
     : nullptr;
   if (!World || !Pipeline)
     return;
-  FCrowdDemoRoundPlanApplyStage PlanApply;
-  PlanApply.UseQuery(InputSyncQuery);
-  PlanApply.Execute(EntityManager, Context);
+  ExecuteRoundPlanApply(InputSyncQuery, EntityManager, Context);
   if (!PublishBootstrapBoundarySnapshotFromMass(
       InputSyncQuery, EntityManager, Context))
   {
@@ -6853,17 +5087,14 @@ UCrowdDemoWorkerResultApplyProcessor()
 void UCrowdDemoWorkerResultApplyProcessor::ConfigureQueries(
   const TSharedRef<FMassEntityManager>& EntityManager)
 {
-  FCrowdDemoWorkerResultApplyStage WorkerResultApply;
-  WorkerResultApply.BindQuery(ResultCommitQuery);
+  ConfigureWorkerResultApplyQuery(ResultCommitQuery);
 }
 
 void UCrowdDemoWorkerResultApplyProcessor::Execute(
   FMassEntityManager& EntityManager,
   FMassExecutionContext& Context)
 {
-  FCrowdDemoWorkerResultApplyStage WorkerResultApply;
-  WorkerResultApply.UseQuery(ResultCommitQuery);
-  WorkerResultApply.Execute(EntityManager, Context);
+  ExecuteWorkerResultApply(ResultCommitQuery, EntityManager, Context);
   UWorld* World = EntityManager.GetWorld();
   UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World
     ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>()

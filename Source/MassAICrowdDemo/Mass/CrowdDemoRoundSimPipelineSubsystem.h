@@ -33,9 +33,7 @@
 #include "Templates/Function.h"
 #include "CrowdDemoRoundSimPipelineSubsystem.generated.h"
 
-class FCrowdDemoRoundWorkBatch;
 struct FCrowdDemoPreparedWorkerMassApplyPlan;
-struct FCrowdDemoPreparedTargetResourcePlan;
 
 // Demo-owned payload for the Runtime Owner Commit Barrier. Runtime owns the
 // generic prepared-result token and barrier protocol; this plan owns only the
@@ -44,8 +42,6 @@ struct FCrowdDemoPreparedRoundCommitPlan
 {
   FCrowdWorkerPreparedResultApply PreparedProxyResult;
   TSharedPtr<FCrowdDemoPreparedWorkerMassApplyPlan> PreparedMassPlan;
-  TSharedPtr<FCrowdDemoPreparedTargetResourcePlan>
-    PreparedTargetResourcePlan;
   FCrowdWorkerResultCommitToken WorkerCommitToken;
   int32 PlanRevision = INDEX_NONE;
   int32 FixedStepIndex = INDEX_NONE;
@@ -55,136 +51,12 @@ struct FCrowdDemoPreparedRoundCommitPlan
   {
     return PreparedProxyResult.IsValid()
       && PreparedMassPlan.IsValid()
-      && PreparedTargetResourcePlan.IsValid()
       && WorkerCommitToken.Matches(PreparedProxyResult)
       && PlanRevision != INDEX_NONE
       && FixedStepIndex != INDEX_NONE
       && FMath::IsFinite(ApplyStartSeconds)
       && ApplyStartSeconds > 0.0;
   }
-};
-
-// Demo-local scheduling vocabulary retained only until the remaining Round
-// work graph is folded into Worker Input Sync / Worker Result Apply. These
-// types deliberately expose none of the removed Runtime boundary transaction,
-// prepared-patch, resource-envelope, or commit-adapter API.
-struct FCrowdBoundaryStageId
-{
-  uint32 Value = 0;
-  bool IsValid() const { return Value != 0; }
-  bool operator==(const FCrowdBoundaryStageId&) const = default;
-  auto operator<=>(const FCrowdBoundaryStageId&) const = default;
-};
-
-struct FCrowdBoundaryTaskTypeId
-{
-  uint32 Value = 0;
-  bool IsValid() const { return Value != 0; }
-  bool operator==(const FCrowdBoundaryTaskTypeId&) const = default;
-  auto operator<=>(const FCrowdBoundaryTaskTypeId&) const = default;
-};
-
-struct FCrowdBoundaryTaskKey
-{
-  FCrowdBoundaryStageId StageId;
-  FCrowdBoundaryTaskTypeId TaskTypeId;
-  uint64 ScopeKey = 0;
-
-  bool operator==(const FCrowdBoundaryTaskKey&) const = default;
-  bool operator<(const FCrowdBoundaryTaskKey& Other) const
-  {
-    if (StageId != Other.StageId) return StageId < Other.StageId;
-    if (TaskTypeId != Other.TaskTypeId) return TaskTypeId < Other.TaskTypeId;
-    return ScopeKey < Other.ScopeKey;
-  }
-  bool IsValid() const
-  {
-    return StageId.IsValid() && TaskTypeId.IsValid();
-  }
-  friend uint32 GetTypeHash(const FCrowdBoundaryTaskKey& Key)
-  {
-    return HashCombineFast(
-      HashCombineFast(
-        ::GetTypeHash(Key.StageId.Value),
-        ::GetTypeHash(Key.TaskTypeId.Value)),
-      ::GetTypeHash(Key.ScopeKey));
-  }
-};
-
-struct FCrowdBoundaryTaskResult
-{
-  uint64 StableHash = 14695981039346656037ull;
-  bool bSucceeded = false;
-  bool bRanOffGameThread = false;
-
-  static FCrowdBoundaryTaskResult Success(const uint64 InStableHash)
-  {
-    FCrowdBoundaryTaskResult Result;
-    Result.StableHash = InStableHash;
-    Result.bSucceeded = InStableHash != 0;
-    return Result;
-  }
-  static FCrowdBoundaryTaskResult Failure() { return {}; }
-};
-
-using FCrowdBoundaryTaskBody =
-  TUniqueFunction<FCrowdBoundaryTaskResult()>;
-
-enum class ECrowdBoundaryTransactionState : uint8
-{
-  Idle = 0,
-  Gathering,
-  Queued,
-  Working,
-  Merging,
-  Validating,
-  ReadyToCommit,
-  Committed,
-  Failed
-};
-
-enum class ECrowdBoundaryPollResult : uint8
-{
-  Pending = 0,
-  Ready,
-  Failed
-};
-
-struct FCrowdBoundaryPhaseTimings
-{
-  double GatherMilliseconds = 0.0;
-  double QueueMilliseconds = 0.0;
-  double WorkMilliseconds = 0.0;
-  double WaitMilliseconds = 0.0;
-  double MergeMilliseconds = 0.0;
-  double ValidateMilliseconds = 0.0;
-  double CommitMilliseconds = 0.0;
-};
-
-struct FCrowdBoundaryTaskTimings
-{
-  double QueueMilliseconds = 0.0;
-  double ExecutionMilliseconds = 0.0;
-  double EndToEndMilliseconds = 0.0;
-};
-
-struct FCrowdBoundaryCompletedTask
-{
-  FCrowdBoundaryTaskKey Key;
-  uint32 TelemetryId = 0;
-  FCrowdBoundaryTaskResult Result;
-  FCrowdBoundaryTaskTimings Timings;
-};
-
-struct FCrowdBoundaryOrchestratorResult
-{
-  ECrowdBoundaryTransactionState State =
-    ECrowdBoundaryTransactionState::Idle;
-  FCrowdBoundaryPhaseTimings Timings;
-  TArray<FCrowdBoundaryCompletedTask> Tasks;
-  uint64 SnapshotHash = 0;
-  uint64 CommitPlanHash = 0;
-  bool bSucceeded = false;
 };
 
 struct FCrowdDemoRoundFacingTemplate
@@ -285,34 +157,6 @@ struct FCrowdDemoPreparedCombatBoundaryCommit
   bool bValid = false;
 };
 
-struct FCrowdDemoPreparedParticleDiagnosticCommit
-{
-  int32 FixedStepIndex = INDEX_NONE;
-  int32 PlanRevision = INDEX_NONE;
-  FCrowdDemoParticleConstraintSummary CandidateSummary;
-  FCrowdDemoParticleConstraintSummary AppliedSummary;
-  uint32 AppliedStateHash = 2166136261u;
-  float SolverMilliseconds = 0.0f;
-  int32 AgentCount = 0;
-  int32 CrossProfileHardViolationCount = 0;
-  int32 CrossProfileSweptViolationCount = 0;
-  float OpenSpawnMaxAgentCorrectionCm = 0.0f;
-  float OpenSpawnSoftErrorCmP95 = 0.0f;
-  TArray<FCrowdDemoParticleSoftPairInfluence> OpenSpawnSoftPairInfluences;
-  TArray<FCrowdDemoSoftPressureRouteStepSample> RouteSamples;
-  FCrowdDemoSoftPressureRouteCounterfactual RouteCounterfactual;
-  FCrowdDemoTargetStabilityStepSample StabilityStep;
-  FCrowdDemoParticleFailureFixture FailureFixture;
-  bool bRecordCrossProfileViolations = false;
-  bool bRecordOpenSpawnStep = false;
-  bool bRecordRouteStep = false;
-  bool bFinalizeRouteDiagnostic = false;
-  bool bRecordStabilityStep = false;
-  bool bFinalizeStabilityDiagnostic = false;
-  bool bRecordFailureFixture = false;
-  bool bValid = false;
-};
-
 struct FCrowdDemoTargetRegionCapabilityCohortRuntime
 {
   FCrowdDemoCapabilityCohort Cohort;
@@ -344,102 +188,6 @@ struct FCrowdDemoTargetRegionCapabilityCohortRuntime
   int32 TargetEngagementReleaseCount = 0;
   int32 TargetEngagementSuppressedRetreatCount = 0;
   bool bRoundValid = true;
-};
-
-struct FCrowdDemoTargetResourceCommitToken
-{
-  uint64 OwnerId = 0;
-  uint64 OwnerRevision = 0;
-  uint64 Generation = 0;
-  uint64 BaseStateHash = 0;
-  uint64 PreparedStateHash = 0;
-  uint64 ResourceId = 0;
-  int32 ResourceRevision = INDEX_NONE;
-  uint32 ResourceBuildHash = 0;
-  int32 ResourceRebuildCount = INDEX_NONE;
-  int32 PlanRevision = INDEX_NONE;
-  int32 FixedStepIndex = INDEX_NONE;
-  int32 TargetRevision = INDEX_NONE;
-
-  bool IsValid() const
-  {
-    return OwnerId != 0 && OwnerRevision != 0 && Generation != 0
-      && BaseStateHash != 0 && PreparedStateHash != 0
-      && ResourceId != 0 && ResourceBuildHash != 0
-      && ResourceRebuildCount != INDEX_NONE
-      && PlanRevision != INDEX_NONE && FixedStepIndex != INDEX_NONE;
-  }
-
-  bool Matches(
-    const uint64 InOwnerId,
-    const uint64 InOwnerRevision,
-    const uint64 InGeneration,
-    const uint64 InBaseStateHash,
-    const uint64 InResourceId,
-    const int32 InResourceRevision,
-    const uint32 InResourceBuildHash,
-    const int32 InResourceRebuildCount,
-    const int32 InPlanRevision,
-    const int32 InFixedStepIndex,
-    const int32 InTargetRevision) const
-  {
-    return IsValid() && OwnerId == InOwnerId
-      && OwnerRevision == InOwnerRevision && Generation == InGeneration
-      && BaseStateHash == InBaseStateHash
-      && ResourceId == InResourceId
-      && ResourceRevision == InResourceRevision
-      && ResourceBuildHash == InResourceBuildHash
-      && ResourceRebuildCount == InResourceRebuildCount
-      && PlanRevision == InPlanRevision
-      && FixedStepIndex == InFixedStepIndex
-      && TargetRevision == InTargetRevision;
-  }
-};
-
-struct FCrowdDemoTargetResourcePrepareValidationInput
-{
-  uint64 OwnerId = 0;
-  uint64 ResourceRevision = 0;
-  bool bResourceReferenceValid = false;
-  TArray<uint64> SlotKeys;
-  TArray<uint64> EntityKeys;
-  TArray<uint64> EntityFieldKeys;
-};
-
-struct FCrowdDemoPreparedTargetResourceCohortApply
-{
-  int32 DestinationIndex = INDEX_NONE;
-  uint32 CohortKey = 0;
-  uint64 BaseStateHash = 0;
-  FCrowdDemoTargetRegionCapabilityCohortRuntime PreparedRuntime;
-};
-
-struct FCrowdDemoPreparedTargetResourceHomogeneousApply
-{
-  FCrowdDemoTargetPolarTopology Topology;
-  FCrowdDemoTargetPolarTopologySummary TopologySummary;
-  FCrowdDemoTargetRegionDemandResult Demand;
-  FCrowdDemoTargetRegionFlowPlan Plan;
-  FCrowdDemoTargetRegionQuotaExecutionState QuotaExecution;
-  FCrowdDemoTargetRegionPlanValidationResult Validation;
-  TArray<FCrowdDemoTargetRegionGuidanceResult> Guidance;
-  FCrowdDemoTargetRegionGuidanceSummary GuidanceSummary;
-  float SolverMilliseconds = 0.0f;
-  int32 RebuildReason = 0;
-  bool bSet = false;
-};
-
-struct FCrowdDemoPreparedTargetResourcePlan
-{
-  FCrowdDemoTargetResourceCommitToken CommitToken;
-  TArray<FCrowdDemoPreparedTargetResourceCohortApply> CohortApplies;
-  FCrowdDemoPreparedTargetResourceHomogeneousApply HomogeneousApply;
-  int32 BuildCount = 0;
-  int32 ApplyCount = 0;
-  bool bValid = false;
-
-  static bool ValidatePrepareInput(
-    const FCrowdDemoTargetResourcePrepareValidationInput& Input);
 };
 
 struct FCrowdDemoPreparedSteeringGuidance
@@ -510,18 +258,6 @@ struct FCrowdDemoPreparedFacingRollbackFact
 {
   int32 AgentId = INDEX_NONE;
   FCrowdMassFacingFragment Facing;
-};
-
-struct FCrowdDemoPreparedMovementBoundaryCommit
-{
-  int32 FixedStepIndex = INDEX_NONE;
-  int32 PlanRevision = INDEX_NONE;
-  FCrowdMassFacingWorkOutput Facing;
-  FCrowdMassMovementFinalizeWorkOutput Finalize;
-  TMap<int32, int32> ConsecutiveSettleStepsByAgentId;
-  TMap<int32, bool> FinalSettledByAgentId;
-  uint64 StableHash = 0;
-  bool bValid = false;
 };
 
 struct FCrowdDemoWorkerMovementTailExecution
@@ -810,7 +546,7 @@ public:
       && BoundarySnapshot.FixedStepIndex == GetCurrentFixedStepIndex()
       && BoundarySnapshot.PlanRevision == GetCurrentPlanRevision();
   }
-  bool BeginBoundaryTransaction(double GatherMilliseconds);
+  bool BeginWorkerBootstrapPreparation(double GatherMilliseconds);
   float GetCurrentBoundaryWallMilliseconds() const;
   bool StageBoundaryBusinessWork();
   bool StageBoundarySharedFlowWork(
@@ -831,15 +567,11 @@ public:
     const FCrowdMassTargetRegionGuidanceInput& Input);
   bool StageBoundaryMovementWork(
     FCrowdMassMovementPipelineWorkInput&& Input);
-  bool ConsumeBoundaryMovementWork(
-    FCrowdMassMovementPipelineWorkOutput& OutOutput);
   bool StageBoundaryParticleWork(
     FCrowdMassParticlePipelineWorkInput&& Input);
   bool StageBoundaryObstacleWork(
     const FCrowdDemoSharedFlowFieldConfig& Config,
     float FixedStepSeconds);
-  bool ConsumeBoundaryParticleWork(
-    FCrowdMassParticlePipelineWorkOutput& OutOutput);
   bool DispatchBoundarySoftPressureWorkGraph(
     FCrowdMassFacingFinalizeWorkInput&& Input,
     TMap<int32, int32>&& PreviousSettleStepsByAgentId,
@@ -848,62 +580,15 @@ public:
     FCrowdMassFacingFinalizeWorkInput&& Input,
     TMap<int32, int32>&& ConsecutiveSettleStepsByAgentId,
     TMap<int32, bool>&& FinalSettledByAgentId);
-  // Returns false only when the specialized fast path was eligible but could
-  // not submit safely. Ineligible frames retain the prepared-boundary path.
-  bool TrySubmitWorkerV2ClockIntentEarly();
   bool CanUseFullWorkerProductionFastPath() const;
   bool TrySubmitFullWorkerProductionIntent();
+  bool SubmitPreparedWorkerBootstrapInput();
   bool IsCurrentStepFullWorkerProductionFastPath() const
   { return bCurrentStepFullWorkerProductionFastPath; }
   uint64 GetCurrentStepFullWorkerInputSequence() const
   { return CurrentStepFullWorkerInputSequence; }
   bool MarkFullWorkerProductionResultCommitted(
     double CommitMilliseconds);
-  ECrowdBoundaryPollResult TryPrepareRoundApply();
-  int32 GetLastBoundaryPrepareCheckpoint() const
-  { return LastBoundaryPrepareCheckpoint; }
-  ECrowdBoundaryTransactionState GetRoundWorkState() const;
-  bool ConsumeBoundaryFacingWork(
-    FCrowdMassFacingFinalizeWorkOutput& OutOutput,
-    TMap<int32, int32>& OutConsecutiveSettleStepsByAgentId,
-    TMap<int32, bool>& OutFinalSettledByAgentId);
-  bool SetPreparedMovementBoundaryCommit(
-    FCrowdDemoPreparedMovementBoundaryCommit&& Commit);
-  const FCrowdDemoPreparedMovementBoundaryCommit&
-    GetPreparedMovementBoundaryCommit() const
-  { return PreparedMovementBoundaryCommit; }
-  bool IsPreparedMovementBoundaryCommitCurrent() const
-  {
-    return PreparedMovementBoundaryCommit.bValid
-      && PreparedMovementBoundaryCommit.FixedStepIndex
-        == GetCurrentFixedStepIndex()
-      && PreparedMovementBoundaryCommit.PlanRevision
-        == GetCurrentPlanRevision();
-  }
-  bool ValidateRoundApplyPlan(
-    TConstArrayView<FCrowdMassCommitTarget> ResolvedTargets);
-  bool PreparePendingTargetResourcePlan();
-  bool FinalValidatePreparedTargetResourcePlan(
-    const FCrowdDemoPreparedTargetResourcePlan& Plan) const;
-  void ApplyPreparedTargetResourcePlanNoFail(
-    FCrowdDemoPreparedTargetResourcePlan& Plan);
-  bool MarkRoundApplyCommitted(double CommitMilliseconds);
-  const FCrowdBoundaryOrchestratorResult& GetLastBoundaryTransactionResult()
-    const
-  { return LastBoundaryTransactionResult; }
-  void MarkMovementFinalizeApplied()
-  { MovementFinalizeAppliedFixedStepIndex = GetCurrentFixedStepIndex(); }
-  bool IsMovementFinalizeAppliedCurrent() const
-  {
-    return IsBoundarySnapshotCurrent()
-      && MovementFinalizeAppliedFixedStepIndex == GetCurrentFixedStepIndex();
-  }
-  void SetPreparedRuntimeSharedFlowOutputs(
-    TArray<FCrowdMassSharedFlowAgentOutput>&& Values)
-  { PreparedRuntimeSharedFlowOutputs = MoveTemp(Values); }
-  const TArray<FCrowdMassSharedFlowAgentOutput>&
-    GetPreparedRuntimeSharedFlowOutputs() const
-  { return PreparedRuntimeSharedFlowOutputs; }
   void SetPreparedTargetRegionGuidanceCandidates(
     TArray<FCrowdGuidanceCandidate>&& Values)
   { PreparedTargetRegionGuidanceCandidates = MoveTemp(Values); }
@@ -922,69 +607,6 @@ public:
   const TArray<FCrowdDemoPreparedReactiveMotionStep>&
     GetPreparedReactiveMotionSteps() const
   { return PreparedReactiveMotionSteps; }
-  bool SetPreparedCombatBoundaryCommit(
-    FCrowdDemoPreparedCombatBoundaryCommit&& Commit);
-  const FCrowdDemoPreparedCombatBoundaryCommit&
-    GetPreparedCombatBoundaryCommit() const
-  { return PreparedCombatBoundaryCommit; }
-  bool IsPreparedCombatBoundaryCommitCurrent() const
-  {
-    return PreparedCombatBoundaryCommit.bValid
-      && PreparedCombatBoundaryCommit.FixedStepIndex
-        == GetCurrentFixedStepIndex()
-      && PreparedCombatBoundaryCommit.PlanRevision
-        == GetCurrentPlanRevision();
-  }
-  void SetPreparedRuntimeComposedGuidance(
-    TArray<FCrowdComposedGuidance>&& Values)
-  { PreparedRuntimeComposedGuidance = MoveTemp(Values); }
-  const TArray<FCrowdComposedGuidance>&
-    GetPreparedRuntimeComposedGuidance() const
-  { return PreparedRuntimeComposedGuidance; }
-  void SetPreparedRuntimePredictedMovements(
-    TArray<FCrowdMassPredictedMovement>&& Values)
-  { PreparedRuntimePredictedMovements = MoveTemp(Values); }
-  const TArray<FCrowdMassPredictedMovement>&
-    GetPreparedRuntimePredictedMovements() const
-  { return PreparedRuntimePredictedMovements; }
-  void SetPreparedRuntimeParticleResults(
-    TArray<FCrowdParticleConstraintResult>&& Values)
-  { PreparedRuntimeParticleResults = MoveTemp(Values); }
-  const TArray<FCrowdParticleConstraintResult>&
-    GetPreparedRuntimeParticleResults() const
-  { return PreparedRuntimeParticleResults; }
-  void SetPreparedRuntimeFinalKinematics(
-    TArray<FCrowdMassFinalKinematicState>&& Values)
-  {
-    if (!bPreparedRuntimeFinalKinematicsWorkerOwned)
-      PreparedRuntimeFinalKinematics = MoveTemp(Values);
-  }
-  const TArray<FCrowdMassFinalKinematicState>&
-    GetPreparedRuntimeFinalKinematics() const
-  { return PreparedRuntimeFinalKinematics; }
-  bool ArePreparedRuntimeFinalKinematicsWorkerOwned() const
-  { return bPreparedRuntimeFinalKinematicsWorkerOwned; }
-  void SetPreparedRuntimeFacingResults(TArray<FCrowdFacingResult>&& Values)
-  { PreparedRuntimeFacingResults = MoveTemp(Values); }
-  const TArray<FCrowdFacingResult>& GetPreparedRuntimeFacingResults() const
-  { return PreparedRuntimeFacingResults; }
-  void SetPreparedFacingRollbackFacts(
-    TArray<FCrowdDemoPreparedFacingRollbackFact>&& Values)
-  { PreparedFacingRollbackFacts = MoveTemp(Values); }
-  const TArray<FCrowdDemoPreparedFacingRollbackFact>&
-    GetPreparedFacingRollbackFacts() const
-  { return PreparedFacingRollbackFacts; }
-  bool SetPreparedParticleDiagnosticCommit(
-    FCrowdDemoPreparedParticleDiagnosticCommit&& Commit);
-  bool CommitPreparedParticleDiagnostics();
-  bool IsPreparedParticleDiagnosticCommitCurrent() const
-  {
-    return PreparedParticleDiagnosticCommit.bValid
-      && PreparedParticleDiagnosticCommit.FixedStepIndex
-        == GetCurrentFixedStepIndex()
-      && PreparedParticleDiagnosticCommit.PlanRevision
-        == GetCurrentPlanRevision();
-  }
   bool IsRangedProjectileCombat() const
   {
     return IsActive()
@@ -1403,8 +1025,6 @@ private:
   FCrowdDemoRoundCompareMetrics LastCompletedRoundMetrics;
   FCrowdDemoRoundCheckpointFrameMetrics LastCorrectionMetrics;
   FCrowdMassBoundarySnapshot BoundarySnapshot;
-  int32 MovementFinalizeAppliedFixedStepIndex = INDEX_NONE;
-  int32 LastBoundaryPrepareCheckpoint = 0;
   TArray<FCrowdDemoRoundBoundaryFormationFact> BoundaryFormationFacts;
   TArray<FCrowdDemoRoundBoundaryFacingFact> BoundaryFacingFacts;
   TArray<FCrowdDemoRoundBoundaryBusinessFact> BoundaryBusinessFacts;
@@ -1412,27 +1032,12 @@ private:
   uint64 DirtyMassApplyBatchCount = 0;
   uint64 DirtyMassApplyEntityCount = 0;
   uint64 PreparedPlannerDecisionHash = 0;
-  TSharedPtr<FCrowdDemoRoundWorkBatch> BoundaryOrchestrator;
   TSharedPtr<FCrowdDemoBoundaryFacingWorkState, ESPMode::ThreadSafe>
     BoundaryFacingWorkState;
-  TArray<FCrowdDemoBoundaryFacingWorkState::FTargetTopologySlot>
-    PreparedTargetResourceSlots;
-  FCrowdDemoPreparedMovementBoundaryCommit PreparedMovementBoundaryCommit;
-  FCrowdBoundaryOrchestratorResult LastBoundaryTransactionResult;
-  TArray<FCrowdMassSharedFlowAgentOutput> PreparedRuntimeSharedFlowOutputs;
   float PreparedObstacleMaxReprojectDeltaCm = -1.0f;
   TArray<FCrowdGuidanceCandidate> PreparedTargetRegionGuidanceCandidates;
   TArray<FCrowdGuidanceCandidate> PreparedBusinessGuidanceCandidates;
   TArray<FCrowdDemoPreparedReactiveMotionStep> PreparedReactiveMotionSteps;
-  FCrowdDemoPreparedCombatBoundaryCommit PreparedCombatBoundaryCommit;
-  TArray<FCrowdComposedGuidance> PreparedRuntimeComposedGuidance;
-  TArray<FCrowdMassPredictedMovement> PreparedRuntimePredictedMovements;
-  TArray<FCrowdParticleConstraintResult> PreparedRuntimeParticleResults;
-  TArray<FCrowdMassFinalKinematicState> PreparedRuntimeFinalKinematics;
-  bool bPreparedRuntimeFinalKinematicsWorkerOwned = false;
-  TArray<FCrowdFacingResult> PreparedRuntimeFacingResults;
-  TArray<FCrowdDemoPreparedFacingRollbackFact> PreparedFacingRollbackFacts;
-  FCrowdDemoPreparedParticleDiagnosticCommit PreparedParticleDiagnosticCommit;
   TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> PreparedOpenSpawnBoundaryFacts;
   int32 PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
   TArray<FCrowdDemoProjectileVisualEvent> OutgoingProjectileVisualEvents;
