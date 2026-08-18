@@ -5,22 +5,22 @@
 namespace CrowdWorkerMovementControlPrivate
 {
   template<typename T>
-  void AppendUnsigned(TArray<uint8>& Bytes, const T Value)
+  void MovementControlAppendUnsigned(TArray<uint8>& Bytes, const T Value)
   {
     static_assert(std::is_unsigned_v<T>);
     for (uint32 Byte = 0; Byte < sizeof(T); ++Byte)
       Bytes.Add(static_cast<uint8>(Value >> (Byte * 8)));
   }
 
-  void AppendFloat(TArray<uint8>& Bytes, const float Value)
+  void MovementControlAppendFloat(TArray<uint8>& Bytes, const float Value)
   {
     uint32 Bits = 0;
     FMemory::Memcpy(&Bits, &Value, sizeof(Bits));
-    AppendUnsigned(Bytes, Bits);
+    MovementControlAppendUnsigned(Bytes, Bits);
   }
 
   template<typename T>
-  bool ReadUnsigned(
+  bool MovementControlReadUnsigned(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     T& OutValue)
@@ -37,13 +37,13 @@ namespace CrowdWorkerMovementControlPrivate
     return true;
   }
 
-  bool ReadFloat(
+  bool MovementControlReadFloat(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     float& OutValue)
   {
     uint32 Bits = 0;
-    if (!ReadUnsigned(Bytes, Offset, Bits)) return false;
+    if (!MovementControlReadUnsigned(Bytes, Offset, Bits)) return false;
     FMemory::Memcpy(&OutValue, &Bits, sizeof(Bits));
     return FMath::IsFinite(OutValue);
   }
@@ -83,28 +83,28 @@ bool FCrowdWorkerMovementProfileCodec::Encode(
   if (!Profile.IsValid()) return false;
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
-  AppendUnsigned(OutPayload.Bytes, Profile.EntityRef.ProviderId);
-  AppendUnsigned(
+  MovementControlAppendUnsigned(OutPayload.Bytes, Profile.EntityRef.ProviderId);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes, Profile.EntityRef.StableEntityId);
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes, Profile.EntityRef.LifecycleSerial);
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes, static_cast<uint32>(Profile.AgentId));
-  AppendUnsigned(OutPayload.Bytes, Profile.InteractionLayer);
-  AppendUnsigned(
+  MovementControlAppendUnsigned(OutPayload.Bytes, Profile.InteractionLayer);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Profile.PreviousBlockedAgeSteps));
-  AppendFloat(OutPayload.Bytes, Profile.MaximumSpeedCmps);
-  AppendFloat(
+  MovementControlAppendFloat(OutPayload.Bytes, Profile.MaximumSpeedCmps);
+  MovementControlAppendFloat(
     OutPayload.Bytes,
     Profile.ParticleEnvironmentHardClearanceCm);
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes, Profile.ParticlePhysicalRadiusCm);
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes, Profile.ParticleHardSafetyGapCm);
-  AppendFloat(OutPayload.Bytes, Profile.ParticleSoftMarginCm);
-  AppendFloat(OutPayload.Bytes, Profile.ParticleMobility);
-  AppendUnsigned(
+  MovementControlAppendFloat(OutPayload.Bytes, Profile.ParticleSoftMarginCm);
+  MovementControlAppendFloat(OutPayload.Bytes, Profile.ParticleMobility);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint8>(
       (Profile.bFreezeAtBoundaryLocation ? 1u : 0u)
@@ -116,18 +116,18 @@ bool FCrowdWorkerMovementProfileCodec::Encode(
       | (Profile.bUseAuthoritativePreferredVelocity ? 64u : 0u)));
   const auto AppendVector = [&OutPayload](const FVector& Value)
   {
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Value.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Value.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Value.Z));
   };
   AppendVector(Profile.AutonomousPreferredVelocity);
   AppendVector(Profile.LocalVelocity);
   AppendVector(Profile.BoundaryLocation);
-  AppendFloat(OutPayload.Bytes, Profile.ProposedZ);
-  AppendFloat(OutPayload.Bytes, Profile.VerticalVelocityCmps);
+  MovementControlAppendFloat(OutPayload.Bytes, Profile.ProposedZ);
+  MovementControlAppendFloat(OutPayload.Bytes, Profile.VerticalVelocityCmps);
   OutPayload.RecalculateStableHash();
   return true;
 }
@@ -145,37 +145,37 @@ bool FCrowdWorkerMovementProfileCodec::Decode(
   uint32 AgentId = 0;
   uint32 PreviousBlockedAgeSteps = 0;
   uint8 Flags = 0;
-  if (!ReadUnsigned(
+  if (!MovementControlReadUnsigned(
       Payload.Bytes, Offset, OutProfile.EntityRef.ProviderId)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset,
       OutProfile.EntityRef.StableEntityId)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset,
       OutProfile.EntityRef.LifecycleSerial)
-    || !ReadUnsigned(Payload.Bytes, Offset, AgentId)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, AgentId)
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset, OutProfile.InteractionLayer)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset, PreviousBlockedAgeSteps)
     || PreviousBlockedAgeSteps
       > static_cast<uint32>(MAX_int32)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset, OutProfile.MaximumSpeedCmps)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutProfile.ParticleEnvironmentHardClearanceCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutProfile.ParticlePhysicalRadiusCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutProfile.ParticleHardSafetyGapCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset, OutProfile.ParticleSoftMarginCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset, OutProfile.ParticleMobility)
-    || !ReadUnsigned(Payload.Bytes, Offset, Flags)
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, Flags)
     || (Flags & ~uint8{127}) != 0)
     return false;
   const auto ReadVector = [&Payload, &Offset](FVector& OutValue)
@@ -183,9 +183,9 @@ bool FCrowdWorkerMovementProfileCodec::Decode(
     float X = 0.0f;
     float Y = 0.0f;
     float Z = 0.0f;
-    if (!ReadFloat(Payload.Bytes, Offset, X)
-      || !ReadFloat(Payload.Bytes, Offset, Y)
-      || !ReadFloat(Payload.Bytes, Offset, Z))
+    if (!MovementControlReadFloat(Payload.Bytes, Offset, X)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, Y)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, Z))
       return false;
     OutValue = FVector(X, Y, Z);
     return true;
@@ -193,9 +193,9 @@ bool FCrowdWorkerMovementProfileCodec::Decode(
   if (!ReadVector(OutProfile.AutonomousPreferredVelocity)
     || !ReadVector(OutProfile.LocalVelocity)
     || !ReadVector(OutProfile.BoundaryLocation)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset, OutProfile.ProposedZ)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset, OutProfile.VerticalVelocityCmps))
     return false;
   OutProfile.AgentId = static_cast<int32>(AgentId);
@@ -386,14 +386,14 @@ bool FCrowdWorkerMovementControlResourceCodec::Encode(
   if (!Resource.IsValid()) return false;
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
-  AppendUnsigned(OutPayload.Bytes, Resource.Revision);
-  AppendUnsigned(
+  MovementControlAppendUnsigned(OutPayload.Bytes, Resource.Revision);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Resource.FixedStepIndex));
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Resource.PlanRevision));
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint8>(
       (Resource.bRunLocalPredictive ? 1u : 0u)
@@ -402,173 +402,173 @@ bool FCrowdWorkerMovementControlResourceCodec::Encode(
       | (Resource.bRunParticleInteraction ? 4u : 0u)));
   const FCrowdSharedFlowFieldConfig& Flow =
     Resource.Environment;
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes, static_cast<uint32>(Flow.Revision));
-  AppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMin.X));
-  AppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMin.Y));
-  AppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMin.Z));
-  AppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMax.X));
-  AppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMax.Y));
-  AppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMax.Z));
-  AppendFloat(OutPayload.Bytes, Flow.CellSizeCm);
-  AppendFloat(OutPayload.Bytes, Flow.AgentInflateCm);
-  AppendUnsigned(
+  MovementControlAppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMin.X));
+  MovementControlAppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMin.Y));
+  MovementControlAppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMin.Z));
+  MovementControlAppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMax.X));
+  MovementControlAppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMax.Y));
+  MovementControlAppendFloat(OutPayload.Bytes, static_cast<float>(Flow.BoundsMax.Z));
+  MovementControlAppendFloat(OutPayload.Bytes, Flow.CellSizeCm);
+  MovementControlAppendFloat(OutPayload.Bytes, Flow.AgentInflateCm);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Flow.ConnectivityContractVersion));
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes, static_cast<float>(Flow.GoalLocation.X));
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes, static_cast<float>(Flow.GoalLocation.Y));
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes, static_cast<float>(Flow.GoalLocation.Z));
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Flow.ObstacleSpecs.Num()));
   for (const FCrowdSharedFlowObstacleSpec& Obstacle :
     Flow.ObstacleSpecs)
   {
-    AppendUnsigned(
+    MovementControlAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint32>(Obstacle.ObstacleId));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Obstacle.Center.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Obstacle.Center.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Obstacle.Center.Z));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Obstacle.Extent.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Obstacle.Extent.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Obstacle.Extent.Z));
   }
   const FCrowdLocalPredictiveSettings& Settings =
     Resource.LocalPredictiveSettings;
-  AppendFloat(OutPayload.Bytes, Settings.FixedStepSeconds);
-  AppendFloat(OutPayload.Bytes, Settings.TimeHorizonSeconds);
-  AppendFloat(OutPayload.Bytes, Settings.SpatialCellSizeCm);
-  AppendFloat(OutPayload.Bytes, Settings.VelocityQuantumCmps);
-  AppendFloat(OutPayload.Bytes, Settings.ConstraintEpsilonCmps);
-  AppendFloat(
+  MovementControlAppendFloat(OutPayload.Bytes, Settings.FixedStepSeconds);
+  MovementControlAppendFloat(OutPayload.Bytes, Settings.TimeHorizonSeconds);
+  MovementControlAppendFloat(OutPayload.Bytes, Settings.SpatialCellSizeCm);
+  MovementControlAppendFloat(OutPayload.Bytes, Settings.VelocityQuantumCmps);
+  MovementControlAppendFloat(OutPayload.Bytes, Settings.ConstraintEpsilonCmps);
+  MovementControlAppendFloat(
     OutPayload.Bytes,
     Settings.RequestedProgressThresholdCmps);
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes,
     Settings.BlockedProgressThresholdCmps);
-  AppendFloat(OutPayload.Bytes, Settings.GrantedResponsibility);
-  AppendUnsigned(
+  MovementControlAppendFloat(OutPayload.Bytes, Settings.GrantedResponsibility);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Settings.GrantDurationSteps));
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Settings.JointIterationCount));
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Resource.PreviousGrantStates.Num()));
   for (const FCrowdLocalPredictiveGrantState& Grant :
     Resource.PreviousGrantStates)
   {
-    AppendUnsigned(OutPayload.Bytes, Grant.ComponentKey);
-    AppendUnsigned(
+    MovementControlAppendUnsigned(OutPayload.Bytes, Grant.ComponentKey);
+    MovementControlAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint32>(Grant.GrantedAgentId));
-    AppendUnsigned(
+    MovementControlAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint32>(Grant.GrantEpoch));
-    AppendUnsigned(
+    MovementControlAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint32>(Grant.RemainingSteps));
   }
   const FCrowdParticleConstraintSettings& Particle =
     Resource.ParticleSettings;
-  AppendFloat(OutPayload.Bytes, Particle.FixedStepSeconds);
-  AppendUnsigned(
+  MovementControlAppendFloat(OutPayload.Bytes, Particle.FixedStepSeconds);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Particle.IterationCount));
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Particle.SafetyIterationCount));
-  AppendFloat(OutPayload.Bytes, Particle.SoftResponsePerSecond);
-  AppendFloat(
+  MovementControlAppendFloat(OutPayload.Bytes, Particle.SoftResponsePerSecond);
+  MovementControlAppendFloat(
     OutPayload.Bytes,
     Particle.SoftMaxPairCorrectionPerIterationCm);
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes,
     Particle.SoftMaxEnvironmentCorrectionPerIterationCm);
-  AppendFloat(
+  MovementControlAppendFloat(
     OutPayload.Bytes,
     Particle.HardMaxPairCorrectionPerIterationCm);
-  AppendFloat(OutPayload.Bytes, Particle.PositionQuantumCm);
-  AppendFloat(OutPayload.Bytes, Particle.VelocityQuantumCmps);
-  AppendUnsigned(
+  MovementControlAppendFloat(OutPayload.Bytes, Particle.PositionQuantumCm);
+  MovementControlAppendFloat(OutPayload.Bytes, Particle.VelocityQuantumCmps);
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint8>(
       (Resource.bParticleConstrainToFlowBounds ? 1u : 0u)
       | (Particle.bCaptureSafetyStageTrace ? 2u : 0u)
       | (Particle.bCaptureRouteDiagnostic ? 4u : 0u)));
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(
       Resource.ExternalParticleAgents.Num()));
   for (const FCrowdParticleConstraintAgent& Agent :
     Resource.ExternalParticleAgents)
   {
-    AppendUnsigned(
+    MovementControlAppendUnsigned(
       OutPayload.Bytes, static_cast<uint32>(Agent.AgentId));
-    AppendUnsigned(OutPayload.Bytes, Agent.InteractionLayer);
-    AppendFloat(
+    MovementControlAppendUnsigned(OutPayload.Bytes, Agent.InteractionLayer);
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Agent.StartPosition.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Agent.StartPosition.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, static_cast<float>(Agent.StartPosition.Z));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Agent.PredictedPosition.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Agent.PredictedPosition.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Agent.PredictedPosition.Z));
-    AppendFloat(OutPayload.Bytes, Agent.PhysicalRadiusCm);
-    AppendFloat(OutPayload.Bytes, Agent.HardSafetyGapCm);
-    AppendFloat(
+    MovementControlAppendFloat(OutPayload.Bytes, Agent.PhysicalRadiusCm);
+    MovementControlAppendFloat(OutPayload.Bytes, Agent.HardSafetyGapCm);
+    MovementControlAppendFloat(
       OutPayload.Bytes, Agent.EnvironmentHardClearanceCm);
-    AppendFloat(OutPayload.Bytes, Agent.SoftMarginCm);
-    AppendFloat(OutPayload.Bytes, Agent.Mobility);
+    MovementControlAppendFloat(OutPayload.Bytes, Agent.SoftMarginCm);
+    MovementControlAppendFloat(OutPayload.Bytes, Agent.Mobility);
   }
-  AppendUnsigned(
+  MovementControlAppendUnsigned(
     OutPayload.Bytes,
     static_cast<uint32>(Resource.Entries.Num()));
   for (const FCrowdWorkerMovementControlEntry& Entry :
     Resource.Entries)
   {
-    AppendUnsigned(OutPayload.Bytes, Entry.EntityRef.ProviderId);
-    AppendUnsigned(
+    MovementControlAppendUnsigned(OutPayload.Bytes, Entry.EntityRef.ProviderId);
+    MovementControlAppendUnsigned(
       OutPayload.Bytes, Entry.EntityRef.StableEntityId);
-    AppendUnsigned(
+    MovementControlAppendUnsigned(
       OutPayload.Bytes, Entry.EntityRef.LifecycleSerial);
-    AppendUnsigned(
+    MovementControlAppendUnsigned(
       OutPayload.Bytes, static_cast<uint32>(Entry.AgentId));
-    AppendUnsigned(OutPayload.Bytes, Entry.InteractionLayer);
-    AppendUnsigned(
+    MovementControlAppendUnsigned(OutPayload.Bytes, Entry.InteractionLayer);
+    MovementControlAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint32>(Entry.PreviousBlockedAgeSteps));
-    AppendFloat(OutPayload.Bytes, Entry.MaximumSpeedCmps);
-    AppendFloat(
+    MovementControlAppendFloat(OutPayload.Bytes, Entry.MaximumSpeedCmps);
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       Entry.ParticleEnvironmentHardClearanceCm);
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, Entry.ParticlePhysicalRadiusCm);
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, Entry.ParticleHardSafetyGapCm);
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, Entry.ParticleSoftMarginCm);
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes, Entry.ParticleMobility);
-    AppendUnsigned(
+    MovementControlAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint8>(
         (Entry.bFreezeAtBoundaryLocation ? 1u : 0u)
@@ -578,35 +578,35 @@ bool FCrowdWorkerMovementControlResourceCodec::Encode(
         | (Entry.bLocalVelocityValid ? 16u : 0u)
         | (Entry.bUseWorkerTargetGuidance ? 32u : 0u)
         | (Entry.bUseAuthoritativePreferredVelocity ? 64u : 0u)));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.AutonomousPreferredVelocity.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.AutonomousPreferredVelocity.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.AutonomousPreferredVelocity.Z));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.LocalVelocity.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.LocalVelocity.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.LocalVelocity.Z));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.BoundaryLocation.X));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.BoundaryLocation.Y));
-    AppendFloat(
+    MovementControlAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(Entry.BoundaryLocation.Z));
-    AppendFloat(OutPayload.Bytes, Entry.ProposedZ);
-    AppendFloat(
+    MovementControlAppendFloat(OutPayload.Bytes, Entry.ProposedZ);
+    MovementControlAppendFloat(
       OutPayload.Bytes, Entry.VerticalVelocityCmps);
   }
   OutPayload.RecalculateStableHash();
@@ -637,26 +637,26 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
   uint32 ParticleSafetyIterationCount = 0;
   uint8 ParticleFlags = 0;
   uint32 ExternalParticleCount = 0;
-  if (!ReadUnsigned(
+  if (!MovementControlReadUnsigned(
       Payload.Bytes, Offset, OutResource.Revision)
-    || !ReadUnsigned(Payload.Bytes, Offset, FixedStepIndex)
-    || !ReadUnsigned(Payload.Bytes, Offset, PlanRevision)
-    || !ReadUnsigned(Payload.Bytes, Offset, ResourceFlags)
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, FixedStepIndex)
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, PlanRevision)
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, ResourceFlags)
     || (ResourceFlags & ~uint8{7}) != 0
-    || !ReadUnsigned(Payload.Bytes, Offset, FlowRevision))
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, FlowRevision))
     return false;
   float FlowValues[8] = {};
   for (float& Value : FlowValues)
-    if (!ReadFloat(Payload.Bytes, Offset, Value))
+    if (!MovementControlReadFloat(Payload.Bytes, Offset, Value))
       return false;
   float GoalValues[3] = {};
-  if (!ReadUnsigned(
+  if (!MovementControlReadUnsigned(
       Payload.Bytes, Offset, ConnectivityVersion))
     return false;
   for (float& Value : GoalValues)
-    if (!ReadFloat(Payload.Bytes, Offset, Value))
+    if (!MovementControlReadFloat(Payload.Bytes, Offset, Value))
       return false;
-  if (!ReadUnsigned(Payload.Bytes, Offset, ObstacleCount)
+  if (!MovementControlReadUnsigned(Payload.Bytes, Offset, ObstacleCount)
     || ObstacleCount > 100000)
     return false;
   OutResource.Environment.Revision =
@@ -679,46 +679,46 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
       OutResource.Environment.ObstacleSpecs.AddDefaulted_GetRef();
     uint32 ObstacleId = 0;
     float Values[6] = {};
-    if (!ReadUnsigned(Payload.Bytes, Offset, ObstacleId))
+    if (!MovementControlReadUnsigned(Payload.Bytes, Offset, ObstacleId))
       return false;
     for (float& Value : Values)
-      if (!ReadFloat(Payload.Bytes, Offset, Value))
+      if (!MovementControlReadFloat(Payload.Bytes, Offset, Value))
         return false;
     Obstacle.ObstacleId = static_cast<int32>(ObstacleId);
     Obstacle.Center = FVector(Values[0], Values[1], Values[2]);
     Obstacle.Extent = FVector(Values[3], Values[4], Values[5]);
   }
-  if (!ReadFloat(
+  if (!MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.FixedStepSeconds)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.TimeHorizonSeconds)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.SpatialCellSizeCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.VelocityQuantumCmps)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.ConstraintEpsilonCmps)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.
         RequestedProgressThresholdCmps)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.
         BlockedProgressThresholdCmps)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.LocalPredictiveSettings.GrantedResponsibility)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset, GrantDurationSteps)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset, JointIterationCount)
-    || !ReadUnsigned(Payload.Bytes, Offset, GrantCount)
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, GrantCount)
     || GrantCount > 100000)
     return false;
   OutResource.FixedStepIndex =
@@ -744,13 +744,13 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
     uint32 GrantedAgentId = 0;
     uint32 GrantEpoch = 0;
     uint32 RemainingSteps = 0;
-    if (!ReadUnsigned(
+    if (!MovementControlReadUnsigned(
         Payload.Bytes, Offset, Grant.ComponentKey)
-      || !ReadUnsigned(
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, GrantedAgentId)
-      || !ReadUnsigned(
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, GrantEpoch)
-      || !ReadUnsigned(
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, RemainingSteps))
       return false;
     Grant.GrantedAgentId =
@@ -759,37 +759,37 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
     Grant.RemainingSteps =
       static_cast<int32>(RemainingSteps);
   }
-  if (!ReadFloat(
+  if (!MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.ParticleSettings.FixedStepSeconds)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset, ParticleIterationCount)
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset, ParticleSafetyIterationCount)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.ParticleSettings.SoftResponsePerSecond)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.ParticleSettings.
         SoftMaxPairCorrectionPerIterationCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.ParticleSettings.
         SoftMaxEnvironmentCorrectionPerIterationCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.ParticleSettings.
         HardMaxPairCorrectionPerIterationCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.ParticleSettings.PositionQuantumCm)
-    || !ReadFloat(
+    || !MovementControlReadFloat(
       Payload.Bytes, Offset,
       OutResource.ParticleSettings.VelocityQuantumCmps)
-    || !ReadUnsigned(Payload.Bytes, Offset, ParticleFlags)
+    || !MovementControlReadUnsigned(Payload.Bytes, Offset, ParticleFlags)
     || (ParticleFlags & ~uint8{7}) != 0
-    || !ReadUnsigned(
+    || !MovementControlReadUnsigned(
       Payload.Bytes, Offset, ExternalParticleCount)
     || ExternalParticleCount > 100000)
     return false;
@@ -812,12 +812,12 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
       OutResource.ExternalParticleAgents.AddDefaulted_GetRef();
     uint32 AgentId = 0;
     float Values[11] = {};
-    if (!ReadUnsigned(Payload.Bytes, Offset, AgentId)
-      || !ReadUnsigned(
+    if (!MovementControlReadUnsigned(Payload.Bytes, Offset, AgentId)
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, Agent.InteractionLayer))
       return false;
     for (float& Value : Values)
-      if (!ReadFloat(Payload.Bytes, Offset, Value))
+      if (!MovementControlReadFloat(Payload.Bytes, Offset, Value))
         return false;
     Agent.AgentId = static_cast<int32>(AgentId);
     Agent.StartPosition =
@@ -830,7 +830,7 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
     Agent.SoftMarginCm = Values[9];
     Agent.Mobility = Values[10];
   }
-  if (!ReadUnsigned(Payload.Bytes, Offset, Count)
+  if (!MovementControlReadUnsigned(Payload.Bytes, Offset, Count)
     || Count > 100000)
     return false;
   OutResource.Entries.Reserve(Count);
@@ -850,47 +850,47 @@ bool FCrowdWorkerMovementControlResourceCodec::Decode(
     float LocalX = 0.0f;
     float LocalY = 0.0f;
     float LocalZ = 0.0f;
-    if (!ReadUnsigned(
+    if (!MovementControlReadUnsigned(
         Payload.Bytes, Offset, Entry.EntityRef.ProviderId)
-      || !ReadUnsigned(
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, Entry.EntityRef.StableEntityId)
-      || !ReadUnsigned(
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, Entry.EntityRef.LifecycleSerial)
-      || !ReadUnsigned(Payload.Bytes, Offset, AgentId)
-      || !ReadUnsigned(
+      || !MovementControlReadUnsigned(Payload.Bytes, Offset, AgentId)
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, Entry.InteractionLayer)
-      || !ReadUnsigned(
+      || !MovementControlReadUnsigned(
         Payload.Bytes, Offset, PreviousBlockedAgeSteps)
-      || !ReadFloat(
+      || !MovementControlReadFloat(
         Payload.Bytes, Offset, Entry.MaximumSpeedCmps)
-      || !ReadFloat(
+      || !MovementControlReadFloat(
         Payload.Bytes, Offset,
         Entry.ParticleEnvironmentHardClearanceCm)
-      || !ReadFloat(
+      || !MovementControlReadFloat(
         Payload.Bytes, Offset,
         Entry.ParticlePhysicalRadiusCm)
-      || !ReadFloat(
+      || !MovementControlReadFloat(
         Payload.Bytes, Offset,
         Entry.ParticleHardSafetyGapCm)
-      || !ReadFloat(
+      || !MovementControlReadFloat(
         Payload.Bytes, Offset,
         Entry.ParticleSoftMarginCm)
-      || !ReadFloat(
+      || !MovementControlReadFloat(
         Payload.Bytes, Offset,
         Entry.ParticleMobility)
-      || !ReadUnsigned(Payload.Bytes, Offset, Flags)
+      || !MovementControlReadUnsigned(Payload.Bytes, Offset, Flags)
       || (Flags & ~uint8{127}) != 0
-      || !ReadFloat(Payload.Bytes, Offset, PreferredX)
-      || !ReadFloat(Payload.Bytes, Offset, PreferredY)
-      || !ReadFloat(Payload.Bytes, Offset, PreferredZ)
-      || !ReadFloat(Payload.Bytes, Offset, LocalX)
-      || !ReadFloat(Payload.Bytes, Offset, LocalY)
-      || !ReadFloat(Payload.Bytes, Offset, LocalZ)
-      || !ReadFloat(Payload.Bytes, Offset, X)
-      || !ReadFloat(Payload.Bytes, Offset, Y)
-      || !ReadFloat(Payload.Bytes, Offset, Z)
-      || !ReadFloat(Payload.Bytes, Offset, Entry.ProposedZ)
-      || !ReadFloat(
+      || !MovementControlReadFloat(Payload.Bytes, Offset, PreferredX)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, PreferredY)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, PreferredZ)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, LocalX)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, LocalY)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, LocalZ)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, X)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, Y)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, Z)
+      || !MovementControlReadFloat(Payload.Bytes, Offset, Entry.ProposedZ)
+      || !MovementControlReadFloat(
         Payload.Bytes, Offset, Entry.VerticalVelocityCmps))
       return false;
     Entry.AgentId = static_cast<int32>(AgentId);

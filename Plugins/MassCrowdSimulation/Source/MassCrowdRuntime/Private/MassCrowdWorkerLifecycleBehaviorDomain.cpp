@@ -18,7 +18,7 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
   }
 
   template<typename T>
-  bool ReadPod(
+  bool LifecycleReadPod(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     T& OutValue)
@@ -45,9 +45,9 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     int32& Offset,
     FCrowdStableEntityRef& OutRef)
   {
-    return ReadPod(Bytes, Offset, OutRef.ProviderId)
-      && ReadPod(Bytes, Offset, OutRef.StableEntityId)
-      && ReadPod(Bytes, Offset, OutRef.LifecycleSerial);
+    return LifecycleReadPod(Bytes, Offset, OutRef.ProviderId)
+      && LifecycleReadPod(Bytes, Offset, OutRef.StableEntityId)
+      && LifecycleReadPod(Bytes, Offset, OutRef.LifecycleSerial);
   }
 
   void WriteVector(
@@ -59,18 +59,18 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     WritePod(Bytes, Value.Z);
   }
 
-  bool ReadVector(
+  bool LifecycleReadVector(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     FVector& OutValue)
   {
-    return ReadPod(Bytes, Offset, OutValue.X)
-      && ReadPod(Bytes, Offset, OutValue.Y)
-      && ReadPod(Bytes, Offset, OutValue.Z)
+    return LifecycleReadPod(Bytes, Offset, OutValue.X)
+      && LifecycleReadPod(Bytes, Offset, OutValue.Y)
+      && LifecycleReadPod(Bytes, Offset, OutValue.Z)
       && !OutValue.ContainsNaN();
   }
 
-  void Fold(uint64& Hash, const uint64 Value)
+  void LifecycleFold(uint64& Hash, const uint64 Value)
   {
     for (uint32 Byte = 0; Byte < sizeof(Value); ++Byte)
     {
@@ -83,9 +83,9 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     const TConstArrayView<FCrowdBehaviorSourceCommand> Commands)
   {
     uint64 Hash = FnvOffset64;
-    Fold(Hash, static_cast<uint32>(Commands.Num()));
+    LifecycleFold(Hash, static_cast<uint32>(Commands.Num()));
     for (const FCrowdBehaviorSourceCommand& Command : Commands)
-      Fold(Hash, Command.CalculateStableHash());
+      LifecycleFold(Hash, Command.CalculateStableHash());
     return Hash;
   }
 
@@ -108,15 +108,15 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     const uint32 StableOrdinal)
   {
     uint64 Hash = FnvOffset64;
-    Fold(Hash, static_cast<uint64>(Event.Kind));
-    Fold(Hash, static_cast<uint64>(Event.FixedStepIndex));
-    Fold(Hash, Event.Handle.EntityRef.ProviderId);
-    Fold(Hash, Event.Handle.EntityRef.StableEntityId);
-    Fold(Hash, Event.Handle.EntityRef.LifecycleSerial);
-    Fold(Hash, Event.Handle.ControllerId.Value);
-    Fold(Hash, Event.Handle.SourceSequence);
-    Fold(Hash, Event.SourceTypeId.Value);
-    Fold(Hash, StableOrdinal);
+    LifecycleFold(Hash, static_cast<uint64>(Event.Kind));
+    LifecycleFold(Hash, static_cast<uint64>(Event.FixedStepIndex));
+    LifecycleFold(Hash, Event.Handle.EntityRef.ProviderId);
+    LifecycleFold(Hash, Event.Handle.EntityRef.StableEntityId);
+    LifecycleFold(Hash, Event.Handle.EntityRef.LifecycleSerial);
+    LifecycleFold(Hash, Event.Handle.ControllerId.Value);
+    LifecycleFold(Hash, Event.Handle.SourceSequence);
+    LifecycleFold(Hash, Event.SourceTypeId.Value);
+    LifecycleFold(Hash, StableOrdinal);
     return Hash == 0 ? 1 : Hash;
   }
 
@@ -132,22 +132,22 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     for (const FCrowdBehaviorSourceInstance& Instance :
       SourceSet.Instances)
     {
-      Fold(OutStateHash, Instance.SourceTypeId.Value);
-      Fold(OutStateHash, Instance.State.CalculateStableHash());
-      Fold(OutTimelineHash, Instance.SourceTypeId.Value);
-      Fold(OutTimelineHash,
+      LifecycleFold(OutStateHash, Instance.SourceTypeId.Value);
+      LifecycleFold(OutStateHash, Instance.State.CalculateStableHash());
+      LifecycleFold(OutTimelineHash, Instance.SourceTypeId.Value);
+      LifecycleFold(OutTimelineHash,
         static_cast<uint64>(Instance.StartFixedStep));
-      Fold(OutTimelineHash,
+      LifecycleFold(OutTimelineHash,
         static_cast<uint64>(Instance.LastUpdateFixedStep));
-      Fold(OutTimelineHash,
+      LifecycleFold(OutTimelineHash,
         static_cast<uint64>(Instance.ExpireFixedStep));
     }
     for (const FCrowdBehaviorControllerCursor& Cursor :
       SourceSet.ControllerCursors)
     {
-      Fold(OutCursorHash, Cursor.ControllerId.Value);
-      Fold(OutCursorHash, Cursor.LastCommandSequence);
-      Fold(OutCursorHash, Cursor.LastCommandHash);
+      LifecycleFold(OutCursorHash, Cursor.ControllerId.Value);
+      LifecycleFold(OutCursorHash, Cursor.LastCommandSequence);
+      LifecycleFold(OutCursorHash, Cursor.LastCommandHash);
     }
   }
 
@@ -195,11 +195,11 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     FCrowdCapabilityBinding& OutBinding)
   {
     OutBinding = {};
-    if (!ReadPod(
+    if (!LifecycleReadPod(
         Bytes, Offset, OutBinding.ProfileKey.Value)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset, OutBinding.ModifierRevision)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset, OutBinding.ModifierCount)
       || OutBinding.ModifierCount
         > CrowdBehavior::MaxCapabilityModifiers)
@@ -208,10 +208,10 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
       Index < OutBinding.ModifierCount; ++Index)
     {
       uint8 Operation = 0;
-      if (!ReadPod(
+      if (!LifecycleReadPod(
           Bytes, Offset,
           OutBinding.Modifiers[Index].CapabilityId.Value)
-        || !ReadPod(Bytes, Offset, Operation))
+        || !LifecycleReadPod(Bytes, Offset, Operation))
         return false;
       OutBinding.Modifiers[Index].Operation =
         static_cast<ECrowdCapabilityModifierOperation>(
@@ -240,8 +240,8 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     FCrowdBehaviorSourcePayload& OutPayload)
   {
     OutPayload = {};
-    if (!ReadPod(Bytes, Offset, OutPayload.SchemaId)
-      || !ReadPod(Bytes, Offset, OutPayload.Size)
+    if (!LifecycleReadPod(Bytes, Offset, OutPayload.SchemaId)
+      || !LifecycleReadPod(Bytes, Offset, OutPayload.Size)
       || OutPayload.Size > CrowdBehavior::MaxPayloadBytes
       || Offset + OutPayload.Size > Bytes.Num())
       return false;
@@ -274,8 +274,8 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     FCrowdBehaviorSourceState& OutState)
   {
     OutState = {};
-    if (!ReadPod(Bytes, Offset, OutState.SchemaId)
-      || !ReadPod(Bytes, Offset, OutState.Size)
+    if (!LifecycleReadPod(Bytes, Offset, OutState.SchemaId)
+      || !LifecycleReadPod(Bytes, Offset, OutState.Size)
       || OutState.Size > CrowdBehavior::MaxStateBytes
       || Offset + OutState.Size > Bytes.Num())
       return false;
@@ -303,12 +303,12 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
     int32& Offset,
     FCrowdBehaviorContributionKey& OutKey)
   {
-    return ReadPod(Bytes, Offset, OutKey.Priority)
-      && ReadPod(
+    return LifecycleReadPod(Bytes, Offset, OutKey.Priority)
+      && LifecycleReadPod(
         Bytes, Offset, OutKey.SourceTypeId.Value)
-      && ReadPod(
+      && LifecycleReadPod(
         Bytes, Offset, OutKey.ControllerId.Value)
-      && ReadPod(Bytes, Offset, OutKey.SourceSequence)
+      && LifecycleReadPod(Bytes, Offset, OutKey.SourceSequence)
       && OutKey.IsValid();
   }
 
@@ -381,44 +381,44 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
   {
     OutResolved = {};
     uint8 InteractionBlend = 0;
-    if (!ReadVector(
+    if (!LifecycleReadVector(
         Bytes, Offset, OutResolved.DesiredVelocity)
-      || !ReadVector(
+      || !LifecycleReadVector(
         Bytes, Offset, OutResolved.MovementGoal.Location)
       || !ReadRef(
         Bytes, Offset, OutResolved.MovementGoal.TargetRef)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset,
         OutResolved.MovementGoal.FactRevision)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset,
         OutResolved.MovementGoal.bHasGoal)
-      || !ReadVector(
+      || !LifecycleReadVector(
         Bytes, Offset, OutResolved.DesiredFacing)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset, OutResolved.SpeedLimitCmps)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset, OutResolved.AllowedNavLayerMask)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset, OutResolved.bMovementLocked)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Bytes, Offset, OutResolved.bHasInteraction))
       return false;
     if (OutResolved.bHasInteraction)
     {
       if (!ReadContributionKey(
           Bytes, Offset, OutResolved.Interaction.Key)
-        || !ReadPod(Bytes, Offset, InteractionBlend)
-        || !ReadPod(
+        || !LifecycleReadPod(Bytes, Offset, InteractionBlend)
+        || !LifecycleReadPod(
           Bytes, Offset,
           OutResolved.Interaction.IntentTypeId)
         || !ReadRef(
           Bytes, Offset,
           OutResolved.Interaction.TargetRef)
-        || !ReadPod(
+        || !LifecycleReadPod(
           Bytes, Offset,
           OutResolved.Interaction.PayloadTypeId)
-        || !ReadPod(
+        || !LifecycleReadPod(
           Bytes, Offset,
           OutResolved.Interaction.PayloadKey))
         return false;
@@ -427,7 +427,7 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
           InteractionBlend);
     }
     uint8 BusinessCount = 0;
-    if (!ReadPod(Bytes, Offset, BusinessCount)
+    if (!LifecycleReadPod(Bytes, Offset, BusinessCount)
       || BusinessCount
         > CrowdBehavior::MaxContributionsPerChannel)
       return false;
@@ -439,23 +439,23 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
       uint8 Blend = 0;
       if (!ReadContributionKey(
           Bytes, Offset, Business.Key)
-        || !ReadPod(Bytes, Offset, Blend)
-        || !ReadPod(Bytes, Offset, Business.AdapterId)
-        || !ReadPod(
+        || !LifecycleReadPod(Bytes, Offset, Blend)
+        || !LifecycleReadPod(Bytes, Offset, Business.AdapterId)
+        || !LifecycleReadPod(
           Bytes, Offset, Business.ExclusiveGroup)
-        || !ReadPod(Bytes, Offset, Business.CommitId)
+        || !LifecycleReadPod(Bytes, Offset, Business.CommitId)
         || !ReadRef(
           Bytes, Offset, Business.InstigatorRef)
         || !ReadRef(Bytes, Offset, Business.TargetRef)
-        || !ReadPod(
+        || !LifecycleReadPod(
           Bytes, Offset, Business.PayloadTypeId)
-        || !ReadPod(Bytes, Offset, Business.Quantity))
+        || !LifecycleReadPod(Bytes, Offset, Business.Quantity))
         return false;
       Business.BlendMode =
         static_cast<ECrowdBehaviorBlendMode>(Blend);
     }
     uint8 PresentationCount = 0;
-    if (!ReadPod(Bytes, Offset, PresentationCount)
+    if (!LifecycleReadPod(Bytes, Offset, PresentationCount)
       || PresentationCount
         > CrowdBehavior::MaxContributionsPerChannel)
       return false;
@@ -468,26 +468,26 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
       uint8 Blend = 0;
       if (!ReadContributionKey(
           Bytes, Offset, Presentation.Key)
-        || !ReadPod(Bytes, Offset, Blend)
-        || !ReadPod(
+        || !LifecycleReadPod(Bytes, Offset, Blend)
+        || !LifecycleReadPod(
           Bytes, Offset, Presentation.PropertyId)
-        || !ReadPod(Bytes, Offset, Presentation.Value))
+        || !LifecycleReadPod(Bytes, Offset, Presentation.Value))
         return false;
       Presentation.BlendMode =
         static_cast<ECrowdBehaviorBlendMode>(Blend);
     }
-    return ReadPod(
+    return LifecycleReadPod(
         Bytes, Offset, OutResolved.MovementHash)
-      && ReadPod(Bytes, Offset, OutResolved.FacingHash)
-      && ReadPod(
+      && LifecycleReadPod(Bytes, Offset, OutResolved.FacingHash)
+      && LifecycleReadPod(
         Bytes, Offset, OutResolved.ConstraintHash)
-      && ReadPod(
+      && LifecycleReadPod(
         Bytes, Offset, OutResolved.InteractionHash)
-      && ReadPod(Bytes, Offset, OutResolved.BusinessHash)
-      && ReadPod(
+      && LifecycleReadPod(Bytes, Offset, OutResolved.BusinessHash)
+      && LifecycleReadPod(
         Bytes, Offset, OutResolved.PresentationHash)
-      && ReadPod(Bytes, Offset, OutResolved.StableHash)
-      && ReadPod(Bytes, Offset, OutResolved.bValid)
+      && LifecycleReadPod(Bytes, Offset, OutResolved.StableHash)
+      && LifecycleReadPod(Bytes, Offset, OutResolved.bValid)
       && OutResolved.MovementGoal.IsValid()
       && OutResolved.bValid
       && OutResolved.StableHash != 0;
@@ -625,9 +625,9 @@ bool FCrowdWorkerLifecycleStateCodec::Decode(
     return false;
   int32 Offset = 0;
   return ReadRef(Payload.Bytes, Offset, OutState.EntityRef)
-    && ReadPod(
+    && LifecycleReadPod(
       Payload.Bytes, Offset, OutState.SourceInputSequence)
-    && ReadPod(
+    && LifecycleReadPod(
       Payload.Bytes, Offset, OutState.InitialStateHash)
     && Offset == Payload.Bytes.Num()
     && OutState.IsValid();
@@ -687,15 +687,15 @@ bool FCrowdWorkerBehaviorInputCodec::Decode(
   int32 Offset = 0;
   uint8 RecordCount = 0;
   if (!ReadRef(Payload.Bytes, Offset, OutContext.EntityRef)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset, OutContext.FixedStepIndex)
-    || !ReadVector(
+    || !LifecycleReadVector(
       Payload.Bytes, Offset, OutContext.Position)
-    || !ReadVector(
+    || !LifecycleReadVector(
       Payload.Bytes, Offset, OutContext.Velocity)
-    || !ReadVector(
+    || !LifecycleReadVector(
       Payload.Bytes, Offset, OutContext.Facing)
-    || !ReadPod(Payload.Bytes, Offset, RecordCount)
+    || !LifecycleReadPod(Payload.Bytes, Offset, RecordCount)
     || RecordCount
       > CrowdBehavior::MaxContextRecordsPerEntity)
     return false;
@@ -704,11 +704,11 @@ bool FCrowdWorkerBehaviorInputCodec::Decode(
   {
     FCrowdBehaviorContextRecord& Record =
       OutContext.Records.AddDefaulted_GetRef();
-    if (!ReadPod(
+    if (!LifecycleReadPod(
         Payload.Bytes, Offset, Record.TypeId.Value)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Record.SchemaVersion)
-      || !ReadPod(Payload.Bytes, Offset, Record.Size)
+      || !LifecycleReadPod(Payload.Bytes, Offset, Record.Size)
       || Record.Size > CrowdBehavior::MaxContextRecordBytes
       || Offset + Record.Size > Payload.Bytes.Num())
       return false;
@@ -719,7 +719,7 @@ bool FCrowdWorkerBehaviorInputCodec::Decode(
         Record.Size);
     Offset += Record.Size;
   }
-  if (!ReadPod(
+  if (!LifecycleReadPod(
       Payload.Bytes, Offset, OutContext.StableHash)
     || Offset != Payload.Bytes.Num()
     || !OutContext.IsValid())
@@ -762,11 +762,11 @@ bool FCrowdWorkerBehaviorBindingInputCodec::Decode(
     || Payload.StableHash != Payload.CalculateStableHash())
     return false;
   int32 Offset = 0;
-  return ReadPod(
+  return LifecycleReadPod(
       Payload.Bytes, Offset, OutUpdate.EffectiveFixedStep)
     && ReadRef(Payload.Bytes, Offset, OutUpdate.EntityRef)
     && ReadBinding(Payload.Bytes, Offset, OutUpdate.Binding)
-    && ReadPod(Payload.Bytes, Offset, OutUpdate.StableHash)
+    && LifecycleReadPod(Payload.Bytes, Offset, OutUpdate.StableHash)
     && Offset == Payload.Bytes.Num()
     && OutUpdate.IsValid();
 }
@@ -811,16 +811,16 @@ bool FCrowdWorkerBehaviorEventCodec::Decode(
     return false;
   int32 Offset = 0;
   uint8 Kind = 0;
-  if (!ReadPod(Payload.Bytes, Offset, Kind)
+  if (!LifecycleReadPod(Payload.Bytes, Offset, Kind)
     || Kind >= static_cast<uint8>(
       ECrowdBehaviorSourceEventKind::Count)
-    || !ReadPod(Payload.Bytes, Offset, OutEvent.FixedStepIndex)
+    || !LifecycleReadPod(Payload.Bytes, Offset, OutEvent.FixedStepIndex)
     || !ReadRef(Payload.Bytes, Offset, OutEvent.Handle.EntityRef)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset, OutEvent.Handle.ControllerId.Value)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset, OutEvent.Handle.SourceSequence)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset, OutEvent.SourceTypeId.Value)
     || Offset != Payload.Bytes.Num())
     return false;
@@ -883,22 +883,22 @@ bool FCrowdWorkerBusinessCommitEventCodec::Decode(
     return false;
   int32 Offset = 0;
   uint8 BlendMode = 0;
-  if (!ReadPod(
+  if (!LifecycleReadPod(
       Payload.Bytes, Offset, OutContribution.Key.Priority)
-    || !ReadPod(Payload.Bytes, Offset,
+    || !LifecycleReadPod(Payload.Bytes, Offset,
       OutContribution.Key.SourceTypeId.Value)
-    || !ReadPod(Payload.Bytes, Offset,
+    || !LifecycleReadPod(Payload.Bytes, Offset,
       OutContribution.Key.ControllerId.Value)
-    || !ReadPod(Payload.Bytes, Offset,
+    || !LifecycleReadPod(Payload.Bytes, Offset,
       OutContribution.Key.SourceSequence)
-    || !ReadPod(Payload.Bytes, Offset, BlendMode)
-    || !ReadPod(Payload.Bytes, Offset, OutContribution.AdapterId)
-    || !ReadPod(Payload.Bytes, Offset, OutContribution.ExclusiveGroup)
-    || !ReadPod(Payload.Bytes, Offset, OutContribution.CommitId)
+    || !LifecycleReadPod(Payload.Bytes, Offset, BlendMode)
+    || !LifecycleReadPod(Payload.Bytes, Offset, OutContribution.AdapterId)
+    || !LifecycleReadPod(Payload.Bytes, Offset, OutContribution.ExclusiveGroup)
+    || !LifecycleReadPod(Payload.Bytes, Offset, OutContribution.CommitId)
     || !ReadRef(Payload.Bytes, Offset, OutContribution.InstigatorRef)
     || !ReadRef(Payload.Bytes, Offset, OutContribution.TargetRef)
-    || !ReadPod(Payload.Bytes, Offset, OutContribution.PayloadTypeId)
-    || !ReadPod(Payload.Bytes, Offset, OutContribution.Quantity)
+    || !LifecycleReadPod(Payload.Bytes, Offset, OutContribution.PayloadTypeId)
+    || !LifecycleReadPod(Payload.Bytes, Offset, OutContribution.Quantity)
     || Offset != Payload.Bytes.Num())
     return false;
   OutContribution.BlendMode =
@@ -993,20 +993,20 @@ bool FCrowdWorkerBehaviorStateCodec::Decode(
   uint16 ContextByteCount = 0;
   uint8 BusinessCommitCount = 0;
   uint8 InstanceCount = 0;
-  if (!ReadPod(
+  if (!LifecycleReadPod(
       Payload.Bytes, Offset, OutState.LastFixedStep)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset,
       OutState.LastAbsoluteSimulationTick)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset,
       OutState.LastConsumedCommandInputSequence)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset, OutState.LastCommandBatchHash)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset,
       OutState.BusinessCommitLedgerHash)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset, BusinessCommitCount)
     || BusinessCommitCount
       > FCrowdWorkerBehaviorState::MaxBusinessCommitIds)
@@ -1016,13 +1016,13 @@ bool FCrowdWorkerBehaviorStateCodec::Decode(
   for (uint8 Index = 0; Index < BusinessCommitCount; ++Index)
   {
     uint64 CommitId = 0;
-    if (!ReadPod(Payload.Bytes, Offset, CommitId)
+    if (!LifecycleReadPod(Payload.Bytes, Offset, CommitId)
       || CommitId == 0
       || OutState.AppliedBusinessCommitIds.Contains(CommitId))
       return false;
     OutState.AppliedBusinessCommitIds.Add(CommitId);
   }
-  if (!ReadPod(Payload.Bytes, Offset, ContextByteCount)
+  if (!LifecycleReadPod(Payload.Bytes, Offset, ContextByteCount)
     || ContextByteCount == 0
     || ContextByteCount
       > FCrowdWorkerBehaviorInputCodec::MaxEncodedBytes
@@ -1044,9 +1044,9 @@ bool FCrowdWorkerBehaviorStateCodec::Decode(
     || !ReadBinding(
       Payload.Bytes, Offset,
       OutState.SourceSet.CapabilityBinding)
-    || !ReadPod(
+    || !LifecycleReadPod(
       Payload.Bytes, Offset, OutState.SourceSet.Revision)
-    || !ReadPod(Payload.Bytes, Offset, InstanceCount)
+    || !LifecycleReadPod(Payload.Bytes, Offset, InstanceCount)
     || InstanceCount > CrowdBehavior::MaxSourcesPerEntity)
     return false;
   OutState.SourceSet.Instances.Reserve(InstanceCount);
@@ -1057,26 +1057,26 @@ bool FCrowdWorkerBehaviorStateCodec::Decode(
     uint8 ReplicationPolicy = 0;
     if (!ReadRef(
         Payload.Bytes, Offset, Instance.Handle.EntityRef)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset,
         Instance.Handle.ControllerId.Value)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset,
         Instance.Handle.SourceSequence)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Instance.SourceTypeId.Value)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Instance.SourceVersion)
-      || !ReadPod(Payload.Bytes, Offset, Instance.Priority)
-      || !ReadPod(
+      || !LifecycleReadPod(Payload.Bytes, Offset, Instance.Priority)
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Instance.ExclusiveGroup)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Instance.StartFixedStep)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Instance.LastUpdateFixedStep)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Instance.ExpireFixedStep)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, ReplicationPolicy)
       || !ReadSourcePayload(
         Payload.Bytes, Offset, Instance.Payload)
@@ -1088,7 +1088,7 @@ bool FCrowdWorkerBehaviorStateCodec::Decode(
         ReplicationPolicy);
   }
   uint8 CursorCount = 0;
-  if (!ReadPod(Payload.Bytes, Offset, CursorCount)
+  if (!LifecycleReadPod(Payload.Bytes, Offset, CursorCount)
     || CursorCount > CrowdBehavior::MaxControllersPerEntity)
     return false;
   OutState.SourceSet.ControllerCursors.Reserve(CursorCount);
@@ -1097,15 +1097,15 @@ bool FCrowdWorkerBehaviorStateCodec::Decode(
     FCrowdBehaviorControllerCursor& Cursor =
       OutState.SourceSet.ControllerCursors.
         AddDefaulted_GetRef();
-    if (!ReadPod(
+    if (!LifecycleReadPod(
         Payload.Bytes, Offset, Cursor.ControllerId.Value)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Cursor.LastCommandSequence)
-      || !ReadPod(
+      || !LifecycleReadPod(
         Payload.Bytes, Offset, Cursor.LastCommandHash))
       return false;
   }
-  if (!ReadPod(
+  if (!LifecycleReadPod(
       Payload.Bytes, Offset, OutState.SourceSet.StableHash)
     || !ReadResolvedChannels(
       Payload.Bytes, Offset, OutState.ResolvedChannels)
@@ -1735,7 +1735,7 @@ bool FCrowdWorkerBehaviorDomainExecutor::Execute(
           Next.SourceSet.CapabilityBinding.ProfileKey.Value,
           Contribution.Key.SourceTypeId.Value, 0);
       Next.AppliedBusinessCommitIds.Add(Contribution.CommitId);
-      Fold(Next.BusinessCommitLedgerHash, Contribution.CommitId);
+      LifecycleFold(Next.BusinessCommitLedgerHash, Contribution.CommitId);
       NewBusinessCommits.Add(Contribution);
     }
     if (!DueRecords.IsEmpty())

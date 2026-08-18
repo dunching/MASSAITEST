@@ -5,34 +5,34 @@ namespace CrowdWorkerFlowResourcePrivate
   constexpr int32 MaxArrayItems = 2000000;
 
   template<typename T>
-  void AppendUnsigned(TArray<uint8>& Bytes, const T Value)
+  void FlowAppendUnsigned(TArray<uint8>& Bytes, const T Value)
   {
     static_assert(std::is_unsigned_v<T>);
     for (uint32 Byte = 0; Byte < sizeof(T); ++Byte)
       Bytes.Add(static_cast<uint8>(Value >> (Byte * 8)));
   }
 
-  void AppendSigned(TArray<uint8>& Bytes, const int32 Value)
+  void FlowAppendSigned(TArray<uint8>& Bytes, const int32 Value)
   {
-    AppendUnsigned(Bytes, static_cast<uint32>(Value));
+    FlowAppendUnsigned(Bytes, static_cast<uint32>(Value));
   }
 
-  void AppendDouble(TArray<uint8>& Bytes, const double Value)
+  void FlowAppendDouble(TArray<uint8>& Bytes, const double Value)
   {
     uint64 Bits = 0;
     FMemory::Memcpy(&Bits, &Value, sizeof(Bits));
-    AppendUnsigned(Bytes, Bits);
+    FlowAppendUnsigned(Bytes, Bits);
   }
 
-  void AppendVector(TArray<uint8>& Bytes, const FVector& Value)
+  void FlowAppendVector(TArray<uint8>& Bytes, const FVector& Value)
   {
-    AppendDouble(Bytes, Value.X);
-    AppendDouble(Bytes, Value.Y);
-    AppendDouble(Bytes, Value.Z);
+    FlowAppendDouble(Bytes, Value.X);
+    FlowAppendDouble(Bytes, Value.Y);
+    FlowAppendDouble(Bytes, Value.Z);
   }
 
   template<typename T>
-  bool ReadUnsigned(
+  bool FlowReadUnsigned(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     T& OutValue)
@@ -50,36 +50,36 @@ namespace CrowdWorkerFlowResourcePrivate
     return true;
   }
 
-  bool ReadSigned(
+  bool FlowReadSigned(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     int32& OutValue)
   {
     uint32 Value = 0;
-    if (!ReadUnsigned(Bytes, Offset, Value)) return false;
+    if (!FlowReadUnsigned(Bytes, Offset, Value)) return false;
     OutValue = static_cast<int32>(Value);
     return true;
   }
 
-  bool ReadDouble(
+  bool FlowReadDouble(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     double& OutValue)
   {
     uint64 Bits = 0;
-    if (!ReadUnsigned(Bytes, Offset, Bits)) return false;
+    if (!FlowReadUnsigned(Bytes, Offset, Bits)) return false;
     FMemory::Memcpy(&OutValue, &Bits, sizeof(Bits));
     return FMath::IsFinite(OutValue);
   }
 
-  bool ReadVector(
+  bool FlowReadVector(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     FVector& OutValue)
   {
-    return ReadDouble(Bytes, Offset, OutValue.X)
-      && ReadDouble(Bytes, Offset, OutValue.Y)
-      && ReadDouble(Bytes, Offset, OutValue.Z);
+    return FlowReadDouble(Bytes, Offset, OutValue.X)
+      && FlowReadDouble(Bytes, Offset, OutValue.Y)
+      && FlowReadDouble(Bytes, Offset, OutValue.Z);
   }
 
   bool ReadCount(
@@ -87,7 +87,7 @@ namespace CrowdWorkerFlowResourcePrivate
     int32& Offset,
     int32& OutCount)
   {
-    return ReadSigned(Bytes, Offset, OutCount)
+    return FlowReadSigned(Bytes, Offset, OutCount)
       && OutCount >= 0 && OutCount <= MaxArrayItems;
   }
 
@@ -95,9 +95,9 @@ namespace CrowdWorkerFlowResourcePrivate
     TArray<uint8>& Bytes,
     const TConstArrayView<int32> Values)
   {
-    AppendSigned(Bytes, Values.Num());
+    FlowAppendSigned(Bytes, Values.Num());
     for (const int32 Value : Values)
-      AppendSigned(Bytes, Value);
+      FlowAppendSigned(Bytes, Value);
   }
 
   bool ReadIntArray(
@@ -109,7 +109,7 @@ namespace CrowdWorkerFlowResourcePrivate
     if (!ReadCount(Bytes, Offset, Count)) return false;
     OutValues.SetNum(Count);
     for (int32& Value : OutValues)
-      if (!ReadSigned(Bytes, Offset, Value))
+      if (!FlowReadSigned(Bytes, Offset, Value))
         return false;
     return true;
   }
@@ -196,83 +196,83 @@ bool FCrowdWorkerFlowFieldResourceCodec::Encode(
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
   TArray<uint8>& Bytes = OutPayload.Bytes;
-  AppendUnsigned(
+  FlowAppendUnsigned(
     Bytes, static_cast<uint64>(Field.Config.Revision));
-  AppendUnsigned(Bytes, Field.BuildHash);
-  AppendVector(Bytes, Field.Config.BoundsMin);
-  AppendVector(Bytes, Field.Config.BoundsMax);
-  AppendVector(Bytes, Field.Config.GoalLocation);
-  AppendDouble(Bytes, Field.Config.CellSizeCm);
-  AppendDouble(Bytes, Field.Config.AgentInflateCm);
-  AppendSigned(
+  FlowAppendUnsigned(Bytes, Field.BuildHash);
+  FlowAppendVector(Bytes, Field.Config.BoundsMin);
+  FlowAppendVector(Bytes, Field.Config.BoundsMax);
+  FlowAppendVector(Bytes, Field.Config.GoalLocation);
+  FlowAppendDouble(Bytes, Field.Config.CellSizeCm);
+  FlowAppendDouble(Bytes, Field.Config.AgentInflateCm);
+  FlowAppendSigned(
     Bytes, Field.Config.ConnectivityContractVersion);
-  AppendSigned(Bytes, Field.Config.ObstacleSpecs.Num());
+  FlowAppendSigned(Bytes, Field.Config.ObstacleSpecs.Num());
   for (const FCrowdSharedFlowObstacleSpec& Obstacle :
     Field.Config.ObstacleSpecs)
   {
-    AppendSigned(Bytes, Obstacle.ObstacleId);
-    AppendVector(Bytes, Obstacle.Center);
-    AppendVector(Bytes, Obstacle.Extent);
+    FlowAppendSigned(Bytes, Obstacle.ObstacleId);
+    FlowAppendVector(Bytes, Obstacle.Center);
+    FlowAppendVector(Bytes, Obstacle.Extent);
   }
-  AppendSigned(Bytes, Field.Width);
-  AppendSigned(Bytes, Field.Height);
-  AppendSigned(Bytes, CellCount);
+  FlowAppendSigned(Bytes, Field.Width);
+  FlowAppendSigned(Bytes, Field.Height);
+  FlowAppendSigned(Bytes, CellCount);
   for (int32 Index = 0; Index < CellCount; ++Index)
   {
-    AppendSigned(Bytes, Field.IntegrationCost[Index]);
-    AppendVector(Bytes, Field.FlowDirection[Index]);
-    AppendSigned(Bytes, Field.NextCellIndex[Index]);
+    FlowAppendSigned(Bytes, Field.IntegrationCost[Index]);
+    FlowAppendVector(Bytes, Field.FlowDirection[Index]);
+    FlowAppendSigned(Bytes, Field.NextCellIndex[Index]);
     Bytes.Add(Field.Blocked[Index] ? 1 : 0);
     Bytes.Add(Field.Unreachable[Index] ? 1 : 0);
   }
 
-  AppendSigned(Bytes, Field.NavigationSafeIntervals.Num());
+  FlowAppendSigned(Bytes, Field.NavigationSafeIntervals.Num());
   for (const FCrowdNavigationSafeInterval& Interval :
     Field.NavigationSafeIntervals)
   {
     Bytes.Add(static_cast<uint8>(Interval.Kind));
-    AppendSigned(Bytes, Interval.PrimaryCellKey);
-    AppendSigned(Bytes, Interval.SecondaryCellKey);
-    AppendSigned(Bytes, Interval.IntervalOrdinal);
-    AppendSigned(Bytes, Interval.QuantizedMinCm);
-    AppendSigned(Bytes, Interval.QuantizedMaxCm);
+    FlowAppendSigned(Bytes, Interval.PrimaryCellKey);
+    FlowAppendSigned(Bytes, Interval.SecondaryCellKey);
+    FlowAppendSigned(Bytes, Interval.IntervalOrdinal);
+    FlowAppendSigned(Bytes, Interval.QuantizedMinCm);
+    FlowAppendSigned(Bytes, Interval.QuantizedMaxCm);
   }
-  AppendSigned(Bytes, Field.NavigationNodes.Num());
+  FlowAppendSigned(Bytes, Field.NavigationNodes.Num());
   for (const FCrowdNavigationNode& Node : Field.NavigationNodes)
   {
-    AppendUnsigned(Bytes, Node.StableNodeKey);
+    FlowAppendUnsigned(Bytes, Node.StableNodeKey);
     Bytes.Add(static_cast<uint8>(Node.Kind));
-    AppendSigned(Bytes, Node.PrimaryCellKey);
-    AppendSigned(Bytes, Node.SecondaryCellKey);
-    AppendSigned(Bytes, Node.IntervalOrdinal);
-    AppendSigned(Bytes, Node.QuantizedLocationCm.X);
-    AppendSigned(Bytes, Node.QuantizedLocationCm.Y);
+    FlowAppendSigned(Bytes, Node.PrimaryCellKey);
+    FlowAppendSigned(Bytes, Node.SecondaryCellKey);
+    FlowAppendSigned(Bytes, Node.IntervalOrdinal);
+    FlowAppendSigned(Bytes, Node.QuantizedLocationCm.X);
+    FlowAppendSigned(Bytes, Node.QuantizedLocationCm.Y);
   }
-  AppendSigned(Bytes, Field.NavigationCellNodes.Num());
+  FlowAppendSigned(Bytes, Field.NavigationCellNodes.Num());
   for (const TArray<int32>& CellNodes :
     Field.NavigationCellNodes)
     AppendIntArray(Bytes, CellNodes);
-  AppendSigned(Bytes, Field.NavigationEdges.Num());
+  FlowAppendSigned(Bytes, Field.NavigationEdges.Num());
   for (const FCrowdNavigationEdge& Edge : Field.NavigationEdges)
   {
-    AppendUnsigned(Bytes, Edge.MinNodeKey);
-    AppendUnsigned(Bytes, Edge.MaxNodeKey);
-    AppendSigned(Bytes, Edge.QuantizedCost);
+    FlowAppendUnsigned(Bytes, Edge.MinNodeKey);
+    FlowAppendUnsigned(Bytes, Edge.MaxNodeKey);
+    FlowAppendSigned(Bytes, Edge.QuantizedCost);
   }
   AppendIntArray(Bytes, Field.NavigationIntegrationCost);
   AppendIntArray(Bytes, Field.NavigationNextNodeIndex);
   AppendIntArray(Bytes, Field.GoalAttachmentNodeIndices);
-  AppendSigned(Bytes, Field.GoalCellIndex);
-  AppendSigned(Bytes, Field.BlockedCellCount);
-  AppendSigned(Bytes, Field.ValidDirectedEdgeCount);
-  AppendSigned(Bytes, Field.NavigationCenterAnchorCount);
-  AppendSigned(Bytes, Field.NavigationConnectionPointCount);
-  AppendSigned(Bytes, Field.NavigationSafeIntervalCount);
-  AppendSigned(Bytes, Field.NavigationInternalEdgeCount);
-  AppendSigned(Bytes, Field.CenterInvalidButConnectedCellCount);
-  AppendSigned(Bytes, Field.GoalAttachmentCount);
-  AppendUnsigned(Bytes, Field.TopologyHash);
-  AppendUnsigned(Bytes, Field.IntegrationHash);
+  FlowAppendSigned(Bytes, Field.GoalCellIndex);
+  FlowAppendSigned(Bytes, Field.BlockedCellCount);
+  FlowAppendSigned(Bytes, Field.ValidDirectedEdgeCount);
+  FlowAppendSigned(Bytes, Field.NavigationCenterAnchorCount);
+  FlowAppendSigned(Bytes, Field.NavigationConnectionPointCount);
+  FlowAppendSigned(Bytes, Field.NavigationSafeIntervalCount);
+  FlowAppendSigned(Bytes, Field.NavigationInternalEdgeCount);
+  FlowAppendSigned(Bytes, Field.CenterInvalidButConnectedCellCount);
+  FlowAppendSigned(Bytes, Field.GoalAttachmentCount);
+  FlowAppendUnsigned(Bytes, Field.TopologyHash);
+  FlowAppendUnsigned(Bytes, Field.IntegrationHash);
   if (Bytes.Num() > MaxEncodedBytes)
   {
     OutPayload = {};
@@ -297,19 +297,19 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
   int32 ObstacleCount = 0;
   int32 CellCount = 0;
   FCrowdSharedFlowField& Field = OutResource.Field;
-  if (!ReadUnsigned(
+  if (!FlowReadUnsigned(
       Payload.Bytes, Offset, OutResource.Revision)
-    || !ReadUnsigned(
+    || !FlowReadUnsigned(
       Payload.Bytes, Offset, OutResource.BuildHash)
-    || !ReadVector(
+    || !FlowReadVector(
       Payload.Bytes, Offset, Field.Config.BoundsMin)
-    || !ReadVector(
+    || !FlowReadVector(
       Payload.Bytes, Offset, Field.Config.BoundsMax)
-    || !ReadVector(
+    || !FlowReadVector(
       Payload.Bytes, Offset, Field.Config.GoalLocation)
-    || !ReadDouble(Payload.Bytes, Offset, CellSize)
-    || !ReadDouble(Payload.Bytes, Offset, AgentInflate)
-    || !ReadSigned(
+    || !FlowReadDouble(Payload.Bytes, Offset, CellSize)
+    || !FlowReadDouble(Payload.Bytes, Offset, AgentInflate)
+    || !FlowReadSigned(
       Payload.Bytes, Offset,
       Field.Config.ConnectivityContractVersion)
     || !ReadCount(Payload.Bytes, Offset, ObstacleCount))
@@ -323,16 +323,16 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
   for (FCrowdSharedFlowObstacleSpec& Obstacle :
     Field.Config.ObstacleSpecs)
   {
-    if (!ReadSigned(
+    if (!FlowReadSigned(
         Payload.Bytes, Offset, Obstacle.ObstacleId)
-      || !ReadVector(
+      || !FlowReadVector(
         Payload.Bytes, Offset, Obstacle.Center)
-      || !ReadVector(
+      || !FlowReadVector(
         Payload.Bytes, Offset, Obstacle.Extent))
       return false;
   }
-  if (!ReadSigned(Payload.Bytes, Offset, Field.Width)
-    || !ReadSigned(Payload.Bytes, Offset, Field.Height)
+  if (!FlowReadSigned(Payload.Bytes, Offset, Field.Width)
+    || !FlowReadSigned(Payload.Bytes, Offset, Field.Height)
     || !ReadCount(Payload.Bytes, Offset, CellCount)
     || CellCount <= 0
     || static_cast<int64>(Field.Width) * Field.Height
@@ -345,11 +345,11 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
   Field.Unreachable.Init(false, CellCount);
   for (int32 Index = 0; Index < CellCount; ++Index)
   {
-    if (!ReadSigned(
+    if (!FlowReadSigned(
         Payload.Bytes, Offset, Field.IntegrationCost[Index])
-      || !ReadVector(
+      || !FlowReadVector(
         Payload.Bytes, Offset, Field.FlowDirection[Index])
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Field.NextCellIndex[Index])
       || Offset + 2 > Payload.Bytes.Num())
       return false;
@@ -373,15 +373,15 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
     const uint8 Kind = Payload.Bytes[Offset++];
     if (Kind > static_cast<uint8>(
         ECrowdNavigationNodeKind::HorizontalEdgeConnection)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Interval.PrimaryCellKey)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Interval.SecondaryCellKey)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Interval.IntervalOrdinal)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Interval.QuantizedMinCm)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Interval.QuantizedMaxCm))
       return false;
     Interval.Kind =
@@ -392,22 +392,22 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
   Field.NavigationNodes.SetNum(Count);
   for (FCrowdNavigationNode& Node : Field.NavigationNodes)
   {
-    if (!ReadUnsigned(
+    if (!FlowReadUnsigned(
         Payload.Bytes, Offset, Node.StableNodeKey)
       || Offset >= Payload.Bytes.Num())
       return false;
     const uint8 Kind = Payload.Bytes[Offset++];
     if (Kind > static_cast<uint8>(
         ECrowdNavigationNodeKind::HorizontalEdgeConnection)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Node.PrimaryCellKey)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Node.SecondaryCellKey)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Node.IntervalOrdinal)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Node.QuantizedLocationCm.X)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Node.QuantizedLocationCm.Y))
       return false;
     Node.Kind = static_cast<ECrowdNavigationNodeKind>(Kind);
@@ -423,11 +423,11 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
   Field.NavigationEdges.SetNum(Count);
   for (FCrowdNavigationEdge& Edge : Field.NavigationEdges)
   {
-    if (!ReadUnsigned(
+    if (!FlowReadUnsigned(
         Payload.Bytes, Offset, Edge.MinNodeKey)
-      || !ReadUnsigned(
+      || !FlowReadUnsigned(
         Payload.Bytes, Offset, Edge.MaxNodeKey)
-      || !ReadSigned(
+      || !FlowReadSigned(
         Payload.Bytes, Offset, Edge.QuantizedCost))
       return false;
   }
@@ -437,26 +437,26 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
       Payload.Bytes, Offset, Field.NavigationNextNodeIndex)
     || !ReadIntArray(
       Payload.Bytes, Offset, Field.GoalAttachmentNodeIndices)
-    || !ReadSigned(Payload.Bytes, Offset, Field.GoalCellIndex)
-    || !ReadSigned(Payload.Bytes, Offset, Field.BlockedCellCount)
-    || !ReadSigned(
+    || !FlowReadSigned(Payload.Bytes, Offset, Field.GoalCellIndex)
+    || !FlowReadSigned(Payload.Bytes, Offset, Field.BlockedCellCount)
+    || !FlowReadSigned(
       Payload.Bytes, Offset, Field.ValidDirectedEdgeCount)
-    || !ReadSigned(
+    || !FlowReadSigned(
       Payload.Bytes, Offset, Field.NavigationCenterAnchorCount)
-    || !ReadSigned(
+    || !FlowReadSigned(
       Payload.Bytes, Offset,
       Field.NavigationConnectionPointCount)
-    || !ReadSigned(
+    || !FlowReadSigned(
       Payload.Bytes, Offset, Field.NavigationSafeIntervalCount)
-    || !ReadSigned(
+    || !FlowReadSigned(
       Payload.Bytes, Offset, Field.NavigationInternalEdgeCount)
-    || !ReadSigned(
+    || !FlowReadSigned(
       Payload.Bytes, Offset,
       Field.CenterInvalidButConnectedCellCount)
-    || !ReadSigned(
+    || !FlowReadSigned(
       Payload.Bytes, Offset, Field.GoalAttachmentCount)
-    || !ReadUnsigned(Payload.Bytes, Offset, Field.TopologyHash)
-    || !ReadUnsigned(
+    || !FlowReadUnsigned(Payload.Bytes, Offset, Field.TopologyHash)
+    || !FlowReadUnsigned(
       Payload.Bytes, Offset, Field.IntegrationHash))
     return false;
   Field.BuildHash = OutResource.BuildHash;
