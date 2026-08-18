@@ -4,14 +4,20 @@
 
 本文记录**当前可用于判断实现状态的测试合同、最后有效 baseline 和下一次必须取得的证据**。
 
-本文件不保存逐日 runner 日志，也不把 source cut 之前的 PASS 自动继承为新架构当前 PASS。
+本文件不保存逐日 runner 日志，也不把架构切换前的 PASS 自动继承为新主链当前 PASS。
+
+Target 边界/容量精确合同：
+
+```text
+Reference/TargetRegionBoundaryCapacityContract.md
+```
 
 当前状态定义：
 
 ```text
 PASS          已在当前相关执行结构上获得正式证据
 STATIC PASS   只完成静态结构/源码审计；不是 UE runtime PASS
-BASELINE      source cut 前的最后有效结果，可用于对比，但不是当前验收
+BASELINE      旧执行结构最后有效结果，可用于对比，但不是当前验收
 REVALIDATE    以前有 PASS/baseline，但相关 live path 已改变，必须重跑
 DIAGNOSTIC    有真实业务结果，但正式 runner/验收形式未通过
 FAIL          已知真实 correctness failure 尚未被关闭
@@ -20,56 +26,57 @@ OPEN          实现/规模门本身尚未完成
 RETIRED       验收对象/机制已从当前架构物理删除，不再作为当前测试门
 ```
 
-当前最重要的证据边界：
-
-> **最新 Worker Production source cut 已删除 Legacy Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels；UE build、PIE、T1–T8、network/late join/scale 尚未在这条新主链上重新执行。**
-
-因此本文保留旧数值作为 baseline，但不把它们登记成 post-cut PASS。
-
 ---
 
 # 2. 当前关键证据摘要
 
 | Gate | 当前状态 | 最后证据 / 当前结论 | 下一次必须证明 |
 |---|---|---|---|
-| PR12 Source Architecture Cut | STATIC PASS | 静态审计确认旧 transaction / Stage / Prepared second-pass production symbols 为 0；Processor surface 仅 2 个 `UMassProcessor`；Owner Barrier 在 Checkpoint 前。 | UE build + architecture automation。 |
-| Persistent Worker Production structure automation | NOT RUN | 新 `CrowdDemo.Architecture.PersistentWorkerProductionStructure` 测试已写入源码。 | 在合并后的 `main` 实际执行并 PASS。 |
-| Runtime Worker Result Apply / Owner Barrier | BASELINE | 旧 Runtime atomicity / dirty batch / event watermark 证据存在。 | post-cut 重新运行 Runtime automation。 |
-| Legacy Demo Prepared Round Adapter | RETIRED | 旧 Target/Resource prepared transaction tests 随机制删除，不再是当前验收门。 | 由 Runtime Owner Barrier + Worker domain result tests 替代。 |
-| Minimal Full Production T8 server-only | REVALIDATE | source cut 前 baseline：900 batches、90,940 patches、150 Ordered Events、attack/spawn/impact/damage=50/50/50/50、duplicate=0/0。 | 新 bootstrap + direct intent path 上重新跑正式 server-only T8。 |
-| 双端 T8 formal runner | REVALIDATE / tool issue | source cut 前存在业务日志，但 runner 有 completion 误判/超时。 | 修 runner 后在新主链正式双端执行。 |
-| T5 Worker Target observability | PASS ON CANDIDATE | ResultApply `Target` / `TargetCohort` 只读 checkpoint valid；Worker Target rejection 已进入 runner hard-failure gate。 | 合并 main 后重跑，再进入长窗口。 |
-| T5 600 Tick | PASS ON CANDIDATE | Static 20-agent：fixed_step=599、generation=1、input=665、publish=600、Worker Target checkpoint valid=1、unrouted=0。 | 合并 main 后重跑。 |
-| T5 >900 Tick | FAIL / unresolved baseline | step ~886 曾出现 Target Demand `feasible-region-insufficient`；尚无修复证据。 | Static + Moving >=1000 Tick 无该失败。 |
-| TargetRegionTransport automation | PASS ON CANDIDATE | `CrowdDemo.SoftPressure.TargetRegionTransport` PASS 7/7。 | Target 算法修改后再次回归。 |
-| RuntimeV2 Target | PASS ON CANDIDATE | Target domain 1/1、10k scoped cohort 1/1、Target observability 2/2。 | 合并 main 后重跑。 |
-| Lifecycle | BASELINE | 旧 2/2 结果存在。 | source cut 后回归，特别验证 first bootstrap / ongoing intent 生命周期序列。 |
-| WorkRing / TimeWheel / Spatial 10k | BASELINE | 1k/2k/5k/10k scheduler、10k sparse wakeup、10k dirty spatial 专项已有记录。 | WA9 前再次在最终 source state 执行。 |
-| Target 10k 双 Cohort scoped invalidation | BASELINE | 受影响 5k Cohort 执行 40×128 Guidance shards；未受影响 Cohort 无 Dirty/Topology rebuild。 | T5/Target 变更后保持同样 scoped invalidation。 |
+| PR12 Source Architecture Cut | STATIC PASS / CLOSED | 旧 transaction / Stage / Prepared second-pass production symbols 为 0；Processor surface 仅 2 个 `UMassProcessor`；Owner Barrier 在 Checkpoint 前。 | 保持不回归。 |
+| Persistent Worker Production structure automation | PASS | `CrowdDemo.Architecture.PersistentWorkerProductionStructure` PASS 1/1。 | 后续 Target/host 改动继续回归。 |
+| Runtime Worker Result Apply / Owner Barrier | PASS | `MassCrowd.Runtime.WorkerResultApply` PASS 4/4；Host atomicity fixture PASS。 | 后续 ownership 改动继续回归。 |
+| Default Unity / DisableUnity | PASS | Runtime Unity helper collision 已关闭；current main 的 moving orchestration 修改后 clean ForceUnity / DisableUnity 都通过。 | Target capacity 修改后重跑。 |
+| Minimal Full Production T8 server-only | PASS | 900 batches、90,940 patches、150 Ordered Events、attack/spawn/impact/damage=50/50/50/50、duplicate=0/0、Golden 一致。 | Target capacity 修改不应影响；后续双端仍需 formal runner。 |
+| 双端 T8 formal runner | REVALIDATE / tool issue | 业务历史证据存在，但正式 runner completion 仍有误判/超时债。 | 修 runner 后正式双端执行。 |
+| T5 Worker Target observability | PASS | ResultApply `Target` / `TargetCohort` 只读 checkpoint valid；Worker Target/domain rejection 已进入 runner hard-failure gate。 | CapacityHold/Overflow 实现后要区分合法 saturation 与真正 rejection。 |
+| T5 Static long-window | PASS | 20-agent `fixed_step=1199` 重复 2/2 PASS；`worker_state_hash=16065067781684863977` 两次一致；unrouted=0、rejection=0。 | Target capacity 修改后至少重跑 1 次并保持 deterministic。 |
+| Moving objective absolute clock | PASS | objective effective tick 与 Worker absolute tick 对齐；pre-round uptime 不进入 objective age。 | 边界能力实现后保持。 |
+| Runtime-owned dynamic SharedFlow | PASS | moving objective 下 Environment revision 随语义变化推进；旧 bootstrap-only stale resource 问题关闭。 | 边界能力实现后保持。 |
+| T5 Moving step ~398 SourceAttachment failure | RETIRED / fixed cause | clock-domain mismatch + stale dynamic SharedFlow 已修；`source_attachment_failures=20/20` signature 不再出现。 | 不回归。 |
+| T5 Moving boundary/corner capacity | FAIL / active | canonical Moving 继续运行至 absolute step 1460：`feasible_regions=3/16`、`desired=19`、`source_attachment_failures=0`，现有 Demand 仍把合法 clipped capacity shortage 当 fatal。 | 实现 clipped topology + finite capacity + Overflow/CapacityHold。 |
+| TargetRegionTransport automation | PASS | `CrowdDemo.SoftPressure.TargetRegionTransport` PASS 7/7。 | Target capacity 合同修改后扩展边缘/角落测试并全量回归。 |
+| RuntimeV2 Target | PASS | Target domain、10k affected cohort、Target observability 当前均 PASS。 | Target capacity 修改后保持 scoped invalidation/determinism。 |
+| Lifecycle | BASELINE / REVALIDATE | 旧 2/2 证据存在。 | 完整 post-cut T1/T6 等继续回归。 |
+| WorkRing / TimeWheel / Spatial 10k | BASELINE | 1k/2k/5k/10k scheduler、10k sparse wakeup、10k dirty spatial 专项已有记录。 | WA9 前最终源码重跑。 |
+| Target 10k 双 Cohort scoped invalidation | PASS / regression invariant | 受影响 Cohort 执行，未受影响 Cohort 无 Dirty/Topology rebuild。 | finite capacity / claim 改动后必须保持。 |
 | Particle 多闭合 Island | BASELINE | independent sub-solve + stable merge + global exact validation 已有专项证据。 | Particle scaling 改动前后都需 reference regression。 |
 | Particle 多 Island UE Task 并行 | OPEN | 当前算法分岛不等于每岛独立 UE Task。 | 实现后证明 determinism + speedup。 |
 | Particle 大型单 Island | OPEN | Cell-Pair Owner / per-round Barrier 未完成。 | 1k/2k/5k/10k dense single-island correctness/perf。 |
-| Networking / Late Join post-cut | REVALIDATE | 公共合同与旧证据存在，但 live host path 已改变。 | checkpoint/correction/late join baseline 在新主链重新跑通。 |
+| Networking / Late Join post-cut | REVALIDATE | 公共合同存在，但 live host path 改写后正式 evidence 未补齐。 | checkpoint/correction/late join baseline 在新主链重跑。 |
 | WA9 完整 10k Production | NOT RUN | 尚无当前完整 gameplay/network/presentation 10k 门。 | 1k→2k→5k→10k 完整验收。 |
 
 ---
 
 # 3. Post-cut Regression Gate
 
-在任何旧 Demo 场景恢复为 `PASS` 前，先关闭这组最低门。
+## 3.1 已通过的核心门
 
-## 3.1 Build / structure
+```text
+Default Unity Development Editor               PASS
+DisableUnity Development Editor                PASS
+PersistentWorkerProductionStructure            PASS
+Runtime OwnerCommit / ResultApply               PASS
+first-step bootstrap                           PASS
+ordinary direct-intent                         PASS
+minimal T8 server-only                         PASS
+Worker Target observability                    PASS
+```
 
-| 项目 | 当前状态 | 要求 |
-|---|---|---|
-| Development Editor build | NOT RUN | 新 `main` 编译成功。 |
-| DisableUnity build | NOT RUN | 在当前项目仍需要 `bUseUnity=false` 的前提下验证完整 TU。 |
-| PersistentWorkerProductionStructure | NOT RUN | 2 processors、retired symbols=0、Owner Barrier/Checkpoint ordering。 |
-| Runtime OwnerCommit atomicity | REVALIDATE | stale token/view/lifecycle/field 必须 first-write 前拒绝。 |
+这些结果证明 Worker-only live path 的基础链可运行，但不自动关闭仍未重跑的 T1/T2/T3/T4/T6/T7、network/late join、双端 T8。
 
-## 3.2 First-step bootstrap
+## 3.2 First-step bootstrap 合同
 
-必须看到一条完整事实链：
+必须保持：
 
 ```text
 valid boundary facts
@@ -77,33 +84,27 @@ valid boundary facts
 → one-shot synchronous bootstrap graph
 → SubmitPreparedWorkerBootstrapInput
 → accepted Worker input sequence > 0
-→ current fixed step marked Worker-owned
+→ current fixed step Worker-owned
 → Worker Published Result
 → Runtime Owner Barrier
 → Dirty Mass Apply
 → Checkpoint / FinishFixedStep
 ```
 
-验收要求：
-
-- 没有 Legacy Round fallback。
-- 没有 Prepared Movement / TargetResource / ParticleDiagnostic 第二遍 commit。
-- bootstrap result 不直接作为 Mass simulation authority。
-- first Worker result 的 applied input sequence 必须与 current step expected sequence 精确匹配。
+普通 Tick 不得重新创建完整 Round DAG。
 
 ## 3.3 Ordinary Production tick
 
-第二个及后续普通 Tick 必须证明：
+必须保持：
 
 ```text
 no bootstrap rebuild
 → TrySubmitFullWorkerProductionIntent
+→ Runtime-owned resource/objective refresh as needed
 → SubmitIntentBatch
 → Worker work propagation
 → Owner Barrier commit
 ```
-
-普通 Tick 不得重新创建完整 Round DAG。
 
 ---
 
@@ -122,67 +123,145 @@ no bootstrap rebuild
 | Ordered Event admission 失败 | reject；不推进 event watermark |
 | 成功路径 | Host FinalValidate/Apply/side effect 各一次；Proxy commit 一次；Dirty ACK 不重复 |
 
-已经删除的 Demo Target/Resource Prepared Transaction fault fixture 不再属于当前合同；Target/Resource authority 应通过 Worker resource/domain revision 与 Result Apply 基线验证。
+Target capacity 实现不得恢复 Demo Target/Resource Prepared Transaction。
 
 ---
 
 # 5. T1–T8 场景职责
 
-T1–T8 是 Demo 验收宿主的归因场景，每个场景只证明自己的能力。
-
-| 场景 | 主要验证内容 | Post-cut 状态 | 下一次重点 |
+| 场景 | 主要验证内容 | 当前状态 | 下一次重点 |
 |---|---|---|---|
 | T1 | 参与集切换、压力传播、staging reset、新平衡 | REVALIDATE | bootstrap scratch、Lifecycle、Particle state reset。 |
 | T2 | 开放区域群体移动、Macro Guidance、自然落位 | REVALIDATE | Shared Flow → MovementPlanning → Worker Result。 |
 | T3 | 双向交换、Local Predictive、公平让行、安全穿越 | REVALIDATE | direct intent 后局部预测与 determinism。 |
 | T4 | 窄通道/出口安全、环境约束 | REVALIDATE | non-particle/obstacle bootstrap + Worker movement。 |
-| T5 | Static/Moving Target、Polar Transport、长期稳定 | FAIL / REVALIDATE | 先重跑短窗口，再关闭 step ~886 long-window blocker。 |
-| T6 | 异构 Radius/Mobility/Distance Band 联合运行 | REVALIDATE | cohort/capability、target、particle safety。 |
+| T5 | Static/Moving Target、Polar Transport、长期稳定 | FAIL / active | Static 已 PASS；Moving 当前 blocker 是 clipped boundary capacity / overflow。 |
+| T6 | 异构 Radius/Mobility/Distance Band 联合运行 | REVALIDATE | finite capacity 必须 profile-aware；同时回归 particle safety。 |
 | T7 | VAT、多视觉状态、HitReact/Knockback/Death | REVALIDATE | Worker combat result → presentation consumption。 |
-| T8 | Combat、Projectile、Impact/Hit、Damage、Event、Golden | REVALIDATE | 最小 server-only 优先；随后双端 formal runner。 |
+| T8 | Combat、Projectile、Impact/Hit、Damage、Event、Golden | SERVER PASS / DUAL REVALIDATE | server-only 当前 PASS；双端 formal runner 仍需关闭。 |
 
-场景不能互相替代：例如 T8 不证明完整 10k，T5 600 Tick 不证明 long-window stability，多 Island 不证明单大 Island scaling。
+场景不能互相替代。
 
 ---
 
 # 6. T5 Target Region 长窗口门
 
-当前已知 correctness blocker 仍按未关闭处理。
+## 6.1 已关闭的历史失败
 
-最后 baseline：
+### Static historical step ~886
 
-- 600 Tick 短窗口曾通过。
-- >900 Tick 在 step ~886 出现 `feasible-region-insufficient`。
-- 10k 双 Cohort scoped invalidation 专项曾通过。
+Static `fixed_step=1199` 已重复 2/2 PASS，当前不再把旧 static step ~886 当 active blocker。
 
-这些结果的正确使用方式是：
+### Moving step ~398
+
+已确认并修复：
 
 ```text
-600 Tick baseline          → post-cut smoke comparison
-step 886 failure           → unresolved correctness target
-10k scoped invalidation    → regression invariant
+A. round-local Objective effective tick
+   vs Worker absolute tick clock-domain mismatch
+
+B. Production fast path 未持续刷新 Runtime-owned dynamic SharedFlow
 ```
 
-正式关闭至少需要：
+修复后：
+
+```text
+absolute_tick == effective_tick
+objective age = 0 at publication
+Environment revision 1 → dynamic revisions
+source_attachment_failures 20 → 0
+```
+
+## 6.2 当前 active failure：clipped edge capacity
+
+canonical Moving long-window 的下一真实 failure：
+
+```text
+absolute fixed_step = 1460
+epoch = 1190
+input = 2470
+target_revision = 1
+target = (-3171, 1900)
+target_velocity = (-90, 0)
+feasible_regions = 3 / 16
+desired = 19
+source_attachment_failures = 0
+topology_cells = 432
+topology_edges = 202
+flow_revision = 27
+flow_build_hash = 3365518101
+```
+
+解释：
+
+- Objective clock 正常。
+- Dynamic SharedFlow 正常刷新。
+- SourceAttachment 正常。
+- Target 靠近环境边缘后完整 Polar topology 被真实空间裁剪。
+- 现有 Demand 仍要求超出当前有效容量的人口，因此 fail-closed。
+
+该问题按 `Reference/TargetRegionBoundaryCapacityContract.md` 处理。
+
+## 6.3 新验收合同
+
+### Clipped topology
 
 | 项目 | 要求 |
 |---|---|
-| Static duration | >= 1000 Tick |
-| Moving duration | >= 1000 Tick |
-| Demand | 无 unexplained feasible-region-insufficient |
-| Plan | 无 stale/invalid plan loop |
-| Quota | 无持续未路由人口积累 |
-| Placement | 连续窗口无明显 anchor 抢占往返振荡 |
-| Lifecycle | stale=0 |
-| Determinism | 同输入重复 Stable Hash 一致 |
+| Center | 完整/近完整 Polar topology 与旧 baseline 一致 |
+| Edge | 只保留真实 NavMesh/Environment-valid Cell；理论 Region 缺失不是 fatal |
+| Corner | 可只剩局部/约 1/4 可行域，仍应保持 valid topology |
+| Invalid cell | capacity=0，不得产生 claim / guidance admission |
 
-修复不得按 step / AgentId / map / region 写生产特判。
+### Finite capacity
+
+| 项目 | 要求 |
+|---|---|
+| Cell capacity | deterministic finite value；共享不等于无限共享 |
+| Total capacity | `Σ Capacity(feasible cell)` |
+| Assignable | `min(DesiredPopulation, TotalFeasibleCapacity)` |
+| Overflow | `max(0, DesiredPopulation - TotalFeasibleCapacity)` |
+| Overbooking | `Occupied + ActiveClaims <= Capacity` 永远成立 |
+
+### Overflow / CapacityHold
+
+合法 capacity shortage：
+
+- 不得计为 Target demand rejection。
+- 不得等同于 `UnroutedFailure`。
+- 额外 Agent 不得继续对已满 Target interior 施压。
+- 新容量出现后按 deterministic order 重新参与。
+
+### Moving cell lifecycle
+
+- valid→invalid：release/migrate claim；无其它容量则 Overflow。
+- invalid→valid：增加 capacity；Overflow deterministic refill。
+- 不得出现 stale claim / stale plan / overbook / 大规模抢占往返振荡。
+
+## 6.4 Gate 关闭条件
+
+```text
+Target boundary/corner unit/automation tests PASS
+TargetRegionTransport full suite PASS
+RuntimeV2 Target PASS
+Target 10k scoped invalidation PASS
+Static T5 >=1000 Tick PASS + deterministic repeat
+Moving T5 >=1000 Tick PASS + deterministic repeat
+Worker Target rejection = 0 for legal capacity saturation
+source_attachment_failures = 0 for canonical moving path
+Occupied / ActiveClaims never exceed Capacity
+legal Overflow != unexplained UnroutedFailure
+stale lifecycle = 0
+invalid/stale plan/claim = 0
+```
+
+不得按 step / AgentId / map / region 写生产特判。
 
 ---
 
 # 7. Worker Runtime 规模 baseline
 
-以下属于 source cut 前已有的基础专项，不等于当前完整 gameplay PASS。
+以下基础专项不等于完整 gameplay PASS。
 
 ## 7.1 WorkRing
 
@@ -210,13 +289,13 @@ step 886 failure           → unresolved correctness target
 full rebuild        = 0
 ```
 
-WA9 前要在最终源码状态重跑，而不是无限继承 baseline。
+WA9 前要在最终源码状态重跑。
 
 ---
 
-# 8. Target 10k scoped invalidation baseline
+# 8. Target 10k scoped invalidation regression invariant
 
-最后记录：
+当前记录：
 
 ```text
 10k agents
@@ -226,11 +305,11 @@ WA9 前要在最终源码状态重跑，而不是无限继承 baseline。
 只修改 Cohort A 相关 Movement/Target facts 时：
 
 - 只唤醒受影响 Cohort。
-- 5k Cohort 以 128 WorkItem shard 执行，记录为 40 shards。
+- 5k Cohort 以 128 WorkItem shard 执行。
 - 未受影响 Cohort 无 Dirty Guidance。
 - 未受影响 Cohort 不重建 Topology。
 
-此结果继续作为 Target 修改后的 regression invariant，但不是 post-cut end-to-end PASS。
+finite capacity / claim 实现不得退化为每次局部变化都重算所有 Cohort。
 
 ---
 
@@ -248,6 +327,8 @@ WA9 前要在最终源码状态重跑，而不是无限继承 baseline。
 | 大型单 Island Cell-Pair sharding | OPEN | stable pair owner + per-round barrier |
 | 大型单 Island 10k dense perf | NOT RUN | Gate 4 完成后执行 |
 
+注意：Target capacity admission 不能下放给 Particle。Particle 只裁决最终安全。
+
 ---
 
 # 10. Networking / Correction / Late Join
@@ -263,9 +344,7 @@ WA9 前要在最终源码状态重跑，而不是无限继承 baseline。
 - Late Join baseline：Checkpoint → Resource Revisions → Event Baseline → Delta。
 - baseline 未完成前拒绝普通增量。
 
-历史上记录过约 `49 KiB → 13 chunks` 的分块回归；当前标记为 baseline。
-
-Post-cut 必须额外验证：
+Post-cut 必须验证：
 
 ```text
 Worker owner commit
@@ -274,13 +353,11 @@ Worker owner commit
 → client apply / late join
 ```
 
-不能依赖已经删除的 PostFinalize prepared arrays。
-
 ---
 
-# 11. T8 server-only 历史 baseline
+# 11. T8 server-only current evidence
 
-source cut 前最后可信的最小 Full Production T8 记录：
+当前 Worker-only Full Production server-only 记录：
 
 ```text
 batches            = 900
@@ -292,56 +369,40 @@ impact              = 50
 damage              = 50
 duplicate fire/hit  = 0 / 0
 Golden              = 439379904 / 1411313634 / 6141440
-fixed-step p95      = 18.579 ms
-commit p95          = 0.281 ms
-realtime            = 0.999
 ```
 
-当前状态：`REVALIDATE`。
-
-这些数值现在的用途只有两个：
-
-1. 作为新主链重新运行时的回归比较基线。
-2. 证明 source cut 前 Worker Combat/Projectile/ResultApply 曾经形成完整最小链。
-
-它们**不是** PR12 后的性能结果。
+性能在 current runs 中仍通过 runner gate；历史 18.579ms fixed-step p95 只保留为比较 baseline，不强制当前每次运行完全相同。
 
 ---
 
 # 12. 双端 T8 runner
 
-历史状态：业务结果 `DIAGNOSTIC`，正式 runner failure。
+当前仍属于验收工具债。
 
-曾观察到 server/client RoundResult、client visual、Golden/event/perf 日志存在，但 runner 会误报部分 completion marker 缺失并超时。
+要求：
 
-当前要求：
-
-- 先修 machine-readable completion contract。
-- 区分 scenario failure 与 runner/parser failure。
-- runner 返回 FAIL 时不得人工登记正式 PASS。
-- source cut 后重新产生 server/client Golden、events、performance evidence。
+- machine-readable completion contract。
+- scenario failure 与 runner/parser failure 分离。
+- runner FAIL 时不得人工登记正式 PASS。
+- source cut 后正式双端产生 server/client Golden、events、performance evidence。
 
 ---
 
 # 13. Diagnostics Recovery Matrix
 
-旧 PostFinalize / Particle prepared second-pass 被删除后，以下类别必须重新审计：
-
 | 类别 | 当前状态 | 处理原则 |
 |---|---|---|
-| Worker runtime / queue / domain metrics | EXPECTED PRESENT | 直接来自 Runtime owner 状态。 |
-| Dirty Mass / ResultApply metrics | EXPECTED PRESENT | 来自 Worker Result Apply path。 |
-| Checkpoint final entity state | EXPECTED PRESENT / REVALIDATE | 从 retained Worker proxy/domain state assembly。 |
-| Particle per-step diagnostics | REVALIDATE | 确认是否从 Worker output/retained state恢复；不能重建旧 second-pass commit。 |
-| Target stability diagnostics | REVALIDATE | 可在 checkpoint derive 或独立 test observer；不得成为 simulation owner。 |
-| Route / T1 / T3 / T6 special metrics | REVALIDATE | 按场景决定保留、重写 observer 或退休。 |
+| Worker runtime / queue / domain metrics | PRESENT | Runtime owner 状态。 |
+| Dirty Mass / ResultApply metrics | PRESENT | Worker Result Apply path。 |
+| Checkpoint final entity state | PRESENT / REVALIDATE | retained Worker proxy/domain state assembly。 |
+| Worker Target observability | PASS | `Target` / `TargetCohort` read-only observer；不是 simulation owner。 |
+| Target legal Overflow observability | OPEN | 实现 capacity contract 后必须 machine-readable 区分 Assigned / Overflow / true UnroutedFailure。 |
+| Particle per-step diagnostics | REVALIDATE | Worker output/retained state 或 test-only observer；不能重建旧 second-pass commit。 |
 | obsolete legacy transaction telemetry | RETIRED | 不因测试需要重新引入。 |
 
 ---
 
 # 14. WA9 最终规模矩阵
-
-WA9 必须在同一 Worker-only Production architecture 上逐级执行：
 
 | 规模 | Simulation | Network | Presentation | Performance | 状态 |
 |---:|---|---|---|---|---|
@@ -350,55 +411,27 @@ WA9 必须在同一 Worker-only Production architecture 上逐级执行：
 | 5,000 | 完整 Domain 链 | 双端 | Relevant lifecycle | Target gate | NOT RUN |
 | 10,000 | 完整 Domain 链 | 双端 | Relevant lifecycle | Final gate | NOT RUN |
 
-完整 Domain 链：
-
-```text
-Lifecycle / Input
-Behavior
-Flow / Resource
-Target
-Combat / Projectile
-Movement Planning
-Movement / Local Predictive
-Particle / Interaction
-Facing / Finalize
-Publish / Result Apply
-Networking
-Presentation
-```
-
-性能门使用 `TargetArchitecture.md`：
-
-```text
-Worker simulation lag p95 <= 66.667 ms
-Client frame p95         <= 33.333 ms
-Visual p95               <= 16.667 ms
-Realtime                 >= 0.95
-Propagation limit hit    = 0
-Ordered Event loss       = 0
-```
+完整 Target gate 必须包含边界/角落有限容量和合法 Overflow，不接受靠 ORCA/Particle 被动挤压掩盖 over-admission。
 
 ---
 
 # 15. 当前推荐执行顺序
 
 ```text
-1. UE build
-2. PersistentWorkerProductionStructure automation
-3. Runtime OwnerBarrier / ResultApply automation
-4. first-step bootstrap smoke
-5. ordinary direct-intent smoke
-6. minimal T8 server-only
-7. T5 short window
-8. T1/T2/T3/T4/T6/T7 regression
-9. network / checkpoint / late join
-10. 双端 T8 runner
-11. T5 Static/Moving >=1000 Tick
-12. Particle scaling
-13. WA9 1k→2k→5k→10k
+1. 实现 TargetRegionBoundaryCapacityContract
+2. Target boundary/corner/capacity automation
+3. TargetRegionTransport + RuntimeV2 Target + 10k scoped regression
+4. Static T5 >=1000 Tick regression
+5. Moving T5 >=1000 Tick + deterministic repeat
+6. T1/T2/T3/T4/T6/T7 regression
+7. network / checkpoint / late join
+8. 双端 T8 runner
+9. Duplicate Kernel / Host cleanup
+10. Particle scaling
+11. WA9 1k→2k→5k→10k
 ```
 
-如果第 1–7 步失败，先修 post-cut regression，不要立即把问题归因到旧的 T5 step 886 或规模算法。
+如果第 1–5 步失败，不进入 Particle/WA9，也不通过反弹 Target、减少 Agent、关闭安全约束或删除 Demand gate 来伪造 PASS。
 
 ---
 
@@ -418,4 +451,4 @@ Ordered Event loss       = 0
 
 原则：
 
-> **架构大切换后，旧 PASS 可以做 baseline，但不能自动继承为当前 PASS。**
+> **合法容量不足应表现为显式 Overflow/CapacityHold；真正的数据/拓扑/计划错误仍必须 fail-closed。**
