@@ -101,6 +101,7 @@ OPEN    尚未达到最终完成定义
 |---|---|---|
 | Shared Flow | DONE | 世界空间 Macro Guidance。Primary runtime resource 由 `UMassCrowdRuntimeSubsystem` 持有。 |
 | Target-relative Polar Transport | DONE | Polar Cell / Demand / Plan / Quota / Guidance 已进入 Core + Worker Target Domain。 |
+| Worker Target long-window observer | DONE | 只读聚合 ResultApply `Target` / `TargetCohort`，输出 machine-readable checkpoint；runner 对 Worker Target rejection、无效或缺失 checkpoint fail-closed。 |
 | Target Cohort scoped invalidation | DONE / baseline | 10k 双 Cohort scoped 专项历史证据存在；完整 post-cut runtime 仍需回归。 |
 | Local Predictive | DONE | 位于 MovementPlanning / movement chain。 |
 | Particle Soft/Hard/Environment Safety | DONE | 最终安全层位于 Worker Interaction Domain。 |

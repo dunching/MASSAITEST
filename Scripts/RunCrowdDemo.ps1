@@ -41,6 +41,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "CrowdDemoRunnerGates.ps1")
+
 $Root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
   $ProjectPath = Join-Path $Root "MassAICrowdDemo.uproject"
@@ -205,15 +207,16 @@ if (Test-Path -LiteralPath $ClientLog) {
   Select-String -Path $ClientLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoRoundCheckpoint" -SimpleMatch | Select-Object -Last 20
 }
 
-$HardFailures = @($ServerLog, $ClientLog) |
-  Where-Object { Test-Path -LiteralPath $_ } |
-  ForEach-Object {
-    Select-String -Path $_ `
-      -Pattern 'Fatal error|Assertion failed|Ensure condition failed|LogWindows: Error|(?-i:\bVIOLATION\b)'
-  }
+$HardFailures = @(Get-CrowdDemoHardFailures @($ServerLog, $ClientLog))
 if ($HardFailures.Count -gt 0) {
   $FirstFailure = $HardFailures | Select-Object -First 1
   throw "CrowdDemo hard failure gate failed: count=$($HardFailures.Count) first=$($FirstFailure.Path):$($FirstFailure.LineNumber) $($FirstFailure.Line)"
+}
+
+if ($TargetRegionTransportDiagnostic) {
+  $WorkerTargetMetrics =
+    Assert-CrowdDemoWorkerTargetGate $ServerLog $EntityCount
+  Write-Host "[CrowdDemo] Worker Target gate passed: fixed_step=$($WorkerTargetMetrics.fixed_step) generation=$($WorkerTargetMetrics.generation) input=$($WorkerTargetMetrics.input_sequence) publish=$($WorkerTargetMetrics.publish_sequence) hash=$($WorkerTargetMetrics.worker_state_hash)"
 }
 
 if ($RangedProjectileGolden) {
