@@ -44,6 +44,9 @@ namespace CrowdWorkerTargetObservabilityTests
     Cohort.Plan.ExternalPopulationHash = 103;
     Cohort.Plan.RoutedAgentCount = 2;
     Cohort.Plan.UnroutedAgentCount = 0;
+    Cohort.Plan.TotalFeasibleCapacity = 8;
+    Cohort.Plan.AssignablePopulation = 2;
+    Cohort.Plan.OverflowPopulation = 0;
     Cohort.Plan.TransportHash = 104;
     Cohort.Plan.bValid = true;
     Cohort.Execution.PlanEpoch = 4;
@@ -153,6 +156,14 @@ bool FCrowdWorkerTargetObservationReadOnlyTest::RunTest(
     First.Cohorts[0].GuidanceHash, uint32{106});
   TestEqual(TEXT("Worker Target observation has no unrouted state"),
     First.UnroutedTargetStateCount, 0);
+  TestEqual(TEXT("Worker Target observation exposes capacity"),
+    First.TotalFeasibleCapacity, 8);
+  TestEqual(TEXT("Worker Target observation exposes assigned population"),
+    First.AssignablePopulation, 2);
+  TestEqual(TEXT("Worker Target observation exposes overflow"),
+    First.OverflowPopulation, 0);
+  TestEqual(TEXT("Worker Target observation has no capacity hold"),
+    First.CapacityHoldTargetStateCount, 0);
 
   FCrowdWorkerTargetObservation Repeat;
   TestTrue(TEXT("Repeated Worker Target observation is valid"),

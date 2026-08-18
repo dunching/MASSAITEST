@@ -402,11 +402,13 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreTargetRegionTopology(
     Out.PrimaryDemandRegionKey = Value.PrimaryDemandRegionKey;
     Out.RelativeAnchorCm = Value.RelativeAnchorCm;
     Out.WorldAnchorCm = Value.WorldAnchorCm;
+    Out.Capacity = Value.Capacity;
     Out.bFeasible = Value.bFeasible;
     Out.bTerminal = Value.bTerminal;
     Out.bBoundsBlocked = Value.bBoundsBlocked;
     Out.bObstacleBlocked = Value.bObstacleBlocked;
     Out.bTargetBlocked = Value.bTargetBlocked;
+    Out.bNavigationBlocked = Value.bNavigationBlocked;
   }
   for (const auto& Value : Source.RegionLinks)
     Target.RegionLinks.Add({Value.CellKey, Value.RegionKey,
@@ -432,13 +434,29 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreTargetRegionDemand(
       Value.CurrentPopulation, Value.DesiredPopulation, Value.Deficit,
       Value.Surplus, Value.bFeasible});
   for (const auto& Value : Source.AgentStates)
-    Target.AgentStates.Add({Value.AgentId, Value.CurrentCellKey,
-      Value.CurrentRegionKey, Value.bTerminal, Value.bTerminalStay,
-      Value.bSupply, Value.bSourceAttached, Value.bEngagedHold});
+  {
+    auto& Out = Target.AgentStates.AddDefaulted_GetRef();
+    Out.AgentId = Value.AgentId;
+    Out.CurrentCellKey = Value.CurrentCellKey;
+    Out.CurrentRegionKey = Value.CurrentRegionKey;
+    Out.AssignedRegionKey = Value.AssignedRegionKey;
+    Out.bTerminal = Value.bTerminal;
+    Out.bTerminalStay = Value.bTerminalStay;
+    Out.bSupply = Value.bSupply;
+    Out.bSourceAttached = Value.bSourceAttached;
+    Out.bEngagedHold = Value.bEngagedHold;
+    Out.bCapacityAdmitted = Value.bCapacityAdmitted;
+    Out.bCapacityHold = Value.bCapacityHold;
+  }
   Target.ExternalPopulationByCell = Source.ExternalPopulationByCell;
   Target.ExternalCongestionCostByCellCm = Source.ExternalCongestionCostByCellCm;
+  Target.AvailableCapacityByCell = Source.AvailableCapacityByCell;
+  Target.AdmittedPopulationByCell = Source.AdmittedPopulationByCell;
   Target.FeasibleRegionCount = Source.FeasibleRegionCount;
   Target.DesiredPopulationTotal = Source.DesiredPopulationTotal;
+  Target.TotalFeasibleCapacity = Source.TotalFeasibleCapacity;
+  Target.AssignablePopulation = Source.AssignablePopulation;
+  Target.OverflowPopulation = Source.OverflowPopulation;
   Target.CurrentTerminalPopulation = Source.CurrentTerminalPopulation;
   Target.TotalDeficit = Source.TotalDeficit;
   Target.TotalSurplus = Source.TotalSurplus;
@@ -470,6 +488,9 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreTargetRegionPlan(
       Value.AgentQuota, Value.ReusedQuota});
   Target.RoutedAgentCount = Source.RoutedAgentCount;
   Target.UnroutedAgentCount = Source.UnroutedAgentCount;
+  Target.TotalFeasibleCapacity = Source.TotalFeasibleCapacity;
+  Target.AssignablePopulation = Source.AssignablePopulation;
+  Target.OverflowPopulation = Source.OverflowPopulation;
   Target.TotalPhysicalCost = Source.TotalPhysicalCost;
   Target.ChangedQuotaUnitCount = Source.ChangedQuotaUnitCount;
   Target.TransportHash = Source.TransportHash;
@@ -512,11 +533,13 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionTopology(
     Out.PrimaryDemandRegionKey = Value.PrimaryDemandRegionKey;
     Out.RelativeAnchorCm = Value.RelativeAnchorCm;
     Out.WorldAnchorCm = Value.WorldAnchorCm;
+    Out.Capacity = Value.Capacity;
     Out.bFeasible = Value.bFeasible;
     Out.bTerminal = Value.bTerminal;
     Out.bBoundsBlocked = Value.bBoundsBlocked;
     Out.bObstacleBlocked = Value.bObstacleBlocked;
     Out.bTargetBlocked = Value.bTargetBlocked;
+    Out.bNavigationBlocked = Value.bNavigationBlocked;
   }
   for (const auto& Value : Source.RegionLinks)
     Target.RegionLinks.Add({Value.CellKey, Value.RegionKey,
@@ -539,6 +562,7 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionTopologySummary(
   return {Source.CellCount, Source.FeasibleCellCount, Source.EdgeCount,
     Source.CrossBandEdgeCount, Source.BoundsBlockedCellCount,
     Source.ObstacleBlockedCellCount, Source.TargetBlockedCellCount,
+    Source.NavigationBlockedCellCount, Source.TotalFeasibleCapacity,
     Source.FeasibleGraphHash, Source.EnvironmentHash, Source.TopologyHash,
     Source.bValid};
 }
@@ -553,13 +577,29 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionDemand(
       Value.CurrentPopulation, Value.DesiredPopulation, Value.Deficit,
       Value.Surplus, Value.bFeasible});
   for (const auto& Value : Source.AgentStates)
-    Target.AgentStates.Add({Value.AgentId, Value.CurrentCellKey,
-      Value.CurrentRegionKey, Value.bTerminal, Value.bTerminalStay,
-      Value.bSupply, Value.bSourceAttached, Value.bEngagedHold});
+  {
+    auto& Out = Target.AgentStates.AddDefaulted_GetRef();
+    Out.AgentId = Value.AgentId;
+    Out.CurrentCellKey = Value.CurrentCellKey;
+    Out.CurrentRegionKey = Value.CurrentRegionKey;
+    Out.AssignedRegionKey = Value.AssignedRegionKey;
+    Out.bTerminal = Value.bTerminal;
+    Out.bTerminalStay = Value.bTerminalStay;
+    Out.bSupply = Value.bSupply;
+    Out.bSourceAttached = Value.bSourceAttached;
+    Out.bEngagedHold = Value.bEngagedHold;
+    Out.bCapacityAdmitted = Value.bCapacityAdmitted;
+    Out.bCapacityHold = Value.bCapacityHold;
+  }
   Target.ExternalPopulationByCell = Source.ExternalPopulationByCell;
   Target.ExternalCongestionCostByCellCm = Source.ExternalCongestionCostByCellCm;
+  Target.AvailableCapacityByCell = Source.AvailableCapacityByCell;
+  Target.AdmittedPopulationByCell = Source.AdmittedPopulationByCell;
   Target.FeasibleRegionCount = Source.FeasibleRegionCount;
   Target.DesiredPopulationTotal = Source.DesiredPopulationTotal;
+  Target.TotalFeasibleCapacity = Source.TotalFeasibleCapacity;
+  Target.AssignablePopulation = Source.AssignablePopulation;
+  Target.OverflowPopulation = Source.OverflowPopulation;
   Target.CurrentTerminalPopulation = Source.CurrentTerminalPopulation;
   Target.TotalDeficit = Source.TotalDeficit;
   Target.TotalSurplus = Source.TotalSurplus;
@@ -591,6 +631,9 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionPlan(
       Value.AgentQuota, Value.ReusedQuota});
   Target.RoutedAgentCount = Source.RoutedAgentCount;
   Target.UnroutedAgentCount = Source.UnroutedAgentCount;
+  Target.TotalFeasibleCapacity = Source.TotalFeasibleCapacity;
+  Target.AssignablePopulation = Source.AssignablePopulation;
+  Target.OverflowPopulation = Source.OverflowPopulation;
   Target.TotalPhysicalCost = Source.TotalPhysicalCost;
   Target.ChangedQuotaUnitCount = Source.ChangedQuotaUnitCount;
   Target.TransportHash = Source.TransportHash;
@@ -632,6 +675,7 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionValidation(
   return {Source.bValid, Source.MissingEdgeCount, Source.InfeasibleEdgeCount,
     Source.InvalidCellCount, Source.InsufficientOutgoingQuotaCellCount,
     Source.FlowConservationFailureCount, Source.UnreachableDeficitCount,
+    Source.OverbookedCellCount,
     Source.FirstFailureCellKey, Source.FirstFailureAgentId,
     Source.ValidationHash};
 }
@@ -660,6 +704,7 @@ FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoTargetRegionGuidanceSummary(
   Target.TransportAgentCount = Source.TransportAgentCount;
   Target.TerminalSettleAgentCount = Source.TerminalSettleAgentCount;
   Target.EngagedHoldAgentCount = Source.EngagedHoldAgentCount;
+  Target.CapacityHoldAgentCount = Source.CapacityHoldAgentCount;
   Target.UnroutedAgentCount = Source.UnroutedAgentCount;
   Target.FirstUnroutedAgentId = Source.FirstUnroutedAgentId;
   Target.FirstUnroutedCellKey = Source.FirstUnroutedCellKey;

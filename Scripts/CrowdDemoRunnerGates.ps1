@@ -58,6 +58,23 @@ function Assert-CrowdDemoWorkerTargetGate {
     $Failures.Add(
       "plan_unrouted_agent_count=$($Metrics.plan_unrouted_agent_count)")
   }
+  $DesiredPopulation = [int]$Metrics.target_agent_count
+  $AssignablePopulation = [int]$Metrics.assignable_population
+  $OverflowPopulation = [int]$Metrics.overflow_population
+  $TotalFeasibleCapacity = [int]$Metrics.total_feasible_capacity
+  $CapacityHoldCount = [int]$Metrics.capacity_hold_target_state_count
+  if ($AssignablePopulation + $OverflowPopulation -ne $DesiredPopulation) {
+    $Failures.Add(
+      "target_capacity_conservation=$AssignablePopulation+$OverflowPopulation!=$DesiredPopulation")
+  }
+  if ($AssignablePopulation -gt $TotalFeasibleCapacity) {
+    $Failures.Add(
+      "assignable_population=$AssignablePopulation>total_feasible_capacity=$TotalFeasibleCapacity")
+  }
+  if ($CapacityHoldCount -ne $OverflowPopulation) {
+    $Failures.Add(
+      "capacity_hold_target_state_count=$CapacityHoldCount!=overflow_population=$OverflowPopulation")
+  }
   if ($ExpectedTargetAgentCount -ge 0) {
     if ([int]$Metrics.expected_target_agent_count `
         -ne $ExpectedTargetAgentCount) {

@@ -64,15 +64,18 @@ namespace
       Observation.Cohorts)
     {
       UE_LOG(LogTemp, Display,
-        TEXT("CrowdWorkerTargetCohortCheckpoint role=server round_id=%d cohort=%u valid=%d topology_revision=%u target_revision=%d feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d execution_hash=%u guidance_hash=%u target_state_count=%d unrouted_target_state_count=%d first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u source=WorkerResultApply"),
+        TEXT("CrowdWorkerTargetCohortCheckpoint role=server round_id=%d cohort=%u valid=%d topology_revision=%u target_revision=%d feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d execution_hash=%u guidance_hash=%u target_state_count=%d unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u source=WorkerResultApply"),
         RoundId, Cohort.CohortKey, Cohort.bValid ? 1 : 0,
         Cohort.TopologyRevision, Cohort.TargetRevision,
         Cohort.FeasibleGraphHash, Cohort.PlanEpoch,
         Cohort.PlanBuildFixedStep, Cohort.MembershipHash,
         Cohort.ExternalPopulationHash, Cohort.TransportHash,
         Cohort.RoutedAgentCount, Cohort.PlanUnroutedAgentCount,
+        Cohort.TotalFeasibleCapacity, Cohort.AssignablePopulation,
+        Cohort.OverflowPopulation,
         Cohort.ExecutionHash, Cohort.GuidanceHash,
         Cohort.TargetStateCount, Cohort.UnroutedTargetStateCount,
+        Cohort.CapacityHoldTargetStateCount,
         Cohort.FirstUnroutedEntityRef.ProviderId,
         Cohort.FirstUnroutedEntityRef.StableEntityId,
         Cohort.FirstUnroutedEntityRef.LifecycleSerial);
@@ -90,7 +93,7 @@ namespace
       Observation.Cohorts.Num() == 1
         ? &Observation.Cohorts[0] : nullptr;
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdWorkerTargetCheckpoint role=server round_id=%d valid=%d fixed_step=%d generation=%llu runtime_worker_epoch=%llu retained_target_worker_epoch=%llu input_sequence=%llu publish_sequence=%llu target_revision=%d target_x=%.3f target_y=%.3f target_velocity_x=%.3f target_velocity_y=%.3f objective_revision_match=%d expected_target_agent_count=%d target_agent_count=%d valid_target_state_count=%d cohort_count=%d topology_revision=%u feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d execution_hash=%u guidance_hash=%u unrouted_target_state_count=%d first_invalid_provider=%u first_invalid_stable_entity=%llu first_invalid_lifecycle=%u first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u target_metrics_available=0 topology_build_count=-1 plan_build_count=-1 plan_cache_hit_count=-1 membership_change_count=-1 published_patch_count=-1 worker_state_hash=%llu source=WorkerResultApply"),
+      TEXT("CrowdWorkerTargetCheckpoint role=server round_id=%d valid=%d fixed_step=%d generation=%llu runtime_worker_epoch=%llu retained_target_worker_epoch=%llu input_sequence=%llu publish_sequence=%llu target_revision=%d target_x=%.3f target_y=%.3f target_velocity_x=%.3f target_velocity_y=%.3f objective_revision_match=%d expected_target_agent_count=%d target_agent_count=%d valid_target_state_count=%d cohort_count=%d topology_revision=%u feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d execution_hash=%u guidance_hash=%u unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_invalid_provider=%u first_invalid_stable_entity=%llu first_invalid_lifecycle=%u first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u target_metrics_available=0 topology_build_count=-1 plan_build_count=-1 plan_cache_hit_count=-1 membership_change_count=-1 published_patch_count=-1 worker_state_hash=%llu source=WorkerResultApply"),
       RoundId, bValid ? 1 : 0, FixedStep,
       Observation.Generation, RuntimeWorkerEpoch,
       Observation.WorkerEpoch,
@@ -112,9 +115,13 @@ namespace
       SingleCohort ? SingleCohort->TransportHash : 0,
       SingleCohort ? SingleCohort->RoutedAgentCount : 0,
       SingleCohort ? SingleCohort->PlanUnroutedAgentCount : 0,
+      Observation.TotalFeasibleCapacity,
+      Observation.AssignablePopulation,
+      Observation.OverflowPopulation,
       SingleCohort ? SingleCohort->ExecutionHash : 0,
       SingleCohort ? SingleCohort->GuidanceHash : 0,
       Observation.UnroutedTargetStateCount,
+      Observation.CapacityHoldTargetStateCount,
       Observation.FirstInvalidEntityRef.ProviderId,
       Observation.FirstInvalidEntityRef.StableEntityId,
       Observation.FirstInvalidEntityRef.LifecycleSerial,

@@ -1,6 +1,7 @@
 #include "Mass/CrowdDemoTargetRegionTransportKernel.h"
 
 #include "Algo/Sort.h"
+#include "Algo/Unique.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
 
 namespace
@@ -192,6 +193,40 @@ namespace
   int32 RegionForOffset(const FVector2f& Offset, const int32 Count)
   {
     return SectorForOffset(Offset, Count);
+  }
+
+  int32 ComputeTerminalCellCapacity(
+    const FCrowdDemoTargetPolarCell& Cell,
+    const FCrowdDemoTargetRegionTransportSettings& Settings)
+  {
+    if (!Cell.bFeasible || !Cell.bTerminal || Cell.SectorCount <= 0)
+      return 0;
+    const float MinimumSpacingCm =
+      2.0f * Settings.PhysicalRadiusCm + Settings.HardSafetyGapCm
+      + 2.0f * Settings.SoftMarginCm;
+    if (!FMath::IsFinite(MinimumSpacingCm) || MinimumSpacingCm <= 0.0f)
+      return 0;
+    const float BandInnerCm = static_cast<float>(Cell.RadialBand)
+      * Settings.RadialBandWidthCm;
+    const float BandOuterCm = BandInnerCm + Settings.RadialBandWidthCm;
+    const float UsableInnerCm = FMath::Max(
+      BandInnerCm, Settings.MinimumCenterDistanceCm);
+    const float UsableOuterCm = FMath::Min(
+      BandOuterCm, Settings.MaximumCenterDistanceCm);
+    const float UsableRadialExtentCm = UsableOuterCm - UsableInnerCm;
+    if (UsableRadialExtentCm <= UE_SMALL_NUMBER)
+      return 0;
+    const float AngularSpanRadians = 2.0f * PI
+      / static_cast<float>(Cell.SectorCount);
+    const float ConservativeArcExtentCm = UsableInnerCm
+      * AngularSpanRadians;
+    const int32 RadialSlots = FMath::Max(
+      1, FMath::FloorToInt(UsableRadialExtentCm / MinimumSpacingCm));
+    const int32 AngularSlots = FMath::Max(
+      1, FMath::FloorToInt(ConservativeArcExtentCm / MinimumSpacingCm));
+    if (RadialSlots > MAX_int32 / AngularSlots)
+      return 0;
+    return RadialSlots * AngularSlots;
   }
 
   const FCrowdDemoTargetPolarCell* FindCell(
@@ -463,6 +498,7 @@ uint32 FCrowdDemoTargetRegionTransportKernel::ComputeFeasibleGraphHash(
     Hash = Fold(Hash, Cell.bFeasible ? 1 : 0);
     Hash = Fold(Hash, Cell.bTerminal ? 1 : 0);
     Hash = Fold(Hash, Cell.PrimaryDemandRegionKey);
+    Hash = Fold(Hash, Cell.Capacity);
   }
   for (const auto& Edge : Topology.Edges)
   {
@@ -533,20 +569,24 @@ void FCrowdDemoTargetRegionTransportKernel::BuildTopology(
       Cell.bTerminal = Cell.bFeasible
         && Radius + 0.01f >= Settings.MinimumCenterDistanceCm
         && Radius <= Settings.MaximumCenterDistanceCm + 0.01f;
+      Cell.Capacity = ComputeTerminalCellCapacity(Cell, Settings);
       OutSummary.BoundsBlockedCellCount += Cell.bBoundsBlocked ? 1 : 0;
       OutSummary.ObstacleBlockedCellCount += Cell.bObstacleBlocked ? 1 : 0;
       OutSummary.TargetBlockedCellCount += Cell.bTargetBlocked ? 1 : 0;
       OutSummary.FeasibleCellCount += Cell.bFeasible ? 1 : 0;
+      OutSummary.TotalFeasibleCapacity += Cell.Capacity;
       FeasibleGraphHash = Fold(FeasibleGraphHash, Cell.StableCellKey);
       FeasibleGraphHash = Fold(FeasibleGraphHash, Cell.bFeasible ? 1 : 0);
       FeasibleGraphHash = Fold(FeasibleGraphHash, Cell.bTerminal ? 1 : 0);
       FeasibleGraphHash = Fold(FeasibleGraphHash, Cell.PrimaryDemandRegionKey);
+      FeasibleGraphHash = Fold(FeasibleGraphHash, Cell.Capacity);
       TopologyHash = Fold(TopologyHash, Cell.StableCellKey);
       TopologyHash = Fold(TopologyHash, Band);
       TopologyHash = Fold(TopologyHash, Sector);
       TopologyHash = Fold(TopologyHash, SectorCount);
       TopologyHash = Fold(TopologyHash, Q(Cell.RelativeAnchorCm.X));
       TopologyHash = Fold(TopologyHash, Q(Cell.RelativeAnchorCm.Y));
+      TopologyHash = Fold(TopologyHash, Cell.Capacity);
 
       const int32 BeginUnit = Sector * AngularUnits / SectorCount;
       const int32 EndUnit = (Sector + 1) * AngularUnits / SectorCount;
@@ -684,6 +724,8 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
   int32 PreviousExternalId = INDEX_NONE;
   OutDemand.ExternalPopulationByCell.Init(0, Topology.Cells.Num());
   OutDemand.ExternalCongestionCostByCellCm.Init(0, Topology.Cells.Num());
+  OutDemand.AvailableCapacityByCell.Init(0, Topology.Cells.Num());
+  OutDemand.AdmittedPopulationByCell.Init(0, Topology.Cells.Num());
   uint32 ExternalPopulationHash = Fold(FnvOffset, 2);
   for (const auto& ExternalAgent : ExternalAgents)
   {
@@ -732,9 +774,22 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
   OutDemand.Regions.SetNum(Settings.DemandRegionCount);
   for (int32 Region = 0; Region < Settings.DemandRegionCount; ++Region)
     OutDemand.Regions[Region].StableRegionKey = Region;
-  for (const auto& Link : Topology.RegionLinks)
-    if (Link.bTerminal && Topology.Cells[Link.CellKey].bFeasible)
-      ++OutDemand.Regions[Link.RegionKey].AvailableCapacity;
+  for (const FCrowdDemoTargetPolarCell& Cell : Topology.Cells)
+  {
+    if (!Cell.bTerminal || !Cell.bFeasible || Cell.Capacity <= 0)
+      continue;
+    const int32 ExternalPopulation =
+      OutDemand.ExternalPopulationByCell.IsValidIndex(Cell.StableCellKey)
+      ? OutDemand.ExternalPopulationByCell[Cell.StableCellKey] : 0;
+    const int32 AvailableCapacity = FMath::Max(
+      0, Cell.Capacity - ExternalPopulation);
+    OutDemand.AvailableCapacityByCell[Cell.StableCellKey] =
+      AvailableCapacity;
+    if (OutDemand.Regions.IsValidIndex(Cell.PrimaryDemandRegionKey))
+      OutDemand.Regions[Cell.PrimaryDemandRegionKey].AvailableCapacity +=
+        AvailableCapacity;
+    OutDemand.TotalFeasibleCapacity += AvailableCapacity;
+  }
   for (auto& Region : OutDemand.Regions)
   {
     Region.bFeasible = Region.AvailableCapacity > 0;
@@ -771,7 +826,13 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
     }
     if (!bProgress) break;
   }
-  OutDemand.DesiredPopulationTotal = Agents.Num() - Remaining;
+  TArray<int32> PreferredDesiredByRegion;
+  PreferredDesiredByRegion.Reserve(OutDemand.Regions.Num());
+  for (const FCrowdDemoTargetDemandRegion& Region : OutDemand.Regions)
+    PreferredDesiredByRegion.Add(Region.DesiredPopulation);
+  OutDemand.DesiredPopulationTotal = Agents.Num();
+  OutDemand.AssignablePopulation = Agents.Num() - Remaining;
+  OutDemand.OverflowPopulation = Remaining;
   uint32 MembershipHash = Fold(FnvOffset, 1);
   for (const auto& Agent : Agents)
   {
@@ -797,24 +858,252 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
     }
     MembershipHash = Fold(MembershipHash, Agent.AgentId);
   }
-  for (auto& Region : OutDemand.Regions)
+  TArray<int32> RemainingCapacityByCell = OutDemand.AvailableCapacityByCell;
+  for (FCrowdDemoTargetDemandRegion& Region : OutDemand.Regions)
   {
-    Region.Deficit = FMath::Max(0, Region.DesiredPopulation - Region.CurrentPopulation);
-    Region.Surplus = FMath::Max(0, Region.CurrentPopulation - Region.DesiredPopulation);
-    OutDemand.TotalDeficit += Region.Deficit;
-    OutDemand.TotalSurplus += Region.Surplus;
-    int32 Keep = FMath::Min(Region.CurrentPopulation, Region.DesiredPopulation);
-    for (auto& State : OutDemand.AgentStates)
-      if (State.bTerminal && State.CurrentRegionKey == Region.StableRegionKey)
-      {
-        State.bTerminalStay = Keep-- > 0;
-        State.bSupply = !State.bTerminalStay;
-      }
+    Region.CurrentPopulation = 0;
+    Region.DesiredPopulation = 0;
+    Region.Deficit = 0;
+    Region.Surplus = 0;
   }
-  for (auto& State : OutDemand.AgentStates)
-    if (!State.bTerminal) State.bSupply = true;
-  for (const auto& State : OutDemand.AgentStates)
-    OutDemand.SupplyAgentCount += State.bSupply ? 1 : 0;
+  int32 AdmittedTerminalPopulation = 0;
+  for (FCrowdDemoTargetRegionAgentDemandState& State : OutDemand.AgentStates)
+  {
+    if (!State.bTerminal) continue;
+    int32 AdmissionCellKey = State.CurrentCellKey;
+    if (State.bEngagedHold)
+    {
+      AdmissionCellKey = INDEX_NONE;
+      for (const FCrowdDemoTargetPolarCell& Cell : Topology.Cells)
+      {
+        if (Cell.bTerminal
+          && Cell.PrimaryDemandRegionKey == State.CurrentRegionKey
+          && RemainingCapacityByCell.IsValidIndex(Cell.StableCellKey)
+          && RemainingCapacityByCell[Cell.StableCellKey] > 0)
+        {
+          AdmissionCellKey = Cell.StableCellKey;
+          break;
+        }
+      }
+    }
+    if (!RemainingCapacityByCell.IsValidIndex(AdmissionCellKey)
+      || RemainingCapacityByCell[AdmissionCellKey] <= 0)
+      continue;
+    const int32 AdmissionRegionKey =
+      Topology.Cells[AdmissionCellKey].PrimaryDemandRegionKey;
+    if (!OutDemand.Regions.IsValidIndex(AdmissionRegionKey)) continue;
+    State.bCapacityAdmitted = true;
+    State.bTerminalStay = true;
+    State.AssignedRegionKey = AdmissionRegionKey;
+    --RemainingCapacityByCell[AdmissionCellKey];
+    ++OutDemand.AdmittedPopulationByCell[AdmissionCellKey];
+    ++OutDemand.Regions[AdmissionRegionKey].CurrentPopulation;
+    ++OutDemand.Regions[AdmissionRegionKey].DesiredPopulation;
+    ++AdmittedTerminalPopulation;
+  }
+
+  // Admission is a deterministic maximum flow from the current attached
+  // source cells to remaining terminal-cell capacity. Region round-robin is
+  // retained as a preference, but cannot assign a source to an unreachable
+  // clipped component.
+  TArray<int32> SupplyCountByCell;
+  SupplyCountByCell.Init(0, Topology.Cells.Num());
+  TArray<int32> SupplySourceCells;
+  for (FCrowdDemoTargetRegionAgentDemandState& State : OutDemand.AgentStates)
+  {
+    if (State.bCapacityAdmitted || !State.bSourceAttached
+      || !SupplyCountByCell.IsValidIndex(State.CurrentCellKey))
+      continue;
+    if (SupplyCountByCell[State.CurrentCellKey]++ == 0)
+      SupplySourceCells.Add(State.CurrentCellKey);
+  }
+  SupplySourceCells.Sort();
+  TArray<int32> TerminalCells;
+  for (const FCrowdDemoTargetPolarCell& Cell : Topology.Cells)
+    if (Cell.bTerminal && Cell.bFeasible
+      && RemainingCapacityByCell.IsValidIndex(Cell.StableCellKey)
+      && RemainingCapacityByCell[Cell.StableCellKey] > 0)
+      TerminalCells.Add(Cell.StableCellKey);
+  TerminalCells.Sort([&](const int32 A, const int32 B)
+  {
+    const int32 RegionA = Topology.Cells[A].PrimaryDemandRegionKey;
+    const int32 RegionB = Topology.Cells[B].PrimaryDemandRegionKey;
+    const bool bPreferredA = PreferredDesiredByRegion.IsValidIndex(RegionA)
+      && OutDemand.Regions[RegionA].CurrentPopulation
+        < PreferredDesiredByRegion[RegionA];
+    const bool bPreferredB = PreferredDesiredByRegion.IsValidIndex(RegionB)
+      && OutDemand.Regions[RegionB].CurrentPopulation
+        < PreferredDesiredByRegion[RegionB];
+    return bPreferredA != bPreferredB ? bPreferredA : A < B;
+  });
+
+  const int32 SourceNode = 0;
+  const int32 SourceBase = 1;
+  const int32 TerminalBase = SourceBase + SupplySourceCells.Num();
+  const int32 RegionBase = TerminalBase + TerminalCells.Num();
+  const int32 SinkNode = RegionBase + OutDemand.Regions.Num();
+  TArray<TArray<FResidualEdge>> AdmissionGraph;
+  AdmissionGraph.SetNum(SinkNode + 1);
+  TArray<TArray<int32>> TopologyAdjacency;
+  TopologyAdjacency.SetNum(Topology.Cells.Num());
+  for (const FCrowdDemoTargetPolarEdge& Edge : Topology.Edges)
+    if (TopologyAdjacency.IsValidIndex(Edge.FromCellKey)
+      && TopologyAdjacency.IsValidIndex(Edge.ToCellKey))
+      TopologyAdjacency[Edge.FromCellKey].Add(Edge.ToCellKey);
+  for (TArray<int32>& Neighbors : TopologyAdjacency)
+  {
+    Neighbors.Sort();
+    Neighbors.SetNum(Algo::Unique(Neighbors));
+  }
+  int32 AdmissionStableOrder = 0;
+  for (int32 SourceIndex = 0; SourceIndex < SupplySourceCells.Num(); ++SourceIndex)
+  {
+    const int32 SourceCellKey = SupplySourceCells[SourceIndex];
+    AddResidualEdge(AdmissionGraph, SourceNode, SourceBase + SourceIndex,
+      SupplyCountByCell[SourceCellKey], 0, 0, AdmissionStableOrder++);
+    TBitArray<> Visited(false, Topology.Cells.Num());
+    TArray<int32> Queue;
+    Visited[SourceCellKey] = true;
+    Queue.Add(SourceCellKey);
+    for (int32 Head = 0; Head < Queue.Num(); ++Head)
+    {
+      const int32 CellKey = Queue[Head];
+      for (const int32 ToCellKey : TopologyAdjacency[CellKey])
+      {
+        if (!Visited.IsValidIndex(ToCellKey) || Visited[ToCellKey])
+          continue;
+        Visited[ToCellKey] = true;
+        Queue.Add(ToCellKey);
+      }
+    }
+    for (int32 TerminalIndex = 0; TerminalIndex < TerminalCells.Num(); ++TerminalIndex)
+    {
+      const int32 TerminalCellKey = TerminalCells[TerminalIndex];
+      if (!Visited[TerminalCellKey]) continue;
+      AddResidualEdge(AdmissionGraph, SourceBase + SourceIndex,
+        TerminalBase + TerminalIndex,
+        FMath::Min(SupplyCountByCell[SourceCellKey],
+          RemainingCapacityByCell[TerminalCellKey]),
+        0, 0, AdmissionStableOrder++, SourceCellKey, TerminalCellKey,
+        true, false);
+    }
+  }
+  TArray<int32> RemainingCapacityByRegion;
+  RemainingCapacityByRegion.Init(0, OutDemand.Regions.Num());
+  for (int32 TerminalIndex = 0; TerminalIndex < TerminalCells.Num(); ++TerminalIndex)
+  {
+    const int32 TerminalCellKey = TerminalCells[TerminalIndex];
+    const int32 RegionKey =
+      Topology.Cells[TerminalCellKey].PrimaryDemandRegionKey;
+    if (!RemainingCapacityByRegion.IsValidIndex(RegionKey)) continue;
+    AddResidualEdge(AdmissionGraph, TerminalBase + TerminalIndex,
+      RegionBase + RegionKey, RemainingCapacityByCell[TerminalCellKey],
+      0, 0, AdmissionStableOrder++);
+    RemainingCapacityByRegion[RegionKey] +=
+      RemainingCapacityByCell[TerminalCellKey];
+  }
+  for (int32 RegionKey = 0; RegionKey < OutDemand.Regions.Num(); ++RegionKey)
+  {
+    const int32 PreferredRemaining = FMath::Clamp(
+      PreferredDesiredByRegion[RegionKey]
+        - OutDemand.Regions[RegionKey].CurrentPopulation,
+      0, RemainingCapacityByRegion[RegionKey]);
+    if (PreferredRemaining > 0)
+      AddResidualEdge(AdmissionGraph, RegionBase + RegionKey, SinkNode,
+        PreferredRemaining, 0, 0, AdmissionStableOrder++);
+    const int32 Spare = RemainingCapacityByRegion[RegionKey]
+      - PreferredRemaining;
+    if (Spare > 0)
+      AddResidualEdge(AdmissionGraph, RegionBase + RegionKey, SinkNode,
+        Spare, 1, 0, AdmissionStableOrder++);
+  }
+  int32 MatchedSupplyPopulation = 0;
+  while (true)
+  {
+    TArray<int32> ParentNode, ParentEdge;
+    ParentNode.Init(INDEX_NONE, AdmissionGraph.Num());
+    ParentEdge.Init(INDEX_NONE, AdmissionGraph.Num());
+    TArray<int32> Queue;
+    Queue.Add(SourceNode);
+    ParentNode[SourceNode] = SourceNode;
+    for (int32 Head = 0;
+      Head < Queue.Num() && ParentNode[SinkNode] == INDEX_NONE; ++Head)
+    {
+      const int32 From = Queue[Head];
+      for (int32 EdgeIndex = 0;
+        EdgeIndex < AdmissionGraph[From].Num(); ++EdgeIndex)
+      {
+        const FResidualEdge& Edge = AdmissionGraph[From][EdgeIndex];
+        if (Edge.Capacity <= 0 || ParentNode[Edge.To] != INDEX_NONE)
+          continue;
+        ParentNode[Edge.To] = From;
+        ParentEdge[Edge.To] = EdgeIndex;
+        Queue.Add(Edge.To);
+        if (Edge.To == SinkNode) break;
+      }
+    }
+    if (ParentNode[SinkNode] == INDEX_NONE) break;
+    int32 Augment = MAX_int32;
+    for (int32 Node = SinkNode; Node != SourceNode;
+      Node = ParentNode[Node])
+      Augment = FMath::Min(Augment,
+        AdmissionGraph[ParentNode[Node]][ParentEdge[Node]].Capacity);
+    for (int32 Node = SinkNode; Node != SourceNode;
+      Node = ParentNode[Node])
+    {
+      FResidualEdge& Edge =
+        AdmissionGraph[ParentNode[Node]][ParentEdge[Node]];
+      Edge.Capacity -= Augment;
+      AdmissionGraph[Node][Edge.Reverse].Capacity += Augment;
+    }
+    MatchedSupplyPopulation += Augment;
+  }
+  TMap<int32, TArray<int32>> DestinationCellsBySource;
+  for (int32 SourceIndex = 0; SourceIndex < SupplySourceCells.Num(); ++SourceIndex)
+    for (const FResidualEdge& Edge : AdmissionGraph[SourceBase + SourceIndex])
+    {
+      if (!Edge.bTopologyForward || Edge.InitialCapacity <= 0) continue;
+      const int32 Used = Edge.InitialCapacity - Edge.Capacity;
+      for (int32 Unit = 0; Unit < Used; ++Unit)
+        DestinationCellsBySource.FindOrAdd(Edge.FromCellKey).Add(
+          Edge.ToCellKey);
+    }
+  for (auto& Pair : DestinationCellsBySource)
+    Pair.Value.Sort();
+  TMap<int32, int32> NextDestinationBySource;
+  int32 AssignedSupplyPopulation = 0;
+  for (FCrowdDemoTargetRegionAgentDemandState& State : OutDemand.AgentStates)
+  {
+    if (State.bCapacityAdmitted) continue;
+    TArray<int32>* Destinations =
+      DestinationCellsBySource.Find(State.CurrentCellKey);
+    int32& NextDestination =
+      NextDestinationBySource.FindOrAdd(State.CurrentCellKey);
+    if (!Destinations || !Destinations->IsValidIndex(NextDestination))
+    {
+      State.bCapacityHold = true;
+      continue;
+    }
+    const int32 DestinationCellKey = (*Destinations)[NextDestination++];
+    const int32 AssignedRegion =
+      Topology.Cells[DestinationCellKey].PrimaryDemandRegionKey;
+    State.bCapacityAdmitted = true;
+    State.bSupply = true;
+    State.AssignedRegionKey = AssignedRegion;
+    ++OutDemand.Regions[AssignedRegion].DesiredPopulation;
+    ++OutDemand.SupplyAgentCount;
+    ++AssignedSupplyPopulation;
+  }
+  if (AssignedSupplyPopulation != MatchedSupplyPopulation) return;
+  OutDemand.AssignablePopulation =
+    AdmittedTerminalPopulation + AssignedSupplyPopulation;
+  OutDemand.OverflowPopulation =
+    OutDemand.DesiredPopulationTotal - OutDemand.AssignablePopulation;
+  for (FCrowdDemoTargetDemandRegion& Region : OutDemand.Regions)
+  {
+    Region.Deficit = Region.DesiredPopulation - Region.CurrentPopulation;
+    OutDemand.TotalDeficit += Region.Deficit;
+  }
 
   uint32 Hash = Fold(FnvOffset, 2);
   Hash = Fold(Hash, Topology.TopologyHash);
@@ -844,14 +1133,24 @@ void FCrowdDemoTargetRegionTransportKernel::BuildDemand(
     Hash = Fold(Hash, State.AgentId);
     Hash = Fold(Hash, State.CurrentCellKey);
     Hash = Fold(Hash, State.CurrentRegionKey);
+    Hash = Fold(Hash, State.AssignedRegionKey);
     Hash = Fold(Hash, State.bTerminalStay ? 1 : 0);
     Hash = Fold(Hash, State.bSupply ? 1 : 0);
     Hash = Fold(Hash, State.bEngagedHold ? 1 : 0);
+    Hash = Fold(Hash, State.bCapacityAdmitted ? 1 : 0);
+    Hash = Fold(Hash, State.bCapacityHold ? 1 : 0);
   }
+  Hash = Fold(Hash, OutDemand.DesiredPopulationTotal);
+  Hash = Fold(Hash, OutDemand.TotalFeasibleCapacity);
+  Hash = Fold(Hash, OutDemand.AssignablePopulation);
+  Hash = Fold(Hash, OutDemand.OverflowPopulation);
   OutDemand.MembershipHash = MembershipHash;
   OutDemand.DemandHash = Hash;
-  OutDemand.bValid = Remaining == 0 && OutDemand.SourceAttachmentFailureCount == 0
-    && OutDemand.DesiredPopulationTotal == Agents.Num();
+  OutDemand.bValid = OutDemand.SourceAttachmentFailureCount == 0
+    && OutDemand.DesiredPopulationTotal == Agents.Num()
+    && OutDemand.AssignablePopulation + OutDemand.OverflowPopulation
+      == OutDemand.DesiredPopulationTotal
+    && OutDemand.TotalDeficit == OutDemand.SupplyAgentCount;
 }
 
 void FCrowdDemoTargetRegionTransportKernel::UpdateStaticDemandPopulation(
@@ -864,213 +1163,9 @@ void FCrowdDemoTargetRegionTransportKernel::UpdateStaticDemandPopulation(
   const TConstArrayView<FCrowdDemoTargetRegionTransportAgent> InputExternalAgents,
   const bool bRefreshSourceAttachments)
 {
-  if (!Topology.bValid || !InOutDemand.bValid
-    || InOutDemand.Regions.Num() != Settings.DemandRegionCount
-    || InOutDemand.DesiredPopulationTotal != InputAgents.Num())
-  {
-    BuildDemand(InputAgents, Settings, FlowConfig, SharedFlowField, Topology, InOutDemand,
-      InputExternalAgents);
-    return;
-  }
-
-  TArray<FCrowdDemoTargetRegionTransportAgent> Agents(InputAgents);
-  Agents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
-  TArray<FCrowdDemoTargetRegionTransportAgent> ExternalAgents(InputExternalAgents);
-  ExternalAgents.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
-  if (InOutDemand.AgentStates.Num() != Agents.Num())
-  {
-    BuildDemand(InputAgents, Settings, FlowConfig, SharedFlowField, Topology, InOutDemand,
-      InputExternalAgents);
-    return;
-  }
-  for (int32 Index = 0; Index < Agents.Num(); ++Index)
-  {
-    if (InOutDemand.AgentStates[Index].AgentId != Agents[Index].AgentId)
-    {
-      BuildDemand(InputAgents, Settings, FlowConfig, SharedFlowField, Topology, InOutDemand,
-        InputExternalAgents);
-      return;
-    }
-  }
-  FCrowdDemoTargetRegionDemandResult Result;
-  Result.Regions = InOutDemand.Regions;
-  Result.ExternalPopulationByCell = InOutDemand.ExternalPopulationByCell;
-  Result.ExternalCongestionCostByCellCm = InOutDemand.ExternalCongestionCostByCellCm;
-  Result.FeasibleRegionCount = InOutDemand.FeasibleRegionCount;
-  Result.DesiredPopulationTotal = InOutDemand.DesiredPopulationTotal;
-  Result.ExternalPopulationByCell.Init(0, Topology.Cells.Num());
-  Result.ExternalCongestionCostByCellCm.Init(0, Topology.Cells.Num());
-  TSet<int32> OwnAgentIds;
-  for (const FCrowdDemoTargetRegionTransportAgent& Agent : Agents)
-    OwnAgentIds.Add(Agent.AgentId);
-  int32 PreviousExternalId = INDEX_NONE;
-  uint32 ExternalPopulationHash = Fold(FnvOffset, 2);
-  for (const FCrowdDemoTargetRegionTransportAgent& ExternalAgent : ExternalAgents)
-  {
-    if (ExternalAgent.AgentId <= PreviousExternalId
-      || OwnAgentIds.Contains(ExternalAgent.AgentId)
-      || !FMath::IsFinite(ExternalAgent.PhysicalRadiusCm)
-      || !FMath::IsFinite(ExternalAgent.HardSafetyGapCm)
-      || !FMath::IsFinite(ExternalAgent.SoftMarginCm)
-      || ExternalAgent.PhysicalRadiusCm <= 0.0f
-      || ExternalAgent.HardSafetyGapCm < 0.0f
-      || ExternalAgent.SoftMarginCm < 0.0f)
-    {
-      BuildDemand(InputAgents, Settings, FlowConfig, SharedFlowField, Topology, InOutDemand,
-        InputExternalAgents);
-      return;
-    }
-    PreviousExternalId = ExternalAgent.AgentId;
-    const int32 DirectCell = DirectCellForLocation(
-      ExternalAgent.Location, Settings, Topology);
-    const FCrowdDemoTargetPolarCell* Cell = FindCell(Topology, DirectCell);
-    const int32 OccupiedCell = Cell && Cell->bFeasible ? DirectCell : INDEX_NONE;
-    if (Result.ExternalPopulationByCell.IsValidIndex(OccupiedCell))
-    {
-      ++Result.ExternalPopulationByCell[OccupiedCell];
-      const int32 PairSoftDistanceCm = FMath::RoundToInt(
-        Settings.PhysicalRadiusCm + ExternalAgent.PhysicalRadiusCm
-        + FMath::Max(Settings.HardSafetyGapCm, ExternalAgent.HardSafetyGapCm)
-        + Settings.SoftMarginCm + ExternalAgent.SoftMarginCm);
-      if (PairSoftDistanceCm <= 0
-        || Result.ExternalCongestionCostByCellCm[OccupiedCell]
-          > MAX_int32 - PairSoftDistanceCm)
-      {
-        BuildDemand(InputAgents, Settings, FlowConfig, SharedFlowField, Topology, InOutDemand,
-          InputExternalAgents);
-        return;
-      }
-      Result.ExternalCongestionCostByCellCm[OccupiedCell] += PairSoftDistanceCm;
-      ++Result.ExternalPopulationAgentCount;
-    }
-    ExternalPopulationHash = Fold(ExternalPopulationHash, ExternalAgent.AgentId);
-    ExternalPopulationHash = Fold(ExternalPopulationHash, OccupiedCell);
-    ExternalPopulationHash = Fold(ExternalPopulationHash,
-      FMath::RoundToInt(ExternalAgent.PhysicalRadiusCm));
-    ExternalPopulationHash = Fold(ExternalPopulationHash,
-      FMath::RoundToInt(ExternalAgent.HardSafetyGapCm));
-    ExternalPopulationHash = Fold(ExternalPopulationHash,
-      FMath::RoundToInt(ExternalAgent.SoftMarginCm));
-  }
-  for (const int32 Population : Result.ExternalPopulationByCell)
-    Result.ExternalOccupiedCellCount += Population > 0 ? 1 : 0;
-  Result.ExternalPopulationHash = ExternalPopulationHash;
-  for (FCrowdDemoTargetDemandRegion& Region : Result.Regions)
-  {
-    Region.CurrentPopulation = 0;
-    Region.Deficit = 0;
-    Region.Surplus = 0;
-  }
-
-  int32 PreviousId = INDEX_NONE;
-  uint32 MembershipHash = Fold(FnvOffset, 1);
-  for (int32 AgentIndex = 0; AgentIndex < Agents.Num(); ++AgentIndex)
-  {
-    const FCrowdDemoTargetRegionTransportAgent& Agent = Agents[AgentIndex];
-    if (Agent.AgentId <= PreviousId)
-    {
-      InOutDemand = {};
-      return;
-    }
-    PreviousId = Agent.AgentId;
-    FCrowdDemoTargetRegionAgentDemandState& State = Result.AgentStates.AddDefaulted_GetRef();
-    State.AgentId = Agent.AgentId;
-    const int32 DirectCellKey = DirectCellForLocation(
-      Agent.Location, Settings, Topology);
-    const bool bDirectCellFeasible = Topology.Cells.IsValidIndex(DirectCellKey)
-      && Topology.Cells[DirectCellKey].bFeasible;
-    const FCrowdDemoTargetRegionAgentDemandState& PreviousState =
-      InOutDemand.AgentStates[AgentIndex];
-    const bool bPreviousAttachmentReusable = !bRefreshSourceAttachments
-      && PreviousState.bSourceAttached
-      && Topology.Cells.IsValidIndex(PreviousState.CurrentCellKey)
-      && Topology.Cells[PreviousState.CurrentCellKey].bFeasible;
-    State.CurrentCellKey = bDirectCellFeasible
-      ? DirectCellKey
-      : bPreviousAttachmentReusable
-        ? PreviousState.CurrentCellKey
-        : AttachSource(Agent.Location, Settings, FlowConfig,
-            SharedFlowField, Topology);
-    State.bSourceAttached = State.CurrentCellKey != INDEX_NONE;
-    Result.SourceAttachmentFailureCount += State.bSourceAttached ? 0 : 1;
-    const FVector2f Offset = Agent.Location - Settings.TargetLocation;
-    State.CurrentRegionKey = RegionForOffset(Offset, Settings.DemandRegionCount);
-    const FCrowdDemoTargetPolarCell* Cell = FindCell(Topology, State.CurrentCellKey);
-    State.bEngagedHold = Agent.bEngagedHold;
-    State.bTerminal = State.bEngagedHold || (Cell && Cell->bTerminal
-      && Offset.Size() + 0.01f >= Settings.MinimumCenterDistanceCm
-      && Offset.Size() <= Settings.MaximumCenterDistanceCm + 0.01f);
-    if (State.bTerminal)
-    {
-      ++Result.Regions[State.CurrentRegionKey].CurrentPopulation;
-      ++Result.CurrentTerminalPopulation;
-    }
-    MembershipHash = Fold(MembershipHash, Agent.AgentId);
-  }
-  for (FCrowdDemoTargetDemandRegion& Region : Result.Regions)
-  {
-    Region.Deficit = FMath::Max(0, Region.DesiredPopulation - Region.CurrentPopulation);
-    Region.Surplus = FMath::Max(0, Region.CurrentPopulation - Region.DesiredPopulation);
-    Result.TotalDeficit += Region.Deficit;
-    Result.TotalSurplus += Region.Surplus;
-    int32 Keep = FMath::Min(Region.CurrentPopulation, Region.DesiredPopulation);
-    for (FCrowdDemoTargetRegionAgentDemandState& State : Result.AgentStates)
-    {
-      if (State.bTerminal && State.CurrentRegionKey == Region.StableRegionKey)
-      {
-        State.bTerminalStay = Keep-- > 0;
-        State.bSupply = !State.bTerminalStay;
-      }
-    }
-  }
-  for (FCrowdDemoTargetRegionAgentDemandState& State : Result.AgentStates)
-  {
-    if (!State.bTerminal) State.bSupply = true;
-    Result.SupplyAgentCount += State.bSupply ? 1 : 0;
-  }
-
-  const int32 NormalizedPhase =
-    ((Settings.DemandRegionPhaseOffset % Settings.DemandRegionCount)
-      + Settings.DemandRegionCount) % Settings.DemandRegionCount;
-  uint32 Hash = Fold(FnvOffset, 2);
-  Hash = Fold(Hash, Topology.TopologyHash);
-  Hash = Fold(Hash, NormalizedPhase);
-  Hash = Fold(Hash, MembershipHash);
-  Hash = Fold(Hash, Result.ExternalPopulationHash);
-  Hash = Fold(Hash, Result.ExternalPopulationAgentCount);
-  Hash = Fold(Hash, Result.ExternalOccupiedCellCount);
-  for (int32 CellKey = 0; CellKey < Result.ExternalPopulationByCell.Num(); ++CellKey)
-  {
-    if (Result.ExternalPopulationByCell[CellKey] > 0)
-    {
-      Hash = Fold(Hash, CellKey);
-      Hash = Fold(Hash, Result.ExternalPopulationByCell[CellKey]);
-      Hash = Fold(Hash, Result.ExternalCongestionCostByCellCm[CellKey]);
-    }
-  }
-  for (const FCrowdDemoTargetDemandRegion& Region : Result.Regions)
-  {
-    Hash = Fold(Hash, Region.StableRegionKey);
-    Hash = Fold(Hash, Region.AvailableCapacity);
-    Hash = Fold(Hash, Region.CurrentPopulation);
-    Hash = Fold(Hash, Region.DesiredPopulation);
-    Hash = Fold(Hash, Region.Deficit);
-    Hash = Fold(Hash, Region.Surplus);
-  }
-  for (const FCrowdDemoTargetRegionAgentDemandState& State : Result.AgentStates)
-  {
-    Hash = Fold(Hash, State.AgentId);
-    Hash = Fold(Hash, State.CurrentCellKey);
-    Hash = Fold(Hash, State.CurrentRegionKey);
-    Hash = Fold(Hash, State.bTerminalStay ? 1 : 0);
-    Hash = Fold(Hash, State.bSupply ? 1 : 0);
-    Hash = Fold(Hash, State.bEngagedHold ? 1 : 0);
-  }
-  Result.MembershipHash = MembershipHash;
-  Result.DemandHash = Hash;
-  Result.bValid = Result.SourceAttachmentFailureCount == 0
-    && Result.DesiredPopulationTotal == Agents.Num();
-  InOutDemand = MoveTemp(Result);
+  BuildDemand(InputAgents, Settings, FlowConfig, SharedFlowField, Topology,
+    InOutDemand, InputExternalAgents);
+  return;
 }
 
 void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
@@ -1091,6 +1186,9 @@ void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
   OutPlan.EnvironmentHash = Topology.EnvironmentHash;
   OutPlan.MembershipHash = Demand.MembershipHash;
   OutPlan.ExternalPopulationHash = Demand.ExternalPopulationHash;
+  OutPlan.TotalFeasibleCapacity = Demand.TotalFeasibleCapacity;
+  OutPlan.AssignablePopulation = Demand.AssignablePopulation;
+  OutPlan.OverflowPopulation = Demand.OverflowPopulation;
   if (!Topology.bValid || !Demand.bValid) return;
   const int32 CellCount = Topology.Cells.Num();
   const int32 RegionCount = Demand.Regions.Num();
@@ -1189,9 +1287,25 @@ void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
       Edge.FromCellKey, Edge.ToCellKey, true, false);
   }
   for (const auto& Link : Topology.RegionLinks)
-    if (Link.bTerminal && Demand.Regions[Link.RegionKey].Deficit > 0)
+  {
+    if (!Link.bTerminal || !Topology.Cells.IsValidIndex(Link.CellKey)
+      || !Demand.Regions.IsValidIndex(Link.RegionKey)
+      || Topology.Cells[Link.CellKey].PrimaryDemandRegionKey != Link.RegionKey
+      || Demand.Regions[Link.RegionKey].Deficit <= 0)
+      continue;
+    const int32 Occupied =
+      Demand.AdmittedPopulationByCell.IsValidIndex(Link.CellKey)
+      ? Demand.AdmittedPopulationByCell[Link.CellKey] : 0;
+    const int32 Available =
+      Demand.AvailableCapacityByCell.IsValidIndex(Link.CellKey)
+      ? FMath::Max(0,
+          Demand.AvailableCapacityByCell[Link.CellKey] - Occupied)
+      : 0;
+    if (Available > 0)
       AddResidualEdge(Graph, Link.CellKey, CellCount + Link.RegionKey,
-        Demand.Regions[Link.RegionKey].Deficit, 0, 0, StableOrder++);
+        FMath::Min(Available, Demand.Regions[Link.RegionKey].Deficit),
+        0, 0, StableOrder++);
+  }
   for (const auto& Region : Demand.Regions)
     if (Region.Deficit > 0)
       AddResidualEdge(Graph, CellCount + Region.StableRegionKey, Sink,
@@ -1332,6 +1446,9 @@ void FCrowdDemoTargetRegionTransportKernel::SolveTransport(
   Hash = Fold(Hash, Demand.ExternalPopulationHash);
   Hash = Fold(Hash, Flow);
   Hash = Fold(Hash, OutPlan.UnroutedAgentCount);
+  Hash = Fold(Hash, OutPlan.TotalFeasibleCapacity);
+  Hash = Fold(Hash, OutPlan.AssignablePopulation);
+  Hash = Fold(Hash, OutPlan.OverflowPopulation);
   Hash = Fold(Hash, TotalPhysical);
   Hash = Fold(Hash, TotalChange);
   for (const auto& Edge : OutPlan.EdgeFlows)
@@ -1377,7 +1494,10 @@ void FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
     || Plan.TargetRevision != TargetRevision
     || Plan.FeasibleGraphHash != Topology.FeasibleGraphHash
     || Plan.MembershipHash != Demand.MembershipHash
-    || Plan.ExternalPopulationHash != Demand.ExternalPopulationHash)
+    || Plan.ExternalPopulationHash != Demand.ExternalPopulationHash
+    || Plan.TotalFeasibleCapacity != Demand.TotalFeasibleCapacity
+    || Plan.AssignablePopulation != Demand.AssignablePopulation
+    || Plan.OverflowPopulation != Demand.OverflowPopulation)
   {
     ++OutValidation.InvalidCellCount;
     PinCell(INDEX_NONE);
@@ -1441,9 +1561,22 @@ void FCrowdDemoTargetRegionTransportKernel::ValidatePlanForDemand(
   TArray<int32> TerminalDeficitCapacity;
   TerminalDeficitCapacity.Init(0, CellCount);
   for (const auto& Link : Topology.RegionLinks)
-    if (Link.bTerminal && Demand.Regions.IsValidIndex(Link.RegionKey)
-      && Topology.Cells.IsValidIndex(Link.CellKey))
-      TerminalDeficitCapacity[Link.CellKey] += Demand.Regions[Link.RegionKey].Deficit;
+  {
+    if (!Link.bTerminal || !Demand.Regions.IsValidIndex(Link.RegionKey)
+      || !Topology.Cells.IsValidIndex(Link.CellKey)
+      || Topology.Cells[Link.CellKey].PrimaryDemandRegionKey != Link.RegionKey)
+      continue;
+    const int32 Occupied =
+      Demand.AdmittedPopulationByCell.IsValidIndex(Link.CellKey)
+      ? Demand.AdmittedPopulationByCell[Link.CellKey] : 0;
+    const int32 Available =
+      Demand.AvailableCapacityByCell.IsValidIndex(Link.CellKey)
+      ? FMath::Max(0,
+          Demand.AvailableCapacityByCell[Link.CellKey] - Occupied)
+      : 0;
+    TerminalDeficitCapacity[Link.CellKey] = FMath::Min(
+      Available, Demand.Regions[Link.RegionKey].Deficit);
+  }
 
   for (int32 Cell = 0; Cell < CellCount; ++Cell)
   {
@@ -1594,23 +1727,32 @@ void FCrowdDemoTargetRegionTransportKernel::ReplacePlanPreservingClaims(
   OutSummary.GeometryEligibleClaimCount = EligibleClaims.Num();
 
   FCrowdDemoTargetRegionPlanValidationResult Validation;
+  FCrowdDemoTargetRegionPlanValidationResult ExecutionValidation;
   while (true)
   {
     SolveTransport(Topology, Demand, PreviousPlan.bValid ? &PreviousPlan : nullptr,
       PlanEpoch, FixedStepIndex, TargetRevision, OutPlan, EligibleClaims);
     ValidatePlanForDemand(Topology, Demand, OutPlan, TargetRevision, Validation);
-    if (OutPlan.bValid && Validation.bValid) break;
+    InitializeQuotaExecutionState(OutPlan, OutExecution);
+    OutExecution.CompletedTransitionCount =
+      PreviousExecution.CompletedTransitionCount
+        + OutSummary.CompletedAtReplacementCount;
+    OutExecution.ActiveClaims = EligibleClaims;
+    OutExecution.bValid = OutPlan.bValid && Validation.bValid;
+    RefreshExecutionHash(OutExecution);
+    ValidateQuotaExecutionState(Topology, Demand, OutPlan, OutExecution,
+      TargetRevision, ExecutionValidation);
+    if (OutPlan.bValid && Validation.bValid && ExecutionValidation.bValid)
+      break;
     if (EligibleClaims.IsEmpty()) break;
     // Lowest AgentId claims have stable precedence. If the full frozen set is
-    // infeasible, release the highest AgentId and retry the complete plan.
+    // infeasible for either the new plan or its capacity/quota execution,
+    // release the highest AgentId and retry the complete atomic replacement.
     EligibleClaims.Pop(EAllowShrinking::No);
   }
 
-  InitializeQuotaExecutionState(OutPlan, OutExecution);
-  OutExecution.CompletedTransitionCount = PreviousExecution.CompletedTransitionCount
-    + OutSummary.CompletedAtReplacementCount;
-  OutExecution.ActiveClaims = EligibleClaims;
-  OutExecution.bValid = OutPlan.bValid && Validation.bValid;
+  OutExecution.bValid = OutPlan.bValid && Validation.bValid
+    && ExecutionValidation.bValid;
   RefreshExecutionHash(OutExecution);
   OutSummary.MigratedClaimCount = EligibleClaims.Num();
   OutSummary.ReleasedClaimCount = FMath::Max(0,
@@ -1633,7 +1775,8 @@ void FCrowdDemoTargetRegionTransportKernel::ReplacePlanPreservingClaims(
     Hash = Fold(Hash, Claim.ToCellKey);
   }
   OutSummary.ReplacementHash = Hash;
-  OutSummary.bValid = OutPlan.bValid && OutExecution.bValid && Validation.bValid;
+  OutSummary.bValid = OutPlan.bValid && OutExecution.bValid
+    && Validation.bValid && ExecutionValidation.bValid;
 }
 
 void FCrowdDemoTargetRegionTransportKernel::ValidateQuotaExecutionState(
@@ -1794,18 +1937,75 @@ void FCrowdDemoTargetRegionTransportKernel::ValidateQuotaExecutionState(
     }
   }
 
+  TArray<int32> ClaimsByDestinationCell;
+  ClaimsByDestinationCell.Init(0, Topology.Cells.Num());
+  TArray<int32> AdmissionQuotaByCell;
+  AdmissionQuotaByCell.Init(0, Topology.Cells.Num());
+  for (const FCrowdDemoTargetRegionAgentDemandState& AgentState :
+    Demand.AgentStates)
+    if (AgentState.bSupply
+      && AdmissionQuotaByCell.IsValidIndex(AgentState.CurrentCellKey))
+      ++AdmissionQuotaByCell[AgentState.CurrentCellKey];
+  for (int32 EdgeIndex = 0; EdgeIndex < State.Edges.Num(); ++EdgeIndex)
+  {
+    const FCrowdDemoTargetRegionQuotaEdgeState& Edge = State.Edges[EdgeIndex];
+    const int32 RemainingQuota = FMath::Max(0,
+      Edge.InitialQuota - Edge.ConsumedQuota
+        - PendingConsumedByEdge[EdgeIndex]);
+    if (AdmissionQuotaByCell.IsValidIndex(Edge.FromCellKey))
+      AdmissionQuotaByCell[Edge.FromCellKey] -= RemainingQuota;
+    if (AdmissionQuotaByCell.IsValidIndex(Edge.ToCellKey))
+      AdmissionQuotaByCell[Edge.ToCellKey] += RemainingQuota;
+  }
+  for (const FCrowdDemoTargetRegionQuotaAgentClaim& Claim :
+    State.ActiveClaims)
+  {
+    const auto* const* AgentStatePtr = DemandByAgent.Find(Claim.AgentId);
+    const FCrowdDemoTargetRegionAgentDemandState* AgentState =
+      AgentStatePtr ? *AgentStatePtr : nullptr;
+    if (AgentState
+      && ClaimsByDestinationCell.IsValidIndex(Claim.ToCellKey)
+      && Topology.Cells[Claim.ToCellKey].bTerminal
+      && Topology.Cells[Claim.ToCellKey].PrimaryDemandRegionKey
+        == AgentState->AssignedRegionKey
+      && ClaimsByDestinationCell[Claim.ToCellKey]
+        < FMath::Max(0, AdmissionQuotaByCell[Claim.ToCellKey]))
+      ++ClaimsByDestinationCell[Claim.ToCellKey];
+  }
+  for (int32 CellKey = 0; CellKey < Topology.Cells.Num(); ++CellKey)
+  {
+    if (!Topology.Cells[CellKey].bTerminal)
+      continue;
+    const int32 Occupied =
+      Demand.AdmittedPopulationByCell.IsValidIndex(CellKey)
+      ? Demand.AdmittedPopulationByCell[CellKey] : 0;
+    const int32 AvailableCapacity =
+      Demand.AvailableCapacityByCell.IsValidIndex(CellKey)
+      ? Demand.AvailableCapacityByCell[CellKey] : 0;
+    const int32 PlannedAdmissions = FMath::Max(
+      ClaimsByDestinationCell[CellKey],
+      FMath::Max(0, AdmissionQuotaByCell[CellKey]));
+    if (Occupied + PlannedAdmissions > AvailableCapacity)
+    {
+      ++OutValidation.OverbookedCellCount;
+      PinCell(CellKey);
+    }
+  }
+
   OutValidation.bValid = OutValidation.MissingEdgeCount == 0
     && OutValidation.InfeasibleEdgeCount == 0
     && OutValidation.InvalidCellCount == 0
     && OutValidation.InsufficientOutgoingQuotaCellCount == 0
     && OutValidation.FlowConservationFailureCount == 0
-    && OutValidation.UnreachableDeficitCount == 0;
+    && OutValidation.UnreachableDeficitCount == 0
+    && OutValidation.OverbookedCellCount == 0;
   uint32 Hash = Fold(FnvOffset, 2);
   Hash = Fold(Hash, OutValidation.bValid ? 1 : 0);
   Hash = Fold(Hash, OutValidation.MissingEdgeCount);
   Hash = Fold(Hash, OutValidation.InvalidCellCount);
   Hash = Fold(Hash, OutValidation.InsufficientOutgoingQuotaCellCount);
   Hash = Fold(Hash, OutValidation.FlowConservationFailureCount);
+  Hash = Fold(Hash, OutValidation.OverbookedCellCount);
   Hash = Fold(Hash, OutValidation.FirstFailureCellKey);
   Hash = Fold(Hash, OutValidation.FirstFailureAgentId);
   Hash = Fold(Hash, TargetRevision);
@@ -1936,12 +2136,19 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
         OutSummary.FirstUnroutedCellKey = INDEX_NONE;
       }
     }
-    else
-    {
+      else
+      {
       Result.CurrentCellKey = State->CurrentCellKey;
-      Result.DemandRegionKey = State->CurrentRegionKey;
+      Result.DemandRegionKey = State->AssignedRegionKey != INDEX_NONE
+        ? State->AssignedRegionKey : State->CurrentRegionKey;
       const float Distance = (Agent.Location - Settings.TargetLocation).Size();
-      if (Distance > Settings.MaximumCenterDistanceCm + Settings.InfluenceBlendWidthCm)
+      if (State->bCapacityHold)
+      {
+        Result.Mode = ECrowdDemoTargetRegionGuidanceMode::CapacityHold;
+        Result.DesiredVelocity = FVector2f::ZeroVector;
+        ++OutSummary.CapacityHoldAgentCount;
+      }
+      else if (Distance > Settings.MaximumCenterDistanceCm + Settings.InfluenceBlendWidthCm)
       {
         Result.Mode = ECrowdDemoTargetRegionGuidanceMode::FarFlow;
         Result.DesiredVelocity = Agent.FarFlowPreferredVelocity;
@@ -2044,7 +2251,7 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
           // angular cell center can otherwise leave only a few cm/s of radial
           // progress at the round boundary.
           if (ToCell.bTerminal
-            && ToCell.PrimaryDemandRegionKey == State->CurrentRegionKey)
+            && ToCell.PrimaryDemandRegionKey == State->AssignedRegionKey)
           {
             const FVector2f Offset = Agent.Location - Settings.TargetLocation;
             if (Distance > Settings.MaximumCenterDistanceCm)
@@ -2079,6 +2286,7 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
   OutSummary.TransportAgentCount = 0;
   OutSummary.TerminalSettleAgentCount = 0;
   OutSummary.EngagedHoldAgentCount = 0;
+  OutSummary.CapacityHoldAgentCount = 0;
   OutSummary.UnroutedAgentCount = 0;
   OutSummary.FirstUnroutedAgentId = INDEX_NONE;
   OutSummary.FirstUnroutedCellKey = INDEX_NONE;
@@ -2092,6 +2300,16 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
       ++OutSummary.TerminalSettleAgentCount; break;
     case ECrowdDemoTargetRegionGuidanceMode::EngagedHold:
       ++OutSummary.EngagedHoldAgentCount; break;
+    case ECrowdDemoTargetRegionGuidanceMode::CapacityHold:
+      ++OutSummary.CapacityHoldAgentCount; break;
+    case ECrowdDemoTargetRegionGuidanceMode::Unrouted:
+      ++OutSummary.UnroutedAgentCount;
+      if (OutSummary.FirstUnroutedAgentId == INDEX_NONE)
+      {
+        OutSummary.FirstUnroutedAgentId = Result.AgentId;
+        OutSummary.FirstUnroutedCellKey = Result.CurrentCellKey;
+      }
+      break;
     default:
       ++OutSummary.UnroutedAgentCount;
       if (OutSummary.FirstUnroutedAgentId == INDEX_NONE)
@@ -2113,6 +2331,55 @@ void FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(
   {
     return A.AgentId < B.AgentId;
   });
+  TArray<int32> TerminalClaimsByCell;
+  TerminalClaimsByCell.Init(0, Topology.Cells.Num());
+  TArray<int32> AdmissionQuotaByCell;
+  AdmissionQuotaByCell.Init(0, Topology.Cells.Num());
+  for (const FCrowdDemoTargetRegionAgentDemandState& AgentState :
+    Demand.AgentStates)
+    if (AgentState.bSupply
+      && AdmissionQuotaByCell.IsValidIndex(AgentState.CurrentCellKey))
+      ++AdmissionQuotaByCell[AgentState.CurrentCellKey];
+  for (const FCrowdDemoTargetRegionQuotaEdgeState& Edge : WorkState.Edges)
+  {
+    const int32 RemainingQuota = FMath::Max(
+      0, Edge.InitialQuota - Edge.ConsumedQuota);
+    if (AdmissionQuotaByCell.IsValidIndex(Edge.FromCellKey))
+      AdmissionQuotaByCell[Edge.FromCellKey] -= RemainingQuota;
+    if (AdmissionQuotaByCell.IsValidIndex(Edge.ToCellKey))
+      AdmissionQuotaByCell[Edge.ToCellKey] += RemainingQuota;
+  }
+  for (const FCrowdDemoTargetRegionQuotaAgentClaim& Claim :
+    WorkState.ActiveClaims)
+  {
+    const auto* const* AgentStatePtr = StateByAgent.Find(Claim.AgentId);
+    const FCrowdDemoTargetRegionAgentDemandState* AgentState =
+      AgentStatePtr ? *AgentStatePtr : nullptr;
+    if (AgentState
+      && TerminalClaimsByCell.IsValidIndex(Claim.ToCellKey)
+      && Topology.Cells[Claim.ToCellKey].bTerminal
+      && Topology.Cells[Claim.ToCellKey].PrimaryDemandRegionKey
+        == AgentState->AssignedRegionKey
+      && TerminalClaimsByCell[Claim.ToCellKey]
+        < FMath::Max(0, AdmissionQuotaByCell[Claim.ToCellKey]))
+      ++TerminalClaimsByCell[Claim.ToCellKey];
+  }
+  for (int32 CellKey = 0; CellKey < Topology.Cells.Num(); ++CellKey)
+  {
+    if (!Topology.Cells[CellKey].bTerminal)
+      continue;
+    const int32 Occupied =
+      Demand.AdmittedPopulationByCell.IsValidIndex(CellKey)
+      ? Demand.AdmittedPopulationByCell[CellKey] : 0;
+    const int32 AvailableCapacity =
+      Demand.AvailableCapacityByCell.IsValidIndex(CellKey)
+      ? Demand.AvailableCapacityByCell[CellKey] : 0;
+    const int32 PlannedAdmissions = FMath::Max(
+      TerminalClaimsByCell[CellKey],
+      FMath::Max(0, AdmissionQuotaByCell[CellKey]));
+    if (Occupied + PlannedAdmissions > AvailableCapacity)
+      bExecutionValid = false;
+  }
   RefreshExecutionHash(WorkState);
   WorkState.bValid = bExecutionValid;
   for (const auto& Flow : StableFlows)

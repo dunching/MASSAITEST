@@ -2693,6 +2693,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryTargetTopologyWork(
       CachedSummary->BoundsBlockedCellCount,
       CachedSummary->ObstacleBlockedCellCount,
       CachedSummary->TargetBlockedCellCount,
+      CachedSummary->NavigationBlockedCellCount,
+      CachedSummary->TotalFeasibleCapacity,
       CachedSummary->FeasibleGraphHash,
       CachedSummary->EnvironmentHash,
       CachedSummary->TopologyHash,

@@ -7,6 +7,7 @@ struct FCrowdMassTargetRegionTopologyInput
 {
   FCrowdTargetRegionTransportSettings Settings;
   FCrowdSharedFlowFieldConfig FlowConfig;
+  const FCrowdSharedFlowField* SharedFlowField = nullptr;
 };
 
 struct FCrowdMassTargetRegionTopologyOutput

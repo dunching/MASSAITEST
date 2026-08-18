@@ -301,10 +301,15 @@ bool FCrowdDemoTargetRegionTransportDemandTest::RunTest(const FString& Parameter
     PhaseFiveDemand.DemandHash, PhaseFiveHash);
 
   auto BoundaryTopology = Topology;
-  for (FCrowdDemoTargetPolarCellRegionLink& Link : BoundaryTopology.RegionLinks)
+  for (FCrowdDemoTargetPolarCell& Cell : BoundaryTopology.Cells)
   {
-    Link.bTerminal = Link.RegionKey == 0 || Link.RegionKey >= 11;
+    const bool bRetainedRegion = Cell.PrimaryDemandRegionKey == 0
+      || Cell.PrimaryDemandRegionKey >= 11;
+    Cell.bTerminal = Cell.bTerminal && bRetainedRegion;
+    if (!Cell.bTerminal) Cell.Capacity = 0;
   }
+  for (FCrowdDemoTargetPolarCellRegionLink& Link : BoundaryTopology.RegionLinks)
+    Link.bTerminal = BoundaryTopology.Cells[Link.CellKey].bTerminal;
   auto BoundaryPhaseSettings = Settings;
   BoundaryPhaseSettings.DemandRegionPhaseOffset = 10;
   FCrowdDemoTargetRegionDemandResult BoundaryPhaseDemand;
@@ -720,6 +725,7 @@ bool FCrowdDemoTargetRegionQuotaExecutionTest::RunTest(const FString& Parameters
     Cell.WorldAnchorCm = FVector2f(static_cast<float>(CellKey) * 100.0f, 0.0f);
     Cell.bFeasible = true;
     Cell.bTerminal = CellKey == 2;
+    Cell.Capacity = CellKey == 2 ? 1 : 0;
     Cell.PrimaryDemandRegionKey = 0;
   }
   for (int32 CellKey = 0; CellKey < 2; ++CellKey)
@@ -737,6 +743,8 @@ bool FCrowdDemoTargetRegionQuotaExecutionTest::RunTest(const FString& Parameters
   Plan.MembershipHash = 77u;
   Plan.TransportHash = 999u;
   Plan.RoutedAgentCount = 1;
+  Plan.TotalFeasibleCapacity = 1;
+  Plan.AssignablePopulation = 1;
   Plan.bValid = true;
   Plan.EdgeFlows = {{0, 1, 1, 0}, {1, 2, 1, 0}};
 
@@ -747,6 +755,10 @@ bool FCrowdDemoTargetRegionQuotaExecutionTest::RunTest(const FString& Parameters
   Demand.SupplyAgentCount = 1;
   Demand.FeasibleRegionCount = 1;
   Demand.DesiredPopulationTotal = 1;
+  Demand.TotalFeasibleCapacity = 1;
+  Demand.AssignablePopulation = 1;
+  Demand.AvailableCapacityByCell = {0, 0, 1};
+  Demand.AdmittedPopulationByCell = {0, 0, 0};
   FCrowdDemoTargetDemandRegion& Region = Demand.Regions.AddDefaulted_GetRef();
   Region.StableRegionKey = 0;
   Region.AvailableCapacity = 1;
@@ -762,7 +774,9 @@ bool FCrowdDemoTargetRegionQuotaExecutionTest::RunTest(const FString& Parameters
   DemandState.AgentId = 10;
   DemandState.CurrentCellKey = 0;
   DemandState.CurrentRegionKey = 0;
+  DemandState.AssignedRegionKey = 0;
   DemandState.bSupply = true;
+  DemandState.bCapacityAdmitted = true;
 
   FCrowdDemoTargetRegionTransportAgent Agent;
   Agent.AgentId = 10;
@@ -786,6 +800,16 @@ bool FCrowdDemoTargetRegionQuotaExecutionTest::RunTest(const FString& Parameters
   TestEqual(TEXT("claim is reserved but not consumed"),
     Execution.Edges[0].ConsumedQuota, 0);
   TestEqual(TEXT("one transient claim exists"), Execution.ActiveClaims.Num(), 1);
+  FCrowdDemoTargetRegionDemandResult OverbookDemand = Demand;
+  OverbookDemand.AvailableCapacityByCell[2] = 0;
+  FCrowdDemoTargetRegionPlanValidationResult OverbookValidation;
+  FCrowdDemoTargetRegionTransportKernel::ValidateQuotaExecutionState(
+    Topology, OverbookDemand, Plan, Execution, 3,
+    OverbookValidation);
+  TestFalse(TEXT("overbooked admission fails closed"),
+    OverbookValidation.bValid);
+  TestEqual(TEXT("overbooked destination is explicit"),
+    OverbookValidation.OverbookedCellCount, 1);
 
   FCrowdDemoTargetRegionFlowPlan ReplacedPlan;
   FCrowdDemoTargetRegionQuotaExecutionState ReplacedExecution;
@@ -860,6 +884,10 @@ bool FCrowdDemoTargetRegionQuotaExecutionTest::RunTest(const FString& Parameters
   Demand.AgentStates[0].bSupply = false;
   Demand.AgentStates[0].bTerminal = true;
   Demand.AgentStates[0].bTerminalStay = true;
+  Demand.AgentStates[0].bCapacityAdmitted = true;
+  Demand.AdmittedPopulationByCell[2] = 1;
+  Demand.TotalDeficit = 0;
+  Demand.SupplyAgentCount = 0;
   Agent.Location = Topology.Cells[2].WorldAnchorCm;
   Agents[0] = Agent;
   FCrowdDemoTargetRegionTransportKernel::BuildGuidanceWithExecution(

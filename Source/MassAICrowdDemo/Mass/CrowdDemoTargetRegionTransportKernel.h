@@ -12,7 +12,8 @@ enum class ECrowdDemoTargetRegionGuidanceMode : uint8
   Transport,
   TerminalSettle,
   EngagedHold,
-  Unrouted
+  Unrouted,
+  CapacityHold
 };
 
 struct FCrowdDemoTargetRegionTransportSettings
@@ -62,11 +63,13 @@ struct FCrowdDemoTargetPolarCell
   int32 PrimaryDemandRegionKey = INDEX_NONE;
   FVector2f RelativeAnchorCm = FVector2f::ZeroVector;
   FVector2f WorldAnchorCm = FVector2f::ZeroVector;
+  int32 Capacity = 0;
   bool bFeasible = false;
   bool bTerminal = false;
   bool bBoundsBlocked = false;
   bool bObstacleBlocked = false;
   bool bTargetBlocked = false;
+  bool bNavigationBlocked = false;
 };
 
 struct FCrowdDemoTargetPolarCellRegionLink
@@ -111,6 +114,8 @@ struct FCrowdDemoTargetPolarTopologySummary
   int32 BoundsBlockedCellCount = 0;
   int32 ObstacleBlockedCellCount = 0;
   int32 TargetBlockedCellCount = 0;
+  int32 NavigationBlockedCellCount = 0;
+  int32 TotalFeasibleCapacity = 0;
   uint32 FeasibleGraphHash = 0;
   uint32 EnvironmentHash = 0;
   uint32 TopologyHash = 0;
@@ -133,11 +138,14 @@ struct FCrowdDemoTargetRegionAgentDemandState
   int32 AgentId = INDEX_NONE;
   int32 CurrentCellKey = INDEX_NONE;
   int32 CurrentRegionKey = INDEX_NONE;
+  int32 AssignedRegionKey = INDEX_NONE;
   bool bTerminal = false;
   bool bTerminalStay = false;
   bool bSupply = false;
   bool bSourceAttached = false;
   bool bEngagedHold = false;
+  bool bCapacityAdmitted = false;
+  bool bCapacityHold = false;
 };
 
 struct FCrowdDemoTargetRegionDemandResult
@@ -146,8 +154,13 @@ struct FCrowdDemoTargetRegionDemandResult
   TArray<FCrowdDemoTargetRegionAgentDemandState> AgentStates;
   TArray<int32> ExternalPopulationByCell;
   TArray<int32> ExternalCongestionCostByCellCm;
+  TArray<int32> AvailableCapacityByCell;
+  TArray<int32> AdmittedPopulationByCell;
   int32 FeasibleRegionCount = 0;
   int32 DesiredPopulationTotal = 0;
+  int32 TotalFeasibleCapacity = 0;
+  int32 AssignablePopulation = 0;
+  int32 OverflowPopulation = 0;
   int32 CurrentTerminalPopulation = 0;
   int32 TotalDeficit = 0;
   int32 TotalSurplus = 0;
@@ -181,6 +194,9 @@ struct FCrowdDemoTargetRegionFlowPlan
   TArray<FCrowdDemoTargetPolarEdgeFlow> EdgeFlows;
   int32 RoutedAgentCount = 0;
   int32 UnroutedAgentCount = 0;
+  int32 TotalFeasibleCapacity = 0;
+  int32 AssignablePopulation = 0;
+  int32 OverflowPopulation = 0;
   int64 TotalPhysicalCost = 0;
   int64 ChangedQuotaUnitCount = 0;
   uint32 TransportHash = 2166136261u;
@@ -235,6 +251,7 @@ struct FCrowdDemoTargetRegionPlanValidationResult
   int32 InsufficientOutgoingQuotaCellCount = 0;
   int32 FlowConservationFailureCount = 0;
   int32 UnreachableDeficitCount = 0;
+  int32 OverbookedCellCount = 0;
   int32 FirstFailureCellKey = INDEX_NONE;
   int32 FirstFailureAgentId = INDEX_NONE;
   uint32 ValidationHash = 2166136261u;
@@ -264,6 +281,7 @@ struct FCrowdDemoTargetRegionGuidanceSummary
   int32 TransportAgentCount = 0;
   int32 TerminalSettleAgentCount = 0;
   int32 EngagedHoldAgentCount = 0;
+  int32 CapacityHoldAgentCount = 0;
   int32 UnroutedAgentCount = 0;
   int32 FirstUnroutedAgentId = INDEX_NONE;
   int32 FirstUnroutedCellKey = INDEX_NONE;

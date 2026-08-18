@@ -5,7 +5,8 @@ FCrowdMassTargetRegionTopologyOutput FCrowdMassTargetRegionWork::BuildTopology(
 {
   FCrowdMassTargetRegionTopologyOutput Output;
   FCrowdTargetRegionTransportKernel::BuildTopology(
-    Input.Settings, Input.FlowConfig, Output.Topology, Output.Summary);
+    Input.Settings, Input.FlowConfig, Output.Topology, Output.Summary,
+    Input.SharedFlowField);
   Output.bValid = Output.Topology.bValid && Output.Summary.bValid;
   return Output;
 }
