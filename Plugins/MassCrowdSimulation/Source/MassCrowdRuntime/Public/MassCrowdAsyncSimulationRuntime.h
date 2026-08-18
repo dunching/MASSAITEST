@@ -171,6 +171,7 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeMetrics
 {
   uint64 Generation = 0;
   uint64 WorkerEpoch = 0;
+  uint64 AbsoluteSimulationTick = 0;
   uint64 LastAcceptedInputSequence = 0;
   uint64 LastAppliedInputSequence = 0;
   uint64 QueuedInputSequenceWatermark = 0;

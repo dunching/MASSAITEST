@@ -319,16 +319,23 @@ namespace
 
   bool BuildTargetObjectiveRevisionDelta(
     const FCrowdDemoTargetFact& Fact,
-    const int32 FixedStepIndex,
+    const double EffectiveSimulationTimeSeconds,
+    const double FixedSimulationQuantumSeconds,
     const uint64 ResourceRevision,
     FCrowdWorkerObjectiveRevisionDelta& OutDelta)
   {
     OutDelta = {};
-    if (FixedStepIndex < 0 || ResourceRevision == 0)
+    int32 EffectiveFixedStepIndex = INDEX_NONE;
+    if (ResourceRevision == 0
+      || !FCrowdWorkerTargetObjectiveClock::
+        ResolveEffectiveFixedStepIndex(
+          EffectiveSimulationTimeSeconds,
+          FixedSimulationQuantumSeconds,
+          EffectiveFixedStepIndex))
       return false;
     FCrowdWorkerTargetObjectiveRevision Revision;
     Revision.TargetRevision = Fact.TargetRevision;
-    Revision.EffectiveFixedStepIndex = FixedStepIndex;
+    Revision.EffectiveFixedStepIndex = EffectiveFixedStepIndex;
     Revision.TargetLocation = FVector2f(
       Fact.Location.X, Fact.Location.Y);
     Revision.TargetVelocity = FVector2f(
@@ -3409,7 +3416,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     FCrowdWorkerObjectiveRevisionDelta& Objective =
       TargetObjectives.AddDefaulted_GetRef();
     if (!BuildTargetObjectiveRevisionDelta(
-        GetTargetFact(), GetCurrentFixedStepIndex(),
+        GetTargetFact(), GetCurrentStepEndServerTimeSeconds(),
+        GetCurrentFixedStepSeconds(),
         NextWorkerV2TargetObjectiveRevision, Objective))
       return RejectWorkerV2Input(TEXT("target_objective_encode"));
     if (!bSubmitIntentOnly)
@@ -3773,6 +3781,25 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
     && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
 
+  const bool bDynamicTargetFlow = bTargetActive
+    && (ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::PursuitAndSettleMoving
+      || ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetMoving);
+  if (bDynamicTargetFlow
+    && !EnsureDynamicSharedFlowField(
+      ActivePlan.Rules.FlowFieldConfig,
+      FVector(
+        GetTargetFact().Location.X,
+        GetTargetFact().Location.Y,
+        ActivePlan.Rules.FlowFieldConfig.GoalLocation.Z)))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoFullWorkerDynamicFlowRefreshFailed step=%d"),
+      GetCurrentFixedStepIndex());
+    return false;
+  }
+
   TArray<FCrowdWorkerObjectiveRevisionDelta> TargetObjectives;
   const uint64 TargetObjectiveSemanticHash = bTargetActive
     ? CalculateTargetObjectiveSemanticHash(GetTargetFact()) : 0;
@@ -3784,7 +3811,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     FCrowdWorkerObjectiveRevisionDelta& Objective =
       TargetObjectives.AddDefaulted_GetRef();
     if (!BuildTargetObjectiveRevisionDelta(
-        GetTargetFact(), GetCurrentFixedStepIndex(),
+        GetTargetFact(), GetCurrentStepEndServerTimeSeconds(),
+        GetCurrentFixedStepSeconds(),
         NextWorkerV2TargetObjectiveRevision, Objective))
       return false;
   }
@@ -4606,6 +4634,16 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureDynamicSharedFlowField(
   {
     SharedFlowField = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowField(
       RuntimeSharedFlowResource.Field);
+  }
+  if (Output.bIntegrationRebuilt)
+  {
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoDynamicSharedFlowCheckpoint step=%d anchor_cell=%d field_revision=%d build_hash=%u integration_hash=%u integration_rebuild_count=%d source=RuntimeSharedFlowOwner"),
+      GetCurrentFixedStepIndex(), DynamicFlowAnchorCellKey,
+      RuntimeSharedFlowResource.Field.Config.Revision,
+      RuntimeSharedFlowResource.Field.BuildHash,
+      RuntimeSharedFlowResource.Field.IntegrationHash,
+      DynamicFlowIntegrationRebuildCount);
   }
 
   auto Fold = [](uint32 Hash, const uint32 Value)

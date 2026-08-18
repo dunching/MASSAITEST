@@ -7,6 +7,7 @@
 #include "Mass/CrowdDemoRoundInitialStateKernel.h"
 #include "Mass/CrowdDemoSharedFlowFieldKernel.h"
 #include "Mass/CrowdDemoTargetFactKernel.h"
+#include "MassCrowdSharedFlowWork.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdDemoRoundStableInitialStateTest,
@@ -152,6 +153,72 @@ bool FCrowdDemoDynamicSharedFlowAnchorTest::RunTest(const FString& Parameters)
     Field.IntegrationHash, RightIntegrationHash);
   TestTrue(TEXT("far-field direction changes with spatial anchor"),
     FVector::DotProduct(RightDirection, LeftDirection) < -0.5f);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoRuntimeOwnedDynamicSharedFlowRefreshTest,
+  "CrowdDemo.SF.Flow.RuntimeOwnerDynamicSemanticRefresh",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoRuntimeOwnedDynamicSharedFlowRefreshTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  FCrowdMassSharedFlowBuildInput Input;
+  Input.Config.Revision = 17;
+  Input.Config.BoundsMin = FVector(0.0f, 0.0f, 0.0f);
+  Input.Config.BoundsMax = FVector(1000.0f, 500.0f, 0.0f);
+  Input.Config.CellSizeCm = 100.0f;
+  Input.Config.AgentInflateCm = 0.0f;
+  Input.Config.ConnectivityContractVersion = 2;
+  Input.Config.GoalLocation = FVector(50.0f, 250.0f, 60.0f);
+  Input.bDynamicTarget = true;
+  Input.TargetLocation = FVector(50.0f, 250.0f, 60.0f);
+
+  FCrowdMassSharedFlowResource Resource;
+  const FCrowdMassSharedFlowBuildOutput Initial =
+    FCrowdMassSharedFlowWork::EnsureResource(Input, Resource);
+  TestTrue(TEXT("Runtime owner builds initial dynamic integration"),
+    Initial.bValid && Initial.bFieldRebuilt
+      && Initial.bIntegrationRebuilt);
+  const int32 InitialAnchor = Resource.DynamicAnchorCellKey;
+  const int32 InitialFieldRebuildCount = Resource.FieldRebuildCount;
+  const int32 InitialIntegrationRebuildCount =
+    Resource.IntegrationRebuildCount;
+  const uint32 InitialBuildHash = Resource.Field.BuildHash;
+
+  Input.TargetLocation = FVector(90.0f, 250.0f, 60.0f);
+  const FCrowdMassSharedFlowBuildOutput SameAnchor =
+    FCrowdMassSharedFlowWork::EnsureResource(Input, Resource);
+  TestTrue(TEXT("same semantic anchor stays valid"),
+    SameAnchor.bValid);
+  TestFalse(TEXT("same semantic anchor skips full field rebuild"),
+    SameAnchor.bFieldRebuilt);
+  TestFalse(TEXT("same semantic anchor skips integration rebuild"),
+    SameAnchor.bIntegrationRebuilt);
+  TestEqual(TEXT("same anchor preserves Worker payload hash"),
+    Resource.Field.BuildHash, InitialBuildHash);
+  TestEqual(TEXT("same anchor preserves semantic rebuild count"),
+    Resource.IntegrationRebuildCount,
+    InitialIntegrationRebuildCount);
+
+  Input.TargetLocation = FVector(150.0f, 250.0f, 60.0f);
+  const FCrowdMassSharedFlowBuildOutput ChangedAnchor =
+    FCrowdMassSharedFlowWork::EnsureResource(Input, Resource);
+  TestTrue(TEXT("changed semantic anchor refreshes integration"),
+    ChangedAnchor.bValid && ChangedAnchor.bIntegrationRebuilt);
+  TestFalse(TEXT("changed anchor does not rebuild topology field"),
+    ChangedAnchor.bFieldRebuilt);
+  TestNotEqual(TEXT("changed anchor advances anchor cell"),
+    Resource.DynamicAnchorCellKey, InitialAnchor);
+  TestNotEqual(TEXT("changed anchor changes Worker payload hash"),
+    Resource.Field.BuildHash, InitialBuildHash);
+  TestEqual(TEXT("dynamic refresh keeps one field owner build"),
+    Resource.FieldRebuildCount, InitialFieldRebuildCount);
+  TestEqual(TEXT("semantic integration count advances once"),
+    Resource.IntegrationRebuildCount,
+    InitialIntegrationRebuildCount + 1);
   return true;
 }
 

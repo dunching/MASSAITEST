@@ -478,6 +478,27 @@ namespace CrowdWorkerTargetPrivate
 
 using namespace CrowdWorkerTargetPrivate;
 
+bool FCrowdWorkerTargetObjectiveClock::ResolveEffectiveFixedStepIndex(
+  const double EffectiveSimulationTimeSeconds,
+  const double FixedSimulationQuantumSeconds,
+  int32& OutEffectiveFixedStepIndex)
+{
+  OutEffectiveFixedStepIndex = INDEX_NONE;
+  if (!FMath::IsFinite(EffectiveSimulationTimeSeconds)
+    || EffectiveSimulationTimeSeconds < 0.0
+    || !FMath::IsFinite(FixedSimulationQuantumSeconds)
+    || FixedSimulationQuantumSeconds <= 0.0)
+    return false;
+  const int64 FixedStep = FMath::RoundToInt64(
+    EffectiveSimulationTimeSeconds
+      / FixedSimulationQuantumSeconds);
+  if (FixedStep < 0
+    || FixedStep > static_cast<int64>(MAX_int32))
+    return false;
+  OutEffectiveFixedStepIndex = static_cast<int32>(FixedStep);
+  return true;
+}
+
 bool FCrowdWorkerTargetAgentInput::IsValid() const
 {
   return EntityRef.IsValid()
@@ -1071,6 +1092,26 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
       + Objective.TargetVelocity
         * static_cast<float>(ObjectiveAgeSeconds);
     EffectiveSettings.TargetVelocity = Objective.TargetVelocity;
+    if (Input.CohortKey == 0
+      && (ObjectiveRecord->Revision == 1
+        || ObjectiveRecord->Revision % 300 == 0))
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdWorkerTargetClockCheckpoint absolute_tick=%llu effective_tick=%d age_seconds=%.6f objective_resource_revision=%llu target_revision=%d base_x=%.3f base_y=%.3f effective_x=%.3f effective_y=%.3f velocity_x=%.3f velocity_y=%.3f environment_revision=%llu flow_build_hash=%u"),
+        Context.AbsoluteSimulationTick,
+        Objective.EffectiveFixedStepIndex,
+        ObjectiveAgeSeconds,
+        ObjectiveRecord->Revision,
+        Objective.TargetRevision,
+        Objective.TargetLocation.X,
+        Objective.TargetLocation.Y,
+        EffectiveSettings.TargetLocation.X,
+        EffectiveSettings.TargetLocation.Y,
+        EffectiveSettings.TargetVelocity.X,
+        EffectiveSettings.TargetVelocity.Y,
+        FlowField.Revision,
+        FlowField.BuildHash);
+    }
     bRejectTargetContextValid = true;
     RejectTargetRevision = Objective.TargetRevision;
     RejectTargetLocation = EffectiveSettings.TargetLocation;

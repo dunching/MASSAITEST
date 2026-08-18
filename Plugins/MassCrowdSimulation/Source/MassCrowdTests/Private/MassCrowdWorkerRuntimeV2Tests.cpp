@@ -480,9 +480,279 @@ namespace CrowdWorkerRuntimeV2Tests
     Snapshot.RecalculateStableHash();
     return Snapshot;
   }
+
+  struct FObjectiveClockObservation
+  {
+    FCriticalSection Mutex;
+    uint64 AbsoluteSimulationTick = 0;
+    int32 EffectiveFixedStepIndex = INDEX_NONE;
+    uint64 ObjectiveResourceRevision = 0;
+    int32 TargetRevision = INDEX_NONE;
+    double ObjectiveAgeSeconds = -1.0;
+    FVector2f BaseLocation = FVector2f::ZeroVector;
+    FVector2f EffectiveLocation = FVector2f::ZeroVector;
+    int32 ExecuteCount = 0;
+  };
+
+  class FObjectiveClockRecordingTargetDomain final
+    : public ICrowdWorkerDomainExecutor
+  {
+  public:
+    explicit FObjectiveClockRecordingTargetDomain(
+      FObjectiveClockObservation& InObservation)
+      : Observation(InObservation)
+    {
+    }
+
+    virtual ECrowdWorkerDomainId GetDomainId() const override
+    {
+      return ECrowdWorkerDomainId::Target;
+    }
+
+    virtual void GetDependencies(
+      TArray<ECrowdWorkerDomainId>& OutDependencies) const override
+    {
+      OutDependencies.Reset();
+    }
+
+    virtual bool Execute(
+      const FCrowdWorkerDomainContext& Context,
+      const TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
+      FCrowdWorkerDomainOutput&) override
+    {
+      if (!Context.Resources || WorkItems.IsEmpty())
+        return false;
+      const FCrowdWorkerResourceRecord* Record =
+        Context.Resources->FindCurrent(
+          CrowdWorkerResourceIds::ObjectiveRevision(
+            CrowdWorkerTargetObjectiveIds::PrimaryTarget));
+      FCrowdWorkerTargetObjectiveRevision Objective;
+      if (!Record
+        || !FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
+          Record->Payload, Objective)
+        || Objective.EffectiveFixedStepIndex
+          > static_cast<int64>(Context.AbsoluteSimulationTick))
+        return false;
+      const double AgeSeconds =
+        static_cast<double>(Context.AbsoluteSimulationTick
+          - static_cast<uint64>(
+            Objective.EffectiveFixedStepIndex))
+        * Context.FixedDeltaSeconds;
+      FScopeLock Lock(&Observation.Mutex);
+      Observation.AbsoluteSimulationTick =
+        Context.AbsoluteSimulationTick;
+      Observation.EffectiveFixedStepIndex =
+        Objective.EffectiveFixedStepIndex;
+      Observation.ObjectiveResourceRevision = Record->Revision;
+      Observation.TargetRevision = Objective.TargetRevision;
+      Observation.ObjectiveAgeSeconds = AgeSeconds;
+      Observation.BaseLocation = Objective.TargetLocation;
+      Observation.EffectiveLocation = Objective.TargetLocation
+        + Objective.TargetVelocity
+          * static_cast<float>(AgeSeconds);
+      ++Observation.ExecuteCount;
+      return true;
+    }
+
+  private:
+    FObjectiveClockObservation& Observation;
+  };
+
+  bool WaitForRuntimeIdle(
+    FCrowdAsyncSimulationRuntime& Runtime,
+    const double TimeoutSeconds = 5.0)
+  {
+    const double Deadline = FPlatformTime::Seconds()
+      + TimeoutSeconds;
+    while (FPlatformTime::Seconds() < Deadline)
+    {
+      const ECrowdAsyncSimulationPollResult Result = Runtime.Poll();
+      const FCrowdAsyncSimulationRuntimeMetrics Metrics =
+        Runtime.GetMetrics();
+      if (Result == ECrowdAsyncSimulationPollResult::Failed)
+        return false;
+      if (Result == ECrowdAsyncSimulationPollResult::Idle
+        && Metrics.InputQueueDepth == 0
+        && Metrics.SimulationTimeSeconds
+          + UE_DOUBLE_SMALL_NUMBER
+          >= Metrics.TargetSimulationTimeSeconds)
+        return true;
+      FPlatformProcess::SleepNoStats(0.0f);
+    }
+    return false;
+  }
 }
 
 using namespace CrowdWorkerRuntimeV2Tests;
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerMovingObjectiveAbsoluteClockTest,
+  "MassCrowd.RuntimeV2.Target.MovingObjectiveAbsoluteClock",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerMovingObjectiveAbsoluteClockTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 31;
+  constexpr double FixedStepSeconds = 1.0 / 30.0;
+  constexpr double PreRoundUptimeSeconds = 9.0;
+
+  FCrowdAsyncSimulationRuntimeConfig Config = MakeSyntheticConfig();
+  Config.ContractLimits.MaxPayloadBytes = 4 * 1024 * 1024;
+  Config.ContractLimits.MaxInputRecordsPerBatch = 16;
+  Config.MaxSimulationStepsPerPump = 512;
+  Config.WorkerV2.Mode = ECrowdWorkerRuntimeV2Mode::Production;
+  Config.WorkerV2.bEnableSyntheticShadow = false;
+
+  FObjectiveClockObservation Observation;
+  FCrowdAsyncSimulationRuntime Runtime;
+  TestTrue(TEXT("recording target domain registers"),
+    Runtime.RegisterDomainExecutor(
+      MakeUnique<FObjectiveClockRecordingTargetDomain>(
+        Observation)));
+  TestTrue(TEXT("runtime starts before moving round"),
+    Runtime.Start(Config, Generation));
+
+  FCrowdWorkerIntentBatch UptimeSnapshot;
+  UptimeSnapshot.Generation = Generation;
+  UptimeSnapshot.FirstInputSequence = 1;
+  UptimeSnapshot.LastInputSequence = 1;
+  UptimeSnapshot.TargetSimulationTimeSeconds =
+    PreRoundUptimeSeconds;
+  UptimeSnapshot.Clock.InputSequence = 1;
+  UptimeSnapshot.Clock.SimulationTick = 270;
+  UptimeSnapshot.RecalculateStableHash();
+  TestEqual(TEXT("non-zero uptime snapshot accepted"),
+    Runtime.SubmitResnapshot(UptimeSnapshot),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("runtime advances through pre-round uptime"),
+    WaitForRuntimeIdle(Runtime));
+  TestEqual(TEXT("pre-round absolute tick is retained"),
+    Runtime.GetMetrics().AbsoluteSimulationTick,
+    uint64{270});
+
+  FCrowdWorkerTargetControlResource Control;
+  Control.Revision = 1;
+  FCrowdWorkerTargetCohortInput& Cohort =
+    Control.Cohorts.AddDefaulted_GetRef();
+  Cohort.CohortKey = 0;
+  Cohort.TopologyRevision = 1;
+  Cohort.TargetRevision = 1;
+  Cohort.FixedStepIndex = 0;
+  Cohort.FlowConfig.Revision = 1;
+  Cohort.FlowConfig.BoundsMin =
+    FVector(-2000.0f, -2000.0f, 0.0f);
+  Cohort.FlowConfig.BoundsMax =
+    FVector(2000.0f, 2000.0f, 0.0f);
+  Cohort.FlowConfig.CellSizeCm = 100.0f;
+  FCrowdWorkerTargetAgentInput& Agent =
+    Cohort.Agents.AddDefaulted_GetRef();
+  Agent.EntityRef = {1, 1, 1};
+  Agent.Agent.AgentId = 1;
+  Agent.Agent.MaxSpeedCmps = 300.0f;
+
+  FCrowdWorkerPayload ControlPayload;
+  TestTrue(TEXT("moving target control encodes"),
+    FCrowdWorkerTargetControlResourceCodec::Encode(
+      Control, ControlPayload));
+
+  const auto SubmitObjective = [&Runtime, &ControlPayload](
+    const uint64 FirstSequence,
+    const uint64 ObjectiveRevision,
+    const uint64 RoundTick,
+    const FVector2f BaseLocation)
+  {
+    const double TargetTime = PreRoundUptimeSeconds
+      + static_cast<double>(RoundTick) * FixedStepSeconds;
+    int32 EffectiveTick = INDEX_NONE;
+    if (!FCrowdWorkerTargetObjectiveClock::
+        ResolveEffectiveFixedStepIndex(
+          TargetTime, FixedStepSeconds, EffectiveTick))
+      return false;
+    FCrowdWorkerTargetObjectiveRevision Objective;
+    Objective.TargetRevision = 1;
+    Objective.EffectiveFixedStepIndex = EffectiveTick;
+    Objective.TargetLocation = BaseLocation;
+    Objective.TargetVelocity = FVector2f(-90.0f, 0.0f);
+    FCrowdWorkerPayload ObjectivePayload;
+    if (!FCrowdWorkerTargetObjectiveRevisionCodec::Encode(
+        Objective, ObjectivePayload))
+      return false;
+
+    FCrowdWorkerIntentBatch Batch;
+    Batch.Generation = Generation;
+    Batch.FirstInputSequence = FirstSequence;
+    FCrowdWorkerObjectiveRevisionDelta& ObjectiveDelta =
+      Batch.ObjectiveRevisions.AddDefaulted_GetRef();
+    ObjectiveDelta.InputSequence = FirstSequence;
+    ObjectiveDelta.ObjectiveId =
+      CrowdWorkerTargetObjectiveIds::PrimaryTarget;
+    ObjectiveDelta.Revision = ObjectiveRevision;
+    ObjectiveDelta.Payload = MoveTemp(ObjectivePayload);
+    if (ObjectiveRevision == 1)
+    {
+      FCrowdWorkerResourceDelta& ControlDelta =
+        Batch.ResourceDeltas.AddDefaulted_GetRef();
+      ControlDelta.InputSequence = FirstSequence + 1;
+      ControlDelta.ResourceId = CrowdWorkerResourceIds::TargetControl;
+      ControlDelta.Revision = 1;
+      ControlDelta.Payload = ControlPayload;
+      Batch.Clock.InputSequence = FirstSequence + 2;
+    }
+    else
+    {
+      Batch.Clock.InputSequence = FirstSequence + 1;
+    }
+    Batch.Clock.SimulationTick =
+      static_cast<uint64>(EffectiveTick);
+    Batch.LastInputSequence = Batch.Clock.InputSequence;
+    Batch.TargetSimulationTimeSeconds = TargetTime;
+    Batch.RecalculateStableHash();
+    return Runtime.SubmitIntentBatch(Batch)
+      == ECrowdAsyncSimulationSubmitResult::Accepted;
+  };
+
+  TestTrue(TEXT("first moving objective accepted"),
+    SubmitObjective(2, 1, 1, FVector2f::ZeroVector));
+  TestTrue(TEXT("first moving objective reaches idle"),
+    WaitForRuntimeIdle(Runtime));
+  {
+    FScopeLock Lock(&Observation.Mutex);
+    TestEqual(TEXT("objective effective tick matches Worker absolute tick"),
+      Observation.EffectiveFixedStepIndex,
+      static_cast<int32>(Observation.AbsoluteSimulationTick));
+    TestEqual(TEXT("pre-round ticks do not enter objective age"),
+      Observation.ObjectiveAgeSeconds, 0.0);
+    TestEqual(TEXT("TargetRevision remains plan revision"),
+      Observation.TargetRevision, 1);
+    TestTrue(TEXT("zero age preserves objective base location"),
+      Observation.EffectiveLocation.Equals(
+        Observation.BaseLocation, 0.001f));
+  }
+
+  TestTrue(TEXT("second moving objective accepted"),
+    SubmitObjective(5, 2, 2, FVector2f(-3.0f, 0.0f)));
+  TestTrue(TEXT("second moving objective reaches idle"),
+    WaitForRuntimeIdle(Runtime));
+  {
+    FScopeLock Lock(&Observation.Mutex);
+    TestEqual(TEXT("objective resource revision advances"),
+      Observation.ObjectiveResourceRevision, uint64{2});
+    TestEqual(TEXT("updated objective remains in absolute clock"),
+      Observation.EffectiveFixedStepIndex,
+      static_cast<int32>(Observation.AbsoluteSimulationTick));
+    TestEqual(TEXT("updated objective age excludes uptime"),
+      Observation.ObjectiveAgeSeconds, 0.0);
+    TestEqual(TEXT("moving objective keeps TargetRevision constant"),
+      Observation.TargetRevision, 1);
+  }
+
+  TestTrue(TEXT("objective clock runtime drains"),
+    Runtime.StopAndDrain(5.0));
+  return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FCrowdWorkerWorkRingEpochTest,

@@ -43,6 +43,17 @@ namespace CrowdWorkerTargetConstants
   constexpr int32 PrimaryTargetParticleAgentId = -1000000001;
 }
 
+struct MASSCROWDRUNTIME_API FCrowdWorkerTargetObjectiveClock
+{
+  // Converts the absolute simulation time carried by a Worker input batch to
+  // the same persistent fixed-tick domain used by
+  // FCrowdWorkerDomainContext::AbsoluteSimulationTick.
+  static bool ResolveEffectiveFixedStepIndex(
+    double EffectiveSimulationTimeSeconds,
+    double FixedSimulationQuantumSeconds,
+    int32& OutEffectiveFixedStepIndex);
+};
+
 struct MASSCROWDRUNTIME_API FCrowdWorkerTargetObjectiveRevision
 {
   int32 TargetRevision = INDEX_NONE;

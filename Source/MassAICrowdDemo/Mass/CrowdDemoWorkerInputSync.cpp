@@ -306,6 +306,10 @@ namespace CrowdDemoWorkerInputSyncPrivate
         if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
             PublishedFlowField, Input.Payload))
           return false;
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoWorkerEnvironmentCheckpoint revision=%llu field_revision=%d build_hash=%u integration_hash=%u source=RuntimeSharedFlowOwner"),
+          Input.Revision, FlowField.Config.Revision,
+          FlowField.BuildHash, FlowField.IntegrationHash);
       }
     }
     for (const FCrowdWorkerVersionedResourceInput& Additional :

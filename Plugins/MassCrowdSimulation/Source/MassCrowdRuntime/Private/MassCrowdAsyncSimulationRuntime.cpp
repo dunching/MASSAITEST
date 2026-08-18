@@ -2455,6 +2455,7 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
       PublishedMirror = MoveTemp(Snapshot);
     Metrics.Generation = Generation.Load();
     Metrics.WorkerEpoch = WorkerEpoch;
+    Metrics.AbsoluteSimulationTick = AbsoluteSimulationTick;
     Metrics.LastAcceptedInputSequence =
       LastAcceptedInputSequence.Load();
     Metrics.LastAppliedInputSequence =
