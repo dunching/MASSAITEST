@@ -13,7 +13,7 @@ namespace CrowdWorkerInteractionDomainPrivate
     14695981039346656037ull;
   constexpr uint64 InteractionFnvPrime64 = 1099511628211ull;
 
-  void Fold(uint64& Hash, const uint64 Value)
+  void InteractionFold(uint64& Hash, const uint64 Value)
   {
     for (uint32 Byte = 0; Byte < sizeof(Value); ++Byte)
     {
@@ -22,7 +22,7 @@ namespace CrowdWorkerInteractionDomainPrivate
     }
   }
 
-  void AppendDouble(TArray<uint8>& Bytes, const double Value)
+  void InteractionAppendDouble(TArray<uint8>& Bytes, const double Value)
   {
     uint64 Bits = 0;
     FMemory::Memcpy(&Bits, &Value, sizeof(Bits));
@@ -30,7 +30,7 @@ namespace CrowdWorkerInteractionDomainPrivate
       Bytes.Add(static_cast<uint8>(Bits >> (Byte * 8)));
   }
 
-  bool ReadDouble(
+  bool InteractionReadDouble(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     double& OutValue)
@@ -283,19 +283,19 @@ uint64 FCrowdWorkerSpatialIndex::CalculateStableHash() const
   Entries.GetKeys(EntityRefs);
   EntityRefs.Sort();
   uint64 Hash = InteractionFnvOffset64;
-  Fold(Hash, 1);
+  InteractionFold(Hash, 1);
   for (const FCrowdStableEntityRef& EntityRef : EntityRefs)
   {
     const FCrowdWorkerSpatialEntry& Entry =
       Entries.FindChecked(EntityRef);
-    Fold(Hash, EntityRef.ProviderId);
-    Fold(Hash, EntityRef.StableEntityId);
-    Fold(Hash, EntityRef.LifecycleSerial);
-    Fold(Hash, GetTypeHash(Entry.Position));
-    Fold(Hash, GetTypeHash(Entry.PhysicalRadiusCm));
-    Fold(Hash, GetTypeHash(Entry.HardSafetyGapCm));
-    Fold(Hash, GetTypeHash(Entry.SoftMarginCm));
-    Fold(Hash, GetTypeHash(Entry.Mobility));
+    InteractionFold(Hash, EntityRef.ProviderId);
+    InteractionFold(Hash, EntityRef.StableEntityId);
+    InteractionFold(Hash, EntityRef.LifecycleSerial);
+    InteractionFold(Hash, GetTypeHash(Entry.Position));
+    InteractionFold(Hash, GetTypeHash(Entry.PhysicalRadiusCm));
+    InteractionFold(Hash, GetTypeHash(Entry.HardSafetyGapCm));
+    InteractionFold(Hash, GetTypeHash(Entry.SoftMarginCm));
+    InteractionFold(Hash, GetTypeHash(Entry.Mobility));
   }
   return Hash;
 }
@@ -314,12 +314,12 @@ bool FCrowdWorkerParticleStateCodec::Encode(
   if (!State.IsValid()) return false;
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
-  AppendDouble(OutPayload.Bytes, State.PositionOffset.X);
-  AppendDouble(OutPayload.Bytes, State.PositionOffset.Y);
-  AppendDouble(OutPayload.Bytes, State.PositionOffset.Z);
-  AppendDouble(OutPayload.Bytes, State.VelocityDelta.X);
-  AppendDouble(OutPayload.Bytes, State.VelocityDelta.Y);
-  AppendDouble(OutPayload.Bytes, State.VelocityDelta.Z);
+  InteractionAppendDouble(OutPayload.Bytes, State.PositionOffset.X);
+  InteractionAppendDouble(OutPayload.Bytes, State.PositionOffset.Y);
+  InteractionAppendDouble(OutPayload.Bytes, State.PositionOffset.Z);
+  InteractionAppendDouble(OutPayload.Bytes, State.VelocityDelta.X);
+  InteractionAppendDouble(OutPayload.Bytes, State.VelocityDelta.Y);
+  InteractionAppendDouble(OutPayload.Bytes, State.VelocityDelta.Z);
   OutPayload.RecalculateStableHash();
   return true;
 }
@@ -335,17 +335,17 @@ bool FCrowdWorkerParticleStateCodec::Decode(
     || Payload.StableHash != Payload.CalculateStableHash())
     return false;
   int32 Offset = 0;
-  return ReadDouble(
+  return InteractionReadDouble(
       Payload.Bytes, Offset, OutState.PositionOffset.X)
-    && ReadDouble(
+    && InteractionReadDouble(
       Payload.Bytes, Offset, OutState.PositionOffset.Y)
-    && ReadDouble(
+    && InteractionReadDouble(
       Payload.Bytes, Offset, OutState.PositionOffset.Z)
-    && ReadDouble(
+    && InteractionReadDouble(
       Payload.Bytes, Offset, OutState.VelocityDelta.X)
-    && ReadDouble(
+    && InteractionReadDouble(
       Payload.Bytes, Offset, OutState.VelocityDelta.Y)
-    && ReadDouble(
+    && InteractionReadDouble(
       Payload.Bytes, Offset, OutState.VelocityDelta.Z)
     && OutState.IsValid();
 }

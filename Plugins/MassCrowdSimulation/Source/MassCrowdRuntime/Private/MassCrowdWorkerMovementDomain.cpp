@@ -30,13 +30,13 @@ namespace CrowdWorkerMovementPlanPrivate
     int32 GrantRemainingSteps = 0;
   };
 
-  void AppendUnsigned(TArray<uint8>& Bytes, const uint32 Value)
+  void MovementPlanAppendUnsigned(TArray<uint8>& Bytes, const uint32 Value)
   {
     for (uint32 Byte = 0; Byte < sizeof(Value); ++Byte)
       Bytes.Add(static_cast<uint8>(Value >> (Byte * 8)));
   }
 
-  bool ReadUnsigned(
+  bool MovementPlanReadUnsigned(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     uint32& OutValue)
@@ -51,7 +51,7 @@ namespace CrowdWorkerMovementPlanPrivate
     return true;
   }
 
-  void AppendFloat(TArray<uint8>& Bytes, const float Value)
+  void MovementPlanAppendFloat(TArray<uint8>& Bytes, const float Value)
   {
     uint32 Bits = 0;
     FMemory::Memcpy(&Bits, &Value, sizeof(Bits));
@@ -59,7 +59,7 @@ namespace CrowdWorkerMovementPlanPrivate
       Bytes.Add(static_cast<uint8>(Bits >> (Byte * 8)));
   }
 
-  bool ReadFloat(
+  bool MovementPlanReadFloat(
     const TConstArrayView<uint8> Bytes,
     int32& Offset,
     float& OutValue)
@@ -92,31 +92,31 @@ namespace CrowdWorkerMovementPlanPrivate
       (State.bUseLocalVelocity ? 1u : 0u)
       | (State.bLocalVelocityValid ? 2u : 0u)
       | (State.bMovementLocked ? 4u : 0u)));
-    AppendFloat(
+    MovementPlanAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(State.AutonomousPreferredVelocity.X));
-    AppendFloat(
+    MovementPlanAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(State.AutonomousPreferredVelocity.Y));
-    AppendFloat(
+    MovementPlanAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(State.AutonomousPreferredVelocity.Z));
-    AppendFloat(
+    MovementPlanAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(State.LocalVelocity.X));
-    AppendFloat(
+    MovementPlanAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(State.LocalVelocity.Y));
-    AppendFloat(
+    MovementPlanAppendFloat(
       OutPayload.Bytes,
       static_cast<float>(State.LocalVelocity.Z));
-    AppendUnsigned(
+    MovementPlanAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint32>(State.NextBlockedAgeSteps));
-    AppendUnsigned(OutPayload.Bytes, State.GrantComponentKey);
-    AppendUnsigned(
+    MovementPlanAppendUnsigned(OutPayload.Bytes, State.GrantComponentKey);
+    MovementPlanAppendUnsigned(
       OutPayload.Bytes, static_cast<uint32>(State.GrantEpoch));
-    AppendUnsigned(
+    MovementPlanAppendUnsigned(
       OutPayload.Bytes,
       static_cast<uint32>(State.GrantRemainingSteps));
     OutPayload.RecalculateStableHash();
@@ -138,14 +138,14 @@ namespace CrowdWorkerMovementPlanPrivate
     float X = 0.0f;
     float Y = 0.0f;
     float Z = 0.0f;
-    if (!ReadFloat(Payload.Bytes, Offset, X)
-      || !ReadFloat(Payload.Bytes, Offset, Y)
-      || !ReadFloat(Payload.Bytes, Offset, Z))
+    if (!MovementPlanReadFloat(Payload.Bytes, Offset, X)
+      || !MovementPlanReadFloat(Payload.Bytes, Offset, Y)
+      || !MovementPlanReadFloat(Payload.Bytes, Offset, Z))
       return false;
     OutState.AutonomousPreferredVelocity = FVector(X, Y, Z);
-    if (!ReadFloat(Payload.Bytes, Offset, X)
-      || !ReadFloat(Payload.Bytes, Offset, Y)
-      || !ReadFloat(Payload.Bytes, Offset, Z))
+    if (!MovementPlanReadFloat(Payload.Bytes, Offset, X)
+      || !MovementPlanReadFloat(Payload.Bytes, Offset, Y)
+      || !MovementPlanReadFloat(Payload.Bytes, Offset, Z))
       return false;
     OutState.LocalVelocity = FVector(X, Y, Z);
     OutState.bUseLocalVelocity =
@@ -157,12 +157,12 @@ namespace CrowdWorkerMovementPlanPrivate
     uint32 NextBlockedAgeSteps = 0;
     uint32 GrantEpoch = 0;
     uint32 GrantRemainingSteps = 0;
-    if (!ReadUnsigned(
+    if (!MovementPlanReadUnsigned(
         Payload.Bytes, Offset, NextBlockedAgeSteps)
-      || !ReadUnsigned(
+      || !MovementPlanReadUnsigned(
         Payload.Bytes, Offset, OutState.GrantComponentKey)
-      || !ReadUnsigned(Payload.Bytes, Offset, GrantEpoch)
-      || !ReadUnsigned(
+      || !MovementPlanReadUnsigned(Payload.Bytes, Offset, GrantEpoch)
+      || !MovementPlanReadUnsigned(
         Payload.Bytes, Offset, GrantRemainingSteps)
       || NextBlockedAgeSteps > static_cast<uint32>(MAX_int32)
       || GrantEpoch > static_cast<uint32>(MAX_int32)
