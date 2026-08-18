@@ -1419,7 +1419,10 @@ static void ExecuteRoundFlowPreferredVelocity(
   UCrowdDemoRoundSimPipelineSubsystem* Pipeline = World
     ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>()
     : nullptr;
-  if (!Pipeline || !Pipeline->IsActive())
+  UMassCrowdRuntimeSubsystem* RuntimeSubsystem = World
+    ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+    : nullptr;
+  if (!Pipeline || !RuntimeSubsystem || !Pipeline->IsActive())
   {
     return;
   }
@@ -1428,7 +1431,7 @@ static void ExecuteRoundFlowPreferredVelocity(
   WorkInput.FixedStepIndex = Pipeline->GetCurrentFixedStepIndex();
   WorkInput.PlanRevision = Pipeline->GetCurrentPlanRevision();
   WorkInput.FixedStepSeconds = Rules.FixedStepSeconds;
-  WorkInput.Fields.Add(&Pipeline->GetRuntimeSharedFlowField());
+  WorkInput.Fields.Add(&RuntimeSubsystem->GetSharedFlowResource().Field);
   if (Pipeline->IsBidirectionalSwap())
   {
     WorkInput.Fields.Add(Pipeline->FindRuntimeBidirectionalSwapFlowField(0));
@@ -1804,8 +1807,14 @@ static void ExecuteRoundTargetRegionPopulationBuild(
 {
   UWorld* World = EntityManager.GetWorld();
   auto* Pipeline = World ? World->GetSubsystem<UCrowdDemoRoundSimPipelineSubsystem>() : nullptr;
-  if (!Pipeline || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
+  const UMassCrowdRuntimeSubsystem* RuntimeSubsystem = World
+    ? World->GetSubsystem<UMassCrowdRuntimeSubsystem>()
+    : nullptr;
+  if (!Pipeline || !RuntimeSubsystem
+    || Pipeline->GetRules().Scenario != ECrowdDemoScenario::SimRoundSoftPressure
     || Pipeline->GetRules().TargetRegionTransportSettings.bEnabled == 0) return;
+  const FCrowdSharedFlowField& RuntimeSharedFlowField =
+    RuntimeSubsystem->GetSharedFlowResource().Field;
   if (!Pipeline->IsBoundarySnapshotCurrent())
   {
     UE_LOG(LogTemp, Error,
@@ -1919,7 +1928,7 @@ static void ExecuteRoundTargetRegionPopulationBuild(
         RunTargetRegionDemandWork(
           Runtime.Agents, ExternalAgents, Settings,
           Pipeline->GetRules().FlowFieldConfig,
-          &Pipeline->GetRuntimeSharedFlowField(), Runtime.Topology,
+          &RuntimeSharedFlowField, Runtime.Topology,
           Runtime.Demand, true, bRefreshSourceAttachments,
           &DemandBoundaryInput, false);
         Pipeline->RecordTargetDemandPerformance(false);
@@ -1929,7 +1938,7 @@ static void ExecuteRoundTargetRegionPopulationBuild(
         RunTargetRegionDemandWork(
           Runtime.Agents, ExternalAgents, Settings,
           Pipeline->GetRules().FlowFieldConfig,
-          &Pipeline->GetRuntimeSharedFlowField(), Runtime.Topology,
+          &RuntimeSharedFlowField, Runtime.Topology,
           Runtime.Demand, false, true, &DemandBoundaryInput, false);
         Pipeline->RecordTargetDemandPerformance(true);
       }
@@ -1990,7 +1999,7 @@ static void ExecuteRoundTargetRegionPopulationBuild(
         >= Pipeline->GetRules().TargetRegionTransportSettings.PlanLifetimeSteps;
     RunTargetRegionDemandWork(
       Agents, {}, Settings, Pipeline->GetRules().FlowFieldConfig,
-      &Pipeline->GetRuntimeSharedFlowField(),
+      &RuntimeSharedFlowField,
       Pipeline->GetPreparedTargetRegionTopology(),
       Pipeline->GetPreparedTargetRegionDemand(), true,
       bRefreshSourceAttachments, &DemandBoundaryInput, false);
@@ -2000,7 +2009,7 @@ static void ExecuteRoundTargetRegionPopulationBuild(
   {
     RunTargetRegionDemandWork(
       Agents, {}, Settings, Pipeline->GetRules().FlowFieldConfig,
-      &Pipeline->GetRuntimeSharedFlowField(),
+      &RuntimeSharedFlowField,
       Pipeline->GetPreparedTargetRegionTopology(),
       Pipeline->GetPreparedTargetRegionDemand(), false, true,
       &DemandBoundaryInput, false);
