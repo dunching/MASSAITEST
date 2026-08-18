@@ -891,18 +891,31 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
   const TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
   FCrowdWorkerDomainOutput& OutOutput)
 {
-  const auto Reject = [&Context, &WorkItems](
+  bool bRejectTargetContextValid = false;
+  int32 RejectTargetRevision = INDEX_NONE;
+  FVector2f RejectTargetLocation = FVector2f::ZeroVector;
+  FVector2f RejectTargetVelocity = FVector2f::ZeroVector;
+  const auto Reject = [&Context, &WorkItems,
+    &bRejectTargetContextValid, &RejectTargetRevision,
+    &RejectTargetLocation, &RejectTargetVelocity](
     const TCHAR* Stage,
     const uint32 CohortKey = 0)
   {
     UE_LOG(LogTemp, Error,
-      TEXT("CrowdWorkerTargetDomainRejected stage=%s generation=%llu epoch=%llu input=%llu work_count=%d cohort=%u"),
+      TEXT("CrowdWorkerTargetDomainRejected stage=%s fixed_step=%llu generation=%llu epoch=%llu input=%llu work_count=%d cohort=%u target_context_valid=%d target_revision=%d target_x=%.3f target_y=%.3f target_velocity_x=%.3f target_velocity_y=%.3f"),
       Stage,
+      Context.AbsoluteSimulationTick,
       Context.Generation,
       Context.WorkerEpoch,
       Context.LastAppliedInputSequence,
       WorkItems.Num(),
-      CohortKey);
+      CohortKey,
+      bRejectTargetContextValid ? 1 : 0,
+      RejectTargetRevision,
+      RejectTargetLocation.X,
+      RejectTargetLocation.Y,
+      RejectTargetVelocity.X,
+      RejectTargetVelocity.Y);
     return false;
   };
   if (!Context.Resources || !Context.EntityStates
@@ -1058,6 +1071,10 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
       + Objective.TargetVelocity
         * static_cast<float>(ObjectiveAgeSeconds);
     EffectiveSettings.TargetVelocity = Objective.TargetVelocity;
+    bRejectTargetContextValid = true;
+    RejectTargetRevision = Objective.TargetRevision;
+    RejectTargetLocation = EffectiveSettings.TargetLocation;
+    RejectTargetVelocity = EffectiveSettings.TargetVelocity;
     CurrentCohorts.Add(Input.CohortKey);
     FCohortRuntime& Runtime = Cohorts.FindOrAdd(Input.CohortKey);
     if (!Runtime.Topology.bValid
@@ -1127,8 +1144,13 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
     if (!Demand.bValid)
     {
       UE_LOG(LogTemp, Error,
-        TEXT("CrowdWorkerTargetDemandRejected cohort=%u agents=%d external_agents=%d regions=%d feasible_regions=%d desired=%d source_attachment_failures=%d topology_cells=%d topology_edges=%d target_x=%.3f target_y=%.3f flow_revision=%llu flow_build_hash=%u"),
+        TEXT("CrowdWorkerTargetDemandRejected fixed_step=%llu generation=%llu epoch=%llu input=%llu cohort=%u target_revision=%d agents=%d external_agents=%d regions=%d feasible_regions=%d desired=%d source_attachment_failures=%d topology_cells=%d topology_edges=%d target_x=%.3f target_y=%.3f target_velocity_x=%.3f target_velocity_y=%.3f flow_revision=%llu flow_build_hash=%u"),
+        Context.AbsoluteSimulationTick,
+        Context.Generation,
+        Context.WorkerEpoch,
+        Context.LastAppliedInputSequence,
         Input.CohortKey,
+        Objective.TargetRevision,
         Input.Agents.Num(),
         Input.ExternalAgents.Num(),
         Demand.Demand.Regions.Num(),
@@ -1139,6 +1161,8 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         Runtime.Topology.Topology.Edges.Num(),
         EffectiveSettings.TargetLocation.X,
         EffectiveSettings.TargetLocation.Y,
+        EffectiveSettings.TargetVelocity.X,
+        EffectiveSettings.TargetVelocity.Y,
         FlowField.Revision,
         FlowField.BuildHash);
       return Reject(TEXT("demand"), Input.CohortKey);

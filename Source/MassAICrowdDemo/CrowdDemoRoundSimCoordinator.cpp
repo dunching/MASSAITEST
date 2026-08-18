@@ -13,6 +13,8 @@
 #include "Mass/CrowdDemoValidCorridorTransitKernel.h"
 #include "MassCrowdReplicationActor.h"
 #include "MassCrowdReplicationChannel.h"
+#include "MassCrowdRuntimeSubsystem.h"
+#include "MassCrowdWorkerTargetObservability.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
@@ -38,6 +40,89 @@ namespace
   constexpr uint32 CrowdDemoRoundCheckpointAgentMagic = 0x41435231u;
   constexpr uint32 CrowdDemoProjectileEventMagic = 0x45565031u;
   constexpr uint32 CrowdDemoRoundResultHeaderMagic = 0x48525231u;
+
+  void LogWorkerTargetObservation(
+    UWorld& World,
+    const UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
+    const int32 RoundId,
+    const int32 ExpectedTargetAgentCount)
+  {
+    const UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
+      World.GetSubsystem<UMassCrowdRuntimeSubsystem>();
+    FCrowdWorkerTargetObservation Observation;
+    if (RuntimeSubsystem)
+    {
+      FCrowdWorkerTargetObserver::Build(
+        RuntimeSubsystem->GetWorkerResultApplyProxy(),
+        ExpectedTargetAgentCount,
+        Observation);
+    }
+    const int32 FixedStep = FMath::Max(
+      0, Pipeline.GetCurrentFixedStepIndex() - 1);
+    const FCrowdDemoTargetFact& Target = Pipeline.GetTargetFact();
+    for (const FCrowdWorkerTargetCohortObservation& Cohort :
+      Observation.Cohorts)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdWorkerTargetCohortCheckpoint role=server round_id=%d cohort=%u valid=%d topology_revision=%u target_revision=%d feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d execution_hash=%u guidance_hash=%u target_state_count=%d unrouted_target_state_count=%d first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u source=WorkerResultApply"),
+        RoundId, Cohort.CohortKey, Cohort.bValid ? 1 : 0,
+        Cohort.TopologyRevision, Cohort.TargetRevision,
+        Cohort.FeasibleGraphHash, Cohort.PlanEpoch,
+        Cohort.PlanBuildFixedStep, Cohort.MembershipHash,
+        Cohort.ExternalPopulationHash, Cohort.TransportHash,
+        Cohort.RoutedAgentCount, Cohort.PlanUnroutedAgentCount,
+        Cohort.ExecutionHash, Cohort.GuidanceHash,
+        Cohort.TargetStateCount, Cohort.UnroutedTargetStateCount,
+        Cohort.FirstUnroutedEntityRef.ProviderId,
+        Cohort.FirstUnroutedEntityRef.StableEntityId,
+        Cohort.FirstUnroutedEntityRef.LifecycleSerial);
+    }
+    const bool bObjectiveRevisionMatches =
+      Observation.TargetRevision == Target.TargetRevision;
+    const bool bValid = RuntimeSubsystem
+      && Observation.bValid
+      && bObjectiveRevisionMatches;
+    const uint64 RuntimeWorkerEpoch = RuntimeSubsystem
+      ? RuntimeSubsystem->GetAsyncSimulationRuntime()
+          .GetMetrics().WorkerEpoch
+      : 0;
+    const FCrowdWorkerTargetCohortObservation* SingleCohort =
+      Observation.Cohorts.Num() == 1
+        ? &Observation.Cohorts[0] : nullptr;
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdWorkerTargetCheckpoint role=server round_id=%d valid=%d fixed_step=%d generation=%llu runtime_worker_epoch=%llu retained_target_worker_epoch=%llu input_sequence=%llu publish_sequence=%llu target_revision=%d target_x=%.3f target_y=%.3f target_velocity_x=%.3f target_velocity_y=%.3f objective_revision_match=%d expected_target_agent_count=%d target_agent_count=%d valid_target_state_count=%d cohort_count=%d topology_revision=%u feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d execution_hash=%u guidance_hash=%u unrouted_target_state_count=%d first_invalid_provider=%u first_invalid_stable_entity=%llu first_invalid_lifecycle=%u first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u target_metrics_available=0 topology_build_count=-1 plan_build_count=-1 plan_cache_hit_count=-1 membership_change_count=-1 published_patch_count=-1 worker_state_hash=%llu source=WorkerResultApply"),
+      RoundId, bValid ? 1 : 0, FixedStep,
+      Observation.Generation, RuntimeWorkerEpoch,
+      Observation.WorkerEpoch,
+      Observation.LastAppliedInputSequence,
+      Observation.PublishSequence, Observation.TargetRevision,
+      Target.Location.X, Target.Location.Y,
+      Target.Velocity.X, Target.Velocity.Y,
+      bObjectiveRevisionMatches ? 1 : 0,
+      Observation.ExpectedTargetAgentCount,
+      Observation.TargetAgentCount,
+      Observation.ValidTargetStateCount,
+      Observation.Cohorts.Num(),
+      SingleCohort ? SingleCohort->TopologyRevision : 0,
+      SingleCohort ? SingleCohort->FeasibleGraphHash : 0,
+      SingleCohort ? SingleCohort->PlanEpoch : 0,
+      SingleCohort ? SingleCohort->PlanBuildFixedStep : INDEX_NONE,
+      SingleCohort ? SingleCohort->MembershipHash : 0,
+      SingleCohort ? SingleCohort->ExternalPopulationHash : 0,
+      SingleCohort ? SingleCohort->TransportHash : 0,
+      SingleCohort ? SingleCohort->RoutedAgentCount : 0,
+      SingleCohort ? SingleCohort->PlanUnroutedAgentCount : 0,
+      SingleCohort ? SingleCohort->ExecutionHash : 0,
+      SingleCohort ? SingleCohort->GuidanceHash : 0,
+      Observation.UnroutedTargetStateCount,
+      Observation.FirstInvalidEntityRef.ProviderId,
+      Observation.FirstInvalidEntityRef.StableEntityId,
+      Observation.FirstInvalidEntityRef.LifecycleSerial,
+      Observation.FirstUnroutedEntityRef.ProviderId,
+      Observation.FirstUnroutedEntityRef.StableEntityId,
+      Observation.FirstUnroutedEntityRef.LifecycleSerial,
+      Observation.StableHash);
+  }
 
   template <typename T>
   bool EncodeProductPayload(
@@ -1073,6 +1158,12 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
   if (Pipeline->GetRules().Scenario == ECrowdDemoScenario::SimRoundSoftPressure)
   {
     const FCrowdDemoRoundCompareMetrics& Metrics = Pipeline->GetLastCompletedRoundMetrics();
+    if (Pipeline->GetRules().TargetRegionTransportSettings.bEnabled != 0)
+    {
+      LogWorkerTargetObservation(
+        *World, *Pipeline, RoundResultPacket.RoundId,
+        RoundResultPacket.Agents.Num());
+    }
     const FCrowdDemoParticleMetrics& Particle = RoundResultPacket.ParticleMetrics;
     UE_LOG(LogTemp, Display,
       TEXT("CrowdDemoParticleCheckpoint role=server round_id=%d agents=%d navigation_hard_clearance_cm=%.3f flow_connectivity_contract_version=%d flow_field_build_hash=%u flow_valid_directed_edges=%d flow_recovered_count=%d desired_segment_hard_obstacle_violation_count=%d soft_pair_count=%d soft_violating_pair_count=%d soft_error_cm_p50=%.3f soft_error_cm_p95=%.3f soft_error_cm_max=%.3f hard_pair_violation_count=%d swept_pair_violation_count=%d pressure_influenced_agent_count=%d first_influenced_iteration_max=%d particle_corrected_agent_count=%d max_agent_correction_cm=%.3f settling_steps=%d obstacle_penetration_count=%d bounds_violation_count=%d environment_soft_contact_count=%d environment_soft_applied_agent_count=%d environment_soft_error_cm_p50=%.3f environment_soft_error_cm_p95=%.3f environment_soft_error_cm_max=%.3f environment_soft_requested_correction_cm_max=%.3f environment_soft_realized_correction_cm_max=%.3f unified_hard_constraint_count=%d unified_hard_residual_cm_max=%.3f unified_hard_infeasible_count=%d invalid_step_count=%d global_fallback_step_count=%d particle_solver_ms_p95=%.3f particle_candidate_hash=%u particle_applied_state_hash=%u failure_fixture_step=%d failure_pair=%d,%d failure_fixture_hash=%u rollback_hit=%d rollback_miss=%d rollback_mismatch=%d rollback_replayed_steps=%d source=MassPipeline"),

@@ -38,10 +38,11 @@ RETIRED       验收对象/机制已从当前架构物理删除，不再作为�
 | Legacy Demo Prepared Round Adapter | RETIRED | 旧 Target/Resource prepared transaction tests 随机制删除，不再是当前验收门。 | 由 Runtime Owner Barrier + Worker domain result tests 替代。 |
 | Minimal Full Production T8 server-only | REVALIDATE | source cut 前 baseline：900 batches、90,940 patches、150 Ordered Events、attack/spawn/impact/damage=50/50/50/50、duplicate=0/0。 | 新 bootstrap + direct intent path 上重新跑正式 server-only T8。 |
 | 双端 T8 formal runner | REVALIDATE / tool issue | source cut 前存在业务日志，但 runner 有 completion 误判/超时。 | 修 runner 后在新主链正式双端执行。 |
-| T5 600 Tick | REVALIDATE | source cut 前短窗口可通过。 | post-cut 短窗口先证明基本 Target/Movement/Particle 链。 |
+| T5 Worker Target observability | PASS ON CANDIDATE | ResultApply `Target` / `TargetCohort` 只读 checkpoint valid；Worker Target rejection 已进入 runner hard-failure gate。 | 合并 main 后重跑，再进入长窗口。 |
+| T5 600 Tick | PASS ON CANDIDATE | Static 20-agent：fixed_step=599、generation=1、input=665、publish=600、Worker Target checkpoint valid=1、unrouted=0。 | 合并 main 后重跑。 |
 | T5 >900 Tick | FAIL / unresolved baseline | step ~886 曾出现 Target Demand `feasible-region-insufficient`；尚无修复证据。 | Static + Moving >=1000 Tick 无该失败。 |
-| TargetRegionTransport automation | BASELINE | 旧 7/7 结果存在。 | source cut 后回归；T5 修复后再次回归。 |
-| RuntimeV2 Target | BASELINE | 旧 1/1 结果存在。 | source cut 后回归。 |
+| TargetRegionTransport automation | PASS ON CANDIDATE | `CrowdDemo.SoftPressure.TargetRegionTransport` PASS 7/7。 | Target 算法修改后再次回归。 |
+| RuntimeV2 Target | PASS ON CANDIDATE | Target domain 1/1、10k scoped cohort 1/1、Target observability 2/2。 | 合并 main 后重跑。 |
 | Lifecycle | BASELINE | 旧 2/2 结果存在。 | source cut 后回归，特别验证 first bootstrap / ongoing intent 生命周期序列。 |
 | WorkRing / TimeWheel / Spatial 10k | BASELINE | 1k/2k/5k/10k scheduler、10k sparse wakeup、10k dirty spatial 专项已有记录。 | WA9 前再次在最终 source state 执行。 |
 | Target 10k 双 Cohort scoped invalidation | BASELINE | 受影响 5k Cohort 执行 40×128 Guidance shards；未受影响 Cohort 无 Dirty/Topology rebuild。 | T5/Target 变更后保持同样 scoped invalidation。 |
