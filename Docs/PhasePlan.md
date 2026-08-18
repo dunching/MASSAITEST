@@ -9,11 +9,11 @@
 当前总方向：
 
 ```text
-WA8 Source Architecture Cut          = structurally closed
+WA8 Source Architecture Cut          = CLOSED / structural
         ↓
-Post-cut Runtime Regression Gate     = next
+Post-cut Runtime Regression Gate     = PARTIAL
         ↓
-T5 Long-Window Correctness
+T5 Long-Window Correctness           = OPEN / active
         ↓
 Duplicate Kernel / Host Shell Cleanup
         ↓
@@ -24,6 +24,12 @@ WA9 Full-Scale Acceptance
 Target Architecture
 ```
 
+T5 的边界/容量精确设计见：
+
+```text
+Reference/TargetRegionBoundaryCapacityContract.md
+```
+
 ---
 
 ## 2. 当前优先级
@@ -31,8 +37,8 @@ Target Architecture
 | 顺序 | Gate | 状态 | 关闭条件 |
 |---:|---|---|---|
 | 0 | WA8 Source Architecture Cut | CLOSED / structural | 第一代跨帧 Round Transaction、完整 rollback source、`FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator、旧 Stage surface、Prepared second-pass commit channels 已从 Production source 退出。 |
-| 1 | Post-cut Runtime Regression | OPEN | 新 `main` 完成 UE build、Architecture automation、核心 T1–T8、checkpoint/network/late join/diagnostic 回归；旧 baseline 不能自动继承为当前 PASS。 |
-| 2 | T5 Long-Window Correctness | OPEN | 关闭 step ~886 Target Demand `feasible-region-insufficient`；Static/Moving 1000+ Tick 都通过。 |
+| 1 | Post-cut Runtime Regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap、ordinary direct-intent、minimal T8、Target observability 已重新建立；仍需补齐 T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8 等正式回归。 |
+| 2 | T5 Long-Window Correctness | OPEN / active | Static/Moving 1000+ Tick；Moving 目标靠边/角落时按 clipped Polar Topology + finite capacity + overflow holding 正常运行，不因合法容量饱和 fail。 |
 | 3 | Duplicate Kernel / Host Shell Cleanup | OPEN | 删除确认失去消费者的 Demo generic duplicate；把 RoundSimPipeline 按 Host Plan / Bootstrap / Metrics / Checkpoint 职责进一步拆分。 |
 | 4 | Large Particle Island Scaling | OPEN | Island-level task parallelism与单大型 Interaction Island Cell-Pair Owner / per-round barrier 分片获得确定性与性能证据。 |
 | 5 | WA9 Full-Scale Acceptance | OPEN | 同一 Production Runtime 在 1k→2k→5k→10k 完整 Simulation + Network + Presentation + Performance 门通过。 |
@@ -88,53 +94,52 @@ WA8 source cut 并没有删除首次 Worker 接管所需的 host bootstrap prepa
 
 这不是旧 Round Transaction 的保留版本，也不能扩展成新的长期 GT simulator。
 
-## 3.3 为什么 WA8 只标 structural closed
+## 3.3 Source cut 与 runtime evidence 分离
 
-本轮 source cut 修改了 Demo live execution path，并删除了旧 PostFinalize/Particle 诊断 side effects。
+WA8 的 source ownership / transaction structure 已关闭。
 
-因此当前只可以确认：
-
-```text
-source ownership / transaction structure = closed
-```
-
-不能确认：
-
-```text
-runtime behavior regression = passed
-```
-
-后者由 Gate 1 单独关闭。
+运行正确性不依赖历史结构结论自动继承，而由后续 regression / scenario gate 单独建立。
 
 ---
 
 # 4. Gate 1 — Post-cut Runtime Regression
 
-这是当前最高优先级。
+当前已经重新证明：
 
-目标不是新增功能，而是证明 source cut 后的 Worker-only live path 真正可运行，并重新建立可信测试基线。
+```text
+Default Unity Development Editor        PASS
+DisableUnity Development Editor         PASS
+PersistentWorkerProductionStructure     PASS
+Runtime WorkerResultApply / OwnerBarrier PASS
+first-step bootstrap                    PASS
+ordinary direct-intent                  PASS
+minimal T8 server-only                  PASS
+Worker Target observability             PASS
+```
+
+这意味着 Worker-only live path 已从“结构成立”进入“核心链真实可运行”。
+
+Gate 1 尚未整体关闭，因为仍缺：
+
+```text
+T1/T2/T3/T4/T6/T7 post-cut regression
+network / checkpoint / correction / late join
+双端 T8 formal runner
+其余被 source cut 影响的 diagnostics
+```
 
 ## 4.1 Build / structure
 
-至少执行：
+继续保持：
 
-```text
-Development Editor build
-DisableUnity build where current project requires it
-CrowdDemo.Architecture.PersistentWorkerProductionStructure
-Runtime Worker Result Apply / Owner Commit Barrier automation
-```
-
-要求：
-
-- 无编译错误。
+- Default Unity 与 DisableUnity 都必须可编译。
 - 旧 transaction / Stage / Prepared second-pass symbol 不复活。
 - `CrowdDemoRoundSimProcessors.h` 仍只有 InputSync + ResultApply 两个 simulation processor。
 - Runtime 不反向依赖 Demo。
 
 ## 4.2 Bootstrap / ordinary tick
 
-必须分别验证：
+已经建立的关键合同必须保持：
 
 ```text
 first Production step
@@ -148,7 +153,7 @@ later Production steps
   → Worker result sequence exact match
 ```
 
-禁止为了回归通过重新引入旧 Round fallback。
+禁止为了后续 T5/边界修复重新引入旧 Round fallback。
 
 ## 4.3 Result Apply / checkpoint
 
@@ -161,26 +166,9 @@ later Production steps
 - Checkpoint 在 Worker owner commit 之后生成。
 - authoritative correction 会正确 invalidate in-flight generation。
 
-## 4.4 T1–T8 回归策略
+## 4.4 Diagnostics recovery
 
-不要求第一轮立刻把所有场景都重新宣告正式 PASS；顺序建议：
-
-```text
-Architecture + Runtime atomicity
-→ 最小 T8 server-only
-→ T5 short window
-→ T1/T2/T3/T4/T6/T7
-→ 双端 T8
-→ T5 long window
-```
-
-原因：最小 T8 最快覆盖 Worker Combat/Projectile/ResultApply；T5 最快暴露 Target/Movement/Particle bootstrap 与连续推进问题。
-
-## 4.5 Diagnostics recovery
-
-旧 PostFinalize/Particle 第二遍路径删除后，需要逐项确认指标现在由什么权威事实产生。
-
-分类：
+旧 PostFinalize/Particle 第二遍路径删除后，指标按以下分类恢复：
 
 ```text
 A. still produced from Worker result / retained state
@@ -189,55 +177,178 @@ C. test-only diagnostic that needs a new explicit observer
 D. obsolete metric that should be deleted
 ```
 
-禁止仅为恢复日志重新建立第二套 simulation commit path。
-
-## 4.6 Gate 关闭条件
-
-至少满足：
-
-```text
-UE build PASS
-Architecture automation PASS
-Runtime ResultApply atomicity PASS
-first-step bootstrap PASS
-ordinary Production intent path PASS
-minimal T8 server-only post-cut PASS
-representative movement/target scenario post-cut PASS
-checkpoint/network basic regression PASS
-critical diagnostics either restored or explicitly retired
-```
-
-关闭后，`TestScenarioMatrix.md` 才能把对应 pre-cut baseline 恢复为当前 PASS。
+Worker Target observability 已按只读 ResultApply `Target` / `TargetCohort` observer 完成；类似修复不得重新建立 simulation writer。
 
 ---
 
 # 5. Gate 2 — T5 Long-Window Correctness
 
-当前已知历史 blocker：长窗口在 step ~886 出现 Target Demand `feasible-region-insufficient`；600 Tick 成功不能覆盖。
+这是当前 active correctness gate。
 
-先在 Gate 1 证明新主链基本运行，再继续定位长期问题，避免把 source-cut regression 与旧 T5 correctness bug 混在一起。
+## 5.1 已关闭的 T5 子问题
 
-处理原则：
+Static T5 已取得 1000+ Tick 重复确定性证据。
 
-- 建立稳定 1000+ Tick Static / Moving runner。
-- 同时记录 Target Revision、Feasible Graph Hash、Demand、Plan、Quota、Unrouted、Cohort revision。
-- 判断问题来自 Demand、可行图变化、old Plan reuse、quota execution、terminal retention 还是供需失配。
-- 修复必须作用于通用 Target Region Transport 合同。
-- 禁止按 step / AgentId / map / region 写生产特判。
-- 修复后重跑短窗口与 10k scoped cohort 专项，避免局部修复破坏增量失效行为。
-
-关闭门：
+Moving T5 原先在 absolute/round-local clock 混用与 dynamic SharedFlow stale 时出现的 SourceAttachment failure 已定位并修复：
 
 ```text
-T5 Static >= 1000 Tick PASS
-T5 Moving >= 1000 Tick PASS
+Objective effective tick
+→ Worker persistent absolute tick domain
+
+Moving Target external fact
+→ Runtime-owned dynamic SharedFlow refresh
+→ versioned Environment resource
+→ Worker Target
+```
+
+旧 Moving failure 的典型特征：
+
+```text
+source_attachment_failures = 20 / 20
+```
+
+在当前修复后不再出现。
+
+因此不能再把 `TargetRevision=1` 或 step ~398 SourceAttachment 当成当前 blocker。
+
+## 5.2 当前真实 blocker：边缘/角落 clipped capacity
+
+canonical Moving 长窗口在目标继续靠近 Environment / NavMesh 边缘时暴露了不同失败：
+
+```text
+absolute fixed_step = 1460
+target = (-3171, 1900)
+target_velocity = (-90, 0)
+feasible_regions = 3 / 16
+desired = 19
+source_attachment_failures = 0
+topology_cells = 432
+topology_edges = 202
+```
+
+这说明：
+
+```text
+SourceAttachment        = healthy
+Moving objective clock = healthy
+Dynamic SharedFlow      = refreshing
+```
+
+剩余问题是现有 Demand 合同仍把“完整 Polar Region 被真实环境边界裁剪后容量不足”作为 fatal invalid。
+
+用户已确认产品/算法设计方向：
+
+> **Target 可以移动到地图边缘/角落；Target Region 只在有效 NavMesh / Environment 区域生成/保留有效 Cell。有效 Cell 的有限容量被占满后，其余 Agent 不得继续往已饱和区域内挤。**
+
+精确合同以：
+
+```text
+Reference/TargetRegionBoundaryCapacityContract.md
+```
+
+为准。
+
+## 5.3 实施 Slice A — Clipped Feasible Topology
+
+目标：
+
+```text
+Polar candidate cells
+→ Environment/NavMesh/reachability/clearance filter
+→ only feasible cells contribute Target capacity
+```
+
+要求：
+
+- 不要求理论 16 Region 全部存在。
+- Target 靠边时自然裁剪；进入角落时可只剩局部/约 1/4 可行域。
+- 被裁剪 Cell 不产生 Demand capacity / Plan claim。
+- 不通过 reflected Target motion 来规避问题。
+- 不按 map / step / region 写生产特判。
+
+## 5.4 实施 Slice B — Finite Cell Capacity
+
+每个 feasible Cell 必须有确定性的有限容量。
+
+```text
+TotalFeasibleCapacity = Σ CellCapacity
+AssignablePopulation  = min(DesiredPopulation, TotalFeasibleCapacity)
+OverflowPopulation    = max(0, DesiredPopulation - TotalFeasibleCapacity)
+```
+
+注意：
+
+- 这不是永久 Agent Slot 系统。
+- Cell 可以共享，但不能无限共享。
+- Capacity 可以由 usable geometry + physical profile / spacing contract 派生。
+- exact capacity formula 必须 deterministic；需要专项设计/测试，而不是 magic number。
+
+## 5.5 实施 Slice C — Plan / Claim / Overflow
+
+Target Plan / Execution 必须成为容量 admission owner：
+
+```text
+Occupied + ActiveClaims <= CellCapacity
+```
+
+当容量满时：
+
+- 新 Agent 不得继续消费该 Cell 的占用资格。
+- 不得让所有 Agent 继续朝饱和 Target interior 压入，再靠 ORCA/Particle 被动顶住。
+- 未获容量的 Agent 进入合法 CapacityHold / Overflow 语义。
+- CapacityHold 必须与真正的 `UnroutedFailure` 区分。
+- 新容量出现时，Overflow Agent 按稳定顺序重新参与分配。
+
+Local Predictive / ORCA / Particle 仍负责局部安全，不负责 Target capacity admission。
+
+## 5.6 实施 Slice D — Moving Cell 生命周期
+
+Target 移动导致 Cell valid/invalid 时：
+
+```text
+valid → invalid
+  → remove capacity
+  → release/migrate claim
+  → reassign or Overflow
+
+invalid → valid
+  → add capacity
+  → deterministic refill from Overflow
+```
+
+要求无 stale claim、无超卖、无大规模抢占往返振荡。
+
+## 5.7 Gate 2 验收矩阵
+
+至少：
+
+```text
+A. Center / full topology
+B. Edge clipped topology
+C. Corner / quarter topology
+D. Capacity saturation
+E. Capacity release / refill
+F. Moving edge-in / edge-out
+G. Deterministic repeat
+```
+
+正式关闭条件：
+
+```text
+T5 Static >= 1000 Tick PASS + repeat deterministic
+T5 Moving >= 1000 Tick PASS + repeat deterministic
 TargetRegionTransport automation PASS
 RuntimeV2 Target automation PASS
+Target affected cohort 10k PASS
+boundary/corner capacity tests PASS
+Occupied / ActiveClaims never exceed Capacity
+legal Overflow does not count as unexplained UnroutedFailure
 stale lifecycle = 0
-unexplained invalid plan = 0
-unexplained unrouted = 0
-repeated run Stable Hash consistent
+invalid plan / stale claim = 0
+Worker Target rejection = 0 for legal capacity saturation
 ```
+
+修复不得按 step / AgentId / map / region 写生产特判。
 
 ---
 
@@ -363,7 +474,7 @@ WA9 是完整 Production Agent Runtime 验收，不是 WorkRing/Spatial 微基�
 - Lifecycle / continuous spawn-despawn
 - Behavior Source / Capability
 - Shared Flow / Resource revision
-- Target / Cohort / Polar Transport
+- Target / Cohort / clipped capacity / Overflow
 - Combat / Projectile
 - Movement / Local Predictive
 - Particle / Interaction
@@ -397,6 +508,8 @@ GT Result Apply 必须保持有界 Dirty Apply，不能为了 10k 重新恢复�
 - runner FAIL 时不得人工改报正式 PASS。
 - post-cut 第一次双端 T8 必须重新建立新的 Golden / event / performance baseline。
 
+T5 Worker Target runner 当前已能把 demand/plan/guidance/domain rejection 作为 hard failure；容量饱和实现后，必须保证合法 Overflow 不被误报为 rejection。
+
 ---
 
 # 10. 当前不优先做
@@ -404,11 +517,13 @@ GT Result Apply 必须保持有界 Dirty Apply，不能为了 10k 重新恢复�
 在上述 Gate 关闭前，不优先：
 
 - 新 Demo-specific Movement Algorithm。
-- 新 Slot / permanent Region Owner 系统。
+- 永久 Agent Slot / permanent Region Owner 系统。
 - 新 GT Simulation Authority。
 - 为已删除 Round API 建兼容层。
 - 通过减少实体数量/关闭安全阶段伪造性能 PASS。
 - 没有 profile 证据前重写 Target min-cost flow。
+
+注意：Gate 2 所需的 **finite Cell capacity / transient claim / Overflow** 不属于“永久 Slot 系统”，是当前 Target Region correctness 合同的一部分。
 
 `FCrowdTargetRegionTransportKernel::SolveTransport()` 的逐单位增广可能成为大 deficit 热点，但必须先有 profile 证据。
 
@@ -427,6 +542,6 @@ Demo              = production verification host
 Legacy Round DAG  = physically absent from production
 ```
 
-当前最重要的下一动作不是继续设计 Authority，而是：
+当前最重要的下一动作是：
 
-> **先把刚完成的 Worker-only source cut 重新跑成可信 runtime baseline，再继续做 correctness、清理和 scale。**
+> **按 `Reference/TargetRegionBoundaryCapacityContract.md` 完成边缘/角落 clipped Target capacity 与 Overflow 语义，重新关闭 Moving T5；随后继续剩余 post-cut regression、清理和规模门。**

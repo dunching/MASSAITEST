@@ -6,6 +6,12 @@
 
 实现原理看 `CurrentArchitecture.md`；下一步看 `PhasePlan.md`；测试证据看 `TestScenarioMatrix.md`。
 
+Target 边界/容量精确合同：
+
+```text
+Reference/TargetRegionBoundaryCapacityContract.md
+```
+
 状态：
 
 ```text
@@ -13,12 +19,6 @@ DONE    当前源码能力/结构已经成立
 PARTIAL 主体成立，但有明确缺口、模式限制或需要重新验证
 OPEN    尚未达到最终完成定义
 ```
-
-特别规则：
-
-> **源码结构已经成立，不代表 PR12 后的 UE runtime regression 已经通过。**
-
-凡运行路径被最新 Worker Production source cut 改写的场景，旧测试结果只能作为 baseline，当前验收状态以 `TestScenarioMatrix.md` 为准。
 
 ---
 
@@ -42,16 +42,16 @@ OPEN    尚未达到最终完成定义
 |---|---|---|
 | Persistent Worker Runtime | DONE | 每 World 的 Async Runtime、Owner continuation、Shard Tasks、状态 Store 已存在。 |
 | Worker Production Owner | DONE | Lifecycle、Behavior、Flow/Resource、Target、Combat/Projectile、MovementPlanning、Movement、Particle、Facing 等已有 Worker Domain Owner。 |
-| Demo live server Worker-only path | DONE / structural | 首次 one-shot bootstrap 后当前 fixed step 立即 Worker-owned；后续 Tick direct intent。旧 Round simulation fallback 已删除。 |
+| Demo live server Worker-only path | DONE | 首次 one-shot bootstrap 后当前 fixed step 立即 Worker-owned；后续 Tick direct intent。旧 Round simulation fallback 已删除。 |
 | Plugin Shadow / Canary 能力 | DONE | 通用插件仍保留 Shadow/Canary；不等于 Demo live Round path 仍有 Legacy fallback。 |
 | 非 Full Production Demo server | DONE / fail-closed | 当前已收口 Round path 不回退旧 DAG；不满足 Full Production 条件时拒绝继续，而不是运行第二套 simulator。 |
 | Simulation Mass Processor 收敛 | DONE | `CrowdDemoRoundSimProcessors.h` 只剩 Worker InputSync + ResultApply 两个 `UMassProcessor`。 |
-| 单字段单 Production Writer | DONE / guarded | Worker field owner + Runtime Owner Barrier 已成立；后续 duplicate host code 只能是 adapter/diagnostic，不得重新推进同一字段。 |
+| 单字段单 Production Writer | DONE / guarded | Worker field owner + Runtime Owner Barrier 已成立；duplicate host code 只能是 adapter/diagnostic，不得重新推进同一字段。 |
 | Worker Result Apply Proxy | DONE | Stable Entity View、Domain Proxy、Dirty Batch、ACK。 |
 | Runtime Owner Commit Barrier | DONE | Token → Proxy validate → Host FinalValidate → Dirty Mass Apply → Proxy commit → no-fail side effects。 |
 | Legacy Round Transaction 退出 | DONE | `FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator 等已从 Production source 物理删除。 |
 | Prepared second-pass commit 退出 | DONE | Movement、Target/Resource、Particle Diagnostic 的旧 Prepared transaction channels 已删除。 |
-| Post-cut runtime regression | OPEN | UE build、PIE/T1–T8、network/checkpoint/diagnostic 尚未在新 source cut 后重新建立正式基线。 |
+| Post-cut runtime regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap/direct-intent、minimal T8、Target observer 已通过；T1/T2/T3/T4/T6/T7、network/late join、双端 T8 等仍需正式回归。 |
 
 ---
 
@@ -95,20 +95,28 @@ OPEN    尚未达到最终完成定义
 
 ---
 
-## 7. 群体运动
+## 7. 群体运动 / Target
 
 | 能力 | 状态 | 当前结论 |
 |---|---|---|
 | Shared Flow | DONE | 世界空间 Macro Guidance。Primary runtime resource 由 `UMassCrowdRuntimeSubsystem` 持有。 |
-| Target-relative Polar Transport | DONE | Polar Cell / Demand / Plan / Quota / Guidance 已进入 Core + Worker Target Domain。 |
-| Worker Target long-window observer | DONE | 只读聚合 ResultApply `Target` / `TargetCohort`，输出 machine-readable checkpoint；runner 对 Worker Target rejection、无效或缺失 checkpoint fail-closed。 |
-| Target Cohort scoped invalidation | DONE / baseline | 10k 双 Cohort scoped 专项历史证据存在；完整 post-cut runtime 仍需回归。 |
+| Moving Objective absolute clock | DONE | Objective effective tick 与 Worker persistent absolute tick 对齐；pre-round uptime 不再混入 objective age。 |
+| Runtime-owned dynamic SharedFlow refresh | DONE | Full Worker Production moving objective 在 intent/resource publish 前刷新 Runtime-owned dynamic SharedFlow；Environment revision 只随语义变化推进。 |
+| Target-relative Polar Transport | DONE / core | Polar Cell / Demand / Plan / Quota / Guidance 已进入 Core + Worker Target Domain。 |
+| Worker Target long-window observer | DONE | 只读聚合 ResultApply `Target` / `TargetCohort`，输出 machine-readable checkpoint；runner 对 Worker Target/domain rejection fail-closed。 |
+| Target Cohort scoped invalidation | DONE / regression invariant | 10k 双 Cohort scoped 专项已经验证；Target 改动后必须持续保持。 |
+| NavMesh/Environment-clipped Target Cell contract | OPEN | 目标靠边/角落时必须只保留真实可行 Polar Cell；缺失理论 Region 本身不能作为 Demand failure。 |
+| Finite Target Cell capacity | OPEN | Feasible Cell 必须具有 deterministic finite occupancy capacity；共享不等于无限容量。 |
+| Target Plan / Claim admission | OPEN | Plan/Execution 必须保证 `Occupied + ActiveClaims <= Capacity`，不得超卖。 |
+| CapacityHold / Overflow semantics | OPEN | 合法容量不足时，超额 Agent 不得继续向已满 Target interior 挤压，并必须与真正 `UnroutedFailure` 区分。 |
+| Moving Cell invalidation / refill | OPEN | Target 移动导致 Cell valid/invalid 时需要稳定 release/migrate/reassign/overflow/refill。 |
 | Local Predictive | DONE | 位于 MovementPlanning / movement chain。 |
 | Particle Soft/Hard/Environment Safety | DONE | 最终安全层位于 Worker Interaction Domain。 |
 | 多 Interaction Island 分解 | DONE | closure graph → components → sub-solve → stable merge → global validation。 |
 | 多 Island UE Task 并行 | OPEN | 当前算法分岛不等于每岛独立 UE Task。 |
 | 大型单 Island 内部分片 | OPEN | Cell-Pair Owner / per-round barrier 未完成。 |
-| T5 >900 Tick 稳定性 | OPEN | step ~886 `feasible-region-insufficient` 历史 blocker 尚未关闭。 |
+| T5 Static >1000 Tick | DONE / evidence | Static fixed_step=1199 重复运行稳定，历史 static step ~886 failure 当前未复现。 |
+| T5 Moving >1000 Tick | OPEN / real failure | 已越过旧 step398 clock/SharedFlow failure；当前在目标靠近边界、`feasible_regions=3/16`、`source_attachment_failures=0` 时暴露 clipped-capacity contract 缺口。 |
 
 ---
 
@@ -122,7 +130,7 @@ OPEN    尚未达到最终完成定义
 | Broadphase + swept hit | DONE | 公共空间候选与 sweep 合同已存在。 |
 | ImpactFact / HitFact | DONE | 几何/命中事实与 Host 业务解释分离。 |
 | Demo Combat Extension | DONE | Worker-side pure C++ extension 不应访问 UWorld/Mass/UObject 隐式状态。 |
-| T8 server-only post-cut formal evidence | OPEN | 900-batch/150-event/50-attack 结果是 source cut 前 baseline；新 live path 尚未正式重跑。 |
+| T8 server-only post-cut evidence | DONE | 当前 Worker-only path 已重跑 900 batches、150 events、50/50/50/50、duplicate=0、Golden 一致。 |
 
 ---
 
@@ -149,7 +157,7 @@ OPEN    尚未达到最终完成定义
 | Late Join contract | DONE | Checkpoint → Resource Revisions → Event Baseline → Delta。 |
 | Relevancy | DONE | Relevant set/snapshot 位于公共 Networking。 |
 | Post-cut network/checkpoint regression | OPEN | live server execution path 已改写，必须重新跑 correction/late join/checkpoint evidence。 |
-| 双端 T8 runner | PARTIAL | 历史业务日志存在但正式 runner 有误判/超时；post-cut 还未重跑。 |
+| 双端 T8 runner | PARTIAL | 历史业务日志存在但正式 runner 有误判/超时；post-cut 双端 formal evidence 仍未关闭。 |
 
 ---
 
@@ -159,7 +167,7 @@ OPEN    尚未达到最终完成定义
 |---|---|---|
 | Stable slot table | DONE | StableEntityRef ↔ instance slot 独立生命周期。 |
 | Spawn/Update/Despawn | DONE | 表现层拥有自己的幂等实例生命周期。 |
-| VAT / Hit response | DONE / capability | Demo 表现路径存在；source cut 后场景证据需要重跑。 |
+| VAT / Hit response | DONE / capability | Demo 表现路径存在；完整 post-cut 场景证据仍需补。 |
 | Presentation 非 Simulation Authority | DONE | 不反向推进 Worker 状态。 |
 | 10k 完整客户端表现门 | OPEN | WA9。 |
 
@@ -172,8 +180,9 @@ OPEN    尚未达到最终完成定义
 | Worker / ResultApply 基础 metrics | DONE | Worker runtime、proxy、commit metrics 结构仍存在。 |
 | RoundResult / Checkpoint host assembly | DONE / structural | host path 仍存在，且 checkpoint 位于 Worker owner commit 后。 |
 | 旧 PostFinalize diagnostics | DONE / removed | 依赖旧 Stage / Prepared Particle second-pass 的路径已经删除。 |
-| Particle/Target stability per-step metrics current completeness | PARTIAL | 必须确认哪些指标仍由 Worker retained state 产生、哪些应在 checkpoint derive、哪些需要新 test observer。 |
-| post-cut Golden/perf baseline | OPEN | 旧数值只作为 baseline，不登记为当前 pass。 |
+| Worker Target observability | DONE | `Target` / `TargetCohort` 只读 checkpoint + runner rejection gate 已进入 current path。 |
+| Particle/其它 special metrics current completeness | PARTIAL | 继续确认哪些指标由 Worker retained state 产生、哪些 checkpoint derive、哪些 test-only observer。 |
+| post-cut Golden/perf baseline | PARTIAL | minimal T8 与 T5 有当前数据；其它 T1–T7、network、双端和规模仍需更新。 |
 
 ---
 
@@ -187,8 +196,8 @@ OPEN    尚未达到最终完成定义
 | Demo generic duplicate kernel 全退出 | OPEN | 仍需 repo-wide consumer audit。 |
 | Bootstrap scratch / historical naming cleanup | OPEN | `BoundaryFacingWorkState` 等仍有旧命名与可能失去消费者的字段。 |
 | 巨型 Demo host 文件职责拆分 | OPEN | Pipeline/Processors/Coordinator 仍混合 Scenario/Bootstrap/Metrics/Checkpoint。 |
-| Demo Unity build 恢复 | OPEN / deferred | 当前 `bUseUnity=false` 仍是结构债信号。 |
-| 文档↔源码当前主事实 | DONE / ongoing | 本轮四份核心文档同步到 Worker source cut；后续源码变化仍需同步。 |
+| Default Unity Runtime compile | DONE | Runtime helper collision 已修复；Default Unity 与 DisableUnity 都有 current PASS 证据。 |
+| 文档↔源码当前主事实 | DONE / ongoing | 核心文档需随 Moving Target / T5 correctness 状态持续同步。 |
 
 ---
 
@@ -199,7 +208,7 @@ OPEN    尚未达到最终完成定义
 ```text
 10k-aware architecture              = YES
 10k scheduler/spatial baseline       = YES
-10k target scoped baseline           = YES
+10k target scoped regression         = YES
 post-cut full 10k gameplay evidence  = NO
 full 10k product acceptance          = NO
 ```
@@ -208,7 +217,7 @@ full 10k product acceptance          = NO
 
 ```text
 Lifecycle / Behavior
-Flow / Resource / Target
+Flow / Resource / Target capacity
 Combat / Projectile
 Movement / Local Predictive
 Particle / Interaction
@@ -222,8 +231,8 @@ Performance
 
 ## 15. 当前主要 OPEN Gate
 
-1. **Post-cut Runtime Regression**：UE build、Architecture/ResultApply automation、minimal T8、代表性 movement/target、checkpoint/network、diagnostics。
-2. **T5 Long-Window Correctness**：关闭 step ~886，Static/Moving >=1000 Tick。
+1. **T5 Long-Window Correctness**：实现 `Reference/TargetRegionBoundaryCapacityContract.md` 的 clipped Cell、finite capacity、Plan/Claim、Overflow/CapacityHold，并关闭 Moving >=1000 Tick。
+2. **Post-cut Runtime Regression remainder**：T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8、剩余 diagnostics。
 3. **Duplicate Kernel / Host Shell Cleanup**：删无消费者实现，拆大型 RoundSim host subsystem。
 4. **Particle Scaling**：Island-level tasks + 单大型 Island Cell-Pair/per-round barrier。
 5. **WA9 Full-Scale Acceptance**：1k→2k→5k→10k 同一 Production path，双端网络/表现/性能。

@@ -17,6 +17,12 @@
 
 当前 `main` 实现到哪里看 `CurrentArchitecture.md`；当前实施顺序看 `PhasePlan.md`；测试状态看 `FeatureChecklist.md` / `TestScenarioMatrix.md`。
 
+Target Region 的边界、容量、claim 与 Overflow 精确合同见：
+
+```text
+Reference/TargetRegionBoundaryCapacityContract.md
+```
+
 ---
 
 ## 2. 最终产品定义
@@ -102,6 +108,16 @@ Digest / Diagnostic
 ### 3.5 Fail-Closed
 
 stale lifecycle、错误 revision/hash、容量溢出、非法双 writer、事件序列破坏、依赖漏标等不得静默降级为成功。
+
+这里必须区分：
+
+```text
+legal capacity saturation / Overflow
+!=
+capacity overflow / overbooking corruption
+```
+
+前者是合法模拟状态；后者必须 fail-closed。
 
 ### 3.6 Demo 不保留第二套产品 Runtime
 
@@ -455,7 +471,7 @@ Facing / Finalize
 
 ### Target Region Transport
 
-解决接近目标后的目标相对宏观分布。
+解决接近目标后的目标相对宏观分布、有限容量和 admission。
 
 ### Local Predictive
 
@@ -485,19 +501,132 @@ Radial Band × Angular Sector
 ```text
 Current Population
 Desired Population
+Feasible Cell Capacity
 Deficit / Surplus
 Transport Plan
 Edge Quota
+Transient Claim / Execution
 Guidance
+Overflow / CapacityHold
 ```
 
-设计原则：
+### 11.1 Environment / NavMesh clipped topology
+
+Polar Cell 只是候选空间。真正可消费的 Target Cell 必须满足当前导航和安全合同：
+
+```text
+Polar candidate
+→ NavMesh / Environment valid
+→ reachable
+→ hard clearance / target clearance valid
+→ profile-compatible
+→ feasible Target Cell
+```
+
+目标可以正常移动到边缘、角落、障碍物附近；Target Region 必须自然被真实空间裁剪。
+
+因此：
+
+- 不要求完整理论 Polar Region 才能运行。
+- Target 靠边时只保留有效部分。
+- Target 在角落时可以只剩局部/约 1/4 可行域。
+- 被裁剪/非法 Cell 不贡献 capacity，也不得产生 claim。
+- 不能仅为维持完整圆环强制 Target 碰边界反弹。
+
+### 11.2 Navigation Cell 可共享，但容量必须有限
+
+设计原则仍然是：
 
 - 无永久 Agent Slot；
-- Navigation Cell 可共享；
+- 无永久 Agent→Cell 绑定；
 - anchor 是引导参考，不是精确站位；
-- Cohort 来源于共享 Objective/NavigationLayer/MovementProfile/Capability/macro policy，不等于 Faction；
-- Local Predictive / Particle 始终拥有局部可执行性和安全最终裁决。
+- Navigation Cell 可以被多个 Agent 在容量允许时共享；
+- **共享不等于无限共享。**
+
+每个 feasible Cell 必须拥有 deterministic finite occupancy capacity。Capacity 可以由 usable geometry、PhysicalRadius、HardSafetyGap、SoftMargin / spacing policy、Capability / profile 等派生。
+
+不强制每个 Cell capacity=1；强制的是：
+
+```text
+Capacity(cell) is finite
+Occupied(cell) + ActiveClaims(cell) <= Capacity(cell)
+```
+
+### 11.3 Desired Population 与可分配容量分离
+
+```text
+TotalFeasibleCapacity = Σ Capacity(feasible cell)
+AssignablePopulation  = min(DesiredPopulation, TotalFeasibleCapacity)
+OverflowPopulation    = max(0, DesiredPopulation - TotalFeasibleCapacity)
+```
+
+`DesiredPopulation > TotalFeasibleCapacity` 是合法容量饱和，不自动等于 Demand failure。
+
+### 11.4 CapacityHold / Overflow
+
+当有效 Target capacity 已满，其余 Agent：
+
+- 不得继续争抢/消费已满 Cell。
+- 不得继续获得把自己压入饱和 Target interior 的 guidance。
+- 必须保持在合法、安全的外围或当前可执行位置。
+- 新容量出现后按稳定顺序重新参与分配。
+
+CapacityHold / Overflow 必须与真正的 `UnroutedFailure` 区分。
+
+### 11.5 Plan / Execution 是 admission owner
+
+Target Plan / Execution 决定谁能消费有限 Target capacity。
+
+Local Predictive / ORCA / Particle 负责局部可执行性与安全，不负责通过物理挤压解决超额 admission。
+
+错误设计：
+
+```text
+Target 无限 admit
+→ 所有 Agent 往里挤
+→ 依赖 ORCA / Particle 顶住
+```
+
+正确设计：
+
+```text
+Feasible Capacity
+→ deterministic Plan / Claim
+→ assigned agents enter
+→ overflow agents hold
+→ LocalPredictive / Particle enforce safety
+```
+
+### 11.6 Moving Cell 生命周期
+
+Target 移动导致 Cell valid/invalid 时：
+
+```text
+valid → invalid
+→ capacity removed
+→ claim release / migrate
+→ reassign or Overflow
+
+invalid → valid
+→ capacity added
+→ deterministic refill from Overflow
+```
+
+不得保留 stale claim，不得超卖，不得因 Task 完成顺序改变 allocation。
+
+### 11.7 Cohort / profile
+
+Cohort 来源于共享 Objective/NavigationLayer/MovementProfile/Capability/macro policy，不等于 Faction。
+
+不同 Physical Profile / Capability 如需要不同安全占用密度，capacity 合同必须 profile-aware，而不是用 Demo map magic number。
+
+完整精确合同以：
+
+```text
+Reference/TargetRegionBoundaryCapacityContract.md
+```
+
+为准。
 
 ---
 
@@ -526,6 +655,8 @@ Global exact validation
 ```
 
 任何并行方案都不能以跨 Shard pair 漏约束为代价。
+
+Particle Safety 不承担 Target Region 的 admission/capacity owner 职责。
 
 ---
 
@@ -604,6 +735,8 @@ Checkpoint
 
 Correction 增加 CorrectionRevision；真正 Full Resnapshot / world switch / teardown 才改变 Generation。
 
+如果 Target capacity / claim / Overflow 属于持续 Worker state，网络/late join 必须消费其版本化结果或可重建状态，而不是由客户端另算第二套 admission。
+
 ---
 
 ## 16. Presentation 终态
@@ -662,7 +795,7 @@ Round 是测试工具，不是最终产品生命周期模型。
 ```text
 Behavior
 Flow / Resource
-Target
+Target / clipped capacity / Overflow
 Combat / Projectile
 Movement
 Local Predictive
@@ -701,6 +834,8 @@ no duplicate gameplay event
 hard safety
 late join correctness
 correction convergence
+Target capacity never overbooked
+legal Overflow remains stable
 ```
 
 ---
@@ -719,10 +854,10 @@ Demo generic duplicate production kernel       = 0
 核心 simulation processors                     = InputSync + ResultApply
 ```
 
-这也是为什么当前 WA8 legacy cleanup 不能只看“测试已经通过”。
+这也是为什么当前 correctness 修复不能通过恢复旧 Target/Resource Prepared transaction 或新增 GT capacity owner 来完成。
 
 ---
 
 ## 20. 最终一句话
 
-> **MassCrowdSimulation 的最终形态是一套 Work-driven、deterministic、Persistent Full Worker Authority 的大规模 Agent Simulation Runtime：Host 提供外部事实和业务规则，Worker 持有模拟权威，Mass/Network/Presentation 只做集成和结果消费；Demo 只负责验证这套生产架构。**
+> **MassCrowdSimulation 的最终形态是一套 Work-driven、deterministic、Persistent Full Worker Authority 的大规模 Agent Simulation Runtime：Host 提供外部事实和业务规则，Worker 持有模拟权威，Mass/Network/Presentation 只做集成和结果消费；Target Region 在真实导航空间内提供有限、可裁剪、可确定性分配的目标附近容量，合法 Overflow 不通过物理挤压伪装为成功；Demo 只负责验证这套生产架构。**
