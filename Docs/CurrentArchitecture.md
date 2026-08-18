@@ -12,6 +12,7 @@
 - 当前测试是否通过；看 `FeatureChecklist.md` / `TestScenarioMatrix.md`。
 - 模块依赖细节；看 `Reference/PluginModuleBoundary.md`。
 - 字段 Owner 细节；看 `Reference/WorkerOwnershipMatrix.md`。
+- Target 边界/容量终态细节；看 `Reference/TargetRegionBoundaryCapacityContract.md`。
 
 ---
 
@@ -93,12 +94,14 @@ Source/
 
 ```text
 External Facts
-Spawn / Despawn / Command / Resource Revision / Correction
+Spawn / Despawn / Command / Objective / Resource Revision / Correction
         │
         ▼
 UCrowdDemoWorkerInputSyncProcessor
         │
-        │ SubmitIntentBatch / versioned resource-objective changes
+        ├── moving Objective absolute-effective-tick fact
+        ├── Runtime-owned dynamic SharedFlow refresh when semantics change
+        └── SubmitIntentBatch / versioned resource-objective changes
         ▼
 Persistent FCrowdAsyncSimulationRuntime
         │
@@ -139,6 +142,18 @@ UCrowdDemoWorkerResultApplyProcessor
 ```
 
 旧的 Round Stage struct、PostFinalize Stage、AuthorityCommit Stage、ClientPredictionCommit Stage 已从该 Processor surface 删除。
+
+### 4.1 Moving objective 时钟域
+
+当前 Moving Target Objective 的 `EffectiveFixedStepIndex` 已使用与 Worker `AbsoluteSimulationTick` 一致的 persistent runtime tick domain。
+
+因此 Worker Target extrapolation 不再把 Round 开始前 uptime 误计入 objective age。
+
+### 4.2 Moving objective dynamic SharedFlow
+
+Full Worker Production fast path 在提交 versioned resources / intent 前，会在 moving objective 造成实际语义变化时刷新 `UMassCrowdRuntimeSubsystem` 唯一持有的 dynamic SharedFlow resource。
+
+这不是恢复旧 Host SharedFlow owner；Environment revision 仍由 Runtime-owned resource 提供。
 
 ---
 
@@ -425,6 +440,35 @@ Edge Quota
 
 Cohort 的 Plan / Execution 属于 Worker simulation state；Topology 可作为由版本化资源重建的 deterministic cache。
 
+### 12.1 当前已成立的 Moving Target 输入编排
+
+当前已修复：
+
+```text
+Objective effective tick clock-domain alignment
+Runtime-owned dynamic SharedFlow refresh
+```
+
+因此旧 Moving `source_attachment_failures=20/20` 的 step ~398 failure 不再是当前 active blocker。
+
+### 12.2 当前尚未实现的边缘容量合同
+
+当前 Target kernel/worker 仍存在明确 correctness 缺口：
+
+> Target 靠近 NavMesh / Environment 边缘时，Polar topology 会自然失去部分可行 Region/Cell；当前 Demand 仍可能把“合法可行域被裁剪导致容量不足”判为 fatal invalid。
+
+当前 canonical Moving 已观察到：
+
+```text
+feasible_regions = 3 / 16
+desired = 19
+source_attachment_failures = 0
+```
+
+这说明 SourceAttachment 正常，但 clipped finite-capacity / Overflow 语义尚未实现。
+
+最终设计已在 `Reference/TargetRegionBoundaryCapacityContract.md` 明确；**这里不能把终态设计误写成当前已经完成的源码能力。**
+
 ---
 
 ## 13. Particle / Interaction 当前并行边界
@@ -590,65 +634,73 @@ Plugin Core 与 Demo 仍存在 LocalPredictive / Particle / SharedFlow / Target 
 
 结构上应继续拆分，但拆分必须保持 Worker authority 和 deterministic contracts 不变。
 
-### 19.4 诊断/验收链需要 post-cut 重建证据
+### 19.4 剩余诊断/验收链
 
-PR12 删除旧 PostFinalize/Particle 第二遍提交时，也删除了依附在该路径上的一批 Demo per-step diagnostics side effects。
+Worker Target observability 已从 Worker retained `Target` / `TargetCohort` 恢复为只读 checkpoint，并进入 runner hard-failure gate。
 
-因此当前不能假设旧的：
+Particle 与其它 special diagnostics 仍需逐项判断：
 
 ```text
-T1–T8 PASS
-Particle diagnostic counters
-Target stability metrics
-T8 Golden/perf runner evidence
+Worker result / retained state
+checkpoint-derived
+explicit test-only observer
+obsolete / retire
 ```
 
-自动适用于新主链。
-
-哪些指标需要改由 Worker result / retained state / host checkpoint 重新生成，必须通过 post-cut UE regression 确认。
+禁止仅为恢复日志重新建立第二套 simulation commit path。
 
 ---
 
 ## 20. 当前验证状态边界
 
-当前已成立的是：
+当前已经有正式/当前链证据：
 
 ```text
-Source architecture cut = complete
-Static structure review = passed
+Default Unity build                         PASS
+DisableUnity build                          PASS
+PersistentWorkerProductionStructure         PASS
+Runtime WorkerResultApply / OwnerBarrier    PASS
+first-step bootstrap                        PASS
+ordinary direct-intent                      PASS
+minimal T8 server-only                      PASS
+Worker Target observability                 PASS
+Static T5 fixed_step=1199 repeat            PASS
+Moving objective clock                      PASS
+Runtime-owned dynamic SharedFlow            PASS
 ```
 
-当前尚未完成的是：
+当前尚未关闭：
 
 ```text
-UE build after source cut
-Architecture automation after source cut
-PIE / T1–T8 regression after source cut
-Networking / Late Join regression after source cut
-Scale / performance regression after source cut
+T5 Moving boundary/corner finite capacity / Overflow
+T1/T2/T3/T4/T6/T7 post-cut regression
+Networking / Late Join regression
+双端 T8 formal runner
+remaining diagnostics
+Particle scaling
+WA9
 ```
 
-所以：
-
-> **“WA8 source structure closed” 不等于 “WA8 runtime regression passed”。**
-
-旧运行结果仍可作为 baseline / 历史证据，但凡执行路径被本轮 source cut 改写，都必须重新验证后才能恢复为当前 PASS。
+所以不能再把“post-cut runtime 全部未跑”当当前事实；但也不能因为核心链已 PASS 就把所有场景自动登记为 PASS。
 
 ---
 
 ## 21. 当前主要 OPEN 项
 
-当前优先级已经从“继续删 Round Transaction”切换为：
-
 ```text
-1. Post-cut Regression Gate
-   - UE build
-   - Architecture automation
-   - T1–T8 / networking / checkpoint / diagnostics
+1. T5 Long-Window Correctness
+   - clipped Environment/NavMesh Target topology
+   - finite feasible Cell capacity
+   - Plan / Execution transient capacity claim
+   - CapacityHold / Overflow
+   - moving Cell invalidation / release / refill
+   - Moving 1000+ Tick deterministic repeat
 
-2. T5 Long-Window Correctness
-   - step ~886 feasible-region-insufficient
-   - Static / Moving 1000+ Tick
+2. Post-cut Regression Remainder
+   - T1/T2/T3/T4/T6/T7
+   - network / checkpoint / late join
+   - 双端 T8
+   - remaining diagnostics
 
 3. Duplicate Kernel / Host Shell Cleanup
    - 删除确认失去消费者的 Demo generic implementation
@@ -671,4 +723,4 @@ Scale / performance regression after source cut
 
 当前 `main` 的架构结论：
 
-> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；第一代跨帧 Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels 已从 Production source 物理删除。Demo 仍保留一次性 bootstrap preparation 与较大的 scenario/metrics/checkpoint host shell。下一阶段首先不是再改 Authority，而是把新主链重新跑实，再继续删 duplicate/host debt，并关闭 T5、Particle scaling 与 WA9。**
+> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；第一代跨帧 Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels 已从 Production source 物理删除。Moving Objective 的 absolute clock 与 Runtime-owned dynamic SharedFlow refresh 已进入主链，旧 SourceAttachment failure 已关闭。当前 Target correctness 的 active 缺口已经收敛为地图边缘/角落的 clipped finite-capacity / Overflow 合同；该终态设计已明确，但源码尚未实现。**
