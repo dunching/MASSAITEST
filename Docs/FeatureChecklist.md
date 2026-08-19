@@ -105,18 +105,18 @@ OPEN    尚未达到最终完成定义
 | Target-relative Polar Transport | DONE / core | Polar Cell / Demand / Plan / Quota / Guidance 已进入 Core + Worker Target Domain。 |
 | Worker Target long-window observer | DONE | 只读聚合 ResultApply `Target` / `TargetCohort`，输出 machine-readable checkpoint；runner 对 Worker Target/domain rejection fail-closed。 |
 | Target Cohort scoped invalidation | DONE / regression invariant | 10k 双 Cohort scoped 专项已经验证；Target 改动后必须持续保持。 |
-| NavMesh/Environment-clipped Target Cell contract | DONE / candidate | Topology 只让 immutable Environment/SharedFlow 可行 Cell 贡献 capacity；理论 Region 缺失不再直接 fatal。 |
-| Finite Target Cell capacity | DONE / candidate | 使用 Cell 可用几何、angular/radial span 与 physical spacing 推导 deterministic finite capacity；invalid Cell capacity=0。 |
-| Target Plan / Claim admission | DONE / candidate | reachability-aware deterministic admission；Plan/Execution validation 保证 `Occupied + ActiveClaims <= Capacity`。 |
-| CapacityHold / Overflow semantics | DONE / candidate | `Desired/Assignable/Overflow` 显式保留；CapacityHold 产生零 Target inward pressure，并与 `UnroutedFailure` 区分。 |
-| Moving Cell invalidation / refill | DONE / candidate | semantic topology/plan 更新时 release/migrate/reassign，新容量按 stable entity order refill。 |
+| NavMesh/Environment-clipped Target Cell contract | DONE | Topology 只让 immutable Environment/SharedFlow 可行 Cell 贡献 capacity；理论 Region 缺失不再直接 fatal；PR #18 已进入 main。 |
+| Finite Target Cell capacity | DONE | 使用 Cell 可用几何、angular/radial span 与 physical spacing 推导 deterministic finite capacity；invalid Cell capacity=0。 |
+| Target Plan / Claim admission | DONE | reachability-aware deterministic admission；Plan/Execution validation 保证 `Occupied + ActiveClaims <= Capacity`。 |
+| CapacityHold / Overflow semantics | DONE | `Desired/Assignable/Overflow` 显式保留；CapacityHold 产生零 Target inward pressure，并与 `UnroutedFailure` 区分。 |
+| Moving Cell invalidation / refill | DONE | semantic topology/plan 更新时 release/migrate/reassign，新容量按 stable entity order refill。 |
 | Local Predictive | DONE | 位于 MovementPlanning / movement chain。 |
 | Particle Soft/Hard/Environment Safety | DONE | 最终安全层位于 Worker Interaction Domain。 |
 | 多 Interaction Island 分解 | DONE | closure graph → components → sub-solve → stable merge → global validation。 |
 | 多 Island UE Task 并行 | OPEN | 当前算法分岛不等于每岛独立 UE Task。 |
 | 大型单 Island 内部分片 | OPEN | Cell-Pair Owner / per-round barrier 未完成。 |
-| T5 Static >1000 Tick | DONE / candidate evidence | final source fixed_step=1199 重复 2/2，worker hash MATCH，capacity/assignable/overflow=162/20/0。 |
-| T5 Moving >1000 Tick | DONE / candidate evidence | canonical final source fixed_step=1199 重复 2/2，capacity/assignable/overflow/hold=16/16/4/4，worker/plan/execution/guidance deterministic，rejection=0。 |
+| T5 Static >1000 Tick | DONE / PASS ON MAIN | `main@182f4d8` fixed_step=1199 重复 2/2，worker/transport/execution/guidance hash MATCH，capacity/assignable/overflow/hold=162/20/0/0。 |
+| T5 Moving >1000 Tick | DONE / PASS ON MAIN | `main@182f4d8` canonical fixed_step=1199 重复 2/2，capacity/assignable/overflow/hold=16/16/4/4，worker/transport/execution/guidance deterministic，rejection=0。Correctness CLOSED；performance OPEN。 |
 
 ---
 
@@ -231,11 +231,10 @@ Performance
 
 ## 15. 当前主要 OPEN Gate
 
-1. **T5 candidate landing**：READY PR review，merge 后在 main 重跑 Build/automation/Static/Moving 门禁。
-2. **Post-cut Runtime Regression remainder**：T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8、剩余 diagnostics。
-3. **Duplicate Kernel / Host Shell Cleanup**：删无消费者实现，拆大型 RoundSim host subsystem。
-4. **Particle Scaling**：Island-level tasks + 单大型 Island Cell-Pair/per-round barrier。
-5. **WA9 Full-Scale Acceptance**：1k→2k→5k→10k 同一 Production path，双端网络/表现/性能。
-6. **Test Harness Reliability**：双端 T8 runner 误判/超时。
+1. **Post-cut Runtime Regression remainder**：T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8、剩余 diagnostics。
+2. **Duplicate Kernel / Host Shell Cleanup**：删无消费者实现，拆大型 RoundSim host subsystem。
+3. **Particle Scaling**：Island-level tasks + 单大型 Island Cell-Pair/per-round barrier。
+4. **WA9 Full-Scale Acceptance**：1k→2k→5k→10k 同一 Production path，双端网络/表现/性能。
+5. **Test Harness Reliability**：双端 T8 runner 误判/超时。
 
 历史完成过程不在本文累积；正式证据状态以 `TestScenarioMatrix.md` 为准。
