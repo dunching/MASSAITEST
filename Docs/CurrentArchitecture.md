@@ -461,7 +461,7 @@ desired = 19
 source_attachment_failures = 0
 ```
 
-当前 candidate 已实现 `Reference/TargetRegionBoundaryCapacityContract.md`：
+当前 main 已实现 `Reference/TargetRegionBoundaryCapacityContract.md`：
 
 ```text
 immutable Environment/SharedFlow feasibility
@@ -670,11 +670,11 @@ first-step bootstrap                        PASS
 ordinary direct-intent                      PASS
 minimal T8 server-only                      PASS
 Worker Target observability                 PASS
-Static T5 fixed_step=1199 repeat            PASS
+Static T5 fixed_step=1199 repeat            PASS ON MAIN
 Moving objective clock                      PASS
 Runtime-owned dynamic SharedFlow            PASS
-Target boundary/corner capacity automation  PASS / candidate
-Moving T5 fixed_step=1199 repeat             PASS / candidate
+Target boundary/corner capacity automation  PASS ON MAIN
+Moving T5 fixed_step=1199 repeat             PASS ON MAIN
 ```
 
 当前尚未关闭：
@@ -695,25 +695,21 @@ WA9
 ## 21. 当前主要 OPEN 项
 
 ```text
-1. T5 Candidate Landing
-   - READY PR review
-   - merge 后 main Build/automation/Static/Moving 重验
-
-2. Post-cut Regression Remainder
+1. Post-cut Regression Remainder
    - T1/T2/T3/T4/T6/T7
    - network / checkpoint / late join
    - 双端 T8
    - remaining diagnostics
 
-3. Duplicate Kernel / Host Shell Cleanup
+2. Duplicate Kernel / Host Shell Cleanup
    - 删除确认失去消费者的 Demo generic implementation
    - 拆 RoundSimPipeline host responsibilities
 
-4. Large Particle Island Scaling
+3. Large Particle Island Scaling
    - Island-level task parallelism
    - Single large-island Cell-Pair Owner / per-round barrier
 
-5. WA9 Full-Scale Acceptance
+4. WA9 Full-Scale Acceptance
    - 1k → 2k → 5k → 10k
    - Simulation + Network + Presentation + Performance
 ```
@@ -724,6 +720,6 @@ WA9
 
 ## 22. 当前总体结论
 
-当前 candidate 的架构结论：
+当前 main 的架构结论：
 
-> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；第一代跨帧 Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels 已从 Production source 物理删除。Moving Objective absolute clock、Runtime-owned dynamic SharedFlow refresh 与 clipped finite-capacity / Overflow 已进入 candidate 源码。Static/Moving T5 均已取得 1199-step deterministic repeat 证据；当前剩余动作是 READY PR review 与合并后 main 重验。**
+> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；第一代跨帧 Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels 已从 Production source 物理删除。PR #18 已合并到 `main@182f4d8dc856102b3a80ade0dc6506ff678c1d6a`，Moving Objective absolute clock、Runtime-owned dynamic SharedFlow refresh 与 clipped finite-capacity / Overflow 已在 main 上通过 Build、Automation 与 Static/Moving 1199-step deterministic repeat。T5 correctness 已关闭；Moving realtime `0.662/0.661` 仍未达到最终 performance gate，不能写成 performance closed。**

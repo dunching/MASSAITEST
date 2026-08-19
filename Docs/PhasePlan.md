@@ -13,7 +13,7 @@ WA8 Source Architecture Cut          = CLOSED / structural
         ↓
 Post-cut Runtime Regression Gate     = PARTIAL
         ↓
-T5 Long-Window Correctness           = CLOSED CANDIDATE
+T5 Long-Window Correctness           = CLOSED ON MAIN
         ↓
 Duplicate Kernel / Host Shell Cleanup
         ↓
@@ -38,7 +38,7 @@ Reference/TargetRegionBoundaryCapacityContract.md
 |---:|---|---|---|
 | 0 | WA8 Source Architecture Cut | CLOSED / structural | 第一代跨帧 Round Transaction、完整 rollback source、`FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator、旧 Stage surface、Prepared second-pass commit channels 已从 Production source 退出。 |
 | 1 | Post-cut Runtime Regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap、ordinary direct-intent、minimal T8、Target observability 已重新建立；仍需补齐 T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8 等正式回归。 |
-| 2 | T5 Long-Window Correctness | CLOSED CANDIDATE | Static/Moving final source 均 1199-step 2/2 deterministic PASS；待 READY PR review 与合并后 main 重验。 |
+| 2 | T5 Long-Window Correctness | CLOSED ON MAIN | PR #18 已合并；`main@182f4d8dc856102b3a80ade0dc6506ff678c1d6a` 上 Build、Automation、Static/Moving 1199-step 2/2 deterministic PASS。Moving performance 仍 OPEN。 |
 | 3 | Duplicate Kernel / Host Shell Cleanup | OPEN | 删除确认失去消费者的 Demo generic duplicate；把 RoundSimPipeline 按 Host Plan / Bootstrap / Metrics / Checkpoint 职责进一步拆分。 |
 | 4 | Large Particle Island Scaling | OPEN | Island-level task parallelism与单大型 Interaction Island Cell-Pair Owner / per-round barrier 分片获得确定性与性能证据。 |
 | 5 | WA9 Full-Scale Acceptance | OPEN | 同一 Production Runtime 在 1k→2k→5k→10k 完整 Simulation + Network + Presentation + Performance 门通过。 |
@@ -183,7 +183,7 @@ Worker Target observability 已按只读 ResultApply `Target` / `TargetCohort` o
 
 # 5. Gate 2 — T5 Long-Window Correctness
 
-当前状态为 CLOSED CANDIDATE：实现与 branch 验证已完成，仍待 READY PR review 与合并后 main 重验。
+当前状态为 CLOSED ON MAIN：PR #18 已合并，并已在 `main@182f4d8dc856102b3a80ade0dc6506ff678c1d6a` 完成 landing revalidation。
 
 ## 5.1 已关闭的 T5 子问题
 
@@ -348,18 +348,23 @@ invalid plan / stale claim = 0
 Worker Target rejection = 0 for legal capacity saturation
 ```
 
-当前 candidate 证据：
+当前 main landing 证据：
 
 ```text
 BoundaryCapacity                              PASS 1/1
 Core TargetRegionTransport                    PASS 2/2
 Demo TargetRegionTransport                    PASS 7/7
 RuntimeV2 Target/TargetObservability           PASS 4/4
-GuidanceShard10k                              PASS 1/1 (505.870s)
+GuidanceShard10k prior regression             PASS 1/1 (505.870s; not rerun in landing task)
 Static T5 fixed_step=1199                     PASS 2/2 deterministic
 Moving T5 fixed_step=1199                     PASS 2/2 deterministic
 Moving capacity/assignable/overflow/hold      16/16/4/4
 Moving rejection/source-attachment/unrouted   0/0/0
+Static worker/transport/execution/guidance     MATCH 2/2
+Moving worker/transport/execution/guidance     MATCH 2/2
+Moving fixed-step p95                         62.745 / 63.837 ms
+Moving commit p95                             0.206 / 0.207 ms
+Moving realtime                               0.662 / 0.661 (performance OPEN)
 ```
 
 修复不得按 step / AgentId / map / region 写生产特判。
@@ -558,4 +563,4 @@ Legacy Round DAG  = physically absent from production
 
 当前最重要的下一动作是：
 
-> **完成 Target boundary-capacity READY PR review，合并后在 main 重验 Build/automation/Static/Moving；随后继续剩余 post-cut regression、清理和规模门。**
+> **T5 correctness 已在 main 关闭；下一步继续剩余 post-cut regression、清理和规模门。Moving realtime 尚未达到最终 performance gate，后续性能工作不得改写为 correctness 回归。**
