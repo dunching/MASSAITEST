@@ -228,8 +228,10 @@ bool FCrowdWorkerTargetObserver::Build(
       StableHash, static_cast<uint64>(Cohort.TargetRevision));
     FoldObservationValue(
       StableHash, static_cast<uint64>(Cohort.PlanEpoch));
-    FoldObservationValue(
-      StableHash, static_cast<uint64>(Cohort.PlanBuildFixedStep));
+    // PlanBuildFixedStep is an absolute Runtime tick. It remains observable
+    // for lifetime diagnostics, but two otherwise identical runs can begin
+    // their round at different absolute ticks because of startup uptime.
+    // Keep the cross-run semantic hash independent of that clock origin.
     FoldObservationValue(StableHash, Cohort.FeasibleGraphHash);
     FoldObservationValue(StableHash, Cohort.MembershipHash);
     FoldObservationValue(StableHash, Cohort.ExternalPopulationHash);
