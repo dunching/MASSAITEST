@@ -543,6 +543,9 @@ public:
     const FCrowdStableEntityRef& EntityRef,
     uint64 MinimumCorrectionRevision);
   int32 RemoveEntity(const FCrowdStableEntityRef& EntityRef);
+  const FCrowdWorkerDirtyStateRecord* Find(
+    const FCrowdStableEntityRef& EntityRef,
+    ECrowdWorkerField Field) const;
   int32 NumEntities() const { return DirtyEntities.Num(); }
   int32 NumFields() const { return Records.Num(); }
   int32 GetHighWatermark() const { return HighWatermark; }
@@ -821,6 +824,15 @@ public:
     const FCrowdWorkerDomainContext& Context,
     TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
     FCrowdWorkerDomainOutput& OutOutput) = 0;
+  // Sparse correction replaces the authoritative entity-state records at a
+  // clean Owner barrier. Stateful domains must rebase any private retained
+  // continuation state from those records before prediction resumes.
+  virtual bool ApplyAuthorityCorrection(
+    const FCrowdWorkerDomainContext& Context,
+    TConstArrayView<FCrowdWorkerDirtyStateRecord> Records)
+  {
+    return true;
+  }
 };
 
 class MASSCROWDRUNTIME_API FCrowdWorkerDomainRegistry
@@ -841,6 +853,9 @@ public:
     const FCrowdWorkerDomainContext& Context,
     TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
     FCrowdWorkerDomainOutput& OutOutput);
+  bool ApplyAuthorityCorrection(
+    const FCrowdWorkerDomainContext& Context,
+    TConstArrayView<FCrowdWorkerDirtyStateRecord> Records);
 
 private:
   bool bFrozen = false;

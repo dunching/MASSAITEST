@@ -530,6 +530,63 @@ namespace
         Result, OutHostResult);
     }
 
+    bool ApplyAuthorityCorrection(
+      const FCrowdWorkerDomainContext& Context,
+      const TConstArrayView<FCrowdWorkerDirtyStateRecord> Records) override
+    {
+      if (Context.Generation == 0)
+        return false;
+      const bool bHasCombatCorrection = Records.ContainsByPredicate(
+        [](const FCrowdWorkerDirtyStateRecord& Record)
+        {
+          return Record.Field == ECrowdWorkerField::Combat;
+        });
+      if (!bHasCombatCorrection)
+        return true;
+      if (!Context.EntityStates)
+        return false;
+      if (CurrentKind == EHostKind::Round)
+      {
+        for (FCrowdDemoRangedCombatAgent& Agent : Agents)
+        {
+          const FCrowdWorkerDirtyStateRecord* Record =
+            Context.EntityStates->Find(
+              Agent.EntityRef, ECrowdWorkerField::Combat);
+          FCrowdWorkerCombatState State;
+          FCrowdDemoCombatAgentState HostState;
+          if (!Record
+            || !FCrowdWorkerCombatStateCodec::Decode(
+              Record->Payload, State)
+            || !FCrowdDemoWorkerCombatStatePayloadCodec::Decode(
+              State.HostState, HostState))
+            return false;
+          Agent.Combat = MoveTemp(HostState);
+          Agent.bAlive = State.bAlive;
+        }
+      }
+      else if (CurrentKind == EHostKind::Mixed)
+      {
+        for (FCrowdDemoWorkerMixedCombatAgent& Agent : MixedAgents)
+        {
+          const FCrowdWorkerDirtyStateRecord* Record =
+            Context.EntityStates->Find(
+              Agent.EntityRef, ECrowdWorkerField::Combat);
+          FCrowdWorkerCombatState State;
+          FCrowdDemoWorkerMixedCombatState HostState;
+          if (!Record
+            || !FCrowdWorkerCombatStateCodec::Decode(
+              Record->Payload, State)
+            || !FCrowdDemoWorkerMixedCombatStateCodec::Decode(
+              State.HostState, HostState))
+            return false;
+          Agent.Health = HostState.Health;
+          Agent.AttackState = MoveTemp(HostState.AttackState);
+        }
+      }
+      Generation = Context.Generation;
+      return true;
+    }
+
   private:
     enum class EHostKind : uint8
     {

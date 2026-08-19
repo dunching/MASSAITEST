@@ -827,9 +827,12 @@ void AMassCrowdReplicationActor::ProcessPendingAuthorityDigest(
   if (PendingDigest == nullptr || bWorkerCorrectionPending)
     return;
   TArray<FCrowdWorkerAuthorityScopeKey> Mismatches;
+  uint64 LocalAuthorityHash = 0;
+  uint64 RemoteAuthorityHash = 0;
   const ECrowdWorkerNetworkReadResult Result =
     Runtime.CompareAuthorityDigest(
-      *PendingDigest, Mismatches);
+      *PendingDigest, Mismatches,
+      &LocalAuthorityHash, &RemoteAuthorityHash);
   if (Result == ECrowdWorkerNetworkReadResult::NoData) return;
   if (Result != ECrowdWorkerNetworkReadResult::Ready)
   {
@@ -840,6 +843,25 @@ void AMassCrowdReplicationActor::ProcessPendingAuthorityDigest(
   const uint64 DigestSequence = PendingDigest->DigestSequence;
   const uint64 DigestSimulationTick = PendingDigest->SimulationTick;
   const uint64 DigestInputSequence = PendingDigest->ThroughInputSequence;
+  const FCrowdAsyncSimulationRuntimeMetrics WorkerMetrics =
+    Runtime.GetMetrics();
+  UE_LOG(LogTemp, Display,
+    TEXT("CrowdWorkerCorrectionCheckpoint role=client generation=%llu digest_sequence=%llu digest_tick=%llu digest_through_input=%llu mismatched_scope_count=%d correction_sequence=0 correction_apply_tick=0 correction_through_input=0 worker_epoch_before=%llu worker_epoch_after=%llu correction_revision_before=%llu correction_revision_after=%llu invalidated_work_count=0 invalidated_wakeup_count=0 invalidated_dirty_count=0 discarded_stale_output_count=%llu result=%s worker_failure=%u local_authority_hash=%llu remote_authority_hash=%llu converged=%d"),
+    Generation,
+    DigestSequence,
+    DigestSimulationTick,
+    DigestInputSequence,
+    Mismatches.Num(),
+    WorkerMetrics.WorkerEpoch,
+    WorkerMetrics.WorkerEpoch,
+    WorkerMetrics.LastAppliedAuthorityCorrectionSequence,
+    WorkerMetrics.LastAppliedAuthorityCorrectionSequence,
+    WorkerMetrics.StaleAfterCorrectionDiscardCount,
+    Mismatches.IsEmpty() ? TEXT("matched") : TEXT("mismatch"),
+    static_cast<uint32>(WorkerMetrics.WorkerV2.LastFailure),
+    LocalAuthorityHash,
+    RemoteAuthorityHash,
+    Mismatches.IsEmpty() ? 1 : 0);
   AuthorityDigestInbox.Consume();
   if (Mismatches.IsEmpty()) return;
   ++WorkerTrafficMetrics.DigestMismatchCount;

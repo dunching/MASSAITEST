@@ -644,7 +644,6 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
     Dirty.Field = ECrowdWorkerField::Particle;
     Dirty.Generation = Context.Generation;
     Dirty.WorkerEpoch = Context.WorkerEpoch;
-    Dirty.StateRevision = Context.WorkerEpoch;
     Dirty.SourceInputSequence =
       Context.LastAppliedInputSequence;
     if (!FCrowdWorkerParticleStateCodec::Encode(
@@ -653,6 +652,10 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
     const FCrowdWorkerDirtyStateRecord* Existing =
       Context.EntityStates->Find(
         Entry.EntityRef, ECrowdWorkerField::Particle);
+    Dirty.StateRevision = Existing
+      ? FMath::Max(
+          Context.WorkerEpoch, Existing->StateRevision + 1)
+      : Context.WorkerEpoch;
     if (!Existing || !(Existing->Payload == Dirty.Payload))
       OutOutput.DirtyStates.Add(MoveTemp(Dirty));
 
@@ -717,7 +720,13 @@ bool FCrowdWorkerFacingFinalizeDomainExecutor::Execute(
     Dirty.Field = ECrowdWorkerField::Facing;
     Dirty.Generation = Context.Generation;
     Dirty.WorkerEpoch = Context.WorkerEpoch;
-    Dirty.StateRevision = MovementRecord->StateRevision + 1;
+    const FCrowdWorkerDirtyStateRecord* ExistingFacing =
+      Context.EntityStates->Find(
+        Work.Key.PrimaryEntity, ECrowdWorkerField::Facing);
+    Dirty.StateRevision = FMath::Max3(
+      Context.WorkerEpoch,
+      MovementRecord->StateRevision + 1,
+      ExistingFacing ? ExistingFacing->StateRevision + 1 : 1);
     Dirty.CorrectionRevision = FMath::Max(
       Work.CorrectionRevision,
       MovementRecord->CorrectionRevision);

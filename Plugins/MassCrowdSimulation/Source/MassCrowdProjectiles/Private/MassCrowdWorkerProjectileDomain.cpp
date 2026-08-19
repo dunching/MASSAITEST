@@ -839,6 +839,49 @@ bool FCrowdWorkerProjectileDomainExecutor::Execute(
   return true;
 }
 
+bool FCrowdWorkerProjectileDomainExecutor::ApplyAuthorityCorrection(
+  const FCrowdWorkerDomainContext& Context,
+  const TConstArrayView<FCrowdWorkerDirtyStateRecord> Records)
+{
+  FScopeLock Lock(&StateMutex);
+  if (Context.Generation == 0)
+    return false;
+  if (StateGeneration != Context.Generation)
+  {
+    StateGeneration = Context.Generation;
+    LastControlRevision = 0;
+    LastFixedStepIndex = INDEX_NONE;
+    Projectiles.Reset();
+    Metrics = {};
+  }
+  for (const FCrowdWorkerDirtyStateRecord& Record : Records)
+  {
+    if (Record.Field != ECrowdWorkerField::Projectile)
+      continue;
+    FCrowdWorkerProjectileState State;
+    if (!FCrowdWorkerProjectileStateCodec::Decode(
+        Record.Payload, State))
+      return false;
+    Projectiles = State.Prepared.States;
+    Projectiles.RemoveAllSwap(
+      [](const FCrowdProjectileState& Projectile)
+      {
+        return !Projectile.bActive;
+      },
+      EAllowShrinking::No);
+    Projectiles.Sort(
+      [](const FCrowdProjectileState& A,
+        const FCrowdProjectileState& B)
+      {
+        return A.ProjectileId < B.ProjectileId;
+      });
+    LastControlRevision = State.ControlRevision;
+    LastFixedStepIndex = State.Prepared.FixedStepIndex;
+  }
+  return !CombatExtension
+    || CombatExtension->ApplyAuthorityCorrection(Context, Records);
+}
+
 FCrowdWorkerProjectileDomainMetrics
 FCrowdWorkerProjectileDomainExecutor::GetMetrics() const
 {

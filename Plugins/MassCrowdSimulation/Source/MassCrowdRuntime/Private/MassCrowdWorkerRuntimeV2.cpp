@@ -999,17 +999,16 @@ ECrowdWorkerQueueResult FCrowdWorkerDirtyStateStore::MarkDirty(
   if (const FCrowdWorkerDirtyStateRecord* Existing =
     Records.Find(Key))
   {
-    if (Record.Generation < Existing->Generation
-      || (Record.Generation == Existing->Generation
-        && Record.CorrectionRevision
+    if (Record.Generation != Existing->Generation)
+      return ECrowdWorkerQueueResult::Conflict;
+    if (Record.CorrectionRevision
           < Existing->CorrectionRevision)
-      || (Record.Generation == Existing->Generation
-        && Record.CorrectionRevision
-          == Existing->CorrectionRevision
-        && Record.StateRevision < Existing->StateRevision))
       return ECrowdWorkerQueueResult::RejectedStale;
-    if (Record.Generation == Existing->Generation
-      && Record.CorrectionRevision
+    if (Record.CorrectionRevision
+          == Existing->CorrectionRevision
+        && Record.StateRevision < Existing->StateRevision)
+      return ECrowdWorkerQueueResult::RejectedStale;
+    if (Record.CorrectionRevision
         == Existing->CorrectionRevision
       && Record.StateRevision == Existing->StateRevision)
     {
@@ -1075,6 +1074,14 @@ int32 FCrowdWorkerDirtyStateStore::InvalidateEntityRevision(
     if (!bHasRemaining) DirtyEntities.Remove(EntityRef);
   }
   return Removed;
+}
+
+const FCrowdWorkerDirtyStateRecord*
+FCrowdWorkerDirtyStateStore::Find(
+  const FCrowdStableEntityRef& EntityRef,
+  const ECrowdWorkerField Field) const
+{
+  return Records.Find({EntityRef, Field});
 }
 
 int32 FCrowdWorkerDirtyStateStore::RemoveEntity(
@@ -1208,22 +1215,23 @@ ECrowdWorkerQueueResult FCrowdWorkerEntityStateStore::ApplyDirty(
   if (!Entities.Contains(Record.EntityRef)
     || !Record.IsValid(MaxPayloadBytes))
     return ECrowdWorkerQueueResult::RejectedInvalid;
+  const FCrowdWorkerDirtyStateRecord* EntityRoot = Find(
+    Record.EntityRef, ECrowdWorkerField::InputSnapshot);
+  if (!EntityRoot || Record.Generation != EntityRoot->Generation)
+    return ECrowdWorkerQueueResult::Conflict;
   const FCrowdWorkerDirtyStateKey Key{
     Record.EntityRef, Record.Field};
   if (const FCrowdWorkerDirtyStateRecord* Existing =
     Fields.Find(Key))
   {
-    if (Record.Generation < Existing->Generation
-      || (Record.Generation == Existing->Generation
-        && Record.CorrectionRevision
+    if (Record.CorrectionRevision
           < Existing->CorrectionRevision)
-      || (Record.Generation == Existing->Generation
-        && Record.CorrectionRevision
-          == Existing->CorrectionRevision
-        && Record.StateRevision < Existing->StateRevision))
       return ECrowdWorkerQueueResult::RejectedStale;
-    if (Record.Generation == Existing->Generation
-      && Record.CorrectionRevision
+    if (Record.CorrectionRevision
+          == Existing->CorrectionRevision
+        && Record.StateRevision < Existing->StateRevision)
+      return ECrowdWorkerQueueResult::RejectedStale;
+    if (Record.CorrectionRevision
         == Existing->CorrectionRevision
       && Record.StateRevision == Existing->StateRevision)
     {
@@ -2104,6 +2112,20 @@ bool FCrowdWorkerDomainRegistry::ExecuteEpoch(
     DomainWork.Sort(V2WorkStableLess);
     if (!DomainWork.IsEmpty()
       && !Executor->Execute(Context, DomainWork, OutOutput))
+      return false;
+  }
+  return true;
+}
+
+bool FCrowdWorkerDomainRegistry::ApplyAuthorityCorrection(
+  const FCrowdWorkerDomainContext& Context,
+  const TConstArrayView<FCrowdWorkerDirtyStateRecord> Records)
+{
+  if (!bFrozen || Context.Generation == 0)
+    return false;
+  for (const TUniquePtr<ICrowdWorkerDomainExecutor>& Executor : Executors)
+  {
+    if (!Executor->ApplyAuthorityCorrection(Context, Records))
       return false;
   }
   return true;
