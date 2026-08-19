@@ -7,6 +7,7 @@
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "Mass/CrowdDemoRoundSimPipelineSubsystem.h"
 #include "Mass/CrowdDemoWorkerCombatExtension.h"
+#include "CrowdDemoVatShowcasePlanner.h"
 #include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerContracts.h"
 #include "MassCrowdWorkerExchange.h"
@@ -142,6 +143,7 @@ bool FCrowdDemoWorkerCombatCodecRoundTripTest::RunTest(
   Input.ServerTimeSeconds = 2.0f;
   Input.FixedStepSeconds = 1.0f / 30.0f;
   Input.AttackSettings.bEnabled = 1;
+  Input.bVatShowcase = true;
   FCrowdDemoRangedCombatAgent& Agent =
     Input.Agents.AddDefaulted_GetRef();
   Agent.EntityRef = {0x44454d4fu, 11, 2};
@@ -156,6 +158,14 @@ bool FCrowdDemoWorkerCombatCodecRoundTripTest::RunTest(
   Agent.Combat.LifecycleSerial = 2;
   Agent.Combat.AttackPhase = ECrowdDemoAttackPhase::Cooldown;
   Agent.Combat.CooldownEndFixedStep = 40;
+  FCrowdDemoWorkerInjectedHitCommand& Command =
+    Input.InjectedHitCommands.AddDefaulted_GetRef();
+  Command.ApplyFixedStep = 30;
+  Command.TargetEntity = Agent.EntityRef;
+  Command.HitEventId = 7001;
+  Command.Damage = 10.0f;
+  Command.HorizontalImpulseCmps = 500.0f;
+  Command.HitFlashProfileKey = 1;
 
   FCrowdWorkerPayload InputPayload;
   FCrowdDemoWorkerCombatHostInput DecodedInput;
@@ -169,6 +179,15 @@ bool FCrowdDemoWorkerCombatCodecRoundTripTest::RunTest(
     DecodedInput.Agents[0].Combat.CooldownEndFixedStep, 40);
   TestEqual(TEXT("stable ref lifecycle survives codec"),
     DecodedInput.Agents[0].EntityRef.LifecycleSerial, 2u);
+  TestTrue(TEXT("VAT showcase flag survives codec"),
+    DecodedInput.bVatShowcase);
+  TestEqual(TEXT("injected command survives codec"),
+    DecodedInput.InjectedHitCommands.Num(), 1);
+  TestEqual(TEXT("injected command tick survives codec"),
+    DecodedInput.InjectedHitCommands[0].ApplyFixedStep, 30);
+  TestEqual(TEXT("injected command target survives codec"),
+    DecodedInput.InjectedHitCommands[0].TargetEntity,
+    Agent.EntityRef);
 
   FCrowdDemoWorkerCombatHostResult Result;
   Result.FixedStepIndex = Input.FixedStepIndex;
@@ -212,6 +231,172 @@ bool FCrowdDemoWorkerCombatCodecRoundTripTest::RunTest(
     DecodedCombat.bReactiveActive);
   TestTrue(TEXT("movement-lock flag survives generic codec"),
     DecodedCombat.bMovementLocked);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoVatShowcaseWorkerOwnedCommandsTest,
+  "CrowdDemo.WorkerV2.WA5.VatShowcaseWorkerOwnedCommands",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoVatShowcaseWorkerOwnedCommandsTest::RunTest(
+  const FString& Parameters)
+{
+  constexpr uint64 Generation = 51;
+  FCrowdDemoWorkerCombatHostInput HostInput;
+  HostInput.RoundId = 1;
+  HostInput.FixedStepIndex = 0;
+  HostInput.PlanRevision = 1;
+  HostInput.FixedStepSeconds = 1.0f / 30.0f;
+  HostInput.bVatShowcase = true;
+  for (int32 FormationIndex = 0; FormationIndex < 20;
+    ++FormationIndex)
+  {
+    FCrowdDemoRangedCombatAgent& Agent =
+      HostInput.Agents.AddDefaulted_GetRef();
+    Agent.EntityRef = {0x44454d4fu,
+      static_cast<uint64>(FormationIndex + 1), 1};
+    Agent.AgentId = FormationIndex + 1;
+    Agent.LifecycleSerial = 1;
+    Agent.FormationIndex = FormationIndex;
+    Agent.Position = FVector(
+      FormationIndex * 100.0f, 0.0f, 60.0f);
+    Agent.RadiusCm = 42.0f;
+    Agent.Combat = MakeAgent(Agent.AgentId);
+    for (const int32 EventStep : {30, 60, 90})
+    {
+      const ECrowdDemoVatInjectedHit Kind =
+        FCrowdDemoVatShowcasePlanner::SelectInjectedHit(
+          FormationIndex, EventStep);
+      if (Kind == ECrowdDemoVatInjectedHit::None)
+        continue;
+      FCrowdDemoWorkerInjectedHitCommand& Command =
+        HostInput.InjectedHitCommands.AddDefaulted_GetRef();
+      Command.ApplyFixedStep = EventStep;
+      Command.TargetEntity = Agent.EntityRef;
+      Command.HitEventId =
+        (static_cast<uint64>(EventStep) << 32)
+        | static_cast<uint32>(Agent.AgentId);
+      Command.Damage = Kind == ECrowdDemoVatInjectedHit::Death
+        ? 1000.0f : 10.0f;
+      Command.HorizontalImpulseCmps =
+        Kind == ECrowdDemoVatInjectedHit::Knockback
+        ? 500.0f : 0.0f;
+      Command.VerticalImpulseCmps =
+        Kind == ECrowdDemoVatInjectedHit::KnockUp
+        ? 650.0f : 0.0f;
+      Command.HitFlashProfileKey = 1;
+    }
+  }
+
+  FCrowdWorkerProjectileControlResource Control;
+  Control.Revision = 1;
+  Control.AnchorEntity = HostInput.Agents[0].EntityRef;
+  Control.bReplaceState = true;
+  Control.Input.FixedStepIndex = 0;
+  Control.Input.FixedStepSeconds = HostInput.FixedStepSeconds;
+  Control.Input.Profiles.Add(
+    FCrowdDemoProjectileAdapters::BuildProfile(
+      HostInput.AttackSettings, 64));
+  TestTrue(TEXT("showcase target snapshots build"),
+    FCrowdDemoProjectileAdapters::BuildTargetSnapshots(
+      HostInput.FixedStepSeconds, HostInput.Agents,
+      Control.Input.Targets));
+  Control.EffectProfiles.Add(
+    FCrowdDemoProjectileAdapters::BuildEffectProfile(
+      HostInput.AttackSettings));
+  TestTrue(TEXT("showcase host command encodes"),
+    FCrowdDemoWorkerCombatHostInputCodec::Encode(
+      HostInput, Control.HostCombatInput));
+  TestTrue(TEXT("showcase control is valid"), Control.IsValid());
+
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("showcase resources reset"),
+    Resources.Reset(
+      FCrowdWorkerProjectileControlResourceCodec::
+        MaxEncodedBytes));
+  FCrowdWorkerPayload ControlPayload;
+  TestTrue(TEXT("showcase control encodes"),
+    FCrowdWorkerProjectileControlResourceCodec::Encode(
+      Control, ControlPayload));
+  TestEqual(TEXT("showcase control stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::ProjectileControl,
+      Control.Revision, MoveTemp(ControlPayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  TestTrue(TEXT("showcase control commits"),
+    Resources.CommitBuildingAtEpoch(1, ResourceEvents));
+
+  FCrowdWorkerEntityStateStore EntityStates;
+  TestTrue(TEXT("showcase entity store resets"),
+    EntityStates.Reset(64, 4 * 1024 * 1024));
+  FCrowdWorkerProjectileDomainExecutor Executor(
+    MakeCrowdDemoWorkerCombatExtension());
+  FCrowdWorkerDomainContext Context;
+  Context.Generation = Generation;
+  Context.FixedDeltaSeconds = HostInput.FixedStepSeconds;
+  Context.RuntimeMode = ECrowdWorkerRuntimeV2Mode::Production;
+  Context.EntityStates = &EntityStates;
+  Context.Resources = &Resources;
+  FCrowdWorkerWorkItem Work;
+  Work.Key.Domain = ECrowdWorkerDomainId::CombatReactive;
+  Work.Key.Kind = ECrowdWorkerWorkKind::Resource;
+  Work.Key.ScopeKey = CrowdWorkerResourceIds::ProjectileControl;
+  uint64 NextEventSequence = 1;
+  bool bKnockbackObserved = false;
+  bool bKnockUpObserved = false;
+  bool bDeathObserved = false;
+  for (int32 Step = 0; Step <= 90; ++Step)
+  {
+    Context.WorkerEpoch = static_cast<uint64>(Step + 1);
+    Context.AbsoluteSimulationTick = Step + 1;
+    Context.LastAppliedInputSequence = 1;
+    Context.NextOrderedEventSequence = NextEventSequence;
+    Context.SimulationTimeSeconds =
+      (Step + 1) * HostInput.FixedStepSeconds;
+    FCrowdWorkerWorkItem StepWork = Work;
+    if (Step > 0)
+      StepWork.ReasonMask = CrowdWorkerReasonMasks::CombatClock;
+    FCrowdWorkerDomainOutput Output;
+    if (!TestTrue(TEXT("showcase Worker combat step executes"),
+        Executor.Execute(Context,
+          TArray<FCrowdWorkerWorkItem>{StepWork}, Output)))
+      return false;
+    NextEventSequence += Output.OrderedEvents.Num();
+    for (const FCrowdWorkerDirtyStateRecord& Dirty :
+      Output.DirtyStates)
+    {
+      if (Dirty.Field != ECrowdWorkerField::Combat)
+        continue;
+      FCrowdWorkerCombatState WorkerState;
+      FCrowdDemoCombatAgentState DemoState;
+      if (!FCrowdWorkerCombatStateCodec::Decode(
+          Dirty.Payload, WorkerState)
+        || !FCrowdDemoWorkerCombatStatePayloadCodec::Decode(
+          WorkerState.HostState, DemoState))
+        return false;
+      bKnockbackObserved |= Step == 30
+        && DemoState.AgentId == 13
+        && DemoState.ReactiveMode
+          == ECrowdDemoReactiveMotionMode::Knockback;
+      bKnockUpObserved |= Step == 60
+        && DemoState.AgentId == 15
+        && DemoState.ReactiveMode
+          == ECrowdDemoReactiveMotionMode::KnockUp;
+      bDeathObserved |= Step == 90
+        && DemoState.AgentId == 17
+        && !DemoState.bAlive
+        && DemoState.BusinessState
+          == ECrowdDemoBusinessState::Dead;
+    }
+  }
+  TestTrue(TEXT("scheduled knockback is Worker-owned"),
+    bKnockbackObserved);
+  TestTrue(TEXT("scheduled knock-up is Worker-owned"),
+    bKnockUpObserved);
+  TestTrue(TEXT("scheduled death is Worker-owned"),
+    bDeathObserved);
   return true;
 }
 
@@ -1039,6 +1224,7 @@ bool FCrowdDemoPersistentWorkerProductionStructureTest::RunTest(
   FString PipelineSource;
   FString PipelineHeader;
   FString OwnerBarrierSource;
+  FString WorkerCombatSource;
   TestTrue(TEXT("processor source is readable"),
     FFileHelper::LoadFileToString(ProcessorSource, *FPaths::Combine(
       FPaths::ProjectDir(), TEXT(
@@ -1059,6 +1245,10 @@ bool FCrowdDemoPersistentWorkerProductionStructureTest::RunTest(
     FFileHelper::LoadFileToString(OwnerBarrierSource, *FPaths::Combine(
       FPaths::ProjectDir(), TEXT(
         "Plugins/MassCrowdSimulation/Source/MassCrowdRuntime/Private/MassCrowdWorkerResultApply.cpp"))));
+  TestTrue(TEXT("Demo Worker combat source is readable"),
+    FFileHelper::LoadFileToString(WorkerCombatSource,
+      *FPaths::Combine(FPaths::ProjectDir(), TEXT(
+        "Source/MassAICrowdDemo/Mass/CrowdDemoWorkerCombatExtension.cpp"))));
 
   int32 ProcessorClassCount = 0;
   int32 SearchFrom = 0;
@@ -1117,6 +1307,32 @@ bool FCrowdDemoPersistentWorkerProductionStructureTest::RunTest(
     ESearchCase::CaseSensitive, ESearchDir::FromStart, OwnerCommit);
   TestTrue(TEXT("checkpoint publication follows Worker owner commit"),
     OwnerCommit != INDEX_NONE && Checkpoint > OwnerCommit);
+  const int32 AcceptanceObservation = ProcessorSource.Find(TEXT(
+    "ObserveCommittedWorkerScenarioState("),
+    ESearchCase::CaseSensitive, ESearchDir::FromStart,
+    OwnerCommit);
+  TestTrue(TEXT("scenario acceptance observes only committed Worker state"),
+    OwnerCommit != INDEX_NONE
+      && AcceptanceObservation > OwnerCommit
+      && Checkpoint > AcceptanceObservation);
+  TestTrue(TEXT("duplicate and stale observations are rejected"),
+    PipelineSource.Contains(TEXT(
+      "PublishSequence <= LastScenarioObservationPublishSequence"))
+      && PipelineSource.Contains(TEXT(
+        "Generation < LastScenarioObservationGeneration")));
+  TestTrue(TEXT("T1 commands enter through movement profile revisions"),
+    PipelineSource.Contains(TEXT("scenario=T1"))
+      && PipelineSource.Contains(TEXT("MovementProfileRevision")));
+  TestTrue(TEXT("T7 bootstrap bypasses Host simulation business work"),
+    PipelineSource.Contains(TEXT(
+      "BuildWorkerNativeScenarioBusinessBootstrap("))
+      && PipelineSource.Contains(TEXT(
+        "bUseWorkerNativeScenarioBusiness")));
+  TestTrue(TEXT("T7 scheduled hits resolve inside Worker combat"),
+    WorkerCombatSource.Contains(TEXT(
+      "CurrentInput.InjectedHitCommands"))
+      && WorkerCombatSource.Contains(TEXT(
+        "FCrowdDemoCombatStateKernel::ResolveHitFacts(")));
   TestTrue(TEXT("ordinary Production submits intent without rebuilding Round DAG"),
     PipelineSource.Contains(TEXT("TrySubmitFullWorkerProductionIntent()"))
       && PipelineSource.Contains(TEXT(

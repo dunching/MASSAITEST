@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
+#include "Mass/CrowdDemoT7PresentationEventStream.h"
 #include "GameFramework/Actor.h"
 #include "CrowdDemoReplicator.generated.h"
 
@@ -81,6 +82,13 @@ public:
   void SetLocalVisualHostOnly(bool bInLocalVisualHostOnly);
   bool IsLocalVisualHostOnly() const { return bLocalVisualHostOnly; }
   void ApplyProjectileVisualEvents(TConstArrayView<FCrowdDemoProjectileVisualEvent> Events);
+  void ApplyT7PresentationEvents(
+    TConstArrayView<FCrowdDemoT7PresentationEvent> Events);
+  bool ResolveT7PresentationState(
+    int32 RoundId,
+    int32 AgentId,
+    int32 LifecycleSerial,
+    FCrowdDemoT7PresentationEvent& OutEvent);
   bool GetProjectileVisualEventCounts(
     int32 RoundId,
     int32& OutSpawn,
@@ -167,6 +175,7 @@ private:
   TMap<int32, FCrowdDemoProjectileVisualRoundCounts> ProjectileVisualRoundCounts;
   TSet<FCrowdDemoProjectileVisualEventKey> SeenProjectileVisualEvents;
   TArray<double> ProjectileImpactExpireWorldSeconds;
+  FCrowdDemoT7PresentationEventStream T7PresentationEventStream;
 
   void RefreshServerSummaryState();
   FCrowdDemoEntityState& FindOrAddEntityState(int32 Id, int32 LifecycleSerial);

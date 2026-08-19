@@ -209,6 +209,19 @@ struct FCrowdDemoCombatNetState
   UPROPERTY() uint32 VisualPhaseSeed = 0;
 };
 
+USTRUCT()
+struct FCrowdDemoT7PresentationEvent
+{
+  GENERATED_BODY()
+
+  UPROPERTY() int32 RoundId = INDEX_NONE;
+  UPROPERTY() int32 AgentId = INDEX_NONE;
+  UPROPERTY() int32 LifecycleSerial = 0;
+  UPROPERTY() int32 FixedStepIndex = INDEX_NONE;
+  UPROPERTY() float ServerTimeSeconds = 0.0f;
+  UPROPERTY() FCrowdDemoCombatNetState Combat;
+};
+
 USTRUCT(BlueprintType)
 struct FCrowdDemoRoundAgentState
 {

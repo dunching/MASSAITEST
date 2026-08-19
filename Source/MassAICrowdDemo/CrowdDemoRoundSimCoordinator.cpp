@@ -39,6 +39,7 @@ namespace
   constexpr uint32 CrowdDemoRoundCheckpointHeaderMagic = 0x48435231u;
   constexpr uint32 CrowdDemoRoundCheckpointAgentMagic = 0x41435231u;
   constexpr uint32 CrowdDemoProjectileEventMagic = 0x45565031u;
+  constexpr uint32 CrowdDemoT7PresentationEventMagic = 0x37565031u;
   constexpr uint32 CrowdDemoRoundResultHeaderMagic = 0x48525231u;
 
   void LogWorkerTargetObservation(
@@ -813,6 +814,11 @@ void ACrowdDemoRoundSimCoordinator::TickServer()
   if (Pipeline->DequeueProjectileVisualEvents(ProjectileVisualEvents))
   {
     PublishProductProjectileEvents(ProjectileVisualEvents);
+  }
+  TArray<FCrowdDemoT7PresentationEvent> T7PresentationEvents;
+  if (Pipeline->DequeueT7PresentationEvents(T7PresentationEvents))
+  {
+    PublishProductT7PresentationEvents(T7PresentationEvents);
   }
 
   const float NowSeconds = World->GetTimeSeconds();
@@ -1864,6 +1870,38 @@ void ACrowdDemoRoundSimCoordinator::PublishProductProjectileEvents(
   }
 }
 
+void ACrowdDemoRoundSimCoordinator::PublishProductT7PresentationEvents(
+  const TConstArrayView<FCrowdDemoT7PresentationEvent> Events)
+{
+  for (TPair<TWeakObjectPtr<APlayerController>,
+    TWeakObjectPtr<AMassCrowdReplicationActor>>& Pair
+    : ProductReplicationChannels)
+  {
+    AMassCrowdReplicationActor* Channel = Pair.Value.Get();
+    if (!Channel) continue;
+    for (const FCrowdDemoT7PresentationEvent& Event : Events)
+    {
+      TArray<uint8> Payload;
+      if (!EncodeProductPayload(
+          CrowdDemoT7PresentationEventMagic, Event, Payload)
+        || !PublishProductReliable(
+          *Channel,
+          ECrowdReliableStateKind::PresentationEvent,
+          {8,
+            static_cast<uint64>(FMath::Max(0, Event.AgentId)) + 1ull,
+            static_cast<uint32>(FMath::Max(1, Event.LifecycleSerial))},
+          static_cast<uint32>(FMath::Max(0, Event.FixedStepIndex) + 1),
+          Payload))
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("VIOLATION CrowdDemoRoundProductChannel role=server stage=publish_t7_presentation round_id=%d agent=%d fixed_step=%d"),
+          Event.RoundId, Event.AgentId, Event.FixedStepIndex);
+        break;
+      }
+    }
+  }
+}
+
 void ACrowdDemoRoundSimCoordinator::
   ConsumeProductReplicationChannels()
 {
@@ -1979,6 +2017,24 @@ void ACrowdDemoRoundSimCoordinator::ConsumeProductReliableRecord(
         const FCrowdDemoProjectileVisualEvent Events[] = {
           ProjectileEvent};
         VisualHost->ApplyProjectileVisualEvents(Events);
+      }
+    return;
+  }
+
+  FCrowdDemoT7PresentationEvent T7PresentationEvent;
+  if (DecodeProductPayload(
+      Record.Payload,
+      CrowdDemoT7PresentationEventMagic,
+      T7PresentationEvent))
+  {
+    UWorld* World = GetWorld();
+    if (World && World->GetNetMode() != NM_DedicatedServer)
+      if (ACrowdDemoReplicator* VisualHost =
+        FindProjectileVisualHost(*World))
+      {
+        const FCrowdDemoT7PresentationEvent Events[] = {
+          T7PresentationEvent};
+        VisualHost->ApplyT7PresentationEvents(Events);
       }
     return;
   }

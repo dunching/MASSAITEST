@@ -43,6 +43,7 @@ try {
     "valid Worker Target checkpoint parses"
 
   $RejectCases = @(
+    "LogTemp: Warning: CrowdWorkerRuntimeV2Failed stage=resume_before_input failure=5",
     "LogTemp: Error: CrowdWorkerTargetDemandRejected fixed_step=886 cohort=0",
     "LogTemp: Error: CrowdWorkerTargetDomainRejected stage=demand fixed_step=886",
     "LogTemp: Error: CrowdWorkerTargetDomainRejected stage=plan fixed_step=886",
@@ -69,7 +70,27 @@ try {
     { Assert-CrowdDemoWorkerTargetGate $MissingLog 20 } `
     "missing checkpoint fails"
 
-  Write-Host "CrowdDemo runner gate tests PASS 9/9"
+  $ScenarioLog = Join-Path $TestRoot "scenario.log"
+  Set-Content -LiteralPath $ScenarioLog -Value @(
+    "LogTemp: Display: CrowdDemoT1Checkpoint role=server round_id=1 valid=1 phase=6 transitions=6 active=19 active_sequence=5,10,15,19,20,19 batches=3 inserted=15 removed=1 layer_max=3 influenced=20 insert_settle=15 post_remove_settle=15",
+    "LogTemp: Display: CrowdDemoT2Checkpoint role=server round_id=1 valid=1 flow_approach_entered_count=20 transport_handoff_count=20 inside_effective_band_count=20 plan_unrouted_count=0 guidance_unrouted_count=0 transport_validation_failure_count=0 terminal_settled_count=20 flow_contract_violation_count=0 final_deadlock_agent_count=0",
+    "LogTemp: Display: CrowdDemoT3Checkpoint role=server round_id=1 valid=1 center_crossed=10,10 completed=10,10 total_completed=20 final_deadlock=0 unreachable_samples=0 last_step=1170",
+    "LogTemp: Display: CrowdDemoT4Checkpoint role=server round_id=1 valid=1 wall_passed=20 corridor_exited=20 completed=20 final_settled=20 final_deadlock=0 unreachable_samples=0 last_step=1170")
+  foreach ($Scenario in @('T1', 'T2', 'T3', 'T4')) {
+    $ScenarioMetrics = Assert-CrowdDemoScenarioAcceptanceGate `
+      $ScenarioLog $Scenario 20
+    Assert-RunnerGateTest ($ScenarioMetrics.valid -eq '1') `
+      "$Scenario valid acceptance checkpoint passes"
+  }
+
+  $FalsePositiveT3Log = Join-Path $TestRoot "t3_false_positive.log"
+  Set-Content -LiteralPath $FalsePositiveT3Log -Value `
+    "LogTemp: Display: CrowdDemoT3Checkpoint role=server round_id=1 valid=1 center_crossed=0,0 completed=0,0 total_completed=0 final_deadlock=0 unreachable_samples=0 last_step=-1"
+  Assert-RunnerGateThrows `
+    { Assert-CrowdDemoScenarioAcceptanceGate $FalsePositiveT3Log T3 20 } `
+    "T3 zero-progress checkpoint cannot pass"
+
+  Write-Host "CrowdDemo runner gate tests PASS 15/15"
 }
 finally {
   Remove-Item -LiteralPath $TestRoot -Recurse -Force

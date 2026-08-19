@@ -104,6 +104,7 @@ if ($TargetStabilityDiagnostic) {
 if ($TargetRegionTransportDiagnostic) {
   $CommonArgs = "$CommonArgs -CrowdDemoTargetRegionTransportDiagnostic"
 }
+
 if ($TargetRegionPlanLifecycleDiagnostic) {
   $CommonArgs = "$CommonArgs -CrowdDemoTargetRegionPlanLifecycleDiagnostic"
 }
@@ -217,6 +218,19 @@ if ($TargetRegionTransportDiagnostic) {
   $WorkerTargetMetrics =
     Assert-CrowdDemoWorkerTargetGate $ServerLog $EntityCount
   Write-Host "[CrowdDemo] Worker Target gate passed: fixed_step=$($WorkerTargetMetrics.fixed_step) generation=$($WorkerTargetMetrics.generation) input=$($WorkerTargetMetrics.input_sequence) publish=$($WorkerTargetMetrics.publish_sequence) hash=$($WorkerTargetMetrics.worker_state_hash)"
+}
+
+$ScenarioAcceptance = switch -Regex ($Map) {
+  'T1OpenSpawnRelaxationSmall$' { 'T1'; break }
+  'T2OpenCohortMovementSmall$' { 'T2'; break }
+  'T3OpenBidirectionalSwapSmall$' { 'T3'; break }
+  'T4ValidCorridorTransitSmall$' { 'T4'; break }
+  default { '' }
+}
+if ($ScenarioAcceptance) {
+  $ScenarioMetrics = Assert-CrowdDemoScenarioAcceptanceGate `
+    $ServerLog $ScenarioAcceptance $EntityCount
+  Write-Host "[CrowdDemo] $ScenarioAcceptance acceptance gate passed: valid=$($ScenarioMetrics.valid)"
 }
 
 if ($RangedProjectileGolden) {

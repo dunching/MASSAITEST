@@ -506,6 +506,22 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         continue;
       }
 
+      FCrowdDemoT7PresentationEvent T7PresentationEvent;
+      const bool bHasT7PresentationEvent = bT7AcceptanceScenario
+        && Replicator->ResolveT7PresentationState(
+          Pipeline->GetCurrentRoundId(),
+          Identities[It].Id,
+          Identities[It].LifecycleSerial,
+          T7PresentationEvent);
+      const FCrowdDemoCombatNetState& PresentationCombat =
+        bHasT7PresentationEvent
+          ? T7PresentationEvent.Combat
+          : Authority.Combat;
+      const float PresentationServerSampleTimeSeconds =
+        bHasT7PresentationEvent
+          ? T7PresentationEvent.ServerTimeSeconds
+          : Authority.ServerSampleTimeSeconds;
+
       FCrowdDemoClientVisualOffsetFragment& Offset = VisualOffsets[It];
       const bool bWasDisplayInitialized = Offset.bDisplayInitialized;
       const FVector PreviousSimLocation = Offset.LastSubmittedSimLocation;
@@ -674,18 +690,21 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
           Label.LifecycleSerial = Identities[It].LifecycleSerial;
           Label.FormationIndex = Formation->FormationIndex;
           Label.AuthoritySampleFixedStepIndex =
-            ResolveAuthoritySampleFixedStepIndex(
-              *Pipeline, Authority.ServerSampleTimeSeconds);
+            bHasT7PresentationEvent
+              ? T7PresentationEvent.FixedStepIndex
+              : ResolveAuthoritySampleFixedStepIndex(
+                  *Pipeline, Authority.ServerSampleTimeSeconds);
           Label.bPreRoundAuthoritySample =
-            Authority.ServerSampleTimeSeconds + KINDA_SMALL_NUMBER
+            (bT7AcceptanceScenario && !bHasT7PresentationEvent)
+            || PresentationServerSampleTimeSeconds + KINDA_SMALL_NUMBER
               < Pipeline->GetActivePlan().StartServerTimeSeconds;
           Label.DisplayLocation = Offset.DisplayLocation;
           Label.AuthoritativeLocation = SimState.Location;
-          Label.Actual = Authority.Combat;
+          Label.Actual = PresentationCombat;
           Label.Evaluation = FCrowdDemoT7AcceptanceOracle::Evaluate(
             Formation->FormationIndex,
             Label.AuthoritySampleFixedStepIndex,
-            Authority.Combat);
+            PresentationCombat);
           if (!Label.bPreRoundAuthoritySample
             && Label.Evaluation.bValid
             && !Label.Evaluation.bMatches)
@@ -695,12 +714,12 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
                 Formation->FormationIndex,
                 FMath::Max(
                   0, Label.AuthoritySampleFixedStepIndex - 1),
-                Authority.Combat);
+                PresentationCombat);
             const FCrowdDemoT7AcceptanceEvaluation NextStepEvaluation =
               FCrowdDemoT7AcceptanceOracle::Evaluate(
                 Formation->FormationIndex,
                 Label.AuthoritySampleFixedStepIndex + 1,
-                Authority.Combat);
+                PresentationCombat);
             Label.bSampleEdgeToleranceMatch =
               PreviousStepEvaluation.bMatches
               || NextStepEvaluation.bMatches;
@@ -726,7 +745,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
               ScenarioStateSidecarAppend += BuildScenarioStateEventJson(
                 Pipeline->GetCurrentRoundId(),
                 Pipeline->GetCurrentFixedStepIndex(),
-                Authority.ServerSampleTimeSeconds,
+                PresentationServerSampleTimeSeconds,
                 Label);
             }
           }
@@ -737,15 +756,19 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
         Offset.DisplayLocation,
         Offset.DisplayYawDegrees);
       FCrowdDemoVatPlaybackInput PlaybackInput;
-      PlaybackInput.VisualState = Authority.Combat.VisualState;
+      PlaybackInput.VisualState = PresentationCombat.VisualState;
       PlaybackInput.ServerTimeSeconds = ClientServerSeconds;
-      PlaybackInput.StateStartServerTimeSeconds = Authority.Combat.VisualStateStartServerTimeSeconds;
+      PlaybackInput.StateStartServerTimeSeconds =
+        PresentationCombat.VisualStateStartServerTimeSeconds;
       PlaybackInput.PlayRate = Authority.VatPlayRateByte / 128.0f;
-      PlaybackInput.PhaseSeed = Authority.Combat.VisualPhaseSeed;
-      PlaybackInput.HitFlashRevision = Authority.Combat.HitFlashRevision;
-      PlaybackInput.HitFlashStartServerTimeSeconds = Authority.Combat.HitFlashStartServerTimeSeconds;
-      PlaybackInput.HitFlashDurationSeconds = Authority.Combat.HitFlashDurationSeconds;
-      PlaybackInput.HitFlashPeakIntensity = Authority.Combat.HitFlashPeakIntensity;
+      PlaybackInput.PhaseSeed = PresentationCombat.VisualPhaseSeed;
+      PlaybackInput.HitFlashRevision = PresentationCombat.HitFlashRevision;
+      PlaybackInput.HitFlashStartServerTimeSeconds =
+        PresentationCombat.HitFlashStartServerTimeSeconds;
+      PlaybackInput.HitFlashDurationSeconds =
+        PresentationCombat.HitFlashDurationSeconds;
+      PlaybackInput.HitFlashPeakIntensity =
+        PresentationCombat.HitFlashPeakIntensity;
       const FCrowdDemoVatPlaybackResult Playback = FCrowdDemoVatPlaybackKernel::Evaluate(PlaybackInput);
       const bool bHitFlashActive = Playback.bValid
         && Playback.HitFlashIntensity > KINDA_SMALL_NUMBER;
@@ -765,7 +788,7 @@ void UCrowdDemoClientVisualMassProcessor::Execute(
       PresentationState.Transform = InstanceTransform;
       PresentationState.ProfileKey = 1;
       PresentationState.VisualState =
-        static_cast<uint32>(Authority.Combat.VisualState);
+        static_cast<uint32>(PresentationCombat.VisualState);
       PresentationState.CustomData = Playback.bValid
         ? FVector3f(
           Playback.Frame,

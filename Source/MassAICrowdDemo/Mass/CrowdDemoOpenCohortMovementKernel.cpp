@@ -114,6 +114,8 @@ void FCrowdDemoOpenCohortMovementKernel::UpdateProgress(
   TArray<FCrowdDemoTargetRegionGuidanceResult> Sorted(Guidance);
   Sorted.Sort([](const auto& A, const auto& B) { return A.AgentId < B.AgentId; });
   TSet<int32> CurrentTerminal;
+  TSet<int32> CurrentInsideBand;
+  TSet<int32> CurrentUnrouted;
   bool bValid = ExpectedAgentCount > 0 && Sorted.Num() == ExpectedAgentCount;
   for (int32 Index = 0; Index < Sorted.Num(); ++Index)
   {
@@ -129,10 +131,17 @@ void FCrowdDemoOpenCohortMovementKernel::UpdateProgress(
     if (Result.Mode == ECrowdDemoTargetRegionGuidanceMode::Transport
       || Result.Mode == ECrowdDemoTargetRegionGuidanceMode::TerminalSettle)
       InOutProgress.TransportHandoffAgentIds.Add(Result.AgentId);
+    if (Result.Mode != ECrowdDemoTargetRegionGuidanceMode::FarFlow
+      && Result.Mode != ECrowdDemoTargetRegionGuidanceMode::Unrouted)
+      CurrentInsideBand.Add(Result.AgentId);
+    if (Result.Mode == ECrowdDemoTargetRegionGuidanceMode::Unrouted)
+      CurrentUnrouted.Add(Result.AgentId);
     if (Result.Mode == ECrowdDemoTargetRegionGuidanceMode::TerminalSettle)
       CurrentTerminal.Add(Result.AgentId);
   }
   InOutProgress.TerminalSettledAgentIds = MoveTemp(CurrentTerminal);
+  InOutProgress.InsideEffectiveBandAgentIds = MoveTemp(CurrentInsideBand);
+  InOutProgress.CurrentUnroutedAgentIds = MoveTemp(CurrentUnrouted);
   if (InOutProgress.TerminalSettledStep == INDEX_NONE
     && InOutProgress.TerminalSettledAgentIds.Num() == ExpectedAgentCount)
     InOutProgress.TerminalSettledStep = FixedStepIndex;
@@ -142,6 +151,8 @@ void FCrowdDemoOpenCohortMovementKernel::UpdateProgress(
   Hash = Fold(Hash, ExpectedAgentCount);
   FoldSortedIds(Hash, InOutProgress.FlowApproachEnteredAgentIds);
   FoldSortedIds(Hash, InOutProgress.TransportHandoffAgentIds);
+  FoldSortedIds(Hash, InOutProgress.InsideEffectiveBandAgentIds);
+  FoldSortedIds(Hash, InOutProgress.CurrentUnroutedAgentIds);
   FoldSortedIds(Hash, InOutProgress.TerminalSettledAgentIds);
   Hash = Fold(Hash, InOutProgress.TerminalSettledStep);
   InOutProgress.ProgressHash = Hash;

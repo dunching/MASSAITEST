@@ -182,6 +182,8 @@ private:
     const FCrowdDemoRoundResultHeader& Header);
   void PublishProductProjectileEvents(
     TConstArrayView<FCrowdDemoProjectileVisualEvent> Events);
+  void PublishProductT7PresentationEvents(
+    TConstArrayView<FCrowdDemoT7PresentationEvent> Events);
   void ConsumeProductReplicationChannels();
   void ConsumeProductReliableRecord(
     AMassCrowdReplicationActor& Channel,

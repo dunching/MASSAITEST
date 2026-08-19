@@ -33,6 +33,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "CrowdDemoRunnerGates.ps1")
+
 function Stop-ProcessIfRunning {
   param([System.Diagnostics.Process]$Process)
   if ($Process -and !$Process.HasExited) {
@@ -230,6 +232,15 @@ if ($T7StateAcceptance) {
   $EntityCount = 20
   $Scenario = "SimRoundSoftPressure"
   $RequireClientReady = $true
+  $ProductionArgs = @(
+    "-CrowdWorkerMovementMode=Production",
+    "-CrowdWorkerBehaviorMode=Production",
+    "-CrowdWorkerTargetMode=Production",
+    "-CrowdWorkerParticleMode=Production",
+    "-CrowdWorkerProjectileMode=Production",
+    "-CrowdWorkerCombatMode=Production"
+  ) -join " "
+  $CommonExtraArgs = "$ProductionArgs $CommonExtraArgs".Trim()
 }
 
 if (!(Test-Path -LiteralPath $EditorPath)) {
@@ -371,6 +382,19 @@ finally {
   if ($ShellApplication -and !$NoMinimizeDesktop) {
     Start-Sleep -Milliseconds 500
     $ShellApplication.UndoMinimizeAll()
+  }
+}
+
+if ($T7StateAcceptance) {
+  foreach ($RuntimeLog in @($ServerLog, $ClientLog)) {
+    if (!(Test-Path -LiteralPath $RuntimeLog)) {
+      throw "T7 runtime log is missing: $RuntimeLog"
+    }
+  }
+  $HardFailure = @(Get-CrowdDemoHardFailures @(
+      $ServerLog, $ClientLog)) | Select-Object -First 1
+  if ($HardFailure) {
+    throw "T7 runtime hard failure in $($HardFailure.Path): $($HardFailure.Line.Trim())"
   }
 }
 
