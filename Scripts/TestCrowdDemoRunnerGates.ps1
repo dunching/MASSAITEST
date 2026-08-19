@@ -34,7 +34,7 @@ try {
   $CleanLog = Join-Path $TestRoot "clean.log"
   Set-Content -LiteralPath $CleanLog -Value @(
     "LogTemp: Display: clean",
-    "LogTemp: Display: CrowdWorkerTargetCheckpoint role=server round_id=1 valid=1 fixed_step=1199 generation=1 worker_epoch=1200 input_sequence=1265 publish_sequence=1200 target_revision=1 objective_revision_match=1 expected_target_agent_count=20 target_agent_count=20 valid_target_state_count=20 cohort_count=1 plan_unrouted_agent_count=0 unrouted_target_state_count=0 worker_state_hash=123 source=WorkerResultApply")
+    "LogTemp: Display: CrowdWorkerTargetCheckpoint role=server round_id=1 valid=1 fixed_step=1199 generation=1 worker_epoch=1200 input_sequence=1265 publish_sequence=1200 target_revision=1 objective_revision_match=1 expected_target_agent_count=20 target_agent_count=20 valid_target_state_count=20 cohort_count=1 plan_unrouted_agent_count=0 unrouted_target_state_count=0 total_feasible_capacity=224 assignable_population=20 overflow_population=0 capacity_hold_target_state_count=0 worker_state_hash=123 source=WorkerResultApply")
   Assert-RunnerGateTest `
     (@(Get-CrowdDemoHardFailures @($CleanLog)).Count -eq 0) `
     "clean log has no hard failures"
@@ -58,7 +58,7 @@ try {
 
   $InvalidLog = Join-Path $TestRoot "invalid.log"
   Set-Content -LiteralPath $InvalidLog -Value `
-    "LogTemp: Display: CrowdWorkerTargetCheckpoint role=server valid=0 objective_revision_match=0 expected_target_agent_count=20 target_agent_count=19 valid_target_state_count=19 cohort_count=0 plan_unrouted_agent_count=1 unrouted_target_state_count=1"
+    "LogTemp: Display: CrowdWorkerTargetCheckpoint role=server valid=0 objective_revision_match=0 expected_target_agent_count=20 target_agent_count=19 valid_target_state_count=19 cohort_count=0 plan_unrouted_agent_count=1 unrouted_target_state_count=1 total_feasible_capacity=6 assignable_population=6 overflow_population=13 capacity_hold_target_state_count=13"
   Assert-RunnerGateThrows `
     { Assert-CrowdDemoWorkerTargetGate $InvalidLog 20 } `
     "invalid checkpoint fails"

@@ -451,13 +451,9 @@ Runtime-owned dynamic SharedFlow refresh
 
 因此旧 Moving `source_attachment_failures=20/20` 的 step ~398 failure 不再是当前 active blocker。
 
-### 12.2 当前尚未实现的边缘容量合同
+### 12.2 边缘裁剪与有限容量
 
-当前 Target kernel/worker 仍存在明确 correctness 缺口：
-
-> Target 靠近 NavMesh / Environment 边缘时，Polar topology 会自然失去部分可行 Region/Cell；当前 Demand 仍可能把“合法可行域被裁剪导致容量不足”判为 fatal invalid。
-
-当前 canonical Moving 已观察到：
+历史 canonical Moving 暴露过：
 
 ```text
 feasible_regions = 3 / 16
@@ -465,9 +461,19 @@ desired = 19
 source_attachment_failures = 0
 ```
 
-这说明 SourceAttachment 正常，但 clipped finite-capacity / Overflow 语义尚未实现。
+当前 candidate 已实现 `Reference/TargetRegionBoundaryCapacityContract.md`：
 
-最终设计已在 `Reference/TargetRegionBoundaryCapacityContract.md` 明确；**这里不能把终态设计误写成当前已经完成的源码能力。**
+```text
+immutable Environment/SharedFlow feasibility
+→ clipped feasible Polar Cells
+→ geometry/profile-derived finite capacity
+→ Desired / Assignable / Overflow
+→ reachability-aware deterministic admission
+→ transient Plan/Execution claims
+→ CapacityHold with zero inward Target pressure
+```
+
+Plan replacement 会验证 occupied/active claim 不超过 Cell capacity；Moving Cell 失效时释放/迁移 claim，新容量按稳定实体顺序 refill。这是 macro population admission，不是永久 Agent→Cell Slot。
 
 ---
 
@@ -667,12 +673,13 @@ Worker Target observability                 PASS
 Static T5 fixed_step=1199 repeat            PASS
 Moving objective clock                      PASS
 Runtime-owned dynamic SharedFlow            PASS
+Target boundary/corner capacity automation  PASS / candidate
+Moving T5 fixed_step=1199 repeat             PASS / candidate
 ```
 
 当前尚未关闭：
 
 ```text
-T5 Moving boundary/corner finite capacity / Overflow
 T1/T2/T3/T4/T6/T7 post-cut regression
 Networking / Late Join regression
 双端 T8 formal runner
@@ -688,13 +695,9 @@ WA9
 ## 21. 当前主要 OPEN 项
 
 ```text
-1. T5 Long-Window Correctness
-   - clipped Environment/NavMesh Target topology
-   - finite feasible Cell capacity
-   - Plan / Execution transient capacity claim
-   - CapacityHold / Overflow
-   - moving Cell invalidation / release / refill
-   - Moving 1000+ Tick deterministic repeat
+1. T5 Candidate Landing
+   - READY PR review
+   - merge 后 main Build/automation/Static/Moving 重验
 
 2. Post-cut Regression Remainder
    - T1/T2/T3/T4/T6/T7
@@ -721,6 +724,6 @@ WA9
 
 ## 22. 当前总体结论
 
-当前 `main` 的架构结论：
+当前 candidate 的架构结论：
 
-> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；第一代跨帧 Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels 已从 Production source 物理删除。Moving Objective 的 absolute clock 与 Runtime-owned dynamic SharedFlow refresh 已进入主链，旧 SourceAttachment failure 已关闭。当前 Target correctness 的 active 缺口已经收敛为地图边缘/角落的 clipped finite-capacity / Overflow 合同；该终态设计已明确，但源码尚未实现。**
+> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；第一代跨帧 Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels 已从 Production source 物理删除。Moving Objective absolute clock、Runtime-owned dynamic SharedFlow refresh 与 clipped finite-capacity / Overflow 已进入 candidate 源码。Static/Moving T5 均已取得 1199-step deterministic repeat 证据；当前剩余动作是 READY PR review 与合并后 main 重验。**

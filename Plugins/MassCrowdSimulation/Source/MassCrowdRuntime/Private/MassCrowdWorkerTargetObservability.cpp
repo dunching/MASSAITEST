@@ -30,6 +30,7 @@ namespace CrowdWorkerTargetObservabilityPrivate
     uint32 GuidanceHash = 0;
     int32 TargetStateCount = 0;
     int32 UnroutedTargetStateCount = 0;
+    int32 CapacityHoldTargetStateCount = 0;
     FCrowdStableEntityRef FirstUnroutedEntityRef;
     bool bHasState = false;
     bool bInvalid = false;
@@ -131,6 +132,12 @@ bool FCrowdWorkerTargetObserver::Build(
       if (OutObservation.FirstUnroutedEntityRef.IsUnset())
         OutObservation.FirstUnroutedEntityRef = EntityRef;
     }
+    else if (TargetState.Mode ==
+      ECrowdTargetRegionGuidanceMode::CapacityHold)
+    {
+      ++Builder.CapacityHoldTargetStateCount;
+      ++OutObservation.CapacityHoldTargetStateCount;
+    }
   }
 
   TArray<uint32> CohortKeys;
@@ -158,11 +165,24 @@ bool FCrowdWorkerTargetObserver::Build(
     Cohort.RoutedAgentCount = Builder.State.Plan.RoutedAgentCount;
     Cohort.PlanUnroutedAgentCount =
       Builder.State.Plan.UnroutedAgentCount;
+    Cohort.TotalFeasibleCapacity =
+      Builder.State.Plan.TotalFeasibleCapacity;
+    Cohort.AssignablePopulation =
+      Builder.State.Plan.AssignablePopulation;
+    Cohort.OverflowPopulation =
+      Builder.State.Plan.OverflowPopulation;
+    OutObservation.TotalFeasibleCapacity +=
+      Cohort.TotalFeasibleCapacity;
+    OutObservation.AssignablePopulation +=
+      Cohort.AssignablePopulation;
+    OutObservation.OverflowPopulation += Cohort.OverflowPopulation;
     Cohort.ExecutionHash = Builder.State.Execution.ExecutionHash;
     Cohort.GuidanceHash = Builder.GuidanceHash;
     Cohort.TargetStateCount = Builder.TargetStateCount;
     Cohort.UnroutedTargetStateCount =
       Builder.UnroutedTargetStateCount;
+    Cohort.CapacityHoldTargetStateCount =
+      Builder.CapacityHoldTargetStateCount;
     Cohort.FirstUnroutedEntityRef =
       Builder.FirstUnroutedEntityRef;
     Cohort.bValid = Builder.bHasState
@@ -192,6 +212,11 @@ bool FCrowdWorkerTargetObserver::Build(
   FoldObservationValue(StableHash, OutObservation.TargetAgentCount);
   FoldObservationValue(
     StableHash, OutObservation.UnroutedTargetStateCount);
+  FoldObservationValue(StableHash, OutObservation.TotalFeasibleCapacity);
+  FoldObservationValue(StableHash, OutObservation.AssignablePopulation);
+  FoldObservationValue(StableHash, OutObservation.OverflowPopulation);
+  FoldObservationValue(
+    StableHash, OutObservation.CapacityHoldTargetStateCount);
   FoldObservationEntity(StableHash, OutObservation.FirstInvalidEntityRef);
   FoldObservationEntity(StableHash, OutObservation.FirstUnroutedEntityRef);
   for (const FCrowdWorkerTargetCohortObservation& Cohort :
@@ -203,8 +228,10 @@ bool FCrowdWorkerTargetObserver::Build(
       StableHash, static_cast<uint64>(Cohort.TargetRevision));
     FoldObservationValue(
       StableHash, static_cast<uint64>(Cohort.PlanEpoch));
-    FoldObservationValue(
-      StableHash, static_cast<uint64>(Cohort.PlanBuildFixedStep));
+    // PlanBuildFixedStep is an absolute Runtime tick. It remains observable
+    // for lifetime diagnostics, but two otherwise identical runs can begin
+    // their round at different absolute ticks because of startup uptime.
+    // Keep the cross-run semantic hash independent of that clock origin.
     FoldObservationValue(StableHash, Cohort.FeasibleGraphHash);
     FoldObservationValue(StableHash, Cohort.MembershipHash);
     FoldObservationValue(StableHash, Cohort.ExternalPopulationHash);
@@ -213,6 +240,11 @@ bool FCrowdWorkerTargetObserver::Build(
     FoldObservationValue(StableHash, Cohort.GuidanceHash);
     FoldObservationValue(StableHash, Cohort.TargetStateCount);
     FoldObservationValue(StableHash, Cohort.UnroutedTargetStateCount);
+    FoldObservationValue(StableHash, Cohort.TotalFeasibleCapacity);
+    FoldObservationValue(StableHash, Cohort.AssignablePopulation);
+    FoldObservationValue(StableHash, Cohort.OverflowPopulation);
+    FoldObservationValue(
+      StableHash, Cohort.CapacityHoldTargetStateCount);
   }
   FoldObservationValue(StableHash, OutObservation.bValid ? 1 : 0);
   OutObservation.StableHash = StableHash;

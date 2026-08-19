@@ -357,6 +357,9 @@ namespace CrowdWorkerTargetPrivate
     }
     AppendSigned(Bytes, Value.RoutedAgentCount);
     AppendSigned(Bytes, Value.UnroutedAgentCount);
+    AppendSigned(Bytes, Value.TotalFeasibleCapacity);
+    AppendSigned(Bytes, Value.AssignablePopulation);
+    AppendSigned(Bytes, Value.OverflowPopulation);
     AppendSigned64(Bytes, Value.TotalPhysicalCost);
     AppendSigned64(Bytes, Value.ChangedQuotaUnitCount);
     AppendUnsigned(Bytes, Value.TransportHash);
@@ -394,6 +397,9 @@ namespace CrowdWorkerTargetPrivate
     }
     return ReadSigned(Bytes, Offset, OutValue.RoutedAgentCount)
       && ReadSigned(Bytes, Offset, OutValue.UnroutedAgentCount)
+      && ReadSigned(Bytes, Offset, OutValue.TotalFeasibleCapacity)
+      && ReadSigned(Bytes, Offset, OutValue.AssignablePopulation)
+      && ReadSigned(Bytes, Offset, OutValue.OverflowPopulation)
       && ReadSigned64(Bytes, Offset, OutValue.TotalPhysicalCost)
       && ReadSigned64(
         Bytes, Offset, OutValue.ChangedQuotaUnitCount)
@@ -716,6 +722,8 @@ CalculateTopologyRevision(
     Fold(WorldAnchorYBits);
     Fold(Cell.bFeasible ? 1u : 0u);
     Fold(Cell.bTerminal ? 1u : 0u);
+    Fold(static_cast<uint32>(Cell.Capacity));
+    Fold(Cell.bNavigationBlocked ? 1u : 0u);
   }
   return Hash != 0 ? Hash : 1u;
 }
@@ -786,7 +794,7 @@ bool FCrowdWorkerTargetState::IsValid() const
   return TargetRevision >= 0
     && static_cast<uint8>(Mode)
       <= static_cast<uint8>(
-        ECrowdTargetRegionGuidanceMode::Unrouted)
+        ECrowdTargetRegionGuidanceMode::CapacityHold)
     && !DesiredVelocity.ContainsNaN()
     && ExecutionHash != 0
     && GuidanceHash != 0;
@@ -832,7 +840,7 @@ bool FCrowdWorkerTargetStateCodec::Decode(
     || !ReadSigned(Payload.Bytes, Offset, OutState.DemandRegionKey)
     || !ReadUnsigned(Payload.Bytes, Offset, Mode)
     || Mode > static_cast<uint8>(
-      ECrowdTargetRegionGuidanceMode::Unrouted)
+      ECrowdTargetRegionGuidanceMode::CapacityHold)
     || !ReadVector(
       Payload.Bytes, Offset, OutState.DesiredVelocity)
     || !ReadUnsigned(
@@ -1130,6 +1138,7 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
         return Reject(
           TEXT("flow_resource_topology"), Input.CohortKey);
       TopologyInput.FlowConfig = Input.FlowConfig;
+      TopologyInput.SharedFlowField = &FlowField.Field;
       Runtime.Topology =
         FCrowdMassTargetRegionWork::BuildTopology(TopologyInput);
       Runtime.TopologyRevision = Input.TopologyRevision;
@@ -1249,7 +1258,103 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
     const FCrowdMassTargetRegionPlanOutput Plan =
       FCrowdMassTargetRegionWork::SolvePlan(PlanInput);
     if (!Plan.bValid)
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdWorkerTargetPlanRejected fixed_step=%llu cohort=%u rebuild_reason=%d desired=%d capacity=%d assignable=%d overflow=%d deficit=%d supply=%d plan_valid=%d routed=%d unrouted=%d execution_valid=%d missing_edge=%d infeasible_edge=%d invalid_cell=%d insufficient_quota=%d conservation=%d unreachable=%d overbook=%d first_cell=%d first_agent=%d feasible_graph_hash=%u demand_hash=%u transport_hash=%u execution_hash=%u"),
+        Context.AbsoluteSimulationTick, Input.CohortKey,
+        Plan.RebuildReason, Demand.Demand.DesiredPopulationTotal,
+        Demand.Demand.TotalFeasibleCapacity,
+        Demand.Demand.AssignablePopulation,
+        Demand.Demand.OverflowPopulation,
+        Demand.Demand.TotalDeficit, Demand.Demand.SupplyAgentCount,
+        Plan.Plan.bValid ? 1 : 0, Plan.Plan.RoutedAgentCount,
+        Plan.Plan.UnroutedAgentCount, Plan.Execution.bValid ? 1 : 0,
+        Plan.Validation.MissingEdgeCount,
+        Plan.Validation.InfeasibleEdgeCount,
+        Plan.Validation.InvalidCellCount,
+        Plan.Validation.InsufficientOutgoingQuotaCellCount,
+        Plan.Validation.FlowConservationFailureCount,
+        Plan.Validation.UnreachableDeficitCount,
+        Plan.Validation.OverbookedCellCount,
+        Plan.Validation.FirstFailureCellKey,
+        Plan.Validation.FirstFailureAgentId,
+        Runtime.Topology.Topology.FeasibleGraphHash,
+        Demand.Demand.DemandHash, Plan.Plan.TransportHash,
+        Plan.Execution.ExecutionHash);
+      for (const FCrowdTargetRegionAgentDemandState& State :
+        Demand.Demand.AgentStates)
+      {
+        if (!State.bSupply) continue;
+        TBitArray<> Visited(false, Runtime.Topology.Topology.Cells.Num());
+        TArray<int32> Queue;
+        int32 OutgoingEdgeCount = 0;
+        int32 ReachableTerminalCellCount = 0;
+        int32 ReachableAdmissionCapacity = 0;
+        uint32 ReachableDeficitRegionMask = 0;
+        if (Visited.IsValidIndex(State.CurrentCellKey))
+        {
+          Visited[State.CurrentCellKey] = true;
+          Queue.Add(State.CurrentCellKey);
+        }
+        for (int32 Head = 0; Head < Queue.Num(); ++Head)
+        {
+          const int32 CellKey = Queue[Head];
+          const FCrowdTargetPolarCell& Cell =
+            Runtime.Topology.Topology.Cells[CellKey];
+          if (Cell.bTerminal
+            && Demand.Demand.Regions.IsValidIndex(
+              Cell.PrimaryDemandRegionKey))
+          {
+            const int32 Available =
+              Demand.Demand.AvailableCapacityByCell.IsValidIndex(CellKey)
+              ? FMath::Max(0,
+                  Demand.Demand.AvailableCapacityByCell[CellKey]
+                    - Demand.Demand.AdmittedPopulationByCell[CellKey])
+              : 0;
+            const int32 Deficit = Demand.Demand.Regions[
+              Cell.PrimaryDemandRegionKey].Deficit;
+            if (Available > 0 && Deficit > 0)
+            {
+              ++ReachableTerminalCellCount;
+              ReachableAdmissionCapacity += FMath::Min(Available, Deficit);
+              if (Cell.PrimaryDemandRegionKey >= 0
+                && Cell.PrimaryDemandRegionKey < 32)
+                ReachableDeficitRegionMask |=
+                  1u << Cell.PrimaryDemandRegionKey;
+            }
+          }
+          for (const FCrowdTargetPolarEdge& Edge :
+            Runtime.Topology.Topology.Edges)
+          {
+            if (Edge.FromCellKey != CellKey) continue;
+            if (CellKey == State.CurrentCellKey) ++OutgoingEdgeCount;
+            if (Visited.IsValidIndex(Edge.ToCellKey)
+              && !Visited[Edge.ToCellKey])
+            {
+              Visited[Edge.ToCellKey] = true;
+              Queue.Add(Edge.ToCellKey);
+            }
+          }
+        }
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdWorkerTargetPlanSupplyDiagnostic fixed_step=%llu agent=%d source_cell=%d current_region=%d assigned_region=%d outgoing_edges=%d reachable_cells=%d reachable_terminal_cells=%d reachable_admission_capacity=%d reachable_deficit_region_mask=%u"),
+          Context.AbsoluteSimulationTick, State.AgentId,
+          State.CurrentCellKey, State.CurrentRegionKey,
+          State.AssignedRegionKey, OutgoingEdgeCount, Queue.Num(),
+          ReachableTerminalCellCount, ReachableAdmissionCapacity,
+          ReachableDeficitRegionMask);
+      }
+      for (const FCrowdTargetDemandRegion& Region : Demand.Demand.Regions)
+      {
+        if (Region.Deficit <= 0) continue;
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdWorkerTargetPlanRegionDiagnostic fixed_step=%llu region=%d capacity=%d current=%d desired=%d deficit=%d"),
+          Context.AbsoluteSimulationTick, Region.StableRegionKey,
+          Region.AvailableCapacity, Region.CurrentPopulation,
+          Region.DesiredPopulation, Region.Deficit);
+      }
       return Reject(TEXT("plan"), Input.CohortKey);
+    }
 
     FCrowdMassTargetRegionGuidanceInput GuidanceInput;
     GuidanceInput.Settings = EffectiveSettings;

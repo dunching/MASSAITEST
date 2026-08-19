@@ -114,7 +114,7 @@ class MASSCROWDRUNTIME_API FCrowdWorkerTargetControlResourceCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43575443u;
-  static constexpr uint16 SchemaVersion = 1;
+  static constexpr uint16 SchemaVersion = 2;
 
   static bool Encode(
     const FCrowdWorkerTargetControlResource& Resource,
@@ -146,7 +146,7 @@ class MASSCROWDRUNTIME_API FCrowdWorkerTargetStateCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43575453u;
-  static constexpr uint16 SchemaVersion = 1;
+  static constexpr uint16 SchemaVersion = 2;
 
   static bool Encode(
     const FCrowdWorkerTargetState& State,
@@ -174,7 +174,7 @@ class MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortStateCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43575448u;
-  static constexpr uint16 SchemaVersion = 1;
+  static constexpr uint16 SchemaVersion = 2;
 
   static bool Encode(
     const FCrowdWorkerTargetCohortState& State,

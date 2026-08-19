@@ -44,6 +44,9 @@ namespace CrowdWorkerTargetObservabilityTests
     Cohort.Plan.ExternalPopulationHash = 103;
     Cohort.Plan.RoutedAgentCount = 2;
     Cohort.Plan.UnroutedAgentCount = 0;
+    Cohort.Plan.TotalFeasibleCapacity = 8;
+    Cohort.Plan.AssignablePopulation = 2;
+    Cohort.Plan.OverflowPopulation = 0;
     Cohort.Plan.TransportHash = 104;
     Cohort.Plan.bValid = true;
     Cohort.Execution.PlanEpoch = 4;
@@ -153,12 +156,58 @@ bool FCrowdWorkerTargetObservationReadOnlyTest::RunTest(
     First.Cohorts[0].GuidanceHash, uint32{106});
   TestEqual(TEXT("Worker Target observation has no unrouted state"),
     First.UnroutedTargetStateCount, 0);
+  TestEqual(TEXT("Worker Target observation exposes capacity"),
+    First.TotalFeasibleCapacity, 8);
+  TestEqual(TEXT("Worker Target observation exposes assigned population"),
+    First.AssignablePopulation, 2);
+  TestEqual(TEXT("Worker Target observation exposes overflow"),
+    First.OverflowPopulation, 0);
+  TestEqual(TEXT("Worker Target observation has no capacity hold"),
+    First.CapacityHoldTargetStateCount, 0);
 
   FCrowdWorkerTargetObservation Repeat;
   TestTrue(TEXT("Repeated Worker Target observation is valid"),
     FCrowdWorkerTargetObserver::Build(Proxy, 2, Repeat));
   TestEqual(TEXT("Repeated observation hash is deterministic"),
     Repeat.StableHash, First.StableHash);
+
+  FCrowdWorkerTargetCohortState ShiftedCohort;
+  TestTrue(TEXT("Target cohort decodes for absolute-tick hash test"),
+    FCrowdWorkerTargetCohortStateCodec::Decode(
+      CohortPayload, ShiftedCohort));
+  ShiftedCohort.Plan.BuildFixedStepIndex += 137;
+  FCrowdWorkerPayload ShiftedCohortPayload;
+  TestTrue(TEXT("Shifted target cohort encodes"),
+    FCrowdWorkerTargetCohortStateCodec::Encode(
+      ShiftedCohort, ShiftedCohortPayload));
+  FCrowdWorkerResultApplyProxy ShiftedProxy;
+  TestTrue(TEXT("Shifted observation proxy initializes"),
+    ShiftedProxy.ResetQuiescent(7, Limits));
+  TestTrue(TEXT("Shifted observation stable view initializes"),
+    ShiftedProxy.UpdateCurrentEntities(7, EntityRefs));
+  FCrowdWorkerPublishedBatch ShiftedBatch = Batch;
+  for (FCrowdWorkerStatePatch& Patch : ShiftedBatch.StatePatches)
+  {
+    if (Patch.StateFieldId ==
+      1 + static_cast<uint16>(ECrowdWorkerField::TargetCohort))
+    {
+      Patch.State.Payload = ShiftedCohortPayload;
+      Patch.RecalculateStableHash();
+    }
+  }
+  ShiftedBatch.RecalculateStableHash();
+  TestEqual(TEXT("Shifted target observation batch applies"),
+    ShiftedProxy.Apply(ShiftedBatch),
+    ECrowdWorkerResultApplyResult::Applied);
+  FCrowdWorkerTargetObservation ShiftedObservation;
+  TestTrue(TEXT("Shifted Worker Target observation is valid"),
+    FCrowdWorkerTargetObserver::Build(
+      ShiftedProxy, 2, ShiftedObservation));
+  TestNotEqual(TEXT("Absolute plan build tick remains observable"),
+    ShiftedObservation.Cohorts[0].PlanBuildFixedStep,
+    First.Cohorts[0].PlanBuildFixedStep);
+  TestEqual(TEXT("Semantic hash excludes absolute plan build tick"),
+    ShiftedObservation.StableHash, First.StableHash);
   TestEqual(TEXT("Observation does not consume a batch"),
     Proxy.GetMetrics().AppliedBatchCount,
     MetricsBefore.AppliedBatchCount);
