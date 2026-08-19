@@ -105,18 +105,18 @@ OPEN    尚未达到最终完成定义
 | Target-relative Polar Transport | DONE / core | Polar Cell / Demand / Plan / Quota / Guidance 已进入 Core + Worker Target Domain。 |
 | Worker Target long-window observer | DONE | 只读聚合 ResultApply `Target` / `TargetCohort`，输出 machine-readable checkpoint；runner 对 Worker Target/domain rejection fail-closed。 |
 | Target Cohort scoped invalidation | DONE / regression invariant | 10k 双 Cohort scoped 专项已经验证；Target 改动后必须持续保持。 |
-| NavMesh/Environment-clipped Target Cell contract | OPEN | 目标靠边/角落时必须只保留真实可行 Polar Cell；缺失理论 Region 本身不能作为 Demand failure。 |
-| Finite Target Cell capacity | OPEN | Feasible Cell 必须具有 deterministic finite occupancy capacity；共享不等于无限容量。 |
-| Target Plan / Claim admission | OPEN | Plan/Execution 必须保证 `Occupied + ActiveClaims <= Capacity`，不得超卖。 |
-| CapacityHold / Overflow semantics | OPEN | 合法容量不足时，超额 Agent 不得继续向已满 Target interior 挤压，并必须与真正 `UnroutedFailure` 区分。 |
-| Moving Cell invalidation / refill | OPEN | Target 移动导致 Cell valid/invalid 时需要稳定 release/migrate/reassign/overflow/refill。 |
+| NavMesh/Environment-clipped Target Cell contract | DONE / candidate | Topology 只让 immutable Environment/SharedFlow 可行 Cell 贡献 capacity；理论 Region 缺失不再直接 fatal。 |
+| Finite Target Cell capacity | DONE / candidate | 使用 Cell 可用几何、angular/radial span 与 physical spacing 推导 deterministic finite capacity；invalid Cell capacity=0。 |
+| Target Plan / Claim admission | DONE / candidate | reachability-aware deterministic admission；Plan/Execution validation 保证 `Occupied + ActiveClaims <= Capacity`。 |
+| CapacityHold / Overflow semantics | DONE / candidate | `Desired/Assignable/Overflow` 显式保留；CapacityHold 产生零 Target inward pressure，并与 `UnroutedFailure` 区分。 |
+| Moving Cell invalidation / refill | DONE / candidate | semantic topology/plan 更新时 release/migrate/reassign，新容量按 stable entity order refill。 |
 | Local Predictive | DONE | 位于 MovementPlanning / movement chain。 |
 | Particle Soft/Hard/Environment Safety | DONE | 最终安全层位于 Worker Interaction Domain。 |
 | 多 Interaction Island 分解 | DONE | closure graph → components → sub-solve → stable merge → global validation。 |
 | 多 Island UE Task 并行 | OPEN | 当前算法分岛不等于每岛独立 UE Task。 |
 | 大型单 Island 内部分片 | OPEN | Cell-Pair Owner / per-round barrier 未完成。 |
-| T5 Static >1000 Tick | DONE / evidence | Static fixed_step=1199 重复运行稳定，历史 static step ~886 failure 当前未复现。 |
-| T5 Moving >1000 Tick | OPEN / real failure | 已越过旧 step398 clock/SharedFlow failure；当前在目标靠近边界、`feasible_regions=3/16`、`source_attachment_failures=0` 时暴露 clipped-capacity contract 缺口。 |
+| T5 Static >1000 Tick | DONE / candidate evidence | final source fixed_step=1199 重复 2/2，worker hash MATCH，capacity/assignable/overflow=162/20/0。 |
+| T5 Moving >1000 Tick | DONE / candidate evidence | canonical final source fixed_step=1199 重复 2/2，capacity/assignable/overflow/hold=16/16/4/4，worker/plan/execution/guidance deterministic，rejection=0。 |
 
 ---
 
@@ -231,7 +231,7 @@ Performance
 
 ## 15. 当前主要 OPEN Gate
 
-1. **T5 Long-Window Correctness**：实现 `Reference/TargetRegionBoundaryCapacityContract.md` 的 clipped Cell、finite capacity、Plan/Claim、Overflow/CapacityHold，并关闭 Moving >=1000 Tick。
+1. **T5 candidate landing**：READY PR review，merge 后在 main 重跑 Build/automation/Static/Moving 门禁。
 2. **Post-cut Runtime Regression remainder**：T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8、剩余 diagnostics。
 3. **Duplicate Kernel / Host Shell Cleanup**：删无消费者实现，拆大型 RoundSim host subsystem。
 4. **Particle Scaling**：Island-level tasks + 单大型 Island Cell-Pair/per-round barrier。

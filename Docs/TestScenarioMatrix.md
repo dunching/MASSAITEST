@@ -35,17 +35,17 @@ RETIRED       验收对象/机制已从当前架构物理删除，不再作为�
 | PR12 Source Architecture Cut | STATIC PASS / CLOSED | 旧 transaction / Stage / Prepared second-pass production symbols 为 0；Processor surface 仅 2 个 `UMassProcessor`；Owner Barrier 在 Checkpoint 前。 | 保持不回归。 |
 | Persistent Worker Production structure automation | PASS | `CrowdDemo.Architecture.PersistentWorkerProductionStructure` PASS 1/1。 | 后续 Target/host 改动继续回归。 |
 | Runtime Worker Result Apply / Owner Barrier | PASS | `MassCrowd.Runtime.WorkerResultApply` PASS 4/4；Host atomicity fixture PASS。 | 后续 ownership 改动继续回归。 |
-| Default Unity / DisableUnity | PASS | Runtime Unity helper collision 已关闭；current main 的 moving orchestration 修改后 clean ForceUnity / DisableUnity 都通过。 | Target capacity 修改后重跑。 |
+| Default Unity / DisableUnity | PASS / candidate | Target capacity candidate 上 Default PASS、clean ForceUnity/NoAdaptiveUnity PASS 198/198、DisableUnity PASS 102/102；UBT 仍打印 working-set exclusion。 | 合并后 main 重跑。 |
 | Minimal Full Production T8 server-only | PASS | 900 batches、90,940 patches、150 Ordered Events、attack/spawn/impact/damage=50/50/50/50、duplicate=0/0、Golden 一致。 | Target capacity 修改不应影响；后续双端仍需 formal runner。 |
 | 双端 T8 formal runner | REVALIDATE / tool issue | 业务历史证据存在，但正式 runner completion 仍有误判/超时债。 | 修 runner 后正式双端执行。 |
-| T5 Worker Target observability | PASS | ResultApply `Target` / `TargetCohort` 只读 checkpoint valid；Worker Target/domain rejection 已进入 runner hard-failure gate。 | CapacityHold/Overflow 实现后要区分合法 saturation 与真正 rejection。 |
-| T5 Static long-window | PASS | 20-agent `fixed_step=1199` 重复 2/2 PASS；`worker_state_hash=16065067781684863977` 两次一致；unrouted=0、rejection=0。 | Target capacity 修改后至少重跑 1 次并保持 deterministic。 |
+| T5 Worker Target observability | PASS / candidate | ResultApply `Target` / `TargetCohort` 只读 checkpoint valid；Capacity/Assignable/Overflow/CapacityHold machine-readable；absolute Plan build tick 保留可观察但不污染跨进程语义 hash；runner gates PASS 9/9。 | 合并后保持。 |
+| T5 Static long-window | PASS / candidate | final source 上 20-agent `fixed_step=1199` 重复 2/2 PASS；`worker_state_hash=16326908351313019605` 两次一致；capacity/assignable/overflow=162/20/0；unrouted/rejection=0。 | 合并后 main 重验。 |
 | Moving objective absolute clock | PASS | objective effective tick 与 Worker absolute tick 对齐；pre-round uptime 不进入 objective age。 | 边界能力实现后保持。 |
 | Runtime-owned dynamic SharedFlow | PASS | moving objective 下 Environment revision 随语义变化推进；旧 bootstrap-only stale resource 问题关闭。 | 边界能力实现后保持。 |
 | T5 Moving step ~398 SourceAttachment failure | RETIRED / fixed cause | clock-domain mismatch + stale dynamic SharedFlow 已修；`source_attachment_failures=20/20` signature 不再出现。 | 不回归。 |
-| T5 Moving boundary/corner capacity | FAIL / active | canonical Moving 继续运行至 absolute step 1460：`feasible_regions=3/16`、`desired=19`、`source_attachment_failures=0`，现有 Demand 仍把合法 clipped capacity shortage 当 fatal。 | 实现 clipped topology + finite capacity + Overflow/CapacityHold。 |
-| TargetRegionTransport automation | PASS | `CrowdDemo.SoftPressure.TargetRegionTransport` PASS 7/7。 | Target capacity 合同修改后扩展边缘/角落测试并全量回归。 |
-| RuntimeV2 Target | PASS | Target domain、10k affected cohort、Target observability 当前均 PASS。 | Target capacity 修改后保持 scoped invalidation/determinism。 |
+| T5 Moving boundary/corner capacity | PASS / CLOSED CANDIDATE | final source canonical Moving 2/2 PASS，`fixed_step=1199`；capacity/assignable/overflow/CapacityHold=16/16/4/4；worker/transport/execution/guidance hash 全部 MATCH；rejection/source-attachment/unrouted/overbook=0。 | READY PR review；合并后 main 重验。 |
+| TargetRegionTransport automation | PASS / candidate | Core 2/2（含 BoundaryCapacity）、`CrowdDemo.SoftPressure.TargetRegionTransport` 7/7、Plugin/Core equivalence 1/1。 | 合并后 main 重验。 |
+| RuntimeV2 Target | PASS / candidate | RuntimeV2 Target/TargetObservability 4/4；GuidanceShard10k 1/1（505.870s）。 | 合并后保持 scoped invalidation/determinism。 |
 | Lifecycle | BASELINE / REVALIDATE | 旧 2/2 证据存在。 | 完整 post-cut T1/T6 等继续回归。 |
 | WorkRing / TimeWheel / Spatial 10k | BASELINE | 1k/2k/5k/10k scheduler、10k sparse wakeup、10k dirty spatial 专项已有记录。 | WA9 前最终源码重跑。 |
 | Target 10k 双 Cohort scoped invalidation | PASS / regression invariant | 受影响 Cohort 执行，未受影响 Cohort 无 Dirty/Topology rebuild。 | finite capacity / claim 改动后必须保持。 |
@@ -135,7 +135,7 @@ Target capacity 实现不得恢复 Demo Target/Resource Prepared Transaction。
 | T2 | 开放区域群体移动、Macro Guidance、自然落位 | REVALIDATE | Shared Flow → MovementPlanning → Worker Result。 |
 | T3 | 双向交换、Local Predictive、公平让行、安全穿越 | REVALIDATE | direct intent 后局部预测与 determinism。 |
 | T4 | 窄通道/出口安全、环境约束 | REVALIDATE | non-particle/obstacle bootstrap + Worker movement。 |
-| T5 | Static/Moving Target、Polar Transport、长期稳定 | FAIL / active | Static 已 PASS；Moving 当前 blocker 是 clipped boundary capacity / overflow。 |
+| T5 | Static/Moving Target、Polar Transport、长期稳定 | CLOSED CANDIDATE | Static/Moving final source 均 2/2 deterministic PASS；待 PR review 与 main 重验。 |
 | T6 | 异构 Radius/Mobility/Distance Band 联合运行 | REVALIDATE | finite capacity 必须 profile-aware；同时回归 particle safety。 |
 | T7 | VAT、多视觉状态、HitReact/Knockback/Death | REVALIDATE | Worker combat result → presentation consumption。 |
 | T8 | Combat、Projectile、Impact/Hit、Damage、Event、Golden | SERVER PASS / DUAL REVALIDATE | server-only 当前 PASS；双端 formal runner 仍需关闭。 |
@@ -172,9 +172,9 @@ Environment revision 1 → dynamic revisions
 source_attachment_failures 20 → 0
 ```
 
-## 6.2 当前 active failure：clipped edge capacity
+## 6.2 已修复：clipped edge capacity
 
-canonical Moving long-window 的下一真实 failure：
+canonical Moving long-window 的历史 failure：
 
 ```text
 absolute fixed_step = 1460
@@ -200,7 +200,19 @@ flow_build_hash = 3365518101
 - Target 靠近环境边缘后完整 Polar topology 被真实空间裁剪。
 - 现有 Demand 仍要求超出当前有效容量的人口，因此 fail-closed。
 
-该问题按 `Reference/TargetRegionBoundaryCapacityContract.md` 处理。
+当前 candidate 已按 `Reference/TargetRegionBoundaryCapacityContract.md` 实现：
+
+```text
+Environment/SharedFlow-clipped feasible Cell
+deterministic finite capacity
+Desired / Assignable / Overflow
+reachability-aware admission
+Occupied + ActiveClaims <= Capacity validation
+CapacityHold with zero inward Target pressure
+moving invalidation/release/refill
+```
+
+最终 canonical Moving 2/2 均在 fixed_step=1199 PASS，且语义 hash 完全一致。
 
 ## 6.3 新验收合同
 
@@ -396,7 +408,7 @@ Golden              = 439379904 / 1411313634 / 6141440
 | Dirty Mass / ResultApply metrics | PRESENT | Worker Result Apply path。 |
 | Checkpoint final entity state | PRESENT / REVALIDATE | retained Worker proxy/domain state assembly。 |
 | Worker Target observability | PASS | `Target` / `TargetCohort` read-only observer；不是 simulation owner。 |
-| Target legal Overflow observability | OPEN | 实现 capacity contract 后必须 machine-readable 区分 Assigned / Overflow / true UnroutedFailure。 |
+| Target legal Overflow observability | PASS / candidate | checkpoint 明确输出 capacity/assignable/overflow/CapacityHold；canonical Moving 的 4 个 Overflow 未计为 UnroutedFailure。 |
 | Particle per-step diagnostics | REVALIDATE | Worker output/retained state 或 test-only observer；不能重建旧 second-pass commit。 |
 | obsolete legacy transaction telemetry | RETIRED | 不因测试需要重新引入。 |
 
@@ -418,20 +430,16 @@ Golden              = 439379904 / 1411313634 / 6141440
 # 15. 当前推荐执行顺序
 
 ```text
-1. 实现 TargetRegionBoundaryCapacityContract
-2. Target boundary/corner/capacity automation
-3. TargetRegionTransport + RuntimeV2 Target + 10k scoped regression
-4. Static T5 >=1000 Tick regression
-5. Moving T5 >=1000 Tick + deterministic repeat
-6. T1/T2/T3/T4/T6/T7 regression
-7. network / checkpoint / late join
-8. 双端 T8 runner
-9. Duplicate Kernel / Host cleanup
-10. Particle scaling
-11. WA9 1k→2k→5k→10k
+1. READY PR review + merge 后 main 重验 T5 candidate
+2. T1/T2/T3/T4/T6/T7 regression
+3. network / checkpoint / late join
+4. 双端 T8 runner
+5. Duplicate Kernel / Host cleanup
+6. Particle scaling
+7. WA9 1k→2k→5k→10k
 ```
 
-如果第 1–5 步失败，不进入 Particle/WA9，也不通过反弹 Target、减少 Agent、关闭安全约束或删除 Demand gate 来伪造 PASS。
+如果合并后 main 重验失败，重新打开 T5 gate；不通过反弹 Target、减少 Agent、关闭安全约束或删除 Demand gate 伪造 PASS。
 
 ---
 

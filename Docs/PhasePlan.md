@@ -13,7 +13,7 @@ WA8 Source Architecture Cut          = CLOSED / structural
         ↓
 Post-cut Runtime Regression Gate     = PARTIAL
         ↓
-T5 Long-Window Correctness           = OPEN / active
+T5 Long-Window Correctness           = CLOSED CANDIDATE
         ↓
 Duplicate Kernel / Host Shell Cleanup
         ↓
@@ -38,7 +38,7 @@ Reference/TargetRegionBoundaryCapacityContract.md
 |---:|---|---|---|
 | 0 | WA8 Source Architecture Cut | CLOSED / structural | 第一代跨帧 Round Transaction、完整 rollback source、`FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator、旧 Stage surface、Prepared second-pass commit channels 已从 Production source 退出。 |
 | 1 | Post-cut Runtime Regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap、ordinary direct-intent、minimal T8、Target observability 已重新建立；仍需补齐 T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8 等正式回归。 |
-| 2 | T5 Long-Window Correctness | OPEN / active | Static/Moving 1000+ Tick；Moving 目标靠边/角落时按 clipped Polar Topology + finite capacity + overflow holding 正常运行，不因合法容量饱和 fail。 |
+| 2 | T5 Long-Window Correctness | CLOSED CANDIDATE | Static/Moving final source 均 1199-step 2/2 deterministic PASS；待 READY PR review 与合并后 main 重验。 |
 | 3 | Duplicate Kernel / Host Shell Cleanup | OPEN | 删除确认失去消费者的 Demo generic duplicate；把 RoundSimPipeline 按 Host Plan / Bootstrap / Metrics / Checkpoint 职责进一步拆分。 |
 | 4 | Large Particle Island Scaling | OPEN | Island-level task parallelism与单大型 Interaction Island Cell-Pair Owner / per-round barrier 分片获得确定性与性能证据。 |
 | 5 | WA9 Full-Scale Acceptance | OPEN | 同一 Production Runtime 在 1k→2k→5k→10k 完整 Simulation + Network + Presentation + Performance 门通过。 |
@@ -183,7 +183,7 @@ Worker Target observability 已按只读 ResultApply `Target` / `TargetCohort` o
 
 # 5. Gate 2 — T5 Long-Window Correctness
 
-这是当前 active correctness gate。
+当前状态为 CLOSED CANDIDATE：实现与 branch 验证已完成，仍待 READY PR review 与合并后 main 重验。
 
 ## 5.1 已关闭的 T5 子问题
 
@@ -211,9 +211,9 @@ source_attachment_failures = 20 / 20
 
 因此不能再把 `TargetRevision=1` 或 step ~398 SourceAttachment 当成当前 blocker。
 
-## 5.2 当前真实 blocker：边缘/角落 clipped capacity
+## 5.2 已关闭 blocker：边缘/角落 clipped capacity
 
-canonical Moving 长窗口在目标继续靠近 Environment / NavMesh 边缘时暴露了不同失败：
+canonical Moving 长窗口曾在目标继续靠近 Environment / NavMesh 边缘时暴露以下历史失败：
 
 ```text
 absolute fixed_step = 1460
@@ -234,7 +234,7 @@ Moving objective clock = healthy
 Dynamic SharedFlow      = refreshing
 ```
 
-剩余问题是现有 Demand 合同仍把“完整 Polar Region 被真实环境边界裁剪后容量不足”作为 fatal invalid。
+该问题已通过 clipped feasible Cell、finite capacity、Desired/Assignable/Overflow、reachability-aware admission 与 CapacityHold 关闭。
 
 用户已确认产品/算法设计方向：
 
@@ -248,7 +248,7 @@ Reference/TargetRegionBoundaryCapacityContract.md
 
 为准。
 
-## 5.3 实施 Slice A — Clipped Feasible Topology
+## 5.3 已实施 Slice A — Clipped Feasible Topology
 
 目标：
 
@@ -266,7 +266,7 @@ Polar candidate cells
 - 不通过 reflected Target motion 来规避问题。
 - 不按 map / step / region 写生产特判。
 
-## 5.4 实施 Slice B — Finite Cell Capacity
+## 5.4 已实施 Slice B — Finite Cell Capacity
 
 每个 feasible Cell 必须有确定性的有限容量。
 
@@ -283,7 +283,7 @@ OverflowPopulation    = max(0, DesiredPopulation - TotalFeasibleCapacity)
 - Capacity 可以由 usable geometry + physical profile / spacing contract 派生。
 - exact capacity formula 必须 deterministic；需要专项设计/测试，而不是 magic number。
 
-## 5.5 实施 Slice C — Plan / Claim / Overflow
+## 5.5 已实施 Slice C — Plan / Claim / Overflow
 
 Target Plan / Execution 必须成为容量 admission owner：
 
@@ -301,7 +301,7 @@ Occupied + ActiveClaims <= CellCapacity
 
 Local Predictive / ORCA / Particle 仍负责局部安全，不负责 Target capacity admission。
 
-## 5.6 实施 Slice D — Moving Cell 生命周期
+## 5.6 已实施 Slice D — Moving Cell 生命周期
 
 Target 移动导致 Cell valid/invalid 时：
 
@@ -346,6 +346,20 @@ legal Overflow does not count as unexplained UnroutedFailure
 stale lifecycle = 0
 invalid plan / stale claim = 0
 Worker Target rejection = 0 for legal capacity saturation
+```
+
+当前 candidate 证据：
+
+```text
+BoundaryCapacity                              PASS 1/1
+Core TargetRegionTransport                    PASS 2/2
+Demo TargetRegionTransport                    PASS 7/7
+RuntimeV2 Target/TargetObservability           PASS 4/4
+GuidanceShard10k                              PASS 1/1 (505.870s)
+Static T5 fixed_step=1199                     PASS 2/2 deterministic
+Moving T5 fixed_step=1199                     PASS 2/2 deterministic
+Moving capacity/assignable/overflow/hold      16/16/4/4
+Moving rejection/source-attachment/unrouted   0/0/0
 ```
 
 修复不得按 step / AgentId / map / region 写生产特判。
@@ -544,4 +558,4 @@ Legacy Round DAG  = physically absent from production
 
 当前最重要的下一动作是：
 
-> **按 `Reference/TargetRegionBoundaryCapacityContract.md` 完成边缘/角落 clipped Target capacity 与 Overflow 语义，重新关闭 Moving T5；随后继续剩余 post-cut regression、清理和规模门。**
+> **完成 Target boundary-capacity READY PR review，合并后在 main 重验 Build/automation/Static/Moving；随后继续剩余 post-cut regression、清理和规模门。**
