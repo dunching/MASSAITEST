@@ -37,7 +37,7 @@ Reference/TargetRegionBoundaryCapacityContract.md
 | 顺序 | Gate | 状态 | 关闭条件 |
 |---:|---|---|---|
 | 0 | WA8 Source Architecture Cut | CLOSED / structural | 第一代跨帧 Round Transaction、完整 rollback source、`FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator、旧 Stage surface、Prepared second-pass commit channels 已从 Production source 退出。 |
-| 1 | Post-cut Runtime Regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap、ordinary direct-intent、minimal T8、Target observability 已重新建立；仍需补齐 T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8 等正式回归。 |
+| 1 | Post-cut Runtime Regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap、ordinary direct-intent、T1/T2/T3/T4、T7 client presentation + sparse correction recovery、T5 与 T8 server-only 已取得 post-cut 证据；T6、LateJoin、完整双端 T8 与其余 network 场景仍未关闭。 |
 | 2 | T5 Long-Window Correctness | CLOSED ON MAIN | PR #18 已合并；`main@182f4d8dc856102b3a80ade0dc6506ff678c1d6a` 上 Build、Automation、Static/Moving 1199-step 2/2 deterministic PASS。Moving performance 仍 OPEN。 |
 | 3 | Duplicate Kernel / Host Shell Cleanup | OPEN | 删除确认失去消费者的 Demo generic duplicate；把 RoundSimPipeline 按 Host Plan / Bootstrap / Metrics / Checkpoint 职责进一步拆分。 |
 | 4 | Large Particle Island Scaling | OPEN | Island-level task parallelism与单大型 Interaction Island Cell-Pair Owner / per-round barrier 分片获得确定性与性能证据。 |
@@ -115,6 +115,9 @@ first-step bootstrap                    PASS
 ordinary direct-intent                  PASS
 minimal T8 server-only                  PASS
 Worker Target observability             PASS
+T1/T2/T3/T4 post-cut canonical          PASS
+T7 client presentation                  PASS
+T7 sparse correction recovery           PASS / 5-run soak
 ```
 
 这意味着 Worker-only live path 已从“结构成立”进入“核心链真实可运行”。
@@ -122,8 +125,8 @@ Worker Target observability             PASS
 Gate 1 尚未整体关闭，因为仍缺：
 
 ```text
-T1/T2/T3/T4/T6/T7 post-cut regression
-network / checkpoint / correction / late join
+T6 post-cut regression
+network late join / remaining scenarios
 双端 T8 formal runner
 其余被 source cut 影响的 diagnostics
 ```
