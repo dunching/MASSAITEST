@@ -164,6 +164,16 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortState
   uint32 CohortKey = 0;
   uint32 TopologyRevision = 0;
   int32 TargetRevision = INDEX_NONE;
+  // Read-only acceptance summaries from the same authoritative Demand build
+  // that produced Plan/Execution. They let ResultApply report heterogeneous
+  // Target acceptance without reviving a Host Target simulation mirror.
+  int32 FeasibleCellCount = 0;
+  int32 EdgeCount = 0;
+  int32 FeasibleRegionCount = 0;
+  int32 FeasibleRegionCoverageCount = 0;
+  int32 CurrentTerminalPopulation = 0;
+  int32 MaximumRegionPopulation = 0;
+  int32 DesiredPopulationTotal = 0;
   FCrowdTargetRegionFlowPlan Plan;
   FCrowdTargetRegionQuotaExecutionState Execution;
 
@@ -174,7 +184,7 @@ class MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortStateCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43575448u;
-  static constexpr uint16 SchemaVersion = 2;
+  static constexpr uint16 SchemaVersion = 3;
 
   static bool Encode(
     const FCrowdWorkerTargetCohortState& State,

@@ -356,6 +356,32 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
   TMap<FCrowdStableEntityRef, FCrowdWorkerCombatState>
     CombatByEntity;
   TMap<FCrowdStableEntityRef, FPlanState> PreviousPlanByEntity;
+  bool bHeterogeneousParticleProfiles = false;
+  if (!Profiles.IsEmpty())
+  {
+    const FCrowdWorkerMovementControlEntry& FirstProfile =
+      Profiles[0];
+    for (int32 Index = 1; Index < Profiles.Num(); ++Index)
+    {
+      const FCrowdWorkerMovementControlEntry& Profile = Profiles[Index];
+      if (!FMath::IsNearlyEqual(
+            Profile.ParticlePhysicalRadiusCm,
+            FirstProfile.ParticlePhysicalRadiusCm)
+        || !FMath::IsNearlyEqual(
+            Profile.ParticleHardSafetyGapCm,
+            FirstProfile.ParticleHardSafetyGapCm)
+        || !FMath::IsNearlyEqual(
+            Profile.ParticleSoftMarginCm,
+            FirstProfile.ParticleSoftMarginCm)
+        || !FMath::IsNearlyEqual(
+            Profile.ParticleMobility,
+            FirstProfile.ParticleMobility))
+      {
+        bHeterogeneousParticleProfiles = true;
+        break;
+      }
+    }
+  }
   for (const FCrowdWorkerMovementControlEntry& Entry :
     Profiles)
   {
@@ -531,6 +557,9 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
         TargetVelocity
           ? *TargetVelocity
           : Entry.AutonomousPreferredVelocity;
+      FVector DiagnosticFlowDirection = FVector::ZeroVector;
+      bool bDiagnosticFlowReachable = false;
+      bool bDiagnosticFlowSampled = false;
       if (!Entry.bUseAuthoritativePreferredVelocity
         && !TargetVelocity && bHasFlowField)
       {
@@ -539,6 +568,9 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
         if (!FlowField.Sample(
             Kinematic.Position, FlowDirection, bReachable))
           return Reject(TEXT("flow_sample"), Entry.EntityRef);
+        DiagnosticFlowDirection = FlowDirection;
+        bDiagnosticFlowReachable = bReachable;
+        bDiagnosticFlowSampled = true;
         if (bReachable)
         {
           PreferredVelocity =
@@ -595,6 +627,44 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       }
       if (bMovementLocked)
         EffectiveMaximumSpeedCmps = 0.0f;
+      if (bHeterogeneousParticleProfiles && Context.WorkerEpoch == 1)
+      {
+        const FCrowdWorkerBehaviorState* Behavior =
+          BehaviorByEntity.Find(Entry.EntityRef);
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdWorkerHeterogeneousMovementBootstrap generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu control_revision=%llu plan_revision=%d agent=%d provider=%u stable_entity=%llu lifecycle=%u position=(%.3f,%.3f,%.3f) radius=%.3f hard_gap=%.3f soft_margin=%.3f mobility=%.3f environment_clearance=%.3f max_speed=%.3f authoritative=%d worker_target_guidance=%d target_velocity=%d flow_present=%d flow_sampled=%d flow_reachable=%d flow_direction=(%.3f,%.3f,%.3f) behavior_present=%d behavior_speed_limit=%.3f behavior_locked=%d behavior_nav_mask=%llu preferred=(%.3f,%.3f,%.3f) effective_max_speed=%.3f source=WorkerMovementPlanning"),
+          Context.Generation, Context.WorkerEpoch,
+          Context.AbsoluteSimulationTick,
+          Context.LastAppliedInputSequence,
+          Control.Revision, Control.PlanRevision,
+          Entry.AgentId,
+          Entry.EntityRef.ProviderId,
+          Entry.EntityRef.StableEntityId,
+          Entry.EntityRef.LifecycleSerial,
+          Kinematic.Position.X, Kinematic.Position.Y,
+          Kinematic.Position.Z,
+          Entry.ParticlePhysicalRadiusCm,
+          Entry.ParticleHardSafetyGapCm,
+          Entry.ParticleSoftMarginCm,
+          Entry.ParticleMobility,
+          Entry.ParticleEnvironmentHardClearanceCm,
+          Entry.MaximumSpeedCmps,
+          Entry.bUseAuthoritativePreferredVelocity ? 1 : 0,
+          Entry.bUseWorkerTargetGuidance ? 1 : 0,
+          TargetVelocity ? 1 : 0,
+          bHasFlowField ? 1 : 0,
+          bDiagnosticFlowSampled ? 1 : 0,
+          bDiagnosticFlowReachable ? 1 : 0,
+          DiagnosticFlowDirection.X,
+          DiagnosticFlowDirection.Y,
+          DiagnosticFlowDirection.Z,
+          Behavior ? 1 : 0,
+          Behavior ? Behavior->ResolvedChannels.SpeedLimitCmps : -1.0f,
+          Behavior && Behavior->ResolvedChannels.bMovementLocked ? 1 : 0,
+          Behavior ? Behavior->ResolvedChannels.AllowedNavLayerMask : 0,
+          PreferredVelocity.X, PreferredVelocity.Y,
+          PreferredVelocity.Z, EffectiveMaximumSpeedCmps);
+      }
       Agent.PreferredVelocity = FVector2f(
         PreferredVelocity.X, PreferredVelocity.Y);
       Agent.PhysicalRadiusCm = Kinematic.PhysicalRadiusCm;

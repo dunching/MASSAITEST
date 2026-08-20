@@ -158,6 +158,18 @@ bool FCrowdWorkerTargetObserver::Build(
       Builder.State.Plan.BuildFixedStepIndex;
     Cohort.FeasibleGraphHash =
       Builder.State.Plan.FeasibleGraphHash;
+    Cohort.FeasibleCellCount = Builder.State.FeasibleCellCount;
+    Cohort.EdgeCount = Builder.State.EdgeCount;
+    Cohort.FeasibleRegionCount =
+      Builder.State.FeasibleRegionCount;
+    Cohort.FeasibleRegionCoverageCount =
+      Builder.State.FeasibleRegionCoverageCount;
+    Cohort.CurrentTerminalPopulation =
+      Builder.State.CurrentTerminalPopulation;
+    Cohort.MaximumRegionPopulation =
+      Builder.State.MaximumRegionPopulation;
+    Cohort.DesiredPopulationTotal =
+      Builder.State.DesiredPopulationTotal;
     Cohort.MembershipHash = Builder.State.Plan.MembershipHash;
     Cohort.ExternalPopulationHash =
       Builder.State.Plan.ExternalPopulationHash;
@@ -233,6 +245,17 @@ bool FCrowdWorkerTargetObserver::Build(
     // their round at different absolute ticks because of startup uptime.
     // Keep the cross-run semantic hash independent of that clock origin.
     FoldObservationValue(StableHash, Cohort.FeasibleGraphHash);
+    FoldObservationValue(StableHash, Cohort.FeasibleCellCount);
+    FoldObservationValue(StableHash, Cohort.EdgeCount);
+    FoldObservationValue(StableHash, Cohort.FeasibleRegionCount);
+    FoldObservationValue(
+      StableHash, Cohort.FeasibleRegionCoverageCount);
+    FoldObservationValue(
+      StableHash, Cohort.CurrentTerminalPopulation);
+    FoldObservationValue(
+      StableHash, Cohort.MaximumRegionPopulation);
+    FoldObservationValue(
+      StableHash, Cohort.DesiredPopulationTotal);
     FoldObservationValue(StableHash, Cohort.MembershipHash);
     FoldObservationValue(StableHash, Cohort.ExternalPopulationHash);
     FoldObservationValue(StableHash, Cohort.TransportHash);

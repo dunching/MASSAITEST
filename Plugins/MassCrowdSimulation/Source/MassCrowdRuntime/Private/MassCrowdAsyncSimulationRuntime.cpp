@@ -2352,6 +2352,9 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
           : Wakeup.Key.Domain
               == ECrowdWorkerDomainId::MovementPlanning
             ? ECrowdWorkerWorkKind::Resource
+            : Wakeup.Key.Domain
+                == ECrowdWorkerDomainId::Target
+              ? ECrowdWorkerWorkKind::Cohort
             : ECrowdWorkerWorkKind::Timer;
         Work.Key.PrimaryEntity = Wakeup.Key.EntityRef;
         Work.Key.ScopeKey = Work.Key.Kind
@@ -2491,6 +2494,8 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
     }
     Context.ResourceRevisionHash =
       ResourceStore.CalculateCurrentStableHash();
+    Context.PropagationRound =
+      WorkerV2EpochPropagationRound;
     Context.FixedDeltaSeconds =
       Config.FixedSimulationQuantumSeconds;
     Context.SimulationTimeSeconds =

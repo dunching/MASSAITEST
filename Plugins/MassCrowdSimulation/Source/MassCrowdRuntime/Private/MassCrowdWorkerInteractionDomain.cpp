@@ -424,7 +424,15 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
   FCrowdMassParticleWorkInput Input;
   if (Context.AbsoluteSimulationTick
       > static_cast<uint64>(MAX_int32))
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("CrowdWorkerParticleDomainRejected stage=input generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d reason=absolute_tick_overflow"),
+      Context.Generation, Context.WorkerEpoch,
+      Context.AbsoluteSimulationTick,
+      Context.LastAppliedInputSequence,
+      Context.PropagationRound);
     return false;
+  }
   Input.FixedStepIndex =
     static_cast<int32>(Context.AbsoluteSimulationTick);
   Input.PlanRevision = Control.PlanRevision;
@@ -438,7 +446,24 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
     Profiles)
   {
     if (EntityRefByAgentId.Contains(Entry.AgentId))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdWorkerParticleDomainRejected stage=profile generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d agent=%d provider=%u stable_entity=%llu lifecycle=%u radius=%.3f hard_gap=%.3f soft_margin=%.3f mobility=%.3f environment_clearance=%.3f reason=duplicate_agent_id"),
+        Context.Generation, Context.WorkerEpoch,
+        Context.AbsoluteSimulationTick,
+        Context.LastAppliedInputSequence,
+        Context.PropagationRound,
+        Entry.AgentId,
+        Entry.EntityRef.ProviderId,
+        Entry.EntityRef.StableEntityId,
+        Entry.EntityRef.LifecycleSerial,
+        Entry.ParticlePhysicalRadiusCm,
+        Entry.ParticleHardSafetyGapCm,
+        Entry.ParticleSoftMarginCm,
+        Entry.ParticleMobility,
+        Entry.ParticleEnvironmentHardClearanceCm);
       return false;
+    }
     EntityRefByAgentId.Add(Entry.AgentId, Entry.EntityRef);
     const FCrowdWorkerDirtyStateRecord* Snapshot =
       Context.EntityStates->Find(
@@ -476,7 +501,21 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
           CombatRecord->Payload, Combat)
         || CombatRecord->SourceInputSequence
           > Context.LastAppliedInputSequence)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdWorkerParticleDomainRejected stage=combat generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d agent=%d provider=%u stable_entity=%llu lifecycle=%u combat_revision=%llu combat_input=%llu reason=invalid_combat_state"),
+          Context.Generation, Context.WorkerEpoch,
+          Context.AbsoluteSimulationTick,
+          Context.LastAppliedInputSequence,
+          Context.PropagationRound,
+          Entry.AgentId,
+          Entry.EntityRef.ProviderId,
+          Entry.EntityRef.StableEntityId,
+          Entry.EntityRef.LifecycleSerial,
+          CombatRecord->StateRevision,
+          CombatRecord->SourceInputSequence);
         return false;
+      }
       bParticleActive = bParticleActive && Combat.bAlive;
     }
     ParticleActiveByEntityRef.Add(
@@ -517,11 +556,33 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
       const FCrowdWorkerResourceRecord* ObjectiveRecord =
         Context.Resources->FindCurrent(ObjectiveResourceId);
       FCrowdWorkerTargetObjectiveRevision Objective;
+      const bool bObjectiveDecoded = ObjectiveRecord
+        && FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
+          ObjectiveRecord->Payload, Objective);
       if (!ObjectiveRecord || ObjectiveRecord->Revision == 0
-        || !FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
-          ObjectiveRecord->Payload, Objective)
+        || !bObjectiveDecoded
         || Objective.EffectiveFixedStepIndex > Input.FixedStepIndex)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdWorkerParticleDomainRejected stage=objective generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d resource=%llu objective_present=%d objective_resource_revision=%llu objective_decoded=%d objective_effective_tick=%d particle_fixed_step=%d target_agent=%d radius=%.3f hard_gap=%.3f soft_margin=%.3f mobility=%.3f environment_clearance=%.3f reason=invalid_primary_target_objective"),
+          Context.Generation, Context.WorkerEpoch,
+          Context.AbsoluteSimulationTick,
+          Context.LastAppliedInputSequence,
+          Context.PropagationRound,
+          ObjectiveResourceId,
+          ObjectiveRecord ? 1 : 0,
+          ObjectiveRecord ? ObjectiveRecord->Revision : 0,
+          bObjectiveDecoded ? 1 : 0,
+          Objective.EffectiveFixedStepIndex,
+          Input.FixedStepIndex,
+          TargetAgent->AgentId,
+          TargetAgent->PhysicalRadiusCm,
+          TargetAgent->HardSafetyGapCm,
+          TargetAgent->SoftMarginCm,
+          TargetAgent->Mobility,
+          TargetAgent->EnvironmentHardClearanceCm);
         return false;
+      }
       TargetAgent->PredictedPosition = FVector(
         Objective.TargetLocation.X, Objective.TargetLocation.Y,
         TargetAgent->PredictedPosition.Z);
@@ -542,13 +603,100 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
   TMap<int32, const FCrowdParticleConstraintResult*> ResultByAgentId;
   if (Control.bRunParticleInteraction)
   {
-    if (Input.Agents.IsEmpty()) return false;
+    if (Input.Agents.IsEmpty())
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("CrowdWorkerParticleDomainRejected stage=input generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d profiles=%d external_agents=%d reason=empty_particle_input"),
+        Context.Generation, Context.WorkerEpoch,
+        Context.AbsoluteSimulationTick,
+        Context.LastAppliedInputSequence,
+        Context.PropagationRound,
+        Profiles.Num(), Control.ExternalParticleAgents.Num());
+      return false;
+    }
     Solver = FCrowdMassParticleWork::Solve(Input);
     if (!Solver.bCompleted)
     {
       UE_LOG(LogTemp, Error,
-        TEXT("CrowdWorkerParticleDomainRejected stage=solver agents=%d"),
-        Input.Agents.Num());
+        TEXT("CrowdWorkerParticleDomainRejected stage=solver generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d resource_revision=%llu control_revision=%llu plan_revision=%d agents=%d results=%d pairs=%d summary_valid=%d applied_valid=%d fixed_step=%.6f iterations=%d safety_iterations=%d reason=particle_work_incomplete"),
+        Context.Generation,
+        Context.WorkerEpoch,
+        Context.AbsoluteSimulationTick,
+        Context.LastAppliedInputSequence,
+        Context.PropagationRound,
+        Resource->Revision,
+        Control.Revision,
+        Control.PlanRevision,
+        Input.Agents.Num(),
+        Solver.Results.Num(),
+        Solver.Pairs.Num(),
+        Solver.Summary.bValid ? 1 : 0,
+        Solver.AppliedSummary.bValid ? 1 : 0,
+        Input.Settings.FixedStepSeconds,
+        Input.Settings.IterationCount,
+        Input.Settings.SafetyIterationCount);
+      for (const FCrowdParticleConstraintAgent& Agent : Input.Agents)
+      {
+        const FCrowdStableEntityRef* EntityRef =
+          EntityRefByAgentId.Find(Agent.AgentId);
+        const FCrowdWorkerDirtyStateRecord* Snapshot = EntityRef
+          ? Context.EntityStates->Find(
+              *EntityRef, ECrowdWorkerField::InputSnapshot)
+          : nullptr;
+        const FCrowdWorkerDirtyStateRecord* Profile = EntityRef
+          ? Context.EntityStates->Find(
+              *EntityRef, ECrowdWorkerField::MovementProfile)
+          : nullptr;
+        const FCrowdWorkerDirtyStateRecord* Movement = EntityRef
+          ? Context.EntityStates->Find(
+              *EntityRef, ECrowdWorkerField::Movement)
+          : nullptr;
+        const TCHAR* Reason = TEXT("valid");
+        if (Agent.AgentId == INDEX_NONE)
+          Reason = TEXT("invalid_agent_id");
+        else if (Agent.StartPosition.ContainsNaN()
+          || Agent.PredictedPosition.ContainsNaN())
+          Reason = TEXT("invalid_position");
+        else if (!FMath::IsFinite(Agent.PhysicalRadiusCm)
+          || Agent.PhysicalRadiusCm <= 0.0f)
+          Reason = TEXT("invalid_physical_radius");
+        else if (!FMath::IsFinite(Agent.HardSafetyGapCm)
+          || Agent.HardSafetyGapCm < 0.0f)
+          Reason = TEXT("invalid_hard_gap");
+        else if (!FMath::IsFinite(Agent.EnvironmentHardClearanceCm)
+          || Agent.EnvironmentHardClearanceCm < 0.0f)
+          Reason = TEXT("invalid_environment_clearance");
+        else if (!FMath::IsFinite(Agent.SoftMarginCm)
+          || Agent.SoftMarginCm < 0.0f)
+          Reason = TEXT("invalid_soft_margin");
+        else if (!FMath::IsFinite(Agent.Mobility)
+          || Agent.Mobility < 0.0f)
+          Reason = TEXT("invalid_mobility");
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdWorkerParticleDomainRejected stage=solver_agent generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d agent=%d provider=%u stable_entity=%llu lifecycle=%u radius=%.3f hard_gap=%.3f soft_margin=%.3f mobility=%.3f environment_clearance=%.3f snapshot=%d snapshot_revision=%llu profile=%d profile_revision=%llu movement=%d movement_revision=%llu movement_input=%llu reason=%s"),
+          Context.Generation,
+          Context.WorkerEpoch,
+          Context.AbsoluteSimulationTick,
+          Context.LastAppliedInputSequence,
+          Context.PropagationRound,
+          Agent.AgentId,
+          EntityRef ? EntityRef->ProviderId : 0,
+          EntityRef ? EntityRef->StableEntityId : 0,
+          EntityRef ? EntityRef->LifecycleSerial : 0,
+          Agent.PhysicalRadiusCm,
+          Agent.HardSafetyGapCm,
+          Agent.SoftMarginCm,
+          Agent.Mobility,
+          Agent.EnvironmentHardClearanceCm,
+          Snapshot ? 1 : 0,
+          Snapshot ? Snapshot->StateRevision : 0,
+          Profile ? 1 : 0,
+          Profile ? Profile->StateRevision : 0,
+          Movement ? 1 : 0,
+          Movement ? Movement->StateRevision : 0,
+          Movement ? Movement->SourceInputSequence : 0,
+          Reason);
+      }
       return false;
     }
     TSet<uint64> UniquePairs;
@@ -569,6 +717,83 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
       if (ResultByAgentId.Contains(Result.AgentId))
         return false;
       ResultByAgentId.Add(Result.AgentId, &Result);
+    }
+    bool bHeterogeneousProfiles = false;
+    if (!Profiles.IsEmpty())
+    {
+      const FCrowdWorkerMovementControlEntry& FirstProfile = Profiles[0];
+      for (int32 Index = 1; Index < Profiles.Num(); ++Index)
+      {
+        const FCrowdWorkerMovementControlEntry& Profile = Profiles[Index];
+        if (!FMath::IsNearlyEqual(
+              Profile.ParticlePhysicalRadiusCm,
+              FirstProfile.ParticlePhysicalRadiusCm)
+          || !FMath::IsNearlyEqual(
+              Profile.ParticleHardSafetyGapCm,
+              FirstProfile.ParticleHardSafetyGapCm)
+          || !FMath::IsNearlyEqual(
+              Profile.ParticleSoftMarginCm,
+              FirstProfile.ParticleSoftMarginCm)
+          || !FMath::IsNearlyEqual(
+              Profile.ParticleMobility,
+              FirstProfile.ParticleMobility))
+        {
+          bHeterogeneousProfiles = true;
+          break;
+        }
+      }
+    }
+    if (bHeterogeneousProfiles && Context.WorkerEpoch == 1)
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdWorkerHeterogeneousParticleBootstrap generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d control_revision=%llu plan_revision=%d agents=%d external_agents=%d pairs=%d summary_valid=%d applied_valid=%d hard=%d swept=%d obstacle=%d bounds=%d infeasible=%d corrected=%d max_correction=%.3f candidate_hash=%u source=WorkerParticleInteraction"),
+        Context.Generation, Context.WorkerEpoch,
+        Context.AbsoluteSimulationTick,
+        Context.LastAppliedInputSequence,
+        Context.PropagationRound,
+        Control.Revision, Control.PlanRevision,
+        Profiles.Num(), Control.ExternalParticleAgents.Num(),
+        Solver.Pairs.Num(),
+        Solver.Summary.bValid ? 1 : 0,
+        Solver.AppliedSummary.bValid ? 1 : 0,
+        Solver.Summary.HardPairViolationCount,
+        Solver.Summary.SweptPairViolationCount,
+        Solver.Summary.ObstaclePenetrationCount,
+        Solver.Summary.BoundsViolationCount,
+        Solver.Summary.UnifiedHardInfeasibleCount,
+        Solver.Summary.CorrectedAgentCount,
+        Solver.Summary.MaxAgentCorrectionCm,
+        Solver.Summary.CandidateHash);
+      for (const FCrowdParticleConstraintAgent& Agent : Input.Agents)
+      {
+        if (!EntityRefByAgentId.Contains(Agent.AgentId))
+          continue;
+        const FCrowdParticleConstraintResult* const* Result =
+          ResultByAgentId.Find(Agent.AgentId);
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdWorkerHeterogeneousParticleAgent generation=%llu worker_epoch=%llu absolute_tick=%llu input_sequence=%llu propagation_round=%d agent=%d start=(%.3f,%.3f,%.3f) predicted=(%.3f,%.3f,%.3f) corrected=(%.3f,%.3f,%.3f) corrected_velocity=(%.3f,%.3f,%.3f) radius=%.3f hard_gap=%.3f soft_margin=%.3f mobility=%.3f environment_clearance=%.3f result=%d source=WorkerParticleInteraction"),
+          Context.Generation, Context.WorkerEpoch,
+          Context.AbsoluteSimulationTick,
+          Context.LastAppliedInputSequence,
+          Context.PropagationRound,
+          Agent.AgentId,
+          Agent.StartPosition.X, Agent.StartPosition.Y,
+          Agent.StartPosition.Z,
+          Agent.PredictedPosition.X, Agent.PredictedPosition.Y,
+          Agent.PredictedPosition.Z,
+          Result ? (*Result)->CorrectedPosition.X : 0.0,
+          Result ? (*Result)->CorrectedPosition.Y : 0.0,
+          Result ? (*Result)->CorrectedPosition.Z : 0.0,
+          Result ? (*Result)->CorrectedVelocity.X : 0.0,
+          Result ? (*Result)->CorrectedVelocity.Y : 0.0,
+          Result ? (*Result)->CorrectedVelocity.Z : 0.0,
+          Agent.PhysicalRadiusCm,
+          Agent.HardSafetyGapCm,
+          Agent.SoftMarginCm,
+          Agent.Mobility,
+          Agent.EnvironmentHardClearanceCm,
+          Result ? 1 : 0);
+      }
     }
   }
 

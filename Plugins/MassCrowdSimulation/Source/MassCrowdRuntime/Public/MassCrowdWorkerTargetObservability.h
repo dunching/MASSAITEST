@@ -12,6 +12,13 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortObservation
   int32 PlanEpoch = 0;
   int32 PlanBuildFixedStep = INDEX_NONE;
   uint32 FeasibleGraphHash = 0;
+  int32 FeasibleCellCount = 0;
+  int32 EdgeCount = 0;
+  int32 FeasibleRegionCount = 0;
+  int32 FeasibleRegionCoverageCount = 0;
+  int32 CurrentTerminalPopulation = 0;
+  int32 MaximumRegionPopulation = 0;
+  int32 DesiredPopulationTotal = 0;
   uint32 MembershipHash = 0;
   uint32 ExternalPopulationHash = 0;
   uint32 TransportHash = 0;

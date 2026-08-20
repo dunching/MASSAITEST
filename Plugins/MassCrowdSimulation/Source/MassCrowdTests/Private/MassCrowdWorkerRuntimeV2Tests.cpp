@@ -3017,6 +3017,8 @@ bool FCrowdWorkerRuntimeV2ParticleTargetObjectiveTest::RunTest(
   TestTrue(TEXT("target particle control encodes"),
     FCrowdWorkerMovementControlResourceCodec::Encode(
       Control, ControlPayload));
+  const FCrowdWorkerPayload MissingObjectiveControlPayload =
+    ControlPayload;
 
   FCrowdWorkerTargetObjectiveRevision Objective;
   Objective.TargetRevision = 2;
@@ -3069,6 +3071,27 @@ bool FCrowdWorkerRuntimeV2ParticleTargetObjectiveTest::RunTest(
   ParticleWork.Key.ScopeKey =
     CrowdWorkerResourceIds::MovementControl;
   FCrowdWorkerParticleInteractionDomainExecutor Executor;
+  FCrowdWorkerResourceStore MissingObjectiveResources;
+  TestTrue(TEXT("missing objective resources reset"),
+    MissingObjectiveResources.Reset(65536));
+  TestEqual(TEXT("missing objective control stages"),
+    MissingObjectiveResources.StageBuilding({
+      CrowdWorkerResourceIds::MovementControl,
+      Control.Revision, MissingObjectiveControlPayload}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent>
+    MissingObjectiveResourceEvents;
+  TestTrue(TEXT("missing objective control commits"),
+    MissingObjectiveResources.CommitBuildingAtEpoch(
+      3, MissingObjectiveResourceEvents));
+  Context.Resources = &MissingObjectiveResources;
+  FCrowdWorkerDomainOutput MissingObjectiveOutput;
+  AddExpectedError(
+    TEXT("CrowdWorkerParticleDomainRejected stage=objective"),
+    EAutomationExpectedErrorFlags::Contains, 1);
+  TestFalse(TEXT("target particle without objective fails closed"),
+    Executor.Execute(Context, {ParticleWork}, MissingObjectiveOutput));
+  Context.Resources = &Resources;
   FCrowdWorkerDomainOutput Output;
   TestTrue(TEXT("particle consumes live target objective"),
     Executor.Execute(Context, {ParticleWork}, Output));
@@ -3102,6 +3125,217 @@ bool FCrowdWorkerRuntimeV2ParticleTargetObjectiveTest::RunTest(
             == ECrowdWorkerDependencyKind::Resource
           && Observation.Source.ScopeKey == ObjectiveResourceId;
       }));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerRuntimeV2HeterogeneousTransitParticleBootstrapTest,
+  "MassCrowd.RuntimeV2.HeterogeneousTransitParticleBootstrap",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerRuntimeV2HeterogeneousTransitParticleBootstrapTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 12;
+  constexpr uint64 InputSequence = 64;
+  constexpr uint64 Epoch = 1;
+  constexpr int32 AgentCount = 20;
+  static constexpr int32 ProfileByFormation[AgentCount] = {
+    0, 0, 0,
+    1, 1, 1,
+    2, 2, 2,
+    3, 3,
+    4, 4, 4,
+    5, 5, 5,
+    6, 6, 6,
+  };
+  static constexpr float RadiusByProfile[7] = {
+    30.0f, 30.0f, 42.0f, 42.0f, 42.0f, 60.0f, 60.0f};
+  static constexpr float MobilityByProfile[7] = {
+    2.0f, 2.0f, 1.0f, 1.0f, 1.0f, 0.5f, 0.5f};
+
+  FCrowdWorkerEntityStateStore States;
+  TestTrue(TEXT("heterogeneous states reset"),
+    States.Reset(32, 4096));
+  FCrowdWorkerMovementControlResource Control;
+  Control.Revision = 1;
+  Control.FixedStepIndex = 271;
+  Control.PlanRevision = 1;
+  Control.bRunParticleInteraction = true;
+  Control.bParticleConstrainToFlowBounds = false;
+  Control.ParticleSettings.FixedStepSeconds = 1.0f / 30.0f;
+  for (int32 FormationIndex = 0;
+    FormationIndex < AgentCount; ++FormationIndex)
+  {
+    const FCrowdStableEntityRef EntityRef{
+      1, static_cast<uint64>(FormationIndex + 1), 1};
+    const FVector Position(
+      static_cast<double>(FormationIndex) * 500.0, 0.0, 0.0);
+    TestEqual(TEXT("heterogeneous entity spawns"),
+      States.Spawn(
+        EntityRef, Generation, InputSequence,
+        MakeBoundaryStatePayload(
+          EntityRef, FormationIndex + 1, Position)),
+      ECrowdWorkerQueueResult::Added);
+    FCrowdWorkerMovementState Movement;
+    Movement.StartPosition = Position;
+    Movement.Position = Position;
+    FCrowdWorkerDirtyStateRecord MovementRecord;
+    MovementRecord.EntityRef = EntityRef;
+    MovementRecord.Field = ECrowdWorkerField::Movement;
+    MovementRecord.Generation = Generation;
+    MovementRecord.WorkerEpoch = Epoch;
+    MovementRecord.StateRevision = FormationIndex + 1;
+    MovementRecord.SourceInputSequence = InputSequence;
+    TestTrue(TEXT("heterogeneous movement encodes"),
+      FCrowdWorkerMovementStateCodec::Encode(
+        Movement, MovementRecord.Payload));
+    TestEqual(TEXT("heterogeneous movement applies"),
+      States.ApplyDirty(MovementRecord),
+      ECrowdWorkerQueueResult::Replaced);
+
+    const int32 ProfileId = ProfileByFormation[FormationIndex];
+    FCrowdWorkerMovementControlEntry& Entry =
+      Control.Entries.AddDefaulted_GetRef();
+    Entry.EntityRef = EntityRef;
+    Entry.AgentId = FormationIndex + 1;
+    Entry.MaximumSpeedCmps = 800.0f;
+    Entry.ParticleEnvironmentHardClearanceCm = 70.0f;
+    Entry.ParticlePhysicalRadiusCm = RadiusByProfile[ProfileId];
+    Entry.ParticleHardSafetyGapCm = 10.0f;
+    Entry.ParticleSoftMarginCm = 17.0f;
+    Entry.ParticleMobility = MobilityByProfile[ProfileId];
+
+    FCrowdWorkerPayload ProfilePayload;
+    TestTrue(TEXT("heterogeneous movement profile encodes"),
+      FCrowdWorkerMovementProfileCodec::Encode(
+        Entry, ProfilePayload));
+    FCrowdWorkerMovementControlEntry DecodedProfile;
+    TestTrue(TEXT("heterogeneous movement profile decodes"),
+      FCrowdWorkerMovementProfileCodec::Decode(
+        ProfilePayload, DecodedProfile));
+    TestEqual(TEXT("heterogeneous radius preserved"),
+      DecodedProfile.ParticlePhysicalRadiusCm,
+      RadiusByProfile[ProfileId]);
+    TestEqual(TEXT("heterogeneous hard gap preserved"),
+      DecodedProfile.ParticleHardSafetyGapCm, 10.0f);
+    TestEqual(TEXT("heterogeneous soft margin preserved"),
+      DecodedProfile.ParticleSoftMarginCm, 17.0f);
+    TestEqual(TEXT("heterogeneous mobility preserved"),
+      DecodedProfile.ParticleMobility,
+      MobilityByProfile[ProfileId]);
+    TestEqual(TEXT("heterogeneous environment clearance preserved"),
+      DecodedProfile.ParticleEnvironmentHardClearanceCm, 70.0f);
+  }
+  FCrowdParticleConstraintAgent& TargetParticle =
+    Control.ExternalParticleAgents.AddDefaulted_GetRef();
+  TargetParticle.AgentId =
+    CrowdWorkerTargetConstants::PrimaryTargetParticleAgentId;
+  TargetParticle.StartPosition = FVector(10000.0, 10000.0, 0.0);
+  TargetParticle.PredictedPosition = TargetParticle.StartPosition;
+  TargetParticle.PhysicalRadiusCm = 100.0f;
+  TargetParticle.HardSafetyGapCm = 10.0f;
+  TargetParticle.SoftMarginCm = 17.0f;
+  TargetParticle.Mobility = 0.0f;
+
+  FCrowdWorkerMovementControlEntry InvalidProfile =
+    Control.Entries[0];
+  InvalidProfile.ParticleMobility = -0.5f;
+  FCrowdWorkerPayload InvalidProfilePayload;
+  TestFalse(TEXT("negative heterogeneous mobility fails closed"),
+    FCrowdWorkerMovementProfileCodec::Encode(
+      InvalidProfile, InvalidProfilePayload));
+
+  FCrowdWorkerPayload ControlPayload;
+  TestTrue(TEXT("heterogeneous movement control encodes"),
+    FCrowdWorkerMovementControlResourceCodec::Encode(
+      Control, ControlPayload));
+  FCrowdWorkerMovementControlResource DecodedControl;
+  TestTrue(TEXT("heterogeneous movement control decodes"),
+    FCrowdWorkerMovementControlResourceCodec::Decode(
+      ControlPayload, DecodedControl));
+  TestEqual(TEXT("heterogeneous control entry count"),
+    DecodedControl.Entries.Num(), AgentCount);
+  TestEqual(TEXT("transit control preserves physical target particle"),
+    DecodedControl.ExternalParticleAgents.Num(), 1);
+
+  FCrowdWorkerTargetObjectiveRevision Objective;
+  Objective.TargetRevision = 1;
+  Objective.EffectiveFixedStepIndex = 271;
+  Objective.TargetLocation = FVector2f(10000.0f, 10000.0f);
+  FCrowdWorkerPayload ObjectivePayload;
+  TestTrue(TEXT("heterogeneous target objective encodes"),
+    FCrowdWorkerTargetObjectiveRevisionCodec::Encode(
+      Objective, ObjectivePayload));
+
+  FCrowdWorkerResourceStore Resources;
+  TestTrue(TEXT("heterogeneous resources reset"),
+    Resources.Reset(65536));
+  TestEqual(TEXT("heterogeneous control stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::MovementControl,
+      Control.Revision, MoveTemp(ControlPayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("heterogeneous target objective stages"),
+    Resources.StageBuilding({
+      CrowdWorkerResourceIds::ObjectiveRevision(
+        CrowdWorkerTargetObjectiveIds::PrimaryTarget),
+      1, MoveTemp(ObjectivePayload)}),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerResourceRevisionEvent> ResourceEvents;
+  TestTrue(TEXT("heterogeneous resources commit"),
+    Resources.CommitBuildingAtEpoch(Epoch, ResourceEvents));
+
+  FCrowdWorkerSpatialIndex Spatial;
+  TestTrue(TEXT("heterogeneous spatial resets"),
+    Spatial.Reset(32, 400.0f));
+  TestTrue(TEXT("heterogeneous spatial rebuilds"),
+    Spatial.Rebuild(States));
+  TestEqual(TEXT("heterogeneous spatial entity count"),
+    Spatial.Num(), AgentCount);
+
+  FCrowdWorkerDomainContext Context;
+  Context.Generation = Generation;
+  Context.WorkerEpoch = Epoch;
+  Context.AbsoluteSimulationTick = 271;
+  Context.LastAppliedInputSequence = InputSequence;
+  Context.FixedDeltaSeconds = 1.0 / 30.0;
+  Context.SimulationTimeSeconds = 271.0 / 30.0;
+  Context.RuntimeMode = ECrowdWorkerRuntimeV2Mode::Production;
+  Context.EntityStates = &States;
+  Context.Resources = &Resources;
+  Context.SpatialIndex = &Spatial;
+  FCrowdWorkerWorkItem ParticleWork;
+  ParticleWork.Key.Domain =
+    ECrowdWorkerDomainId::ParticleInteraction;
+  ParticleWork.Key.Kind = ECrowdWorkerWorkKind::Resource;
+  ParticleWork.Key.ScopeKey =
+    CrowdWorkerResourceIds::MovementControl;
+  FCrowdWorkerParticleInteractionDomainExecutor Executor;
+  FCrowdWorkerDomainOutput FirstOutput;
+  FCrowdWorkerDomainOutput SecondOutput;
+  TestTrue(TEXT("heterogeneous transit particle bootstrap succeeds"),
+    Executor.Execute(Context, {ParticleWork}, FirstOutput));
+  TestTrue(TEXT("heterogeneous particle bootstrap repeats"),
+    Executor.Execute(Context, {ParticleWork}, SecondOutput));
+  TestEqual(TEXT("heterogeneous particle output count"),
+    FirstOutput.DirtyStates.Num(), AgentCount);
+  TestEqual(TEXT("heterogeneous repeat output count"),
+    SecondOutput.DirtyStates.Num(), FirstOutput.DirtyStates.Num());
+  if (SecondOutput.DirtyStates.Num() == FirstOutput.DirtyStates.Num())
+  {
+    for (int32 Index = 0; Index < FirstOutput.DirtyStates.Num(); ++Index)
+    {
+      TestTrue(TEXT("heterogeneous output entity deterministic"),
+        FirstOutput.DirtyStates[Index].EntityRef
+          == SecondOutput.DirtyStates[Index].EntityRef);
+      TestEqual(TEXT("heterogeneous output payload deterministic"),
+        FirstOutput.DirtyStates[Index].Payload.StableHash,
+        SecondOutput.DirtyStates[Index].Payload.StableHash);
+    }
+  }
   return true;
 }
 
@@ -3851,7 +4085,7 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
     Metrics.PublishedPatchCount, uint64{20});
 
   Objective.TargetRevision = 92;
-  Objective.EffectiveFixedStepIndex = 2;
+  Objective.EffectiveFixedStepIndex = 3;
   Objective.TargetLocation = FVector2f(100.0f, 0.0f);
   Objective.TargetVelocity = FVector2f(30.0f, 0.0f);
   TestTrue(TEXT("revised target objective encodes"),
@@ -3869,6 +4103,28 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
   Context.WorkerEpoch = 2;
   Context.AbsoluteSimulationTick = 2;
   Context.SimulationTimeSeconds = 2.0 / 30.0;
+  FCrowdWorkerDomainOutput DeferredObjectiveOutput;
+  TestTrue(TEXT("future target objective defers without failure"),
+    Executor.Execute(Context, Work, DeferredObjectiveOutput));
+  TestEqual(TEXT("future target objective publishes no early patch"),
+    DeferredObjectiveOutput.DirtyStates.Num(), 0);
+  TestEqual(TEXT("future target objective schedules one cohort"),
+    DeferredObjectiveOutput.Wakeups.Num(), 1);
+  if (DeferredObjectiveOutput.Wakeups.Num() == 1)
+  {
+    TestEqual(TEXT("future target objective wakeup tick"),
+      DeferredObjectiveOutput.Wakeups[0].AbsoluteSimulationTick,
+      uint64{3});
+    TestEqual(TEXT("future target objective wakeup domain"),
+      DeferredObjectiveOutput.Wakeups[0].Key.Domain,
+      ECrowdWorkerDomainId::Target);
+    TestEqual(TEXT("future target objective wakeup cohort"),
+      DeferredObjectiveOutput.Wakeups[0].Key.WakeupId,
+      CrowdWorkerTargetWorkScopes::EncodeCohortKey(0));
+  }
+  Context.WorkerEpoch = 3;
+  Context.AbsoluteSimulationTick = 3;
+  Context.SimulationTimeSeconds = 3.0 / 30.0;
   FCrowdWorkerDomainOutput ObjectiveOutput;
   TestTrue(TEXT("objective-only target clock executes"),
     Executor.Execute(Context, Work, ObjectiveOutput));
@@ -3900,10 +4156,10 @@ bool FCrowdWorkerRuntimeV2TargetDomainTest::RunTest(
     ECrowdWorkerQueueResult::Added);
   Events.Reset();
   TestTrue(TEXT("reduced target resource commits"),
-    Resources.CommitBuildingAtEpoch(3, Events));
-  Context.WorkerEpoch = 3;
-  Context.AbsoluteSimulationTick = 3;
-  Context.SimulationTimeSeconds = 3.0 / 30.0;
+    Resources.CommitBuildingAtEpoch(4, Events));
+  Context.WorkerEpoch = 4;
+  Context.AbsoluteSimulationTick = 4;
+  Context.SimulationTimeSeconds = 4.0 / 30.0;
   FCrowdWorkerTargetDomainExecutor SurvivorExecutor;
   FCrowdWorkerDomainOutput SurvivorOutput;
   TestTrue(TEXT("surviving member restores cohort after anchor despawn"),

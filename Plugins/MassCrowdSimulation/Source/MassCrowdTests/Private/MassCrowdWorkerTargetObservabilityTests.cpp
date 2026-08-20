@@ -36,6 +36,13 @@ namespace CrowdWorkerTargetObservabilityTests
     Cohort.CohortKey = 3;
     Cohort.TopologyRevision = 77;
     Cohort.TargetRevision = 9;
+    Cohort.FeasibleCellCount = 12;
+    Cohort.EdgeCount = 24;
+    Cohort.FeasibleRegionCount = 4;
+    Cohort.FeasibleRegionCoverageCount = 2;
+    Cohort.CurrentTerminalPopulation = 2;
+    Cohort.MaximumRegionPopulation = 1;
+    Cohort.DesiredPopulationTotal = 2;
     Cohort.Plan.PlanEpoch = 4;
     Cohort.Plan.BuildFixedStepIndex = 11;
     Cohort.Plan.TargetRevision = 9;
@@ -148,6 +155,16 @@ bool FCrowdWorkerTargetObservationReadOnlyTest::RunTest(
   if (First.Cohorts.Num() != 1) return false;
   TestEqual(TEXT("Worker Target observation sees feasible graph"),
     First.Cohorts[0].FeasibleGraphHash, uint32{101});
+  TestEqual(TEXT("Worker Target observation sees feasible cells"),
+    First.Cohorts[0].FeasibleCellCount, 12);
+  TestEqual(TEXT("Worker Target observation sees topology edges"),
+    First.Cohorts[0].EdgeCount, 24);
+  TestEqual(TEXT("Worker Target observation sees feasible regions"),
+    First.Cohorts[0].FeasibleRegionCount, 4);
+  TestEqual(TEXT("Worker Target observation sees region coverage"),
+    First.Cohorts[0].FeasibleRegionCoverageCount, 2);
+  TestEqual(TEXT("Worker Target observation sees terminal population"),
+    First.Cohorts[0].CurrentTerminalPopulation, 2);
   TestEqual(TEXT("Worker Target observation sees transport hash"),
     First.Cohorts[0].TransportHash, uint32{104});
   TestEqual(TEXT("Worker Target observation sees execution hash"),
