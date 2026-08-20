@@ -909,6 +909,12 @@ void FCrowdTargetRegionTransportKernel::BuildDemand(
     const int32 AdmissionRegionKey =
       Topology.Cells[AdmissionCellKey].PrimaryDemandRegionKey;
     if (!OutDemand.Regions.IsValidIndex(AdmissionRegionKey)) continue;
+    const bool bPreferredTerminalAdmissionAvailable =
+      PreferredDesiredByRegion.IsValidIndex(AdmissionRegionKey)
+      && OutDemand.Regions[AdmissionRegionKey].CurrentPopulation
+        < PreferredDesiredByRegion[AdmissionRegionKey];
+    if (!State.bEngagedHold && !bPreferredTerminalAdmissionAvailable)
+      continue;
     State.bCapacityAdmitted = true;
     State.bTerminalStay = true;
     State.AssignedRegionKey = AdmissionRegionKey;

@@ -121,6 +121,50 @@ bool FMassCrowdTargetRegionTransportCoreTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdTargetRegionTerminalSurplusRedistributionTest,
+  "MassCrowd.Core.TargetRegionTransport.TerminalSurplusRedistribution",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdTargetRegionTerminalSurplusRedistributionTest::RunTest(
+  const FString& Parameters)
+{
+  using namespace MassCrowdTargetRegionTransportTests;
+  (void)Parameters;
+  const FCrowdTargetRegionTransportSettings Settings = MakeSettings();
+  const FCrowdSharedFlowFieldConfig Flow = MakeFlowConfig();
+  FCrowdTargetPolarTopology Topology;
+  FCrowdTargetPolarTopologySummary TopologySummary;
+  FCrowdTargetRegionTransportKernel::BuildTopology(
+    Settings, Flow, Topology, TopologySummary);
+  TestTrue(TEXT("surplus topology is valid"), Topology.bValid);
+
+  TArray<FCrowdTargetRegionTransportAgent> Agents;
+  for (int32 Index = 0; Index < 3; ++Index)
+    Agents.Add(MakeAgent(Index + 1, 0, 500.0f));
+  FCrowdTargetRegionDemandResult Demand;
+  FCrowdTargetRegionTransportKernel::BuildDemand(
+    Agents, Settings, Flow, nullptr, Topology, Demand);
+  TestTrue(TEXT("terminal surplus demand is valid"), Demand.bValid);
+  TSet<int32> AssignedRegions;
+  for (const FCrowdTargetRegionAgentDemandState& State : Demand.AgentStates)
+  {
+    TestTrue(TEXT("terminal surplus remains assignable"),
+      State.bCapacityAdmitted && !State.bCapacityHold);
+    AssignedRegions.Add(State.AssignedRegionKey);
+  }
+  TestEqual(TEXT("terminal surplus preserves round-robin coverage"),
+    AssignedRegions.Num(), 3);
+
+  Algo::Reverse(Agents);
+  FCrowdTargetRegionDemandResult Reversed;
+  FCrowdTargetRegionTransportKernel::BuildDemand(
+    Agents, Settings, Flow, nullptr, Topology, Reversed);
+  TestEqual(TEXT("terminal surplus demand is deterministic"),
+    Reversed.DemandHash, Demand.DemandHash);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
   FMassCrowdTargetRegionBoundaryCapacityTest,
   "MassCrowd.Core.TargetRegionTransport.BoundaryCapacity",
   EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

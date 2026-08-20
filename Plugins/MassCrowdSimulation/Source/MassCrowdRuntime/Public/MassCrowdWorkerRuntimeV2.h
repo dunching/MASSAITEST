@@ -728,6 +728,7 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerDomainContext
   uint64 LastAppliedInputSequence = 0;
   uint64 NextOrderedEventSequence = 1;
   uint64 ResourceRevisionHash = 0;
+  int32 PropagationRound = 0;
   double FixedDeltaSeconds = 0.0;
   double SimulationTimeSeconds = 0.0;
   ECrowdWorkerRuntimeV2Mode RuntimeMode =

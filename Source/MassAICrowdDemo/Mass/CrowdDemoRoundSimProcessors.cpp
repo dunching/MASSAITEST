@@ -20,6 +20,7 @@
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerProjectileDomain.h"
 #include "MassCrowdWorkerTargetDomain.h"
+#include "MassCrowdWorkerTargetObservability.h"
 #include "Mass/CrowdDemoParticleConstraintKernel.h"
 #include "Mass/CrowdDemoLocalPredictiveInteractionKernel.h"
 #include "Mass/CrowdDemoOpenSpawnRelaxationKernel.h"
@@ -62,6 +63,243 @@ namespace
     Hash ^= Value;
     Hash *= TargetFnvPrime;
     return Hash;
+  }
+
+  bool ProjectHeterogeneousTransitWorkerTargetMetrics(
+    const UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
+    const FCrowdWorkerResultApplyProxy& Proxy,
+    TConstArrayView<FCrowdDemoRoundAgentState> FinalStates,
+    FCrowdDemoParticleMetrics& Metrics)
+  {
+    const auto& Runtimes = Pipeline.GetCapabilityCohorts();
+    FCrowdWorkerTargetObservation Observation;
+    if (!FCrowdWorkerTargetObserver::Build(
+        Proxy, FinalStates.Num(), Observation)
+      || Observation.Cohorts.Num() != Runtimes.Num())
+      return false;
+
+    TMap<int32, const FCrowdDemoRoundAgentState*> FinalStateByAgentId;
+    FinalStateByAgentId.Reserve(FinalStates.Num());
+    for (const FCrowdDemoRoundAgentState& State : FinalStates)
+      FinalStateByAgentId.Add(State.AgentId, &State);
+
+    Metrics.CapabilityProfiles.Reset(Runtimes.Num());
+    Metrics.TargetTransportFeasibleCellCount = 0;
+    Metrics.TargetTransportEdgeCount = 0;
+    Metrics.TargetTransportFeasibleRegionCount = 0;
+    Metrics.TargetTransportFeasibleRegionCoverageCount = 0;
+    Metrics.TargetTransportInsideEffectiveBandCount = 0;
+    Metrics.TargetTransportMaximumRegionPopulation = 0;
+    Metrics.TargetTransportDesiredPopulation = 0;
+    Metrics.TargetTransportRoutedAgentCount = 0;
+    Metrics.TargetTransportUnroutedAgentCount = 0;
+    Metrics.TargetTransportPlanEpoch = 0;
+    Metrics.TargetTransportTopologyHash = 2166136261u;
+    Metrics.TargetTransportDemandHash = 2166136261u;
+    Metrics.TargetTransportPlanHash = 2166136261u;
+    Metrics.TargetTransportGuidanceHash = 2166136261u;
+    Metrics.TargetTransportValidationHash = 2166136261u;
+
+    const FVector2f TargetLocation(
+      Pipeline.GetTargetFact().Location.X,
+      Pipeline.GetTargetFact().Location.Y);
+    const FVector2f TargetVelocity(
+      Pipeline.GetTargetFact().Velocity.X,
+      Pipeline.GetTargetFact().Velocity.Y);
+    bool bValid = Observation.bValid;
+    for (const FCrowdDemoTargetRegionCapabilityCohortRuntime& Runtime :
+      Runtimes)
+    {
+      const FCrowdWorkerTargetCohortObservation* Cohort =
+        Observation.Cohorts.FindByPredicate(
+          [&Runtime](const FCrowdWorkerTargetCohortObservation& Candidate)
+          {
+            return Candidate.CohortKey
+              == Runtime.Cohort.CapabilityProfileKey;
+          });
+      if (!Cohort)
+      {
+        bValid = false;
+        continue;
+      }
+
+      FCrowdDemoCapabilityProfileMetrics& Profile =
+        Metrics.CapabilityProfiles.AddDefaulted_GetRef();
+      Profile.CapabilityProfileKey = Runtime.Cohort.CapabilityProfileKey;
+      Profile.DemandRegionPhaseOffset = Runtime.DemandRegionPhaseOffset;
+      Profile.AgentCount = Runtime.Cohort.AgentIds.Num();
+      Profile.FeasibleRegionCount = Cohort->FeasibleRegionCount;
+      Profile.FeasibleRegionCoverageCount =
+        Cohort->FeasibleRegionCoverageCount;
+      Profile.InsideBandCount = Cohort->CurrentTerminalPopulation;
+      Profile.RoutedAgentCount = Cohort->RoutedAgentCount;
+      Profile.UnroutedAgentCount = FMath::Max(
+        Cohort->PlanUnroutedAgentCount,
+        Cohort->UnroutedTargetStateCount);
+      Profile.MaximumRegionPopulation =
+        Cohort->MaximumRegionPopulation;
+      Profile.TopologyHash = Cohort->FeasibleGraphHash;
+      Profile.DemandHash = FoldTargetHash(
+        Cohort->MembershipHash, Cohort->ExternalPopulationHash);
+      Profile.TransportHash = Cohort->TransportHash;
+      Profile.GuidanceHash = Cohort->GuidanceHash;
+      Profile.ValidationHash = Cohort->ExecutionHash;
+
+      bool bHasOutsideProgress = false;
+      int32 FinalProfileStateCount = 0;
+      for (const int32 AgentId : Runtime.Cohort.AgentIds)
+      {
+        const FCrowdDemoRoundAgentState* const* FinalState =
+          FinalStateByAgentId.Find(AgentId);
+        if (!FinalState)
+        {
+          bValid = false;
+          continue;
+        }
+        ++FinalProfileStateCount;
+        const FVector2f Location(
+          (*FinalState)->Location.X, (*FinalState)->Location.Y);
+        const FVector2f Velocity(
+          (*FinalState)->Velocity.X, (*FinalState)->Velocity.Y);
+        const FVector2f Delta = Location - TargetLocation;
+        const float Distance = Delta.Size();
+        float ErrorCm = 0.0f;
+        float ProgressCmps = 0.0f;
+        if (Distance < Runtime.Cohort.Profile.NormalizedMinimumCenterDistanceCm)
+        {
+          ++Profile.BelowBandCount;
+          ErrorCm = Runtime.Cohort.Profile.NormalizedMinimumCenterDistanceCm
+            - Distance;
+          ProgressCmps = Distance > UE_SMALL_NUMBER
+            ? FVector2f::DotProduct(
+                Velocity - TargetVelocity, Delta / Distance)
+            : 0.0f;
+        }
+        else if (Distance >
+          Runtime.Cohort.Profile.NormalizedMaximumCenterDistanceCm)
+        {
+          ++Profile.AboveBandCount;
+          ErrorCm = Distance
+            - Runtime.Cohort.Profile.NormalizedMaximumCenterDistanceCm;
+          ProgressCmps = Distance > UE_SMALL_NUMBER
+            ? -FVector2f::DotProduct(
+                Velocity - TargetVelocity, Delta / Distance)
+            : 0.0f;
+        }
+        else
+        {
+          ++Profile.DistanceBandInsideCount;
+          continue;
+        }
+        Profile.OutsideBandErrorCmMax = FMath::Max(
+          Profile.OutsideBandErrorCmMax, ErrorCm);
+        if (!bHasOutsideProgress)
+        {
+          Profile.OutsideBandProgressCmpsMin = ProgressCmps;
+          Profile.OutsideBandProgressCmpsMax = ProgressCmps;
+          bHasOutsideProgress = true;
+        }
+        else
+        {
+          Profile.OutsideBandProgressCmpsMin = FMath::Min(
+            Profile.OutsideBandProgressCmpsMin, ProgressCmps);
+          Profile.OutsideBandProgressCmpsMax = FMath::Max(
+            Profile.OutsideBandProgressCmpsMax, ProgressCmps);
+        }
+      }
+
+      bValid = bValid && Cohort->bValid
+        && Cohort->TargetStateCount == Profile.AgentCount
+        && FinalProfileStateCount == Profile.AgentCount
+        && Cohort->CurrentTerminalPopulation <= Profile.AgentCount
+        && Cohort->FeasibleRegionCoverageCount
+          <= Cohort->FeasibleRegionCount;
+      if (Cohort->CurrentTerminalPopulation != Profile.AgentCount
+        || Cohort->FeasibleRegionCoverageCount
+          != FMath::Min(Profile.AgentCount, Cohort->FeasibleRegionCount))
+      {
+        for (const int32 AgentId : Runtime.Cohort.AgentIds)
+        {
+          const FCrowdMassBoundaryAgentRecord* Boundary =
+            Pipeline.GetBoundarySnapshot().Agents.FindByPredicate(
+              [AgentId](const FCrowdMassBoundaryAgentRecord& Candidate)
+              {
+                return Candidate.Identity.AgentId == AgentId;
+              });
+          const FCrowdDemoRoundAgentState* const* FinalState =
+            FinalStateByAgentId.Find(AgentId);
+          FCrowdWorkerTargetState TargetState;
+          const FCrowdWorkerDomainProxyState* TargetDomain = Boundary
+            ? Proxy.FindDomain(
+                Boundary->AgentFacts.StableEntityRef,
+                ECrowdWorkerField::Target)
+            : nullptr;
+          const bool bTargetStateValid = TargetDomain
+            && FCrowdWorkerTargetStateCodec::Decode(
+              TargetDomain->State.Payload, TargetState);
+          const FVector Location = FinalState
+            ? FVector((*FinalState)->Location) : FVector::ZeroVector;
+          const FVector Velocity = FinalState
+            ? FVector((*FinalState)->Velocity) : FVector::ZeroVector;
+          const float Distance = FVector2f(
+            Location.X - TargetLocation.X,
+            Location.Y - TargetLocation.Y).Size();
+          UE_LOG(LogTemp, Display,
+            TEXT("CrowdDemoT6WorkerTargetAcceptanceWitness profile=%u agent=%d terminal=%d/%d coverage=%d/%d location=(%.1f,%.1f) velocity=(%.1f,%.1f) distance=%.1f band=(%.1f,%.1f) target_state_valid=%d mode=%d current_cell=%d next_cell=%d demand_region=%d desired=(%.1f,%.1f) source=WorkerResultApply"),
+            Cohort->CohortKey, AgentId,
+            Cohort->CurrentTerminalPopulation, Profile.AgentCount,
+            Cohort->FeasibleRegionCoverageCount,
+            FMath::Min(Profile.AgentCount, Cohort->FeasibleRegionCount),
+            Location.X, Location.Y, Velocity.X, Velocity.Y, Distance,
+            Runtime.Cohort.Profile.NormalizedMinimumCenterDistanceCm,
+            Runtime.Cohort.Profile.NormalizedMaximumCenterDistanceCm,
+            bTargetStateValid ? 1 : 0,
+            bTargetStateValid ? static_cast<int32>(TargetState.Mode)
+              : INDEX_NONE,
+            bTargetStateValid ? TargetState.CurrentCellKey : INDEX_NONE,
+            bTargetStateValid ? TargetState.NextCellKey : INDEX_NONE,
+            bTargetStateValid ? TargetState.DemandRegionKey : INDEX_NONE,
+            bTargetStateValid ? TargetState.DesiredVelocity.X : 0.0f,
+            bTargetStateValid ? TargetState.DesiredVelocity.Y : 0.0f);
+        }
+      }
+      Metrics.TargetTransportFeasibleCellCount += Cohort->FeasibleCellCount;
+      Metrics.TargetTransportEdgeCount += Cohort->EdgeCount;
+      Metrics.TargetTransportFeasibleRegionCount +=
+        Cohort->FeasibleRegionCount;
+      Metrics.TargetTransportFeasibleRegionCoverageCount +=
+        Cohort->FeasibleRegionCoverageCount;
+      Metrics.TargetTransportInsideEffectiveBandCount +=
+        Cohort->CurrentTerminalPopulation;
+      Metrics.TargetTransportMaximumRegionPopulation = FMath::Max(
+        Metrics.TargetTransportMaximumRegionPopulation,
+        Cohort->MaximumRegionPopulation);
+      Metrics.TargetTransportDesiredPopulation +=
+        Cohort->DesiredPopulationTotal;
+      Metrics.TargetTransportRoutedAgentCount += Cohort->RoutedAgentCount;
+      Metrics.TargetTransportUnroutedAgentCount +=
+        Profile.UnroutedAgentCount;
+      Metrics.TargetTransportPlanEpoch = FMath::Max(
+        Metrics.TargetTransportPlanEpoch, Cohort->PlanEpoch);
+      const uint32 Key = Cohort->CohortKey;
+      Metrics.TargetTransportTopologyHash = FoldTargetHash(
+        FoldTargetHash(Metrics.TargetTransportTopologyHash, Key),
+        Profile.TopologyHash);
+      Metrics.TargetTransportDemandHash = FoldTargetHash(
+        FoldTargetHash(Metrics.TargetTransportDemandHash, Key),
+        Profile.DemandHash);
+      Metrics.TargetTransportPlanHash = FoldTargetHash(
+        FoldTargetHash(Metrics.TargetTransportPlanHash, Key),
+        Profile.TransportHash);
+      Metrics.TargetTransportGuidanceHash = FoldTargetHash(
+        FoldTargetHash(Metrics.TargetTransportGuidanceHash, Key),
+        Profile.GuidanceHash);
+      Metrics.TargetTransportValidationHash = FoldTargetHash(
+        FoldTargetHash(Metrics.TargetTransportValidationHash, Key),
+        Profile.ValidationHash);
+    }
+    Metrics.bTargetRegionTransportValid = bValid ? 1 : 0;
+    return bValid;
   }
 
   uint32 BuildAndOptionallyWriteTargetRegionFailureFixture(
@@ -3674,6 +3912,15 @@ static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, F
           }
           Metrics.bTargetRegionTransportValid = bAllValid
             && Metrics.bCapabilityProfilesValid != 0 ? 1 : 0;
+          if (Pipeline->IsHeterogeneousTransit()
+            && !ProjectHeterogeneousTransitWorkerTargetMetrics(
+              *Pipeline, Proxy, States, Metrics))
+          {
+            UE_LOG(LogTemp, Error,
+              TEXT("VIOLATION CrowdDemoT6WorkerTargetProjectionInvalid step=%d agents=%d profiles=%d"),
+              Pipeline->GetCurrentFixedStepIndex(), States.Num(),
+              Pipeline->GetCapabilityCohorts().Num());
+          }
         }
         else
         {

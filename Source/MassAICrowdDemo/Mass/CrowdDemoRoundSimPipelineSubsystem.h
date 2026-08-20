@@ -1221,6 +1221,7 @@ private:
   uint64 NextWorkerV2MovementControlRevision = 1;
   uint64 LastWorkerV2MovementControlGeneration = 0;
   int32 LastWorkerV2MovementControlPlanRevision = INDEX_NONE;
+  bool bLastWorkerV2MovementControlTargetActive = false;
   uint64 WorkerV2MovementControlPublishCount = 0;
   uint64 WorkerV2MovementControlReuseCount = 0;
   uint64 NextWorkerV2TargetControlRevision = 1;

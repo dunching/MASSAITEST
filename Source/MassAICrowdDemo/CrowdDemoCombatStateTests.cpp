@@ -1323,6 +1323,12 @@ bool FCrowdDemoPersistentWorkerProductionStructureTest::RunTest(
   TestTrue(TEXT("T1 commands enter through movement profile revisions"),
     PipelineSource.Contains(TEXT("scenario=T1"))
       && PipelineSource.Contains(TEXT("MovementProfileRevision")));
+  TestTrue(TEXT("staged Worker Target handoff revises shadowing movement profiles"),
+    PipelineSource.Contains(TEXT("bMovementTargetActivityChanged"))
+      && PipelineSource.Contains(TEXT(
+        "!bSubmitIntentOnly || bMovementTargetActivityChanged"))
+      && PipelineSource.Contains(TEXT(
+        "PlanRevisionInputs.Append(MoveTemp(MovementProfileInputs))")));
   TestTrue(TEXT("T7 bootstrap bypasses Host simulation business work"),
     PipelineSource.Contains(TEXT(
       "BuildWorkerNativeScenarioBusinessBootstrap("))

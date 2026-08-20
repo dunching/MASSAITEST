@@ -129,9 +129,23 @@ public:
           || Nodes[Index].Key < Nodes[Selected].Key)
           Selected = Index;
       }
-      if (Selected == INDEX_NONE) return false;
+      if (Selected == INDEX_NONE)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdDemoBootstrapGraphRejected stage=schedule completed=%d nodes=%d reason=no_ready_task"),
+          Completed.Num(), Nodes.Num());
+        return false;
+      }
       FCrowdBootstrapTaskResult Result = Nodes[Selected].Body();
-      if (!Result.bSucceeded) return false;
+      if (!Result.bSucceeded)
+      {
+        const FCrowdBootstrapTaskKey& Key = Nodes[Selected].Key;
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdDemoBootstrapGraphRejected stage=execute completed=%d nodes=%d task_stage=%u task_type=%u scope=%llu reason=task_failure"),
+          Completed.Num(), Nodes.Num(), Key.StageId.Value,
+          Key.TaskTypeId.Value, Key.ScopeKey);
+        return false;
+      }
       Completed.Add(Selected);
     }
     return true;
@@ -2088,6 +2102,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   bValidCorridorTransitHoldCommandSubmitted = false;
   LastWorkerV2MovementControlGeneration = 0;
   LastWorkerV2MovementControlPlanRevision = INDEX_NONE;
+  bLastWorkerV2MovementControlTargetActive = false;
   LastWorkerV2TargetControlSemanticHash = 0;
   LastWorkerV2TargetObjectiveSemanticHash = 0;
   LastWorkerV2ProjectileControlSemanticHash = 0;
@@ -2953,12 +2968,17 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     RuntimeSubsystem->GetWorkerShadowSync();
   const bool bSubmitIntentOnly = WorkerShadow.IsStarted()
     && WorkerShadow.GetMetrics().FullResnapshotCount > 0;
+  const bool bHasTargetControl =
+    !BoundaryFacingWorkState->TargetTopologySlots.IsEmpty();
+  const bool bMovementTargetActivityChanged =
+    bLastWorkerV2MovementControlTargetActive != bHasTargetControl;
   const bool bPublishMovementControl =
     !bSubmitIntentOnly
     || LastWorkerV2MovementControlGeneration
       != WorkerShadow.GetGeneration()
     || LastWorkerV2MovementControlPlanRevision
-      != GetCurrentPlanRevision();
+      != GetCurrentPlanRevision()
+    || bMovementTargetActivityChanged;
   if (GetWorld()->GetNetMode() == NM_Client)
   {
     const FCrowdAsyncSimulationRuntime& Runtime =
@@ -2995,8 +3015,6 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   if (!ResolveWorkerTargetAuthority(
       BoundarySnapshot, TargetMode, TargetCanaries))
     return RejectWorkerV2Input(TEXT("target_authority"));
-  const bool bHasTargetControl =
-    !BoundaryFacingWorkState->TargetTopologySlots.IsEmpty();
   if (bHasTargetControl
     && TargetMode
       != ECrowdDemoWorkerTargetAuthorityMode::Shadow
@@ -3018,6 +3036,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   }
 
   FCrowdWorkerTargetControlResource TargetControl;
+  TSet<FCrowdStableEntityRef> WorkerTargetGuidanceEntities;
   uint64 TargetControlSemanticHash = 0;
   bool bPublishTargetControl = false;
   if (bHasTargetControl)
@@ -3129,6 +3148,17 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       {
         return A.CohortKey < B.CohortKey;
       });
+    for (const FCrowdWorkerTargetCohortInput& Cohort :
+      TargetControl.Cohorts)
+    {
+      for (const FCrowdWorkerTargetAgentInput& Agent : Cohort.Agents)
+      {
+        if (!Agent.EntityRef.IsValid()
+          || WorkerTargetGuidanceEntities.Contains(Agent.EntityRef))
+          return RejectWorkerV2Input(TEXT("target_guidance_membership"));
+        WorkerTargetGuidanceEntities.Add(Agent.EntityRef);
+      }
+    }
     FCrowdWorkerTargetControlResource SemanticControl =
       TargetControl;
     SemanticControl.Revision = 1;
@@ -3537,10 +3567,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
           == ECrowdDemoWorkerTargetAuthorityMode::Production
         || TargetCanaries.Contains(*EntityRef);
       Entry.bUseWorkerTargetGuidance =
-        bHasTargetControl
-        && bTargetOwner
-        && (*Guidance)->SelectedProvider
-          == ECrowdGuidanceProvider::TargetRegion;
+        bTargetOwner
+        && WorkerTargetGuidanceEntities.Contains(*EntityRef);
       Entry.bUseAuthoritativePreferredVelocity =
         !bWorkerNativeVatBootstrap
         && ((*Guidance)->SelectedProvider
@@ -3599,13 +3627,32 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       {
         return A.EntityRef < B.EntityRef;
       });
+    if (IsHeterogeneousTransit() && bHasTargetControl)
+    {
+      int32 WorkerTargetGuidanceCount = 0;
+      for (const FCrowdWorkerMovementControlEntry& Entry : Control.Entries)
+        WorkerTargetGuidanceCount += Entry.bUseWorkerTargetGuidance ? 1 : 0;
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoT6MovementHandoff target_mode=%d target_membership=%d movement_entries=%d worker_target_guidance=%d source=WorkerInputSync"),
+        static_cast<int32>(TargetMode),
+        WorkerTargetGuidanceEntities.Num(), Control.Entries.Num(),
+        WorkerTargetGuidanceCount);
+    }
   }
+  const bool bHasPrimaryTargetParticle =
+    Control.ExternalParticleAgents.ContainsByPredicate([](const auto& Agent)
+    {
+      return Agent.AgentId
+        == CrowdWorkerTargetConstants::PrimaryTargetParticleAgentId;
+    });
+  const bool bRequiresTargetObjective =
+    bHasTargetControl || bHasPrimaryTargetParticle;
   TArray<FCrowdWorkerVersionedResourceInput> ResourceInputs;
   ResourceInputs.Reserve(
     (bPublishMovementControl ? 1 : 0)
       + (bPublishTargetControl ? 1 : 0)
       + (bPublishProjectileControl ? 1 : 0)
-      + (!bSubmitIntentOnly && bHasTargetControl ? 1 : 0));
+      + (!bSubmitIntentOnly && bRequiresTargetObjective ? 1 : 0));
   if (bPublishMovementControl)
   {
     FCrowdWorkerVersionedResourceInput& ResourceInput =
@@ -3629,9 +3676,9 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       return false;
   }
   TArray<FCrowdWorkerObjectiveRevisionDelta> TargetObjectives;
-  const uint64 TargetObjectiveSemanticHash = bHasTargetControl
+  const uint64 TargetObjectiveSemanticHash = bRequiresTargetObjective
     ? CalculateTargetObjectiveSemanticHash(GetTargetFact()) : 0;
-  const bool bPublishTargetObjective = bHasTargetControl
+  const bool bPublishTargetObjective = bRequiresTargetObjective
     && (!bSubmitIntentOnly
       || TargetObjectiveSemanticHash
         != LastWorkerV2TargetObjectiveSemanticHash);
@@ -3674,7 +3721,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   }
   TArray<FCrowdWorkerExternalGameplayInput>
     MovementProfileInputs;
-  if (!bSubmitIntentOnly)
+  if (!bSubmitIntentOnly || bMovementTargetActivityChanged)
   {
     MovementProfileInputs.Reserve(Control.Entries.Num());
     for (const FCrowdWorkerMovementControlEntry& Entry :
@@ -3716,6 +3763,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         return RejectWorkerV2Input(TEXT("plan_revision_encode"));
     }
   }
+  if (bSubmitIntentOnly && !MovementProfileInputs.IsEmpty())
+    PlanRevisionInputs.Append(MoveTemp(MovementProfileInputs));
   const bool bWorkerInputAccepted = bSubmitIntentOnly
     ? FCrowdDemoWorkerInputSync::SubmitIntentBatch(
         *GetWorld(), GetCurrentFixedStepIndex(),
@@ -3763,6 +3812,9 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   if (bHasTargetControl)
   {
     bWorkerV2TargetStateBootstrapped = true;
+  }
+  if (bRequiresTargetObjective)
+  {
     if (bPublishTargetObjective)
     {
       LastWorkerV2TargetObjectiveSemanticHash =
@@ -3846,6 +3898,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       WorkerShadow.GetGeneration();
     LastWorkerV2MovementControlPlanRevision =
       GetCurrentPlanRevision();
+    bLastWorkerV2MovementControlTargetActive =
+      bHasTargetControl;
     ++WorkerV2MovementControlPublishCount;
     ++NextWorkerV2MovementControlRevision;
     if (NextWorkerV2MovementControlRevision == 0)
@@ -4491,7 +4545,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::
       bObserved = true;
     }
   }
-  else if (IsValidCorridorTransit())
+  else if (IsCorridorTransitProgressScenario())
   {
     TArray<FCrowdDemoValidCorridorTransitStepAgent> Results;
     Results.Reserve(BoundarySnapshot.Agents.Num());
@@ -4515,8 +4569,20 @@ void UCrowdDemoRoundSimPipelineSubsystem::
     }
     if (!Results.IsEmpty())
     {
+      const bool bWasValid = ValidCorridorTransitProgress.bValid;
       FCrowdDemoValidCorridorTransitKernel::UpdateProgress(
         Results, FixedStepIndex, ValidCorridorTransitProgress);
+      if (bWasValid && !ValidCorridorTransitProgress.bValid)
+      {
+        FString AgentIds;
+        for (const FCrowdDemoValidCorridorTransitStepAgent& Result : Results)
+          AgentIds += FString::Printf(TEXT("%s%d"),
+            AgentIds.IsEmpty() ? TEXT("") : TEXT(","), Result.AgentId);
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdDemoCorridorProgressRejected scenario=%d fixed_step=%d agents=%d ids=[%s] source=WorkerResultApply"),
+          static_cast<int32>(ActivePlan.Rules.SoftPressureTestCase),
+          FixedStepIndex, Results.Num(), *AgentIds);
+      }
       bObserved = true;
     }
   }
@@ -5079,6 +5145,43 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
             }
             Slot.DemandOutput =
               FCrowdMassTargetRegionWork::BuildDemand(DemandInput);
+            if (!Slot.DemandOutput.bValid)
+            {
+              UE_LOG(LogTemp, Error,
+                TEXT("CrowdDemoBootstrapTargetDemandRejected cohort=%u agents=%d external_agents=%d topology_valid=%d cells=%d feasible_cells=%d capacity=%d demand_states=%d feasible_regions=%d desired=%d assignable=%d overflow=%d supply=%d source_attachment_failures=%d membership_hash=%u demand_hash=%u reason=demand_invalid"),
+                Slot.CohortKey,
+                DemandInput.Agents.Num(),
+                DemandInput.ExternalAgents.Num(),
+                DemandInput.Topology.bValid ? 1 : 0,
+                DemandInput.Topology.Cells.Num(),
+                Slot.Output.Summary.FeasibleCellCount,
+                Slot.Output.Summary.TotalFeasibleCapacity,
+                Slot.DemandOutput.Demand.AgentStates.Num(),
+                Slot.DemandOutput.Demand.FeasibleRegionCount,
+                Slot.DemandOutput.Demand.DesiredPopulationTotal,
+                Slot.DemandOutput.Demand.AssignablePopulation,
+                Slot.DemandOutput.Demand.OverflowPopulation,
+                Slot.DemandOutput.Demand.SupplyAgentCount,
+                Slot.DemandOutput.Demand.SourceAttachmentFailureCount,
+                Slot.DemandOutput.Demand.MembershipHash,
+                Slot.DemandOutput.Demand.DemandHash);
+              for (const FCrowdTargetRegionTransportAgent& Agent :
+                DemandInput.Agents)
+              {
+                UE_LOG(LogTemp, Error,
+                  TEXT("CrowdDemoBootstrapTargetDemandAgent cohort=%u agent=%d location=(%.3f,%.3f) velocity=(%.3f,%.3f) far_flow=(%.3f,%.3f) max_speed=%.3f radius=%.3f hard_gap=%.3f soft_margin=%.3f engaged_hold=%d"),
+                  Slot.CohortKey, Agent.AgentId,
+                  Agent.Location.X, Agent.Location.Y,
+                  Agent.Velocity.X, Agent.Velocity.Y,
+                  Agent.FarFlowPreferredVelocity.X,
+                  Agent.FarFlowPreferredVelocity.Y,
+                  Agent.MaxSpeedCmps,
+                  Agent.PhysicalRadiusCm,
+                  Agent.HardSafetyGapCm,
+                  Agent.SoftMarginCm,
+                  Agent.bEngagedHold ? 1 : 0);
+              }
+            }
             return Slot.DemandOutput.bValid
               ? FCrowdBootstrapTaskResult::Success(
                   Slot.DemandOutput.Demand.DemandHash)
@@ -6212,6 +6315,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::FailFixedStep()
   bWorkerV2ProjectileStateBootstrapped = false;
   LastWorkerV2MovementControlGeneration = 0;
   LastWorkerV2MovementControlPlanRevision = INDEX_NONE;
+  bLastWorkerV2MovementControlTargetActive = false;
   LastWorkerV2TargetControlSemanticHash = 0;
   LastWorkerV2TargetObjectiveSemanticHash = 0;
   LastWorkerV2ProjectileControlSemanticHash = 0;
@@ -6248,6 +6352,7 @@ InvalidateInFlightBoundaryForAuthoritativeState()
   bWorkerV2ProjectileStateBootstrapped = false;
   LastWorkerV2MovementControlGeneration = 0;
   LastWorkerV2MovementControlPlanRevision = INDEX_NONE;
+  bLastWorkerV2MovementControlTargetActive = false;
   LastWorkerV2TargetControlSemanticHash = 0;
   LastWorkerV2TargetObjectiveSemanticHash = 0;
   LastWorkerV2ProjectileControlSemanticHash = 0;

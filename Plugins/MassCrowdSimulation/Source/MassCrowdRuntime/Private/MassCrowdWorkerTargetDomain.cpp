@@ -653,27 +653,27 @@ bool FCrowdWorkerTargetControlResourceCodec::Encode(
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
   TArray<uint8>& Bytes = OutPayload.Bytes;
-  AppendUnsigned(Bytes, Resource.Revision);
-  AppendUnsigned(
+  CrowdWorkerTargetPrivate::AppendUnsigned(Bytes, Resource.Revision);
+  CrowdWorkerTargetPrivate::AppendUnsigned(
     Bytes, static_cast<uint32>(Resource.Cohorts.Num()));
   for (const FCrowdWorkerTargetCohortInput& Cohort :
     Resource.Cohorts)
   {
-    AppendUnsigned(Bytes, Cohort.CohortKey);
-    AppendUnsigned(Bytes, Cohort.TopologyRevision);
+    CrowdWorkerTargetPrivate::AppendUnsigned(Bytes, Cohort.CohortKey);
+    CrowdWorkerTargetPrivate::AppendUnsigned(Bytes, Cohort.TopologyRevision);
     AppendSigned(Bytes, Cohort.TargetRevision);
     AppendSigned(Bytes, Cohort.FixedStepIndex);
     AppendSettings(Bytes, Cohort.Settings);
     AppendFlow(Bytes, Cohort.FlowConfig);
-    AppendUnsigned(
+    CrowdWorkerTargetPrivate::AppendUnsigned(
       Bytes, static_cast<uint32>(Cohort.Agents.Num()));
     for (const FCrowdWorkerTargetAgentInput& Input :
       Cohort.Agents)
     {
-      AppendRef(Bytes, Input.EntityRef);
+      CrowdWorkerTargetPrivate::AppendRef(Bytes, Input.EntityRef);
       AppendAgent(Bytes, Input.Agent);
     }
-    AppendUnsigned(
+    CrowdWorkerTargetPrivate::AppendUnsigned(
       Bytes,
       static_cast<uint32>(Cohort.ExternalAgents.Num()));
     for (const FCrowdTargetRegionTransportAgent& Agent :
@@ -808,16 +808,19 @@ bool FCrowdWorkerTargetStateCodec::Encode(
   if (!State.IsValid()) return false;
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
-  AppendUnsigned(OutPayload.Bytes, State.CohortKey);
+  CrowdWorkerTargetPrivate::AppendUnsigned(
+    OutPayload.Bytes, State.CohortKey);
   AppendSigned(OutPayload.Bytes, State.TargetRevision);
   AppendSigned(OutPayload.Bytes, State.CurrentCellKey);
   AppendSigned(OutPayload.Bytes, State.NextCellKey);
   AppendSigned(OutPayload.Bytes, State.DemandRegionKey);
-  AppendUnsigned(
+  CrowdWorkerTargetPrivate::AppendUnsigned(
     OutPayload.Bytes, static_cast<uint8>(State.Mode));
   AppendVector(OutPayload.Bytes, State.DesiredVelocity);
-  AppendUnsigned(OutPayload.Bytes, State.ExecutionHash);
-  AppendUnsigned(OutPayload.Bytes, State.GuidanceHash);
+  CrowdWorkerTargetPrivate::AppendUnsigned(
+    OutPayload.Bytes, State.ExecutionHash);
+  CrowdWorkerTargetPrivate::AppendUnsigned(
+    OutPayload.Bytes, State.GuidanceHash);
   OutPayload.RecalculateStableHash();
   return true;
 }
@@ -858,6 +861,14 @@ bool FCrowdWorkerTargetCohortState::IsValid() const
 {
   return TopologyRevision != 0
     && TargetRevision >= 0
+    && FeasibleCellCount >= 0
+    && EdgeCount >= 0
+    && FeasibleRegionCount >= 0
+    && FeasibleRegionCoverageCount >= 0
+    && FeasibleRegionCoverageCount <= FeasibleRegionCount
+    && CurrentTerminalPopulation >= 0
+    && MaximumRegionPopulation >= 0
+    && DesiredPopulationTotal >= 0
     && Plan.bValid
     && Execution.bValid
     && Plan.TargetRevision == TargetRevision
@@ -873,9 +884,18 @@ bool FCrowdWorkerTargetCohortStateCodec::Encode(
   if (!State.IsValid()) return false;
   OutPayload.SchemaId = SchemaId;
   OutPayload.SchemaVersion = SchemaVersion;
-  AppendUnsigned(OutPayload.Bytes, State.CohortKey);
-  AppendUnsigned(OutPayload.Bytes, State.TopologyRevision);
+  CrowdWorkerTargetPrivate::AppendUnsigned(
+    OutPayload.Bytes, State.CohortKey);
+  CrowdWorkerTargetPrivate::AppendUnsigned(
+    OutPayload.Bytes, State.TopologyRevision);
   AppendSigned(OutPayload.Bytes, State.TargetRevision);
+  AppendSigned(OutPayload.Bytes, State.FeasibleCellCount);
+  AppendSigned(OutPayload.Bytes, State.EdgeCount);
+  AppendSigned(OutPayload.Bytes, State.FeasibleRegionCount);
+  AppendSigned(OutPayload.Bytes, State.FeasibleRegionCoverageCount);
+  AppendSigned(OutPayload.Bytes, State.CurrentTerminalPopulation);
+  AppendSigned(OutPayload.Bytes, State.MaximumRegionPopulation);
+  AppendSigned(OutPayload.Bytes, State.DesiredPopulationTotal);
   AppendPlan(OutPayload.Bytes, State.Plan);
   AppendExecution(OutPayload.Bytes, State.Execution);
   OutPayload.RecalculateStableHash();
@@ -896,6 +916,17 @@ bool FCrowdWorkerTargetCohortStateCodec::Decode(
     && ReadUnsigned(
       Payload.Bytes, Offset, OutState.TopologyRevision)
     && ReadSigned(Payload.Bytes, Offset, OutState.TargetRevision)
+    && ReadSigned(Payload.Bytes, Offset, OutState.FeasibleCellCount)
+    && ReadSigned(Payload.Bytes, Offset, OutState.EdgeCount)
+    && ReadSigned(Payload.Bytes, Offset, OutState.FeasibleRegionCount)
+    && ReadSigned(
+      Payload.Bytes, Offset, OutState.FeasibleRegionCoverageCount)
+    && ReadSigned(
+      Payload.Bytes, Offset, OutState.CurrentTerminalPopulation)
+    && ReadSigned(
+      Payload.Bytes, Offset, OutState.MaximumRegionPopulation)
+    && ReadSigned(
+      Payload.Bytes, Offset, OutState.DesiredPopulationTotal)
     && ReadPlan(Payload.Bytes, Offset, OutState.Plan)
     && ReadExecution(Payload.Bytes, Offset, OutState.Execution)
     && Offset == Payload.Bytes.Num()
@@ -997,10 +1028,52 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
   if (!ObjectiveRecord
     || !FCrowdWorkerTargetObjectiveRevisionCodec::Decode(
       ObjectiveRecord->Payload, Objective)
-    || ObjectiveRecord->Revision == 0
-    || Objective.EffectiveFixedStepIndex
-      > static_cast<int64>(Context.AbsoluteSimulationTick))
+    || ObjectiveRecord->Revision == 0)
     return Reject(TEXT("objective_decode"));
+  if (Objective.EffectiveFixedStepIndex
+    > static_cast<int64>(Context.AbsoluteSimulationTick))
+  {
+    const auto DeferCohort = [&Control, &OutOutput, &Objective,
+      &ObjectiveRecord](const uint32 CohortKey)
+    {
+      const FCrowdWorkerTargetCohortInput* Cohort =
+        Control.Cohorts.FindByPredicate([CohortKey](const auto& Input)
+        {
+          return Input.CohortKey == CohortKey;
+        });
+      if (!Cohort || Cohort->Agents.IsEmpty()
+        || !Cohort->Agents[0].EntityRef.IsValid())
+        return false;
+      FCrowdWorkerWakeup Wakeup;
+      Wakeup.Key.Domain = ECrowdWorkerDomainId::Target;
+      Wakeup.Key.EntityRef = Cohort->Agents[0].EntityRef;
+      Wakeup.Key.WakeupId =
+        CrowdWorkerTargetWorkScopes::EncodeCohortKey(CohortKey);
+      Wakeup.AbsoluteSimulationTick = static_cast<uint64>(
+        Objective.EffectiveFixedStepIndex);
+      Wakeup.Revision = ObjectiveRecord->Revision;
+      Wakeup.Priority = ECrowdWorkerWorkPriority::High;
+      Wakeup.ReasonMask = 1ull << 20;
+      OutOutput.Wakeups.Add(MoveTemp(Wakeup));
+      return true;
+    };
+    if (bFullResourceWork)
+    {
+      for (const FCrowdWorkerTargetCohortInput& Cohort : Control.Cohorts)
+        if (!DeferCohort(Cohort.CohortKey))
+          return Reject(TEXT("objective_defer"), Cohort.CohortKey);
+    }
+    else
+    {
+      TArray<uint32> CohortKeys;
+      WorkByCohort.GetKeys(CohortKeys);
+      CohortKeys.Sort();
+      for (const uint32 CohortKey : CohortKeys)
+        if (!DeferCohort(CohortKey))
+          return Reject(TEXT("objective_defer"), CohortKey);
+    }
+    return true;
+  }
 
   FScopeLock Lock(&StateMutex);
   if (StateGeneration != Context.Generation)
@@ -1387,6 +1460,21 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
     CohortState.CohortKey = Input.CohortKey;
     CohortState.TopologyRevision = Input.TopologyRevision;
     CohortState.TargetRevision = Objective.TargetRevision;
+    CohortState.FeasibleCellCount =
+      Runtime.Topology.Summary.FeasibleCellCount;
+    CohortState.EdgeCount = Runtime.Topology.Summary.EdgeCount;
+    CohortState.FeasibleRegionCount = Demand.Demand.FeasibleRegionCount;
+    CohortState.CurrentTerminalPopulation =
+      Demand.Demand.CurrentTerminalPopulation;
+    CohortState.DesiredPopulationTotal =
+      Demand.Demand.DesiredPopulationTotal;
+    for (const FCrowdTargetDemandRegion& Region : Demand.Demand.Regions)
+    {
+      CohortState.MaximumRegionPopulation = FMath::Max(
+        CohortState.MaximumRegionPopulation, Region.CurrentPopulation);
+      if (Region.bFeasible && Region.CurrentPopulation > 0)
+        ++CohortState.FeasibleRegionCoverageCount;
+    }
     CohortState.Plan = Plan.Plan;
     CohortState.Execution = Guidance.Execution;
     FCrowdWorkerPayload CohortPayload;
