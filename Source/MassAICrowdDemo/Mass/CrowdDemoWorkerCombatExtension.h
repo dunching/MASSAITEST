@@ -7,6 +7,17 @@
 #include "Mass/CrowdDemoProjectileAdapters.h"
 #include "MassCrowdWorkerProjectileDomain.h"
 
+struct FCrowdDemoWorkerInjectedHitCommand
+{
+  int32 ApplyFixedStep = INDEX_NONE;
+  FCrowdStableEntityRef TargetEntity;
+  uint64 HitEventId = 0;
+  float Damage = 0.0f;
+  float HorizontalImpulseCmps = 0.0f;
+  float VerticalImpulseCmps = 0.0f;
+  uint32 HitFlashProfileKey = 0;
+};
+
 struct FCrowdDemoWorkerCombatHostInput
 {
   int32 RoundId = INDEX_NONE;
@@ -16,6 +27,8 @@ struct FCrowdDemoWorkerCombatHostInput
   float FixedStepSeconds = 0.0f;
   FCrowdDemoRangedCombatSettings AttackSettings;
   FCrowdDemoHitResponseSettings HitSettings;
+  bool bVatShowcase = false;
+  TArray<FCrowdDemoWorkerInjectedHitCommand> InjectedHitCommands;
   TArray<FCrowdDemoRangedCombatAgent> Agents;
 };
 
@@ -74,7 +87,7 @@ class FCrowdDemoWorkerCombatHostInputCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x44435749u;
-  static constexpr uint16 SchemaVersion = 1;
+  static constexpr uint16 SchemaVersion = 2;
   static constexpr int32 MaxEncodedBytes = 4 * 1024 * 1024;
 
   static bool Encode(

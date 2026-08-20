@@ -1,5 +1,6 @@
 #include "Mass/CrowdDemoWorkerCombatExtension.h"
 
+#include "CrowdDemoVatShowcasePlanner.h"
 #include "MassCrowdWorkerMovementDomain.h"
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "Serialization/MemoryReader.h"
@@ -106,6 +107,34 @@ namespace
     Ar << Value.GravityCmps2;
     Ar << Value.GroundZ;
     Ar << Value.FixedStepSeconds;
+  }
+
+  void SerializeInjectedHitCommand(
+    FArchive& Ar,
+    FCrowdDemoWorkerInjectedHitCommand& Value)
+  {
+    Ar << Value.ApplyFixedStep;
+    SerializeRef(Ar, Value.TargetEntity);
+    Ar << Value.HitEventId;
+    Ar << Value.Damage;
+    Ar << Value.HorizontalImpulseCmps;
+    Ar << Value.VerticalImpulseCmps;
+    Ar << Value.HitFlashProfileKey;
+  }
+
+  bool IsFiniteInjectedHitCommand(
+    const FCrowdDemoWorkerInjectedHitCommand& Value)
+  {
+    return Value.ApplyFixedStep >= 0
+      && Value.TargetEntity.IsValid()
+      && Value.HitEventId != 0
+      && FMath::IsFinite(Value.Damage)
+      && FMath::IsFinite(Value.HorizontalImpulseCmps)
+      && FMath::IsFinite(Value.VerticalImpulseCmps)
+      && Value.Damage >= 0.0f
+      && Value.HorizontalImpulseCmps >= 0.0f
+      && Value.VerticalImpulseCmps >= 0.0f
+      && Value.HitFlashProfileKey != 0;
   }
 
   void SerializeProjectileSummary(
@@ -299,6 +328,23 @@ namespace
       {
         Generation = Context.Generation;
         Agents = Input.Agents;
+        if (Input.bVatShowcase)
+        {
+          for (FCrowdDemoRangedCombatAgent& Agent : Agents)
+          {
+            Agent.Combat.BusinessState =
+              static_cast<ECrowdDemoBusinessState>(
+                FCrowdDemoVatShowcasePlanner::ResolveInitialState(
+                  Agent.FormationIndex));
+            Agent.Combat.AttackPhase =
+              Agent.Combat.BusinessState
+                == ECrowdDemoBusinessState::Attacking
+              ? ECrowdDemoAttackPhase::Windup
+              : ECrowdDemoAttackPhase::None;
+            Agent.Combat.BusinessStateRevision = 1;
+            Agent.Combat.BusinessStateEnterFixedStep = 0;
+          }
+        }
       }
       else
       {
@@ -350,11 +396,18 @@ namespace
       }
       TArray<FCrowdProjectileSpawnRequest> SpawnRequests;
       FCrowdDemoProjectileStepSummary Summary;
-      if (!FCrowdDemoProjectileAdapters::BuildRangedAttackPlan(
-          Input.RoundId, Input.FixedStepIndex,
-          Input.AttackSettings, Agents,
-          SpawnRequests, Summary)
-        || !FCrowdDemoProjectileAdapters::BuildTargetSnapshots(
+      if (Input.bVatShowcase)
+      {
+        Summary.bValid = true;
+      }
+      else if (!FCrowdDemoProjectileAdapters::BuildRangedAttackPlan(
+        Input.RoundId, Input.FixedStepIndex,
+        Input.AttackSettings, Agents,
+        SpawnRequests, Summary))
+      {
+        return false;
+      }
+      if (!FCrowdDemoProjectileAdapters::BuildTargetSnapshots(
           Input.FixedStepSeconds, Agents,
           InOutProjectileInput.Targets))
         return false;
@@ -382,6 +435,36 @@ namespace
       if (!FCrowdDemoProjectileAdapters::BuildDemoHitFacts(
           Hits, Agents, DemoHits))
         return false;
+      if (CurrentInput.bVatShowcase)
+      {
+        TMap<FCrowdStableEntityRef,
+          const FCrowdDemoRangedCombatAgent*> AgentByRef;
+        for (const FCrowdDemoRangedCombatAgent& Agent : Agents)
+          AgentByRef.Add(Agent.EntityRef, &Agent);
+        for (const FCrowdDemoWorkerInjectedHitCommand& Command :
+          CurrentInput.InjectedHitCommands)
+        {
+          if (Command.ApplyFixedStep
+              != CurrentInput.FixedStepIndex)
+            continue;
+          const FCrowdDemoRangedCombatAgent* const* Target =
+            AgentByRef.Find(Command.TargetEntity);
+          if (!Target) return false;
+          FCrowdDemoHitFact& Fact = DemoHits.AddDefaulted_GetRef();
+          Fact.HitEventId = Command.HitEventId;
+          Fact.ApplyFixedStep = Command.ApplyFixedStep;
+          Fact.TargetAgentId = (*Target)->AgentId;
+          Fact.TargetLifecycleSerial = (*Target)->LifecycleSerial;
+          Fact.HitPosition = (*Target)->Position;
+          Fact.HitDirection = FVector::ForwardVector;
+          Fact.Damage = Command.Damage;
+          Fact.HorizontalImpulseCmps =
+            Command.HorizontalImpulseCmps;
+          Fact.VerticalImpulseCmps =
+            Command.VerticalImpulseCmps;
+          Fact.HitFlashProfileKey = Command.HitFlashProfileKey;
+        }
+      }
       TArray<FCrowdDemoCombatAgentState> CombatStates;
       for (const FCrowdDemoRangedCombatAgent& Agent : Agents)
         CombatStates.Add(Agent.Combat);
@@ -445,6 +528,63 @@ namespace
       Result.HitSummary = HitSummary;
       return FCrowdDemoWorkerCombatHostResultCodec::Encode(
         Result, OutHostResult);
+    }
+
+    bool ApplyAuthorityCorrection(
+      const FCrowdWorkerDomainContext& Context,
+      const TConstArrayView<FCrowdWorkerDirtyStateRecord> Records) override
+    {
+      if (Context.Generation == 0)
+        return false;
+      const bool bHasCombatCorrection = Records.ContainsByPredicate(
+        [](const FCrowdWorkerDirtyStateRecord& Record)
+        {
+          return Record.Field == ECrowdWorkerField::Combat;
+        });
+      if (!bHasCombatCorrection)
+        return true;
+      if (!Context.EntityStates)
+        return false;
+      if (CurrentKind == EHostKind::Round)
+      {
+        for (FCrowdDemoRangedCombatAgent& Agent : Agents)
+        {
+          const FCrowdWorkerDirtyStateRecord* Record =
+            Context.EntityStates->Find(
+              Agent.EntityRef, ECrowdWorkerField::Combat);
+          FCrowdWorkerCombatState State;
+          FCrowdDemoCombatAgentState HostState;
+          if (!Record
+            || !FCrowdWorkerCombatStateCodec::Decode(
+              Record->Payload, State)
+            || !FCrowdDemoWorkerCombatStatePayloadCodec::Decode(
+              State.HostState, HostState))
+            return false;
+          Agent.Combat = MoveTemp(HostState);
+          Agent.bAlive = State.bAlive;
+        }
+      }
+      else if (CurrentKind == EHostKind::Mixed)
+      {
+        for (FCrowdDemoWorkerMixedCombatAgent& Agent : MixedAgents)
+        {
+          const FCrowdWorkerDirtyStateRecord* Record =
+            Context.EntityStates->Find(
+              Agent.EntityRef, ECrowdWorkerField::Combat);
+          FCrowdWorkerCombatState State;
+          FCrowdDemoWorkerMixedCombatState HostState;
+          if (!Record
+            || !FCrowdWorkerCombatStateCodec::Decode(
+              Record->Payload, State)
+            || !FCrowdDemoWorkerMixedCombatStateCodec::Decode(
+              State.HostState, HostState))
+            return false;
+          Agent.Health = HostState.Health;
+          Agent.AttackState = MoveTemp(HostState.AttackState);
+        }
+      }
+      Generation = Context.Generation;
+      return true;
     }
 
   private:
@@ -717,8 +857,17 @@ bool FCrowdDemoWorkerCombatHostInputCodec::Encode(
     || !FMath::IsFinite(Input.FixedStepSeconds)
     || Input.FixedStepSeconds <= 0.0f
     || Input.Agents.IsEmpty()
-    || Input.Agents.Num() > MaxAgents)
+    || Input.Agents.Num() > MaxAgents
+    || (!Input.bVatShowcase
+      && !Input.InjectedHitCommands.IsEmpty()))
     return false;
+  TSet<FCrowdStableEntityRef> AgentRefs;
+  for (const FCrowdDemoRangedCombatAgent& Agent : Input.Agents)
+    AgentRefs.Add(Agent.EntityRef);
+  for (const FCrowdDemoWorkerInjectedHitCommand& Command :
+    Input.InjectedHitCommands)
+    if (!AgentRefs.Contains(Command.TargetEntity))
+      return false;
   TArray<uint8> Bytes;
   FMemoryWriter Writer(Bytes, true);
   int32 RoundId = Input.RoundId;
@@ -728,11 +877,36 @@ bool FCrowdDemoWorkerCombatHostInputCodec::Encode(
   float FixedStep = Input.FixedStepSeconds;
   auto Attack = Input.AttackSettings;
   auto Hit = Input.HitSettings;
+  uint8 VatShowcase = Input.bVatShowcase ? 1 : 0;
+  TArray<FCrowdDemoWorkerInjectedHitCommand> Commands =
+    Input.InjectedHitCommands;
   TArray<FCrowdDemoRangedCombatAgent> Agents = Input.Agents;
   Writer << RoundId << FixedStepIndex << PlanRevision;
   Writer << ServerTime << FixedStep;
   SerializeAttackSettings(Writer, Attack);
   SerializeHitSettings(Writer, Hit);
+  Writer << VatShowcase;
+  Commands.Sort([](
+    const FCrowdDemoWorkerInjectedHitCommand& A,
+    const FCrowdDemoWorkerInjectedHitCommand& B)
+  {
+    if (A.ApplyFixedStep != B.ApplyFixedStep)
+      return A.ApplyFixedStep < B.ApplyFixedStep;
+    if (A.TargetEntity != B.TargetEntity)
+      return A.TargetEntity < B.TargetEntity;
+    return A.HitEventId < B.HitEventId;
+  });
+  int32 CommandCount = Commands.Num();
+  Writer << CommandCount;
+  TSet<uint64> HitEventIds;
+  for (FCrowdDemoWorkerInjectedHitCommand& Command : Commands)
+  {
+    if (!IsFiniteInjectedHitCommand(Command)
+      || HitEventIds.Contains(Command.HitEventId))
+      return false;
+    HitEventIds.Add(Command.HitEventId);
+    SerializeInjectedHitCommand(Writer, Command);
+  }
   int32 Count = Agents.Num();
   Writer << Count;
   for (FCrowdDemoRangedCombatAgent& Agent : Agents)
@@ -769,6 +943,25 @@ bool FCrowdDemoWorkerCombatHostInputCodec::Decode(
     << OutInput.FixedStepSeconds;
   SerializeAttackSettings(Reader, OutInput.AttackSettings);
   SerializeHitSettings(Reader, OutInput.HitSettings);
+  uint8 VatShowcase = 0;
+  Reader << VatShowcase;
+  if (VatShowcase > 1) return false;
+  OutInput.bVatShowcase = VatShowcase != 0;
+  int32 CommandCount = 0;
+  Reader << CommandCount;
+  if (CommandCount < 0 || CommandCount > MaxAgents)
+    return false;
+  OutInput.InjectedHitCommands.SetNum(CommandCount);
+  TSet<uint64> HitEventIds;
+  for (FCrowdDemoWorkerInjectedHitCommand& Command :
+    OutInput.InjectedHitCommands)
+  {
+    SerializeInjectedHitCommand(Reader, Command);
+    if (!IsFiniteInjectedHitCommand(Command)
+      || HitEventIds.Contains(Command.HitEventId))
+      return false;
+    HitEventIds.Add(Command.HitEventId);
+  }
   int32 Count = 0;
   Reader << Count;
   if (Count <= 0 || Count > MaxAgents) return false;
@@ -778,6 +971,16 @@ bool FCrowdDemoWorkerCombatHostInputCodec::Decode(
     SerializeAgent(Reader, Agent);
     if (!IsFiniteAgent(Agent)) return false;
   }
+  if (!OutInput.bVatShowcase
+    && !OutInput.InjectedHitCommands.IsEmpty())
+    return false;
+  TSet<FCrowdStableEntityRef> AgentRefs;
+  for (const FCrowdDemoRangedCombatAgent& Agent : OutInput.Agents)
+    AgentRefs.Add(Agent.EntityRef);
+  for (const FCrowdDemoWorkerInjectedHitCommand& Command :
+    OutInput.InjectedHitCommands)
+    if (!AgentRefs.Contains(Command.TargetEntity))
+      return false;
   return !Reader.IsError() && Reader.AtEnd()
     && OutInput.FixedStepIndex >= 0
     && OutInput.FixedStepSeconds > 0.0f;

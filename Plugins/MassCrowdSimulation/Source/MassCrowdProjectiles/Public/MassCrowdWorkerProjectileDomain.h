@@ -99,6 +99,12 @@ public:
     TConstArrayView<FCrowdHitFact> Hits,
     TArray<FCrowdWorkerCombatExtensionPatch>& OutPatches,
     FCrowdWorkerPayload& OutHostResult) = 0;
+  virtual bool ApplyAuthorityCorrection(
+    const FCrowdWorkerDomainContext& Context,
+    TConstArrayView<FCrowdWorkerDirtyStateRecord> Records)
+  {
+    return true;
+  }
 };
 
 class MASSCROWDPROJECTILES_API
@@ -120,6 +126,9 @@ public:
     const FCrowdWorkerDomainContext& Context,
     TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
     FCrowdWorkerDomainOutput& OutOutput) override;
+  bool ApplyAuthorityCorrection(
+    const FCrowdWorkerDomainContext& Context,
+    TConstArrayView<FCrowdWorkerDirtyStateRecord> Records) override;
   FCrowdWorkerProjectileDomainMetrics GetMetrics() const;
 
 private:

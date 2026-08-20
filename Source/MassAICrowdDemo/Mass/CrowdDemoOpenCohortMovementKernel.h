@@ -29,6 +29,8 @@ struct FCrowdDemoOpenCohortMovementProgress
   bool bValid = true;
   TSet<int32> FlowApproachEnteredAgentIds;
   TSet<int32> TransportHandoffAgentIds;
+  TSet<int32> InsideEffectiveBandAgentIds;
+  TSet<int32> CurrentUnroutedAgentIds;
   TSet<int32> TerminalSettledAgentIds;
   int32 TerminalSettledStep = INDEX_NONE;
   uint32 ProgressHash = 2166136261u;

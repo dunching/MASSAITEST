@@ -188,6 +188,9 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeMetrics
   uint64 AuthorityCorrectionCount = 0;
   uint64 AuthorityCorrectionEntityCount = 0;
   uint64 AuthorityCorrectionScopeCount = 0;
+  uint64 LastAppliedAuthorityCorrectionSequence = 0;
+  uint64 StaleAfterCorrectionDiscardCount = 0;
+  uint64 StaleAfterCorrectionDiscardedDirtyCount = 0;
   uint64 ConsecutivePredictionEpochsWithoutCorrection = 0;
   uint64 MaxPredictionEpochsWithoutCorrection = 0;
   int32 InputQueueDepth = 0;
@@ -216,6 +219,9 @@ struct MASSCROWDRUNTIME_API FCrowdAsyncSimulationRuntimeMetrics
   int32 LastCorrectionAfterCombatMismatchCount = 0;
   int32 LastCorrectionEntityCount = 0;
   int32 LastCorrectionScopeCount = 0;
+  int32 LastCorrectionInvalidatedWorkCount = 0;
+  int32 LastCorrectionInvalidatedWakeupCount = 0;
+  int32 LastCorrectionInvalidatedDirtyCount = 0;
   int32 LastPublishedPatchCount = 0;
   int32 LastPublishedEventCount = 0;
   ECrowdAsyncSimulationInputFailure LastInputFailure =
@@ -274,7 +280,9 @@ public:
     FCrowdWorkerAuthorityDigestBatch& OutDigest) const;
   ECrowdWorkerNetworkReadResult CompareAuthorityDigest(
     const FCrowdWorkerAuthorityDigestBatch& AuthorityDigest,
-    TArray<FCrowdWorkerAuthorityScopeKey>& OutMismatchedScopes) const;
+    TArray<FCrowdWorkerAuthorityScopeKey>& OutMismatchedScopes,
+    uint64* OutLocalAuthorityHash = nullptr,
+    uint64* OutRemoteAuthorityHash = nullptr) const;
   ECrowdWorkerNetworkReadResult BuildAuthorityCorrection(
     uint64 ExpectedGeneration,
     uint64 AuthorityDigestSequence,

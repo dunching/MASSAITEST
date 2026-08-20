@@ -1,5 +1,6 @@
 #include "Misc/AutomationTest.h"
 #include "Mass/CrowdDemoT7AcceptanceOracle.h"
+#include "Mass/CrowdDemoT7PresentationEventStream.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -74,6 +75,63 @@ bool FCrowdDemoT7AcceptanceOracleTest::RunTest(
     FCrowdDemoT7AcceptanceOracle::Evaluate(16, 90, Dead).bMatches);
   TestFalse(TEXT("death mismatch is visible"),
     FCrowdDemoT7AcceptanceOracle::Evaluate(16, 90, Idle).bMatches);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoT7PresentationEventStreamTest,
+  "CrowdDemo.Acceptance.T7.CommittedPresentationEventStream",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoT7PresentationEventStreamTest::RunTest(
+  const FString& Parameters)
+{
+  FCrowdDemoT7PresentationEventStream Stream;
+  FCrowdDemoT7PresentationEvent Idle;
+  Idle.RoundId = 4;
+  Idle.AgentId = 12;
+  Idle.LifecycleSerial = 3;
+  Idle.FixedStepIndex = 0;
+  Idle.ServerTimeSeconds = 10.0f;
+  Idle.Combat.VisualState = ECrowdDemoVisualState::Idle;
+  FCrowdDemoT7PresentationEvent Knockback = Idle;
+  Knockback.FixedStepIndex = 30;
+  Knockback.ServerTimeSeconds = 11.0f;
+  Knockback.Combat.BusinessState = ECrowdDemoBusinessState::HitReact;
+  Knockback.Combat.ReactiveMode =
+    ECrowdDemoReactiveMotionMode::Knockback;
+  Knockback.Combat.VisualState = ECrowdDemoVisualState::HitReact;
+
+  TestTrue(TEXT("accept committed idle event"), Stream.Enqueue(Idle));
+  TestTrue(TEXT("accept committed knockback event"),
+    Stream.Enqueue(Knockback));
+  FCrowdDemoT7PresentationEvent Resolved;
+  TestTrue(TEXT("resolve first committed event"),
+    Stream.Resolve(4, 12, 3, 20.0, Resolved));
+  TestEqual(TEXT("first event is not coalesced away"),
+    Resolved.FixedStepIndex, 0);
+  TestTrue(TEXT("resolve next committed event"),
+    Stream.Resolve(4, 12, 3, 20.11, Resolved));
+  TestEqual(TEXT("second event retains Worker tick"),
+    Resolved.FixedStepIndex, 30);
+  TestEqual(TEXT("second event retains Worker state"),
+    Resolved.Combat.ReactiveMode,
+    ECrowdDemoReactiveMotionMode::Knockback);
+  TestFalse(TEXT("stale lifecycle cannot consume presentation"),
+    Stream.Resolve(4, 12, 2, 20.22, Resolved));
+
+  FCrowdDemoT7PresentationEvent NextRound = Idle;
+  NextRound.RoundId = 5;
+  NextRound.FixedStepIndex = 0;
+  TestTrue(TEXT("next round resets presentation stream"),
+    Stream.Enqueue(NextRound));
+  TestFalse(TEXT("old round cannot consume next-round state"),
+    Stream.Resolve(4, 12, 3, 21.0, Resolved));
+  TestTrue(TEXT("resolve next-round event"),
+    Stream.Resolve(5, 12, 3, 21.0, Resolved));
+  TestEqual(TEXT("old-round queued event was discarded"),
+    Resolved.RoundId, 5);
   return true;
 }
 

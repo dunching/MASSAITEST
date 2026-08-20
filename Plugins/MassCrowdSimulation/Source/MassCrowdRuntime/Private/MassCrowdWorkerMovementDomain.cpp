@@ -708,7 +708,13 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     Dirty.Field = ECrowdWorkerField::MovementPlan;
     Dirty.Generation = Context.Generation;
     Dirty.WorkerEpoch = Context.WorkerEpoch;
-    Dirty.StateRevision = Context.WorkerEpoch;
+    const FCrowdWorkerDirtyStateRecord* ExistingPlan =
+      Context.EntityStates->Find(
+        Entry.EntityRef, ECrowdWorkerField::MovementPlan);
+    Dirty.StateRevision = ExistingPlan
+      ? FMath::Max(
+          Context.WorkerEpoch, ExistingPlan->StateRevision + 1)
+      : Context.WorkerEpoch;
     Dirty.SourceInputSequence =
       Context.LastAppliedInputSequence;
     if (!Encode(Plan, Dirty.Payload))

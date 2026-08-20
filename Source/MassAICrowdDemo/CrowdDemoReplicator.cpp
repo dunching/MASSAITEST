@@ -490,6 +490,33 @@ void ACrowdDemoReplicator::ApplyProjectileVisualEvents(
   }
 }
 
+void ACrowdDemoReplicator::ApplyT7PresentationEvents(
+  const TConstArrayView<FCrowdDemoT7PresentationEvent> Events)
+{
+  for (const FCrowdDemoT7PresentationEvent& Event : Events)
+  {
+    if (!T7PresentationEventStream.Enqueue(Event))
+    {
+      UE_LOG(LogTemp, Error,
+        TEXT("VIOLATION CrowdDemoT7PresentationEvent stage=enqueue round_id=%d agent=%d lifecycle=%d fixed_step=%d"),
+        Event.RoundId, Event.AgentId, Event.LifecycleSerial,
+        Event.FixedStepIndex);
+    }
+  }
+}
+
+bool ACrowdDemoReplicator::ResolveT7PresentationState(
+  const int32 RoundId,
+  const int32 AgentId,
+  const int32 LifecycleSerial,
+  FCrowdDemoT7PresentationEvent& OutEvent)
+{
+  return T7PresentationEventStream.Resolve(
+    RoundId, AgentId, LifecycleSerial,
+    GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0,
+    OutEvent);
+}
+
 bool ACrowdDemoReplicator::GetProjectileVisualEventCounts(
   const int32 RoundId,
   int32& OutSpawn,

@@ -33,6 +33,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "CrowdDemoRunnerGates.ps1")
+
 function Stop-ProcessIfRunning {
   param([System.Diagnostics.Process]$Process)
   if ($Process -and !$Process.HasExited) {
@@ -230,6 +232,15 @@ if ($T7StateAcceptance) {
   $EntityCount = 20
   $Scenario = "SimRoundSoftPressure"
   $RequireClientReady = $true
+  $ProductionArgs = @(
+    "-CrowdWorkerMovementMode=Production",
+    "-CrowdWorkerBehaviorMode=Production",
+    "-CrowdWorkerTargetMode=Production",
+    "-CrowdWorkerParticleMode=Production",
+    "-CrowdWorkerProjectileMode=Production",
+    "-CrowdWorkerCombatMode=Production"
+  ) -join " "
+  $CommonExtraArgs = "$ProductionArgs $CommonExtraArgs".Trim()
 }
 
 if (!(Test-Path -LiteralPath $EditorPath)) {
@@ -374,6 +385,19 @@ finally {
   }
 }
 
+if ($T7StateAcceptance) {
+  foreach ($RuntimeLog in @($ServerLog, $ClientLog)) {
+    if (!(Test-Path -LiteralPath $RuntimeLog)) {
+      throw "T7 runtime log is missing: $RuntimeLog"
+    }
+  }
+  $HardFailure = @(Get-CrowdDemoHardFailures @(
+      $ServerLog, $ClientLog)) | Select-Object -First 1
+  if ($HardFailure) {
+    throw "T7 runtime hard failure in $($HardFailure.Path): $($HardFailure.Line.Trim())"
+  }
+}
+
 if (Test-Path -LiteralPath $ServerLog) {
   Select-String -Path $ServerLog -Pattern "CrowdDemo:","CrowdDemoMass:","CrowdDemoSummary","CrowdDemoArena:" -SimpleMatch | Select-Object -Last 24
 }
@@ -466,6 +490,7 @@ if ($T7StateAcceptance) {
   )
 
   $SliceManifests = @()
+  $AcceptanceEventOffsets = @()
   foreach ($Specification in $EventSpecifications) {
     $Event = $Specification.Candidates |
       Sort-Object -Property utc_ticks |
@@ -480,6 +505,7 @@ if ($T7StateAcceptance) {
         $EventOffsetSeconds -gt $CaptureSeconds) {
       throw "T7 event $($Specification.Name) falls outside the recorded video. offset=$EventOffsetSeconds"
     }
+    $AcceptanceEventOffsets += $EventOffsetSeconds
     $SliceStartSeconds = [Math]::Max(
       0.0, $EventOffsetSeconds - $EventSliceLeadSeconds)
     $SliceDurationSeconds = [Math]::Min(
@@ -529,13 +555,39 @@ if ($T7StateAcceptance) {
   }
 
   $PreviousErrorActionPreference = $ErrorActionPreference
+  $ActiveRoundRows = @($StateRows | Where-Object {
+    $_.pre_round_sample -ne 1
+  })
+  $ActiveWindowStartSeconds = [Math]::Max(
+    0.0,
+    (([int64]($ActiveRoundRows |
+      Sort-Object -Property utc_ticks |
+      Select-Object -First 1).utc_ticks) - $CaptureStartUtcTicks) /
+      10000000.0)
+  $ActiveWindowEndSeconds = [Math]::Min(
+    [double]$CaptureSeconds,
+    [double](($AcceptanceEventOffsets |
+      Measure-Object -Maximum).Maximum) + $EventSliceTailSeconds)
+  $ActiveWindowDurationSeconds =
+    $ActiveWindowEndSeconds - $ActiveWindowStartSeconds
+  if ($ActiveWindowDurationSeconds -le 0.0) {
+    throw "T7 active video window is invalid. start=$ActiveWindowStartSeconds end=$ActiveWindowEndSeconds"
+  }
+  $ActiveWindowStartText = [string]::Format(
+    [Globalization.CultureInfo]::InvariantCulture,
+    "{0:0.000}", $ActiveWindowStartSeconds)
+  $ActiveWindowDurationText = [string]::Format(
+    [Globalization.CultureInfo]::InvariantCulture,
+    "{0:0.000}", $ActiveWindowDurationSeconds)
   try {
     # Windows PowerShell promotes native stderr to ErrorRecord when the global
     # preference is Stop. ffmpeg writes probe/filter diagnostics to stderr even
     # on success, so collect it under Continue and validate the native exit code.
     $ErrorActionPreference = "Continue"
     $FreezeOutput = (
-      & $FfmpegPath -hide_banner -loglevel info -i $VideoPath `
+      & $FfmpegPath -hide_banner -loglevel info `
+        -ss $ActiveWindowStartText -i $VideoPath `
+        -t $ActiveWindowDurationText `
         -vf "freezedetect=n=0.003:d=2.0" -an -f null NUL 2>&1 |
         Out-String)
     $FreezeExitCode = $LASTEXITCODE

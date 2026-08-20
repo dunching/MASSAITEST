@@ -3794,7 +3794,7 @@ static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, F
         const auto& Route = Pipeline->GetSoftPressureRouteDiagnosticSummary();
         auto& Metrics = Result.ParticleMetrics;
         Metrics.bT2Valid = Layout.bValid && Progress.bValid
-          && Metrics.bTargetRegionTransportValid != 0 ? 1 : 0;
+          && Progress.CurrentUnroutedAgentIds.IsEmpty() ? 1 : 0;
         Metrics.T2LayoutHash = Layout.LayoutHash;
         Metrics.T2RouteDiagnosticHash = Route.StableHash;
         Metrics.T2ProgressHash = Progress.ProgressHash;
@@ -3802,12 +3802,15 @@ static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, F
         Metrics.T2FinalDeadlockAgentCount = Route.CorridorFinalDeadlockAgentCount;
         Metrics.T2FlowApproachEnteredCount = Progress.FlowApproachEnteredAgentIds.Num();
         Metrics.T2TransportHandoffCount = Progress.TransportHandoffAgentIds.Num();
-        Metrics.T2InsideEffectiveBandCount = Metrics.TargetTransportInsideEffectiveBandCount;
+        Metrics.T2InsideEffectiveBandCount =
+          Progress.InsideEffectiveBandAgentIds.Num();
         Metrics.T2FeasibleRegionCount = Metrics.TargetTransportFeasibleRegionCount;
         Metrics.T2FeasibleRegionCoverageCount =
           Metrics.TargetTransportFeasibleRegionCoverageCount;
-        Metrics.T2PlanUnroutedCount = Metrics.TargetTransportUnroutedAgentCount;
-        Metrics.T2GuidanceUnroutedCount = Metrics.TargetGuidanceUnroutedAgentMax;
+        Metrics.T2PlanUnroutedCount =
+          Progress.CurrentUnroutedAgentIds.Num();
+        Metrics.T2GuidanceUnroutedCount =
+          Progress.CurrentUnroutedAgentIds.Num();
         Metrics.T2TransportValidationFailureCount =
           Metrics.TargetTransportValidationFailureCount;
         Metrics.T2TerminalSettledCount = Progress.TerminalSettledAgentIds.Num();
@@ -4818,6 +4821,14 @@ bool AdvanceRoundWorkerFrame(
       Pipeline->FailFixedStep();
       return ECrowdDemoRoundFrameStageResult::Failed;
     }
+    const int64 AbsoluteSimulationTick = static_cast<int64>(
+      RuntimeSubsystem->GetAsyncSimulationRuntime().GetMetrics().
+        AbsoluteSimulationTick);
+    Pipeline->ObserveCommittedWorkerScenarioState(
+      Proxy,
+      PendingWorkerResult->PreparedProxyResult.Batch.Generation,
+      PendingWorkerResult->PreparedProxyResult.Batch.PublishSequence,
+      AbsoluteSimulationTick);
     const float CommitMs = static_cast<float>(
       (FPlatformTime::Seconds() - CommitStart) * 1000.0);
     Pipeline->RecordPerformanceStage(

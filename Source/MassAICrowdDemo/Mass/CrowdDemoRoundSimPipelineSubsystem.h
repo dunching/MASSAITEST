@@ -25,6 +25,7 @@
 #include "MassCrowdParticlePipelineWork.h"
 #include "MassCrowdTargetRegionWork.h"
 #include "MassCrowdWorkerResultApply.h"
+#include "MassCrowdWorkerMovementControlResource.h"
 #include "Mass/CrowdDemoTargetFactKernel.h"
 #include "Mass/CrowdDemoTargetRegionTransportKernel.h"
 #include "Mass/CrowdDemoTargetRegionPlanLifecycleDiagnosticKernel.h"
@@ -327,6 +328,7 @@ struct FCrowdDemoBoundaryFacingWorkState
   bool bMovementShadowInputValid = false;
   bool bWorkerV2InputSubmitted = false;
   bool bUseWorkerV2Target = false;
+  bool bUseWorkerNativeScenarioBusiness = false;
   uint64 WorkerV2InputSequence = 0;
   bool bWorkerMovementTailSubmitted = false;
   bool bWorkerMovementTailConsumed = false;
@@ -589,6 +591,11 @@ public:
   { return CurrentStepFullWorkerInputSequence; }
   bool MarkFullWorkerProductionResultCommitted(
     double CommitMilliseconds);
+  void ObserveCommittedWorkerScenarioState(
+    const FCrowdWorkerResultApplyProxy& Proxy,
+    uint64 Generation,
+    uint64 PublishSequence,
+    int64 AbsoluteSimulationTick);
   void SetPreparedTargetRegionGuidanceCandidates(
     TArray<FCrowdGuidanceCandidate>&& Values)
   { PreparedTargetRegionGuidanceCandidates = MoveTemp(Values); }
@@ -627,6 +634,8 @@ public:
   void RecordProjectileHitResponse(const FCrowdDemoHitResponseSummary& Summary);
   FCrowdDemoProjectileMetrics BuildProjectileMetrics() const;
   bool DequeueProjectileVisualEvents(TArray<FCrowdDemoProjectileVisualEvent>& OutEvents);
+  bool DequeueT7PresentationEvents(
+    TArray<FCrowdDemoT7PresentationEvent>& OutEvents);
 
   void RecordParticleConstraintSummary(
     const FCrowdDemoParticleConstraintSummary& CandidateSummary,
@@ -1041,6 +1050,7 @@ private:
   TArray<FCrowdDemoPreparedOpenSpawnBoundaryFact> PreparedOpenSpawnBoundaryFacts;
   int32 PreparedOpenSpawnBoundaryFixedStepIndex = INDEX_NONE;
   TArray<FCrowdDemoProjectileVisualEvent> OutgoingProjectileVisualEvents;
+  TArray<FCrowdDemoT7PresentationEvent> OutgoingT7PresentationEvents;
   FCrowdDemoProjectileMetrics ProjectileMetrics;
   TMap<int32, int32> FormationIndexByAgentId;
   FCrowdDemoSharedFlowField SharedFlowField;
@@ -1164,6 +1174,18 @@ private:
     RuntimeBidirectionalSwapFlowResources;
   FCrowdDemoValidCorridorTransitLayout ValidCorridorTransitLayout;
   FCrowdDemoValidCorridorTransitProgress ValidCorridorTransitProgress;
+  TMap<FCrowdStableEntityRef, FCrowdWorkerMovementControlEntry>
+    WorkerScenarioMovementProfiles;
+  TSet<FCrowdStableEntityRef> WorkerScenarioFrozenProfiles;
+  uint64 LastScenarioObservationGeneration = 0;
+  uint64 LastScenarioObservationPublishSequence = 0;
+  int64 LastScenarioObservationAbsoluteTick = INDEX_NONE;
+  int64 OpenSpawnScenarioAbsoluteOriginTick = INDEX_NONE;
+  int32 OpenSpawnScenarioLastCommandTick = 0;
+  int64 VatShowcaseScenarioAbsoluteOriginTick = INDEX_NONE;
+  int32 VatShowcaseLastMovementHalfCycle = INDEX_NONE;
+  TMap<int32, uint32> VatShowcaseLastPresentationSignatureByAgentId;
+  bool bValidCorridorTransitHoldCommandSubmitted = false;
   int32 CrossProfileHardViolationCount = 0;
   int32 CrossProfileSweptViolationCount = 0;
   int32 ParticleSettlingWindowCount = 0;

@@ -189,6 +189,13 @@ namespace CrowdWorkerRuntimeV2Tests
     public ICrowdWorkerDomainExecutor
   {
   public:
+    explicit FCorrectionRevisionBehaviorDomain(
+      TSharedPtr<TAtomic<int32>, ESPMode::ThreadSafe>
+        InCorrectionApplyCount = {})
+      : CorrectionApplyCount(MoveTemp(InCorrectionApplyCount))
+    {
+    }
+
     virtual ECrowdWorkerDomainId GetDomainId() const override
     {
       return ECrowdWorkerDomainId::Behavior;
@@ -217,7 +224,9 @@ namespace CrowdWorkerRuntimeV2Tests
         Dirty.Generation = Context.Generation;
         Dirty.WorkerEpoch = Context.WorkerEpoch;
         Dirty.StateRevision = Context.WorkerEpoch;
-        Dirty.CorrectionRevision = Context.CorrectionRevision;
+        // Deliberately omit the correction fence, matching the production
+        // Behavior domain that exposed T7. The Owner dispatch boundary must
+        // stamp every shard-local record with Context.CorrectionRevision.
         Dirty.SourceInputSequence =
           Context.LastAppliedInputSequence;
         Dirty.Payload = MakePayload(
@@ -242,6 +251,24 @@ namespace CrowdWorkerRuntimeV2Tests
       }
       return true;
     }
+
+    virtual bool ApplyAuthorityCorrection(
+      const FCrowdWorkerDomainContext& Context,
+      const TConstArrayView<FCrowdWorkerDirtyStateRecord> Records) override
+    {
+      if (Context.Generation == 0 || Records.IsEmpty())
+        return false;
+      if (CorrectionApplyCount)
+      {
+        CorrectionApplyCount->Store(
+          CorrectionApplyCount->Load() + 1);
+      }
+      return true;
+    }
+
+  private:
+    TSharedPtr<TAtomic<int32>, ESPMode::ThreadSafe>
+      CorrectionApplyCount;
   };
 
   class FLeakyLifecycleDomain final :
@@ -580,6 +607,93 @@ namespace CrowdWorkerRuntimeV2Tests
       FPlatformProcess::SleepNoStats(0.0f);
     }
     return false;
+  }
+
+  bool WaitForCorrectionCount(
+    FCrowdAsyncSimulationRuntime& Runtime,
+    const uint64 ExpectedCount,
+    const double TimeoutSeconds = 5.0)
+  {
+    const double Deadline = FPlatformTime::Seconds()
+      + TimeoutSeconds;
+    while (FPlatformTime::Seconds() < Deadline)
+    {
+      if (Runtime.Poll() == ECrowdAsyncSimulationPollResult::Failed)
+        return false;
+      if (Runtime.GetMetrics().AuthorityCorrectionCount
+          >= ExpectedCount)
+        return true;
+      FPlatformProcess::SleepNoStats(0.0f);
+    }
+    return false;
+  }
+
+  FCrowdWorkerAuthorityCorrectionBatch MakeBehaviorCorrection(
+    const uint64 Generation,
+    const uint64 CorrectionSequence,
+    const FCrowdAsyncSimulationRuntimeMetrics& Metrics)
+  {
+    const FCrowdStableEntityRef EntityRef{1, 42, 1};
+    FCrowdWorkerAuthorityCorrectionBatch Correction;
+    Correction.Generation = Generation;
+    Correction.CorrectionSequence = CorrectionSequence;
+    Correction.ApplySimulationTick = FMath::Max<uint64>(
+      1, Metrics.AbsoluteSimulationTick);
+    Correction.ThroughInputSequence = FMath::Max<uint64>(
+      1, Metrics.LastAppliedInputSequence);
+    FCrowdWorkerAuthorityScopeKey Scope;
+    Scope.Field = ECrowdWorkerField::Behavior;
+    Correction.Scopes.Add(Scope);
+    Correction.AuthoritativeMembers.Add(EntityRef);
+    FCrowdWorkerDirtyStateRecord Record;
+    Record.EntityRef = EntityRef;
+    Record.Field = ECrowdWorkerField::Behavior;
+    Record.Generation = Generation;
+    Record.WorkerEpoch = FMath::Max<uint64>(1, Metrics.WorkerEpoch);
+    Record.StateRevision = FMath::Max<uint64>(
+      1, Metrics.WorkerEpoch + 1);
+    Record.CorrectionRevision = CorrectionSequence;
+    Record.SourceInputSequence = Correction.ThroughInputSequence;
+    Record.Payload = MakePayload(42, 91007);
+    Correction.Records.Add(MoveTemp(Record));
+    Correction.RecalculateStableHash();
+    return Correction;
+  }
+
+  bool StartCorrectionRuntime(
+    FCrowdAsyncSimulationRuntime& Runtime,
+    const uint64 Generation,
+    const bool bSlowLifecycle = false,
+    TSharedPtr<TAtomic<int32>, ESPMode::ThreadSafe>
+      CorrectionApplyCount = {})
+  {
+    const bool bLifecycleRegistered = bSlowLifecycle
+      ? Runtime.RegisterDomainExecutor(
+          MakeUnique<FSlowLifecycleDomain>())
+      : Runtime.RegisterDomainExecutor(
+          MakeUnique<FSyntheticLifecycleDomain>());
+    return bLifecycleRegistered
+      && Runtime.RegisterDomainExecutor(
+        MakeUnique<FCorrectionRevisionBehaviorDomain>(
+          MoveTemp(CorrectionApplyCount)))
+      && Runtime.Start(MakeSyntheticConfig(), Generation);
+  }
+
+  FCrowdWorkerIntentBatch MakeClockIntent(
+    const uint64 Generation,
+    const uint64 InputSequence,
+    const uint64 SimulationTick)
+  {
+    FCrowdWorkerIntentBatch Clock;
+    Clock.Generation = Generation;
+    Clock.FirstInputSequence = InputSequence;
+    Clock.LastInputSequence = InputSequence;
+    Clock.TargetSimulationTimeSeconds =
+      static_cast<double>(SimulationTick) / 30.0;
+    Clock.Clock.InputSequence = InputSequence;
+    Clock.Clock.SimulationTick = SimulationTick;
+    Clock.RecalculateStableHash();
+    return Clock;
   }
 }
 
@@ -5435,6 +5549,258 @@ bool FCrowdWorkerSpatialIncrementalMigrationTest::RunTest(
     return true;
   };
   return RunMigrationCase(1) && RunMigrationCase(10);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerCleanBarrierCorrectionTest,
+  "MassCrowd.RuntimeV2.CorrectionRecovery.CleanBarrierCorrection",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerCleanBarrierCorrectionTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 201;
+  FCrowdAsyncSimulationRuntime Runtime;
+  TSharedPtr<TAtomic<int32>, ESPMode::ThreadSafe>
+    CorrectionApplyCount = MakeShared<
+      TAtomic<int32>, ESPMode::ThreadSafe>(0);
+  TestTrue(TEXT("runtime starts"),
+    StartCorrectionRuntime(
+      Runtime, Generation, false, CorrectionApplyCount));
+  TestEqual(TEXT("bootstrap queues"),
+    Runtime.SubmitResnapshot(MakeSyntheticSnapshot(Generation)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("bootstrap reaches clean barrier"),
+    WaitForRuntimeIdle(Runtime));
+  const FCrowdAsyncSimulationRuntimeMetrics Before =
+    Runtime.GetMetrics();
+  const FCrowdWorkerAuthorityCorrectionBatch Correction =
+    MakeBehaviorCorrection(Generation, 1, Before);
+  TestTrue(TEXT("correction barrier opens"),
+    Runtime.BeginAuthorityCorrectionBarrier(
+      Generation, Correction.ApplySimulationTick,
+      Correction.ThroughInputSequence));
+  TestEqual(TEXT("correction queues"),
+    Runtime.SubmitAuthorityCorrection(Correction),
+    ECrowdAsyncSimulationCorrectionResult::Accepted);
+  TestTrue(TEXT("clean barrier correction applies"),
+    WaitForCorrectionCount(Runtime, 1));
+  const FCrowdAsyncSimulationRuntimeMetrics After =
+    Runtime.GetMetrics();
+  TestEqual(TEXT("runtime remains running"), Runtime.GetState(),
+    ECrowdAsyncSimulationRuntimeState::Running);
+  TestEqual(TEXT("correction has no worker failure"),
+    After.WorkerV2.LastFailure,
+    ECrowdWorkerRuntimeV2Failure::None);
+  TestEqual(TEXT("correction avoids resnapshot"),
+    After.ResnapshotCount, Before.ResnapshotCount);
+  TestEqual(TEXT("stateful domains rebase at correction barrier"),
+    CorrectionApplyCount->Load(), 1);
+  TestTrue(TEXT("runtime stops"), Runtime.StopAndDrain(5.0));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerCorrectionBeforeNextInputTest,
+  "MassCrowd.RuntimeV2.CorrectionRecovery.CorrectionBeforeNextInput",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerCorrectionBeforeNextInputTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 202;
+  FCrowdAsyncSimulationRuntime Runtime;
+  TestTrue(TEXT("runtime starts"),
+    StartCorrectionRuntime(Runtime, Generation));
+  TestEqual(TEXT("bootstrap queues"),
+    Runtime.SubmitResnapshot(MakeSyntheticSnapshot(Generation)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("bootstrap applies"), WaitForRuntimeIdle(Runtime));
+  const FCrowdWorkerAuthorityCorrectionBatch Correction =
+    MakeBehaviorCorrection(Generation, 1, Runtime.GetMetrics());
+  TestTrue(TEXT("barrier opens"), Runtime.BeginAuthorityCorrectionBarrier(
+    Generation, Correction.ApplySimulationTick,
+    Correction.ThroughInputSequence));
+  TestEqual(TEXT("correction queues"),
+    Runtime.SubmitAuthorityCorrection(Correction),
+    ECrowdAsyncSimulationCorrectionResult::Accepted);
+  TestTrue(TEXT("correction applies"),
+    WaitForCorrectionCount(Runtime, 1));
+  FCrowdWorkerIntentBatch Next = MakeClockIntent(Generation, 4, 2);
+  TestEqual(TEXT("next input queues"), Runtime.SubmitIntentBatch(Next),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("next input applies after correction"),
+    WaitForRuntimeIdle(Runtime));
+  const FCrowdAsyncSimulationRuntimeMetrics Metrics =
+    Runtime.GetMetrics();
+  TestEqual(TEXT("next input watermark"),
+    Metrics.LastAppliedInputSequence, uint64{4});
+  TestEqual(TEXT("resume_before_input remains healthy"),
+    Metrics.WorkerV2.LastFailure,
+    ECrowdWorkerRuntimeV2Failure::None);
+  TestTrue(TEXT("runtime stops"), Runtime.StopAndDrain(5.0));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerPendingWorkCorrectionTest,
+  "MassCrowd.RuntimeV2.CorrectionRecovery.PendingWorkCorrection",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerPendingWorkCorrectionTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 203;
+  FCrowdAsyncSimulationRuntime Runtime;
+  TestTrue(TEXT("slow runtime starts"),
+    StartCorrectionRuntime(Runtime, Generation, true));
+  TestEqual(TEXT("bootstrap queues"),
+    Runtime.SubmitResnapshot(MakeSyntheticSnapshot(Generation)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  const double InFlightDeadline = FPlatformTime::Seconds() + 5.0;
+  FCrowdAsyncSimulationRuntimeMetrics InFlight;
+  while (FPlatformTime::Seconds() < InFlightDeadline)
+  {
+    Runtime.Poll();
+    InFlight = Runtime.GetMetrics();
+    if (InFlight.WorkerV2.ShardInFlightCount > 0
+      && InFlight.AbsoluteSimulationTick > 0)
+      break;
+    FPlatformProcess::SleepNoStats(0.0f);
+  }
+  TestTrue(TEXT("pending shard is observed"),
+    InFlight.WorkerV2.ShardInFlightCount > 0);
+  const FCrowdWorkerAuthorityCorrectionBatch Correction =
+    MakeBehaviorCorrection(Generation, 1, InFlight);
+  TestTrue(TEXT("barrier opens while shard is pending"),
+    Runtime.BeginAuthorityCorrectionBarrier(
+      Generation, Correction.ApplySimulationTick,
+      Correction.ThroughInputSequence));
+  TestEqual(TEXT("pending-work correction queues"),
+    Runtime.SubmitAuthorityCorrection(Correction),
+    ECrowdAsyncSimulationCorrectionResult::Accepted);
+  TestTrue(TEXT("barrier waits and correction applies"),
+    WaitForCorrectionCount(Runtime, 1));
+  const FCrowdAsyncSimulationRuntimeMetrics After =
+    Runtime.GetMetrics();
+  TestEqual(TEXT("pending correction does not resnapshot"),
+    After.ResnapshotCount, InFlight.ResnapshotCount);
+  TestEqual(TEXT("pending correction keeps runtime running"),
+    Runtime.GetState(), ECrowdAsyncSimulationRuntimeState::Running);
+  TestEqual(TEXT("pending correction has no failure"),
+    After.WorkerV2.LastFailure,
+    ECrowdWorkerRuntimeV2Failure::None);
+  TestTrue(TEXT("runtime stops"), Runtime.StopAndDrain(5.0));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerStaleDirtyAfterCorrectionTest,
+  "MassCrowd.RuntimeV2.CorrectionRecovery.StaleDirtyAfterCorrection",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerStaleDirtyAfterCorrectionTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  FCrowdWorkerEntityStateStore Store;
+  TestTrue(TEXT("state store resets"), Store.Reset(4, 64));
+  const FCrowdStableEntityRef EntityRef{1, 42, 1};
+  TestEqual(TEXT("entity spawns"),
+    Store.Spawn(EntityRef, 204, 1, MakePayload(42, 91003)),
+    ECrowdWorkerQueueResult::Added);
+  FCrowdWorkerDirtyStateRecord Authority;
+  Authority.EntityRef = EntityRef;
+  Authority.Field = ECrowdWorkerField::Behavior;
+  Authority.Generation = 204;
+  Authority.WorkerEpoch = 10;
+  Authority.StateRevision = 10;
+  Authority.CorrectionRevision = 3;
+  Authority.SourceInputSequence = 10;
+  Authority.Payload = MakePayload(42, 91007);
+  TestTrue(TEXT("authoritative revision installs"),
+    Store.ApplyAuthoritativeDirty(Authority));
+  FCrowdWorkerDirtyStateRecord Stale = Authority;
+  Stale.WorkerEpoch = 11;
+  Stale.StateRevision = 11;
+  Stale.CorrectionRevision = 2;
+  Stale.Payload = MakePayload(43, 91007);
+  TestEqual(TEXT("older correction fence is classified stale"),
+    Store.ApplyDirty(Stale),
+    ECrowdWorkerQueueResult::RejectedStale);
+  FCrowdWorkerDirtyStateRecord Conflict = Authority;
+  Conflict.Payload = MakePayload(44, 91007);
+  TestEqual(TEXT("same revision conflicting payload fails closed"),
+    Store.ApplyDirty(Conflict), ECrowdWorkerQueueResult::Conflict);
+  FCrowdWorkerDirtyStateRecord FutureGeneration = Authority;
+  FutureGeneration.Generation = 205;
+  FutureGeneration.Payload = MakePayload(45, 91007);
+  TestEqual(TEXT("future generation is not treated as legal stale"),
+    Store.ApplyDirty(FutureGeneration),
+    ECrowdWorkerQueueResult::Conflict);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerRepeatedCorrectionTest,
+  "MassCrowd.RuntimeV2.CorrectionRecovery.RepeatedCorrection",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerRepeatedCorrectionTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 Generation = 205;
+  FCrowdAsyncSimulationRuntime Runtime;
+  TestTrue(TEXT("runtime starts"),
+    StartCorrectionRuntime(Runtime, Generation));
+  TestEqual(TEXT("bootstrap queues"),
+    Runtime.SubmitResnapshot(MakeSyntheticSnapshot(Generation)),
+    ECrowdAsyncSimulationSubmitResult::Accepted);
+  TestTrue(TEXT("bootstrap applies"), WaitForRuntimeIdle(Runtime));
+  uint64 InputSequence = 4;
+  uint64 Tick = 2;
+  for (uint64 Sequence = 1; Sequence <= 3; ++Sequence)
+  {
+    const FCrowdWorkerAuthorityCorrectionBatch Correction =
+      MakeBehaviorCorrection(Generation, Sequence,
+        Runtime.GetMetrics());
+    TestTrue(*FString::Printf(TEXT("barrier %llu opens"), Sequence),
+      Runtime.BeginAuthorityCorrectionBarrier(
+        Generation, Correction.ApplySimulationTick,
+        Correction.ThroughInputSequence));
+    TestEqual(*FString::Printf(TEXT("correction %llu queues"), Sequence),
+      Runtime.SubmitAuthorityCorrection(Correction),
+      ECrowdAsyncSimulationCorrectionResult::Accepted);
+    TestTrue(*FString::Printf(TEXT("correction %llu applies"), Sequence),
+      WaitForCorrectionCount(Runtime, Sequence));
+    FCrowdWorkerIntentBatch Next = MakeClockIntent(
+      Generation, InputSequence++, Tick++);
+    TestEqual(*FString::Printf(TEXT("prediction %llu queues"), Sequence),
+      Runtime.SubmitIntentBatch(Next),
+      ECrowdAsyncSimulationSubmitResult::Accepted);
+    TestTrue(*FString::Printf(TEXT("prediction %llu applies"), Sequence),
+      WaitForRuntimeIdle(Runtime));
+  }
+  const FCrowdAsyncSimulationRuntimeMetrics Metrics =
+    Runtime.GetMetrics();
+  TestEqual(TEXT("three corrections apply"),
+    Metrics.AuthorityCorrectionCount, uint64{3});
+  TestEqual(TEXT("runtime remains running"), Runtime.GetState(),
+    ECrowdAsyncSimulationRuntimeState::Running);
+  TestEqual(TEXT("repeated corrections have no failure"),
+    Metrics.WorkerV2.LastFailure,
+    ECrowdWorkerRuntimeV2Failure::None);
+  TestTrue(TEXT("runtime stops"), Runtime.StopAndDrain(5.0));
+  return true;
 }
 
 #endif

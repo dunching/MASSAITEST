@@ -608,6 +608,82 @@ namespace
     return Result;
   }
 
+  FCrowdDemoCombatNetState BuildT7PresentationCombatNetState(
+    const FCrowdDemoCombatAgentState& State)
+  {
+    FCrowdDemoCombatNetState Result;
+    Result.Health = State.Health;
+    Result.MaxHealth = State.MaxHealth;
+    Result.LifecycleState = State.LifecycleState;
+    Result.bAlive = State.bAlive ? 1 : 0;
+    Result.BusinessState = State.BusinessState;
+    Result.BusinessStateRevision = State.BusinessStateRevision;
+    Result.BusinessStateEnterFixedStep =
+      State.BusinessStateEnterFixedStep;
+    Result.TargetAgentId = State.TargetAgentId;
+    Result.TargetLifecycleSerial = State.TargetLifecycleSerial;
+    Result.AttackPhase = State.AttackPhase;
+    Result.AttackPhaseEnterFixedStep = State.AttackPhaseEnterFixedStep;
+    Result.CooldownEndFixedStep = State.CooldownEndFixedStep;
+    Result.LockedTargetAgentId = State.LockedTargetAgentId;
+    Result.LockedTargetLifecycleSerial =
+      State.LockedTargetLifecycleSerial;
+    Result.LockedTargetLocation = FVector_NetQuantize10(
+      State.LockedTargetLocation);
+    Result.FireSequence = State.FireSequence;
+    Result.bFireRequestIssued = State.bFireRequestIssued ? 1 : 0;
+    Result.ReactiveMode = State.ReactiveMode;
+    Result.HorizontalReactiveVelocity = FVector_NetQuantize10(
+      State.HorizontalReactiveVelocity);
+    Result.VerticalReactiveVelocityCmps =
+      State.VerticalReactiveVelocityCmps;
+    Result.ReactiveStartFixedStep = State.ReactiveStartFixedStep;
+    Result.ReactiveEndFixedStep = State.ReactiveEndFixedStep;
+    Result.ReactiveRevision = State.ReactiveRevision;
+    Result.RestoreBusinessState = State.RestoreBusinessState;
+    Result.ApexCount = State.ApexCount;
+    Result.LandingCount = State.LandingCount;
+    Result.HitFlashRevision = State.HitFlashRevision;
+    Result.HitFlashStartServerTimeSeconds =
+      State.HitFlashStartServerTimeSeconds;
+    Result.HitFlashDurationSeconds = State.HitFlashDurationSeconds;
+    Result.HitFlashProfileKey = State.HitFlashProfileKey;
+    Result.HitFlashPeakIntensity = State.HitFlashPeakIntensity;
+    Result.LastConsumedHitEventId = State.LastConsumedHitEventId;
+    Result.VisualState = State.VisualState;
+    Result.VisualRevision = State.VisualRevision;
+    Result.VisualStateStartServerTimeSeconds =
+      State.VisualStateStartServerTimeSeconds;
+    Result.VisualPhaseSeed = State.VisualPhaseSeed;
+    return Result;
+  }
+
+  uint32 BuildT7PresentationStateSignature(
+    const FCrowdDemoCombatNetState& State,
+    const int32 LifecycleSerial)
+  {
+    uint32 Hash = GetTypeHash(LifecycleSerial);
+    Hash = HashCombineFast(Hash, GetTypeHash(State.Health));
+    Hash = HashCombineFast(Hash, GetTypeHash(State.bAlive));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(State.LifecycleState)));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(State.BusinessState)));
+    Hash = HashCombineFast(Hash, GetTypeHash(State.BusinessStateRevision));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(State.AttackPhase)));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(State.ReactiveMode)));
+    Hash = HashCombineFast(Hash, GetTypeHash(State.ReactiveRevision));
+    Hash = HashCombineFast(Hash, GetTypeHash(State.ApexCount));
+    Hash = HashCombineFast(Hash, GetTypeHash(State.LandingCount));
+    Hash = HashCombineFast(Hash, GetTypeHash(State.HitFlashRevision));
+    Hash = HashCombineFast(Hash,
+      GetTypeHash(static_cast<uint8>(State.VisualState)));
+    Hash = HashCombineFast(Hash, GetTypeHash(State.VisualRevision));
+    return Hash;
+  }
+
   bool ApplyWorkerCombatState(
     const FCrowdDemoCombatAgentState& State,
     FCrowdDemoRoundBoundaryBusinessFact& Fact)
@@ -933,6 +1009,25 @@ namespace
     Output.StableHash = StableHash;
     Output.bCompleted = Output.Commit.bValid
       && Output.ReactiveSteps.Num() == Input.Snapshot.Agents.Num();
+    return Output;
+  }
+
+  FCrowdDemoBoundaryBusinessWorkOutput
+    BuildWorkerNativeScenarioBusinessBootstrap(
+      const FCrowdDemoBoundaryBusinessWorkInput& Input)
+  {
+    FCrowdDemoBoundaryBusinessWorkOutput Output;
+    if (!Input.Snapshot.bValid
+      || Input.FixedStepIndex != Input.Snapshot.FixedStepIndex
+      || Input.PlanRevision != Input.Snapshot.PlanRevision
+      || Input.Facts.Num() != Input.Snapshot.Agents.Num()
+      || Input.FixedStepSeconds <= 0.0f)
+      return Output;
+    Output.bRequiresCommit = false;
+    Output.StableHash = FoldBoundaryHash(
+      FoldBoundaryHash(Input.Snapshot.StableHash, 0x57374e42u),
+      static_cast<uint32>(Input.FixedStepIndex));
+    Output.bCompleted = Output.StableHash != 0;
     return Output;
   }
 
@@ -1980,6 +2075,17 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
   ClearPreparedRoundCommitPlan();
   bWorkerV2TargetStateBootstrapped = false;
   bWorkerV2ProjectileStateBootstrapped = false;
+  WorkerScenarioMovementProfiles.Reset();
+  WorkerScenarioFrozenProfiles.Reset();
+  LastScenarioObservationGeneration = 0;
+  LastScenarioObservationPublishSequence = 0;
+  LastScenarioObservationAbsoluteTick = INDEX_NONE;
+  OpenSpawnScenarioAbsoluteOriginTick = INDEX_NONE;
+  OpenSpawnScenarioLastCommandTick = 0;
+  VatShowcaseScenarioAbsoluteOriginTick = INDEX_NONE;
+  VatShowcaseLastMovementHalfCycle = INDEX_NONE;
+  VatShowcaseLastPresentationSignatureByAgentId.Reset();
+  bValidCorridorTransitHoldCommandSubmitted = false;
   LastWorkerV2MovementControlGeneration = 0;
   LastWorkerV2MovementControlPlanRevision = INDEX_NONE;
   LastWorkerV2TargetControlSemanticHash = 0;
@@ -2133,6 +2239,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::ActivatePlan(
         World->GetSubsystem<UCrowdDemoMassSubsystem>())
         MassSubsystem->ResetProjectileStates();
     OutgoingProjectileVisualEvents.Reset();
+    OutgoingT7PresentationEvents.Reset();
     ProjectileMetrics = FCrowdDemoProjectileMetrics();
     ProjectileMetrics.bValid = 1;
     OpenSpawnRelaxationLayout = {};
@@ -2592,6 +2699,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::StageBoundaryBusinessWork()
       == ECrowdDemoScenario::SimRoundSoftPressure
     && ActivePlan.Rules.SoftPressureTestCase
       == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse;
+  BoundaryFacingWorkState->bUseWorkerNativeScenarioBusiness =
+    bVatShowcase && IsFullWorkerProductionMode();
   const bool bRangedAttack =
     ActivePlan.Rules.Scenario
       == ECrowdDemoScenario::SimRoundSoftPressure
@@ -2822,10 +2931,14 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       Stage, GetCurrentFixedStepIndex());
     return false;
   };
+  const bool bWorkerNativeVatBootstrap =
+    BoundaryFacingWorkState.IsValid()
+    && BoundaryFacingWorkState->bUseWorkerNativeScenarioBusiness;
   if (!IsInGameThread() || !BoundaryFacingWorkState.IsValid()
     || BoundaryFacingWorkState->bWorkerV2InputSubmitted
     || !BoundaryFacingWorkState->bMovementShadowInputValid
-    || !BoundaryFacingWorkState->GraphOutput.Movement.bCompleted
+    || (!bWorkerNativeVatBootstrap
+      && !BoundaryFacingWorkState->GraphOutput.Movement.bCompleted)
     || !BoundarySnapshot.bValid || !GetWorld()
     || NextWorkerV2MovementControlRevision == 0
     || NextWorkerV2TargetControlRevision == 0
@@ -2861,8 +2974,17 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     BoundaryFacingWorkState->bWorkerV2InputSubmitted = true;
     return true;
   }
+  FString MovementModeValue;
+  const bool bMovementProduction =
+    FParse::Value(
+      FCommandLine::Get(),
+      TEXT("CrowdWorkerMovementMode="),
+      MovementModeValue)
+    && MovementModeValue.Equals(
+      TEXT("Production"), ESearchCase::IgnoreCase);
   const bool bCaptureShadowExpectation =
-    RuntimeSubsystem->GetWorkerMovementAuthority().GetMode()
+    !bMovementProduction
+    && RuntimeSubsystem->GetWorkerMovementAuthority().GetMode()
       == ECrowdWorkerMovementAuthorityMode::Shadow;
   if (bCaptureShadowExpectation
     && PendingWorkerV2MovementExpectations.Num() >= 16)
@@ -2873,14 +2995,6 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   if (!ResolveWorkerTargetAuthority(
       BoundarySnapshot, TargetMode, TargetCanaries))
     return RejectWorkerV2Input(TEXT("target_authority"));
-  FString MovementModeValue;
-  const bool bMovementProduction =
-    FParse::Value(
-      FCommandLine::Get(),
-      TEXT("CrowdWorkerMovementMode="),
-      MovementModeValue)
-    && MovementModeValue.Equals(
-      TEXT("Production"), ESearchCase::IgnoreCase);
   const bool bHasTargetControl =
     !BoundaryFacingWorkState->TargetTopologySlots.IsEmpty();
   if (bHasTargetControl
@@ -3056,8 +3170,15 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   FCrowdWorkerProjectileControlResource ProjectileControl;
   uint64 ProjectileControlSemanticHash = 0;
   bool bPublishProjectileControl = false;
+  const bool bVatShowcase =
+    BoundaryFacingWorkState->BusinessInput.Rules.Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && BoundaryFacingWorkState->BusinessInput.Rules.
+      SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse;
   const bool bHasProjectileControl =
-    BoundaryFacingWorkState->BusinessInput.Rules.
+    bVatShowcase
+    || BoundaryFacingWorkState->BusinessInput.Rules.
       RangedCombatSettings.bEnabled != 0;
   if (bHasProjectileControl)
   {
@@ -3072,7 +3193,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     const FCrowdDemoBoundaryBusinessWorkInput& BusinessInput =
       BoundaryFacingWorkState->BusinessInput;
     if (!BoundaryFacingWorkState->BusinessOutput.bCompleted
-      || !BoundaryFacingWorkState->BusinessOutput.bRequiresCommit
+      || (!bVatShowcase
+        && !BoundaryFacingWorkState->BusinessOutput.bRequiresCommit)
       || BusinessInput.Facts.Num()
         != BusinessInput.Snapshot.Agents.Num()
       || BusinessInput.FixedStepIndex
@@ -3116,40 +3238,48 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       CombatAgents;
     TArray<FCrowdProjectileSpawnRequest> SpawnRequests;
     FCrowdDemoProjectileStepSummary AttackSummary;
-    if (!FCrowdDemoProjectileAdapters::BuildRangedAttackPlan(
-        BusinessInput.RoundId, BusinessInput.FixedStepIndex,
-        BusinessInput.Rules.RangedCombatSettings,
-        CombatAgents, SpawnRequests, AttackSummary))
-      return RejectProjectileControl(TEXT("attack_plan"));
-    const FCrowdDemoProjectileStepSummary& LegacyAttack =
-      BoundaryFacingWorkState->BusinessOutput.Commit.ProjectileSummary;
-    if (AttackSummary.TargetAcquiredCount
-          != LegacyAttack.TargetAcquiredCount
-      || AttackSummary.CompletedWindupCount
-          != LegacyAttack.CompletedWindupCount
-      || AttackSummary.DuplicateFireCount
-          != LegacyAttack.DuplicateFireCount
-      || AttackSummary.InvalidTargetLifecycleCount
-          != LegacyAttack.InvalidTargetLifecycleCount
-      || AttackSummary.AttackStateHash
-          != LegacyAttack.AttackStateHash)
+    if (bVatShowcase)
     {
-      UE_LOG(LogTemp, Error,
-        TEXT("CrowdDemoWorkerProjectileAttackParityRejected step=%d acquired=%d/%d windup=%d/%d spawn_requests=%d legacy_spawned=%d duplicate=%d/%d invalid_lifecycle=%d/%d attack_hash=%u/%u"),
-        GetCurrentFixedStepIndex(),
-        AttackSummary.TargetAcquiredCount,
-        LegacyAttack.TargetAcquiredCount,
-        AttackSummary.CompletedWindupCount,
-        LegacyAttack.CompletedWindupCount,
-        SpawnRequests.Num(),
-        LegacyAttack.SpawnedCount,
-        AttackSummary.DuplicateFireCount,
-        LegacyAttack.DuplicateFireCount,
-        AttackSummary.InvalidTargetLifecycleCount,
-        LegacyAttack.InvalidTargetLifecycleCount,
-        AttackSummary.AttackStateHash,
-        LegacyAttack.AttackStateHash);
-      return RejectProjectileControl(TEXT("attack_plan_parity"));
+      AttackSummary.bValid = true;
+    }
+    else
+    {
+      if (!FCrowdDemoProjectileAdapters::BuildRangedAttackPlan(
+          BusinessInput.RoundId, BusinessInput.FixedStepIndex,
+          BusinessInput.Rules.RangedCombatSettings,
+          CombatAgents, SpawnRequests, AttackSummary))
+        return RejectProjectileControl(TEXT("attack_plan"));
+      const FCrowdDemoProjectileStepSummary& LegacyAttack =
+        BoundaryFacingWorkState->BusinessOutput.Commit.
+          ProjectileSummary;
+      if (AttackSummary.TargetAcquiredCount
+            != LegacyAttack.TargetAcquiredCount
+        || AttackSummary.CompletedWindupCount
+            != LegacyAttack.CompletedWindupCount
+        || AttackSummary.DuplicateFireCount
+            != LegacyAttack.DuplicateFireCount
+        || AttackSummary.InvalidTargetLifecycleCount
+            != LegacyAttack.InvalidTargetLifecycleCount
+        || AttackSummary.AttackStateHash
+            != LegacyAttack.AttackStateHash)
+      {
+        UE_LOG(LogTemp, Error,
+          TEXT("CrowdDemoWorkerProjectileAttackParityRejected step=%d acquired=%d/%d windup=%d/%d spawn_requests=%d legacy_spawned=%d duplicate=%d/%d invalid_lifecycle=%d/%d attack_hash=%u/%u"),
+          GetCurrentFixedStepIndex(),
+          AttackSummary.TargetAcquiredCount,
+          LegacyAttack.TargetAcquiredCount,
+          AttackSummary.CompletedWindupCount,
+          LegacyAttack.CompletedWindupCount,
+          SpawnRequests.Num(),
+          LegacyAttack.SpawnedCount,
+          AttackSummary.DuplicateFireCount,
+          LegacyAttack.DuplicateFireCount,
+          AttackSummary.InvalidTargetLifecycleCount,
+          LegacyAttack.InvalidTargetLifecycleCount,
+          AttackSummary.AttackStateHash,
+          LegacyAttack.AttackStateHash);
+        return RejectProjectileControl(TEXT("attack_plan_parity"));
+      }
     }
     ProjectileControl.Revision =
       NextWorkerV2ProjectileControlRevision;
@@ -3197,6 +3327,42 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       BusinessInput.Rules.RangedCombatSettings;
     HostCombatInput.HitSettings.FixedStepSeconds =
       BusinessInput.FixedStepSeconds;
+    HostCombatInput.bVatShowcase = bVatShowcase;
+    if (bVatShowcase)
+    {
+      constexpr int32 ShowcaseEventSteps[] = {30, 60, 90};
+      for (const FCrowdDemoRangedCombatAgent& Agent :
+        HostCombatAgents)
+      {
+        for (const int32 EventStep : ShowcaseEventSteps)
+        {
+          const ECrowdDemoVatInjectedHit InjectedHit =
+            FCrowdDemoVatShowcasePlanner::SelectInjectedHit(
+              Agent.FormationIndex, EventStep);
+          if (InjectedHit == ECrowdDemoVatInjectedHit::None)
+            continue;
+          FCrowdDemoWorkerInjectedHitCommand& Command =
+            HostCombatInput.InjectedHitCommands.
+              AddDefaulted_GetRef();
+          Command.ApplyFixedStep = EventStep;
+          Command.TargetEntity = Agent.EntityRef;
+          Command.HitEventId =
+            (static_cast<uint64>(BusinessInput.RoundId) << 32)
+            | (static_cast<uint64>(EventStep) << 16)
+            | static_cast<uint32>(Agent.AgentId);
+          Command.Damage =
+            InjectedHit == ECrowdDemoVatInjectedHit::Death
+            ? 1000.0f : 10.0f;
+          Command.HorizontalImpulseCmps =
+            InjectedHit == ECrowdDemoVatInjectedHit::Knockback
+            ? 500.0f : 0.0f;
+          Command.VerticalImpulseCmps =
+            InjectedHit == ECrowdDemoVatInjectedHit::KnockUp
+            ? 650.0f : 0.0f;
+          Command.HitFlashProfileKey = 1;
+        }
+      }
+    }
     HostCombatInput.Agents = HostCombatAgents;
     if (!FCrowdDemoWorkerCombatHostInputCodec::Encode(
         HostCombatInput, ProjectileControl.HostCombatInput))
@@ -3224,16 +3390,18 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     if (Overlays.Num() != BoundarySnapshot.Agents.Num())
       return RejectWorkerV2Input(TEXT("movement_overlay_count"));
     TMap<int32, const FCrowdComposedGuidance*> GuidanceByAgentId;
-    for (const FCrowdComposedGuidance& Guidance :
-      MovementOutput.Guidance.ComposedGuidance)
-    {
-      if (!Guidance.bValid
-        || GuidanceByAgentId.Contains(Guidance.AgentId))
-        return false;
-      GuidanceByAgentId.Add(Guidance.AgentId, &Guidance);
-    }
+    if (!bWorkerNativeVatBootstrap)
+      for (const FCrowdComposedGuidance& Guidance :
+        MovementOutput.Guidance.ComposedGuidance)
+      {
+        if (!Guidance.bValid
+          || GuidanceByAgentId.Contains(Guidance.AgentId))
+          return false;
+        GuidanceByAgentId.Add(Guidance.AgentId, &Guidance);
+      }
     TMap<int32, const FCrowdLocalPredictiveResult*> LocalByAgentId;
-    if (MovementInput.bRunLocalPredictive)
+    if (MovementInput.bRunLocalPredictive
+      && !bWorkerNativeVatBootstrap)
     {
       for (const FCrowdLocalPredictiveResult& Local :
         MovementOutput.LocalPredictive.Results)
@@ -3243,8 +3411,10 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         LocalByAgentId.Add(Local.AgentId, &Local);
       }
     }
-    if (GuidanceByAgentId.Num() != Overlays.Num()
+    if ((!bWorkerNativeVatBootstrap
+        && GuidanceByAgentId.Num() != Overlays.Num())
       || (MovementInput.bRunLocalPredictive
+        && !bWorkerNativeVatBootstrap
         && LocalByAgentId.Num() != Overlays.Num()))
       return false;
     Control.Revision = NextWorkerV2MovementControlRevision;
@@ -3306,14 +3476,24 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     {
       const FCrowdStableEntityRef* EntityRef =
         EntityRefByAgentId.Find(Overlay.AgentId);
+      const FCrowdMassBoundaryAgentRecord* BoundaryAgent =
+        BoundarySnapshot.Agents.FindByPredicate(
+          [&Overlay](const FCrowdMassBoundaryAgentRecord& Agent)
+          {
+            return Agent.Identity.AgentId == Overlay.AgentId;
+          });
       const FCrowdComposedGuidance* const* Guidance =
-        GuidanceByAgentId.Find(Overlay.AgentId);
+        bWorkerNativeVatBootstrap
+          ? nullptr : GuidanceByAgentId.Find(Overlay.AgentId);
       const FCrowdLocalPredictiveResult* const* Local =
         MovementInput.bRunLocalPredictive
+          && !bWorkerNativeVatBootstrap
           ? LocalByAgentId.Find(Overlay.AgentId)
           : nullptr;
-      if (!EntityRef || !Guidance
-        || (MovementInput.bRunLocalPredictive && !Local))
+      if (!EntityRef || !BoundaryAgent
+        || (!bWorkerNativeVatBootstrap && !Guidance)
+        || (MovementInput.bRunLocalPredictive
+          && !bWorkerNativeVatBootstrap && !Local))
         return false;
       FCrowdWorkerMovementControlEntry& Entry =
         Control.Entries.AddDefaulted_GetRef();
@@ -3323,6 +3503,16 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       Entry.PreviousBlockedAgeSteps =
         FMath::Max(0, Overlay.PreviousBlockedAgeSteps);
       Entry.MaximumSpeedCmps = Overlay.MaximumSpeedCmps;
+      Entry.ParticleEnvironmentHardClearanceCm =
+        BoundaryAgent->Properties.HardSafetyGapCm;
+      Entry.ParticlePhysicalRadiusCm =
+        BoundaryAgent->Properties.PhysicalRadiusCm;
+      Entry.ParticleHardSafetyGapCm =
+        BoundaryAgent->Properties.HardSafetyGapCm;
+      Entry.ParticleSoftMarginCm =
+        BoundaryAgent->Properties.SoftMarginCm;
+      Entry.ParticleMobility =
+        BoundaryAgent->Properties.Mobility;
       if (const FCrowdParticleConstraintAgent* const* ParticleAgent =
         ParticleAgentById.Find(Overlay.AgentId))
       {
@@ -3339,8 +3529,9 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         Entry.ParticleMobility =
           (*ParticleAgent)->Mobility;
       }
-      Entry.AutonomousPreferredVelocity =
-        (*Guidance)->AutonomousPreferredVelocity;
+      Entry.AutonomousPreferredVelocity = bWorkerNativeVatBootstrap
+        ? FVector::ZeroVector
+        : (*Guidance)->AutonomousPreferredVelocity;
       const bool bTargetOwner =
         TargetMode
           == ECrowdDemoWorkerTargetAuthorityMode::Production
@@ -3351,10 +3542,41 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         && (*Guidance)->SelectedProvider
           == ECrowdGuidanceProvider::TargetRegion;
       Entry.bUseAuthoritativePreferredVelocity =
-        (*Guidance)->SelectedProvider
+        !bWorkerNativeVatBootstrap
+        && ((*Guidance)->SelectedProvider
           == ECrowdGuidanceProvider::BusinessOverride
         || (*Guidance)->SelectedProvider
-          == ECrowdGuidanceProvider::Stop;
+          == ECrowdGuidanceProvider::Stop
+        || IsBidirectionalSwap());
+      if (IsOpenSpawnRelaxation())
+      {
+        Entry.AutonomousPreferredVelocity = FVector::ZeroVector;
+        Entry.bUseWorkerTargetGuidance = false;
+        Entry.bUseAuthoritativePreferredVelocity = true;
+      }
+      else if (bVatShowcase)
+      {
+        const FCrowdDemoRoundBoundaryBusinessFact* BusinessFact =
+          BoundaryFacingWorkState->BusinessInput.Facts.
+            FindByPredicate(
+              [&Overlay](
+                const FCrowdDemoRoundBoundaryBusinessFact& Fact)
+              {
+                return Fact.AgentId == Overlay.AgentId;
+              });
+        if (!BusinessFact)
+          return RejectWorkerV2Input(
+            TEXT("vat_movement_profile_join"));
+        const bool bMovingFormation =
+          FCrowdDemoVatShowcasePlanner::ResolveInitialState(
+            BusinessFact->FormationIndex)
+          == ECrowdDemoVatPlannedState::Moving;
+        Entry.AutonomousPreferredVelocity = bMovingFormation
+          ? FVector(60.0f, 0.0f, 0.0f)
+          : FVector::ZeroVector;
+        Entry.bUseWorkerTargetGuidance = false;
+        Entry.bUseAuthoritativePreferredVelocity = true;
+      }
       Entry.bUseLocalVelocity =
         MovementInput.bRunLocalPredictive;
       if (Local)
@@ -3514,6 +3736,29 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     return RejectWorkerV2Input(TEXT("accepted_sequence"));
   BoundaryFacingWorkState->WorkerV2InputSequence =
     AcceptedInputSequence;
+  UE_LOG(LogTemp, Display,
+    TEXT("CrowdDemoWorkerBootstrapInputAccepted step=%d input_sequence=%llu worker_native_vat=%d movement_resource=%d target_resource=%d combat_resource=%d source=WorkerInputSync"),
+    GetCurrentFixedStepIndex(), AcceptedInputSequence,
+    bWorkerNativeVatBootstrap ? 1 : 0,
+    bPublishMovementControl ? 1 : 0,
+    bPublishTargetControl ? 1 : 0,
+    bPublishProjectileControl ? 1 : 0);
+  if (bPublishMovementControl
+    && (IsOpenSpawnRelaxation() || IsValidCorridorTransit()
+      || bVatShowcase))
+  {
+    WorkerScenarioMovementProfiles.Reset();
+    WorkerScenarioFrozenProfiles.Reset();
+    for (const FCrowdWorkerMovementControlEntry& Entry :
+      Control.Entries)
+    {
+      WorkerScenarioMovementProfiles.Add(Entry.EntityRef, Entry);
+      if (Entry.bFreezeAtBoundaryLocation)
+        WorkerScenarioFrozenProfiles.Add(Entry.EntityRef);
+    }
+    if (bVatShowcase)
+      VatShowcaseLastMovementHalfCycle = 0;
+  }
 
   if (bHasTargetControl)
   {
@@ -3709,11 +3954,21 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     return false;
   }
   if (!SubmitWorkerV2BoundaryInput())
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoWorkerBootstrapResourceSubmitRejected step=%d"),
+      GetCurrentFixedStepIndex());
     return false;
+  }
   const uint64 AcceptedInputSequence =
     BoundaryFacingWorkState->WorkerV2InputSequence;
   if (AcceptedInputSequence == 0)
+  {
+    UE_LOG(LogTemp, Error,
+      TEXT("VIOLATION CrowdDemoWorkerBootstrapSequenceMissing step=%d"),
+      GetCurrentFixedStepIndex());
     return false;
+  }
   CurrentStepFullWorkerInputSequence = AcceptedInputSequence;
   bCurrentStepFullWorkerProductionFastPath = true;
   UE_LOG(LogTemp, Display,
@@ -3755,9 +4010,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   const bool bProjectileActive =
     ActivePlan.Rules.Scenario
       == ECrowdDemoScenario::SimRoundSoftPressure
-    && ActivePlan.Rules.SoftPressureTestCase
-      == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
-    && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
+    && (ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse
+      || (ActivePlan.Rules.SoftPressureTestCase
+          == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
+        && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0));
   return (!bTargetActive || bWorkerV2TargetStateBootstrapped)
     && (!bProjectileActive || bWorkerV2ProjectileStateBootstrapped);
 }
@@ -3779,9 +4036,11 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   const bool bProjectileActive =
     ActivePlan.Rules.Scenario
       == ECrowdDemoScenario::SimRoundSoftPressure
-    && ActivePlan.Rules.SoftPressureTestCase
-      == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
-    && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0;
+    && (ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse
+      || (ActivePlan.Rules.SoftPressureTestCase
+          == ECrowdDemoSoftPressureTestCase::RangedProjectileCombat
+        && ActivePlan.Rules.RangedCombatSettings.bEnabled != 0));
 
   const bool bDynamicTargetFlow = bTargetActive
     && (ActivePlan.Rules.SoftPressureTestCase
@@ -3819,13 +4078,218 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       return false;
   }
 
+  FCrowdDemoOpenSpawnRelaxationRuntime CandidateOpenSpawnRuntime =
+    OpenSpawnRelaxationRuntime;
+  TMap<FCrowdStableEntityRef, FCrowdWorkerMovementControlEntry>
+    CandidateScenarioProfiles = WorkerScenarioMovementProfiles;
+  TSet<FCrowdStableEntityRef> CandidateFrozenProfiles;
+  TArray<int32> ConsumedOpenSpawnResetAgentIds;
+  TArray<FCrowdWorkerExternalGameplayInput> ScenarioInputs;
+  int32 ScenarioCommandTick = INDEX_NONE;
+  int32 CandidateVatMovementHalfCycle =
+    VatShowcaseLastMovementHalfCycle;
+  const bool bVatShowcase =
+    ActivePlan.Rules.Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && ActivePlan.Rules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse;
+  if (IsOpenSpawnRelaxation())
+  {
+    if (CandidateScenarioProfiles.Num() != BoundarySnapshot.Agents.Num()
+      || LastScenarioObservationAbsoluteTick == INDEX_NONE
+      || OpenSpawnScenarioAbsoluteOriginTick == INDEX_NONE)
+      return false;
+
+    const int64 AbsoluteCommandTick =
+      LastScenarioObservationAbsoluteTick + 1;
+    const int64 ScenarioCommandTick64 = AbsoluteCommandTick
+      - OpenSpawnScenarioAbsoluteOriginTick;
+    if (ScenarioCommandTick64 < OpenSpawnScenarioLastCommandTick
+      || ScenarioCommandTick64 > MAX_int32)
+      return false;
+    ScenarioCommandTick = static_cast<int32>(ScenarioCommandTick64);
+    FCrowdDemoOpenSpawnRelaxationKernel::PrepareBoundary(
+      ScenarioCommandTick, OpenSpawnRelaxationLayout,
+      CandidateOpenSpawnRuntime);
+
+    TMap<FCrowdStableEntityRef, FCrowdWorkerMovementControlEntry>
+      ChangedProfiles;
+    for (const FCrowdStableEntityRef& EntityRef :
+      WorkerScenarioFrozenProfiles)
+    {
+      FCrowdWorkerMovementControlEntry* Profile =
+        CandidateScenarioProfiles.Find(EntityRef);
+      if (!Profile) return false;
+      Profile->bFreezeAtBoundaryLocation = false;
+      ChangedProfiles.Add(EntityRef, *Profile);
+    }
+    for (const FCrowdDemoOpenSpawnRelaxationAgentState& State :
+      CandidateOpenSpawnRuntime.Agents)
+    {
+      const FCrowdMassBoundaryAgentRecord* BoundaryAgent =
+        BoundarySnapshot.Agents.FindByPredicate(
+          [&State](const FCrowdMassBoundaryAgentRecord& Agent)
+          {
+            return Agent.Identity.AgentId == State.AgentId;
+          });
+      if (!BoundaryAgent) return false;
+      FCrowdWorkerMovementControlEntry* Profile =
+        CandidateScenarioProfiles.Find(
+          BoundaryAgent->AgentFacts.StableEntityRef);
+      if (!Profile) return false;
+      if (Profile->bParticleActive != State.bParticleActive
+        || State.bPendingBoundaryReset)
+      {
+        Profile->bParticleActive = State.bParticleActive;
+        Profile->bFreezeAtBoundaryLocation =
+          State.bPendingBoundaryReset;
+        Profile->BoundaryLocation = State.BoundaryResetLocation;
+        ChangedProfiles.Add(Profile->EntityRef, *Profile);
+      }
+      if (State.bPendingBoundaryReset)
+      {
+        CandidateFrozenProfiles.Add(Profile->EntityRef);
+        ConsumedOpenSpawnResetAgentIds.Add(State.AgentId);
+      }
+    }
+    TArray<FCrowdStableEntityRef> ChangedRefs;
+    ChangedProfiles.GetKeys(ChangedRefs);
+    ChangedRefs.Sort();
+    ScenarioInputs.Reserve(ChangedRefs.Num());
+    for (const FCrowdStableEntityRef& EntityRef : ChangedRefs)
+    {
+      const FCrowdWorkerMovementControlEntry* Profile =
+        ChangedProfiles.Find(EntityRef);
+      if (!Profile) return false;
+      FCrowdWorkerExternalGameplayInput& Input =
+        ScenarioInputs.AddDefaulted_GetRef();
+      Input.EntityRef = EntityRef;
+      Input.InputTypeId = static_cast<uint16>(
+        ECrowdWorkerExternalGameplayInputType::
+          MovementProfileRevision);
+      Input.DirtyMask = 1;
+      if (!FCrowdWorkerMovementProfileCodec::Encode(
+          *Profile, Input.FullState))
+        return false;
+    }
+    int32 ActiveParticipantCount = 0;
+    for (const FCrowdDemoOpenSpawnRelaxationAgentState& State :
+      CandidateOpenSpawnRuntime.Agents)
+      ActiveParticipantCount += State.bParticleActive ? 1 : 0;
+    if (!ScenarioInputs.IsEmpty())
+    {
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoScenarioControlCheckpoint scenario=T1 worker_absolute_tick=%lld scenario_tick=%d profiles=%d active=%d phase=%d source=WorkerInputSync"),
+        AbsoluteCommandTick, ScenarioCommandTick,
+        ScenarioInputs.Num(), ActiveParticipantCount,
+        static_cast<int32>(CandidateOpenSpawnRuntime.Phase));
+    }
+  }
+  else if (bVatShowcase)
+  {
+    if (CandidateScenarioProfiles.Num() != BoundarySnapshot.Agents.Num()
+      || LastScenarioObservationAbsoluteTick == INDEX_NONE
+      || VatShowcaseScenarioAbsoluteOriginTick == INDEX_NONE)
+      return false;
+    const int64 AbsoluteCommandTick =
+      LastScenarioObservationAbsoluteTick + 1;
+    const int64 ScenarioTick = AbsoluteCommandTick
+      - VatShowcaseScenarioAbsoluteOriginTick;
+    FCrowdDemoVatMotionSettings MotionSettings;
+    if (ScenarioTick < 0 || ScenarioTick > MAX_int32
+      || MotionSettings.HalfCycleFixedSteps <= 0)
+      return false;
+    CandidateVatMovementHalfCycle =
+      static_cast<int32>(ScenarioTick)
+      / MotionSettings.HalfCycleFixedSteps;
+    if (CandidateVatMovementHalfCycle
+        > VatShowcaseLastMovementHalfCycle)
+    {
+      const float Direction =
+        (CandidateVatMovementHalfCycle & 1) == 0
+        ? 1.0f : -1.0f;
+      for (const FCrowdDemoRoundBoundaryBusinessFact& Fact :
+        BoundaryBusinessFacts)
+      {
+        if (FCrowdDemoVatShowcasePlanner::ResolveInitialState(
+            Fact.FormationIndex)
+          != ECrowdDemoVatPlannedState::Moving)
+          continue;
+        FCrowdWorkerMovementControlEntry* Profile =
+          CandidateScenarioProfiles.Find(Fact.EntityRef);
+        if (!Profile) return false;
+        Profile->AutonomousPreferredVelocity = FVector(
+          Direction * MotionSettings.MoveSpeedCmps,
+          0.0f, 0.0f);
+        Profile->bUseWorkerTargetGuidance = false;
+        Profile->bUseAuthoritativePreferredVelocity = true;
+        FCrowdWorkerExternalGameplayInput& Input =
+          ScenarioInputs.AddDefaulted_GetRef();
+        Input.EntityRef = Fact.EntityRef;
+        Input.InputTypeId = static_cast<uint16>(
+          ECrowdWorkerExternalGameplayInputType::
+            MovementProfileRevision);
+        Input.DirtyMask = 1;
+        if (!FCrowdWorkerMovementProfileCodec::Encode(
+            *Profile, Input.FullState))
+          return false;
+      }
+      ScenarioInputs.Sort([](
+        const FCrowdWorkerExternalGameplayInput& A,
+        const FCrowdWorkerExternalGameplayInput& B)
+      {
+        return A.EntityRef < B.EntityRef;
+      });
+      UE_LOG(LogTemp, Display,
+        TEXT("CrowdDemoScenarioControlCheckpoint scenario=T7 worker_absolute_tick=%lld scenario_tick=%lld command=movement_half_cycle half_cycle=%d profiles=%d source=WorkerInputSync"),
+        AbsoluteCommandTick, ScenarioTick,
+        CandidateVatMovementHalfCycle, ScenarioInputs.Num());
+    }
+  }
+  else if (IsValidCorridorTransit()
+    && FCrowdDemoValidCorridorTransitKernel::
+      ShouldHoldCompletedGroup(ValidCorridorTransitProgress)
+    && !bValidCorridorTransitHoldCommandSubmitted)
+  {
+    if (CandidateScenarioProfiles.Num() != BoundarySnapshot.Agents.Num())
+      return false;
+    TArray<FCrowdStableEntityRef> EntityRefs;
+    CandidateScenarioProfiles.GetKeys(EntityRefs);
+    EntityRefs.Sort();
+    ScenarioInputs.Reserve(EntityRefs.Num());
+    for (const FCrowdStableEntityRef& EntityRef : EntityRefs)
+    {
+      FCrowdWorkerMovementControlEntry* Profile =
+        CandidateScenarioProfiles.Find(EntityRef);
+      if (!Profile) return false;
+      Profile->AutonomousPreferredVelocity = FVector::ZeroVector;
+      Profile->bUseWorkerTargetGuidance = false;
+      Profile->bUseAuthoritativePreferredVelocity = true;
+      FCrowdWorkerExternalGameplayInput& Input =
+        ScenarioInputs.AddDefaulted_GetRef();
+      Input.EntityRef = EntityRef;
+      Input.InputTypeId = static_cast<uint16>(
+        ECrowdWorkerExternalGameplayInputType::
+          MovementProfileRevision);
+      Input.DirtyMask = 1;
+      if (!FCrowdWorkerMovementProfileCodec::Encode(
+          *Profile, Input.FullState))
+        return false;
+    }
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoScenarioControlCheckpoint scenario=T4 worker_absolute_tick=%lld command=group_exit_hold profiles=%d source=WorkerInputSync"),
+      LastScenarioObservationAbsoluteTick + 1,
+      ScenarioInputs.Num());
+  }
+
   const uint64 PreviousInputSequence =
     WorkerShadow.GetMetrics().LastSubmittedInputSequence;
   CurrentBoundaryRequestStartSeconds = FPlatformTime::Seconds();
   if (!FCrowdDemoWorkerInputSync::SubmitIntentBatch(
       *GetWorld(), GetCurrentFixedStepIndex(),
       GetCurrentPlanRevision(),
-      GetCurrentStepEndServerTimeSeconds(), {}, {}, {}, {}, nullptr,
+      GetCurrentStepEndServerTimeSeconds(), {}, {}, {}, ScenarioInputs,
+      nullptr,
       TargetObjectives))
   {
     UE_LOG(LogTemp, Error,
@@ -3844,6 +4308,34 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       GetCurrentFixedStepIndex(), PreviousInputSequence,
       AcceptedInputSequence);
     return false;
+  }
+  if (IsOpenSpawnRelaxation())
+  {
+    if (!ConsumedOpenSpawnResetAgentIds.IsEmpty()
+      && !FCrowdDemoOpenSpawnRelaxationKernel::
+        ConsumePendingBoundaryResets(
+          ConsumedOpenSpawnResetAgentIds,
+          CandidateOpenSpawnRuntime))
+      return false;
+    OpenSpawnRelaxationRuntime = MoveTemp(CandidateOpenSpawnRuntime);
+    WorkerScenarioMovementProfiles =
+      MoveTemp(CandidateScenarioProfiles);
+    WorkerScenarioFrozenProfiles =
+      MoveTemp(CandidateFrozenProfiles);
+    OpenSpawnScenarioLastCommandTick = ScenarioCommandTick;
+  }
+  else if (IsValidCorridorTransit() && !ScenarioInputs.IsEmpty())
+  {
+    WorkerScenarioMovementProfiles =
+      MoveTemp(CandidateScenarioProfiles);
+    bValidCorridorTransitHoldCommandSubmitted = true;
+  }
+  else if (bVatShowcase && !ScenarioInputs.IsEmpty())
+  {
+    WorkerScenarioMovementProfiles =
+      MoveTemp(CandidateScenarioProfiles);
+    VatShowcaseLastMovementHalfCycle =
+      CandidateVatMovementHalfCycle;
   }
 
   CurrentStepFullWorkerInputSequence = AcceptedInputSequence;
@@ -3880,6 +4372,390 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       WorkerV2TargetObjectiveReuseCount);
   }
   return true;
+}
+
+void UCrowdDemoRoundSimPipelineSubsystem::
+  ObserveCommittedWorkerScenarioState(
+    const FCrowdWorkerResultApplyProxy& Proxy,
+    const uint64 Generation,
+    const uint64 PublishSequence,
+    const int64 AbsoluteSimulationTick)
+{
+  check(IsInGameThread());
+  if (Generation == 0 || PublishSequence == 0
+    || AbsoluteSimulationTick < 0
+    || AbsoluteSimulationTick > MAX_int32)
+    return;
+  if (Generation < LastScenarioObservationGeneration)
+    return;
+  if (Generation > LastScenarioObservationGeneration)
+  {
+    LastScenarioObservationGeneration = Generation;
+    LastScenarioObservationPublishSequence = 0;
+    LastScenarioObservationAbsoluteTick = INDEX_NONE;
+  }
+  if (PublishSequence <= LastScenarioObservationPublishSequence
+    || (LastScenarioObservationAbsoluteTick != INDEX_NONE
+      && AbsoluteSimulationTick
+        < LastScenarioObservationAbsoluteTick))
+    return;
+
+  const auto DecodeMovement = [&Proxy](
+    const FCrowdStableEntityRef& EntityRef,
+    FCrowdWorkerMovementState& OutState)
+  {
+    const FCrowdWorkerDomainProxyState* Domain =
+      Proxy.FindDomain(EntityRef, ECrowdWorkerField::Facing);
+    if (!Domain)
+      Domain = Proxy.FindDomain(
+        EntityRef, ECrowdWorkerField::Movement);
+    return Domain && FCrowdWorkerMovementStateCodec::Decode(
+      Domain->State.Payload, OutState);
+  };
+
+  bool bObserved = false;
+  const int32 FixedStepIndex =
+    static_cast<int32>(AbsoluteSimulationTick);
+  if (IsOpenCohortMovement())
+  {
+    TArray<FCrowdDemoTargetRegionGuidanceResult> Results;
+    Results.Reserve(BoundarySnapshot.Agents.Num());
+    for (const FCrowdMassBoundaryAgentRecord& Agent :
+      BoundarySnapshot.Agents)
+    {
+      const FCrowdWorkerDomainProxyState* Domain = Proxy.FindDomain(
+        Agent.AgentFacts.StableEntityRef,
+        ECrowdWorkerField::Target);
+      FCrowdWorkerTargetState State;
+      if (!Domain || !FCrowdWorkerTargetStateCodec::Decode(
+          Domain->State.Payload, State))
+      {
+        Results.Reset();
+        break;
+      }
+      FCrowdDemoTargetRegionGuidanceResult& Result =
+        Results.AddDefaulted_GetRef();
+      Result.AgentId = Agent.Identity.AgentId;
+      Result.CurrentCellKey = State.CurrentCellKey;
+      Result.NextCellKey = State.NextCellKey;
+      Result.DemandRegionKey = State.DemandRegionKey;
+      Result.Mode = static_cast<ECrowdDemoTargetRegionGuidanceMode>(
+        State.Mode);
+      Result.DesiredVelocity = FVector2f(
+        State.DesiredVelocity.X, State.DesiredVelocity.Y);
+    }
+    if (!Results.IsEmpty())
+    {
+      FCrowdDemoOpenCohortMovementKernel::UpdateProgress(
+        Results, OpenCohortMovementLayout.Agents.Num(),
+        FixedStepIndex, OpenCohortMovementProgress);
+      bObserved = true;
+    }
+  }
+  else if (IsBidirectionalSwap())
+  {
+    TArray<FCrowdDemoBidirectionalSwapStepAgent> Results;
+    Results.Reserve(BoundarySnapshot.Agents.Num());
+    for (const FCrowdMassBoundaryAgentRecord& Agent :
+      BoundarySnapshot.Agents)
+    {
+      const FCrowdDemoBidirectionalSwapLayoutAgent* LayoutAgent =
+        BidirectionalSwapLayout.Agents.FindByPredicate(
+          [&Agent](const FCrowdDemoBidirectionalSwapLayoutAgent& Value)
+          {
+            return Value.AgentId == Agent.Identity.AgentId;
+          });
+      FCrowdWorkerMovementState State;
+      const FCrowdDemoSharedFlowField* Field =
+        LayoutAgent ? FindBidirectionalSwapFlowField(
+          LayoutAgent->FormationIndex) : nullptr;
+      if (!LayoutAgent || !Field || !DecodeMovement(
+          Agent.AgentFacts.StableEntityRef, State))
+      {
+        Results.Reset();
+        break;
+      }
+      FCrowdDemoBidirectionalSwapStepAgent& Result =
+        Results.AddDefaulted_GetRef();
+      Result.AgentId = Agent.Identity.AgentId;
+      Result.FormationIndex = LayoutAgent->FormationIndex;
+      Result.Location = State.Position;
+      Result.Velocity = State.Velocity;
+      Result.FlowStatus = FCrowdDemoSharedFlowFieldKernel::Sample(
+        *Field, State.Position).Status;
+    }
+    if (!Results.IsEmpty())
+    {
+      FCrowdDemoBidirectionalSwapKernel::UpdateProgress(
+        Results, FixedStepIndex, BidirectionalSwapProgress);
+      bObserved = true;
+    }
+  }
+  else if (IsValidCorridorTransit())
+  {
+    TArray<FCrowdDemoValidCorridorTransitStepAgent> Results;
+    Results.Reserve(BoundarySnapshot.Agents.Num());
+    for (const FCrowdMassBoundaryAgentRecord& Agent :
+      BoundarySnapshot.Agents)
+    {
+      FCrowdWorkerMovementState State;
+      if (!DecodeMovement(
+          Agent.AgentFacts.StableEntityRef, State))
+      {
+        Results.Reset();
+        break;
+      }
+      FCrowdDemoValidCorridorTransitStepAgent& Result =
+        Results.AddDefaulted_GetRef();
+      Result.AgentId = Agent.Identity.AgentId;
+      Result.Location = State.Position;
+      Result.Velocity = State.Velocity;
+      Result.FlowStatus = FCrowdDemoSharedFlowFieldKernel::Sample(
+        SharedFlowField, State.Position).Status;
+    }
+    if (!Results.IsEmpty())
+    {
+      FCrowdDemoValidCorridorTransitKernel::UpdateProgress(
+        Results, FixedStepIndex, ValidCorridorTransitProgress);
+      bObserved = true;
+    }
+  }
+  else if (ActivePlan.Rules.Scenario
+      == ECrowdDemoScenario::SimRoundSoftPressure
+    && ActivePlan.Rules.SoftPressureTestCase
+      == ECrowdDemoSoftPressureTestCase::MultiStateVatHitResponse)
+  {
+    int32 IdleCount = 0;
+    int32 MovingCount = 0;
+    int32 AttackingCount = 0;
+    int32 HitReactCount = 0;
+    int32 DeadCount = 0;
+    int32 KnockbackCount = 0;
+    int32 KnockUpCount = 0;
+    int32 ValidCount = 0;
+    TArray<FCrowdDemoCombatAgentState> CommittedStates;
+    CommittedStates.Reserve(BoundarySnapshot.Agents.Num());
+    for (const FCrowdMassBoundaryAgentRecord& Agent :
+      BoundarySnapshot.Agents)
+    {
+      const FCrowdWorkerDomainProxyState* Domain = Proxy.FindDomain(
+        Agent.AgentFacts.StableEntityRef,
+        ECrowdWorkerField::Combat);
+      FCrowdWorkerCombatState WorkerCombat;
+      FCrowdDemoCombatAgentState State;
+      if (!Domain
+        || !FCrowdWorkerCombatStateCodec::Decode(
+          Domain->State.Payload, WorkerCombat)
+        || !FCrowdDemoWorkerCombatStatePayloadCodec::Decode(
+          WorkerCombat.HostState, State)
+        || State.AgentId != Agent.Identity.AgentId
+        || State.LifecycleSerial != static_cast<int32>(
+          Agent.AgentFacts.StableEntityRef.LifecycleSerial))
+      {
+        ValidCount = 0;
+        break;
+      }
+      ++ValidCount;
+      IdleCount += State.BusinessState
+        == ECrowdDemoBusinessState::Idle ? 1 : 0;
+      MovingCount += State.BusinessState
+        == ECrowdDemoBusinessState::Moving ? 1 : 0;
+      AttackingCount += State.BusinessState
+        == ECrowdDemoBusinessState::Attacking ? 1 : 0;
+      HitReactCount += State.BusinessState
+        == ECrowdDemoBusinessState::HitReact ? 1 : 0;
+      DeadCount += State.BusinessState
+        == ECrowdDemoBusinessState::Dead ? 1 : 0;
+      KnockbackCount += State.ReactiveMode
+        == ECrowdDemoReactiveMotionMode::Knockback ? 1 : 0;
+      KnockUpCount += State.ReactiveMode
+        == ECrowdDemoReactiveMotionMode::KnockUp ? 1 : 0;
+      CommittedStates.Add(State);
+    }
+    if (ValidCount == BoundarySnapshot.Agents.Num()
+      && ValidCount > 0)
+    {
+      if (VatShowcaseScenarioAbsoluteOriginTick == INDEX_NONE)
+      {
+        VatShowcaseScenarioAbsoluteOriginTick =
+          AbsoluteSimulationTick;
+      }
+      const int64 ScenarioObservationTick = AbsoluteSimulationTick
+        - VatShowcaseScenarioAbsoluteOriginTick;
+      if (ScenarioObservationTick >= 0
+        && ScenarioObservationTick <= MAX_int32)
+      {
+        const int32 PresentationFixedStep = static_cast<int32>(
+          ScenarioObservationTick);
+        const float PresentationServerTimeSeconds =
+          ActivePlan.StartServerTimeSeconds
+          + static_cast<float>(PresentationFixedStep + 1)
+            * CurrentFixedStepSeconds;
+        for (const FCrowdDemoCombatAgentState& State : CommittedStates)
+        {
+          FCrowdDemoCombatNetState Combat =
+            BuildT7PresentationCombatNetState(State);
+          const ECrowdDemoVisualState ProjectedVisualState =
+            FCrowdDemoCombatStateKernel::ResolveVisualState(
+              State, FVector::ZeroVector, true);
+          if (Combat.VisualState != ProjectedVisualState)
+          {
+            Combat.VisualState = ProjectedVisualState;
+            Combat.VisualStateStartServerTimeSeconds =
+              PresentationServerTimeSeconds;
+          }
+          const uint32 Signature = BuildT7PresentationStateSignature(
+            Combat, State.LifecycleSerial);
+          const uint32* PreviousSignature =
+            VatShowcaseLastPresentationSignatureByAgentId.Find(
+              State.AgentId);
+          if (PreviousSignature && *PreviousSignature == Signature)
+            continue;
+          VatShowcaseLastPresentationSignatureByAgentId.Add(
+            State.AgentId, Signature);
+          FCrowdDemoT7PresentationEvent& Event =
+            OutgoingT7PresentationEvents.AddDefaulted_GetRef();
+          Event.RoundId = ActivePlan.RoundId;
+          Event.AgentId = State.AgentId;
+          Event.LifecycleSerial = State.LifecycleSerial;
+          Event.FixedStepIndex = PresentationFixedStep;
+          Event.ServerTimeSeconds = PresentationServerTimeSeconds;
+          Event.Combat = Combat;
+        }
+      }
+      if (ScenarioObservationTick == 0
+        || ScenarioObservationTick == 30
+        || ScenarioObservationTick == 60
+        || ScenarioObservationTick == 90)
+      {
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoT7ObserverCheckpoint worker_absolute_tick=%lld scenario_tick=%lld valid=%d idle=%d moving=%d attacking=%d hit_react=%d dead=%d knockback=%d knockup=%d source=CommittedWorkerResult"),
+          AbsoluteSimulationTick, ScenarioObservationTick,
+          ValidCount, IdleCount, MovingCount, AttackingCount,
+          HitReactCount, DeadCount, KnockbackCount, KnockUpCount);
+      }
+      bObserved = true;
+    }
+  }
+  else if (IsOpenSpawnRelaxation())
+  {
+    TArray<int32> AgentIds;
+    TArray<FVector> Locations;
+    TMap<int32, FVector> ParticleOffsets;
+    for (const FCrowdMassBoundaryAgentRecord& Agent :
+      BoundarySnapshot.Agents)
+    {
+      FCrowdWorkerMovementState Movement;
+      if (!DecodeMovement(
+          Agent.AgentFacts.StableEntityRef, Movement))
+      {
+        AgentIds.Reset();
+        break;
+      }
+      AgentIds.Add(Agent.Identity.AgentId);
+      Locations.Add(Movement.Position);
+      const FCrowdWorkerDomainProxyState* ParticleDomain =
+        Proxy.FindDomain(Agent.AgentFacts.StableEntityRef,
+          ECrowdWorkerField::Particle);
+      FCrowdWorkerParticleState Particle;
+      if (ParticleDomain
+        && FCrowdWorkerParticleStateCodec::Decode(
+          ParticleDomain->State.Payload, Particle))
+        ParticleOffsets.Add(
+          Agent.Identity.AgentId, Particle.PositionOffset);
+    }
+    if (!AgentIds.IsEmpty())
+    {
+      if (OpenSpawnScenarioAbsoluteOriginTick == INDEX_NONE)
+      {
+        OpenSpawnScenarioAbsoluteOriginTick =
+          AbsoluteSimulationTick - OpenSpawnScenarioLastCommandTick;
+      }
+      TArray<float> OffsetSizes;
+      TArray<float> SoftErrors;
+      TArray<FCrowdDemoParticleSoftPairInfluence> Influences;
+      TSet<int32> ActiveAgentIds;
+      for (const FCrowdDemoOpenSpawnRelaxationAgentState& State :
+        OpenSpawnRelaxationRuntime.Agents)
+      {
+        if (State.bParticleActive)
+          ActiveAgentIds.Add(State.AgentId);
+      }
+      for (const TPair<int32, FVector>& Pair : ParticleOffsets)
+      {
+        if (ActiveAgentIds.Contains(Pair.Key))
+          OffsetSizes.Add(Pair.Value.Size2D());
+      }
+      float MaxCorrection = 0.0f;
+      for (const float Value : OffsetSizes)
+        MaxCorrection = FMath::Max(MaxCorrection, Value);
+      const float SoftPairDistance =
+        ActivePlan.Rules.ParticleProfile.PhysicalRadiusCm * 2.0f
+        + ActivePlan.Rules.ParticleProfile.HardSafetyGapCm
+        + ActivePlan.Rules.ParticleProfile.SoftMarginCm * 2.0f;
+      for (int32 A = 0; A < AgentIds.Num(); ++A)
+      {
+        if (!ActiveAgentIds.Contains(AgentIds[A]))
+          continue;
+        const FVector OffsetA = ParticleOffsets.FindRef(AgentIds[A]);
+        for (int32 B = A + 1; B < AgentIds.Num(); ++B)
+        {
+          if (!ActiveAgentIds.Contains(AgentIds[B]))
+            continue;
+          const FVector OffsetB = ParticleOffsets.FindRef(AgentIds[B]);
+          const float Distance =
+            FVector::Dist2D(Locations[A], Locations[B]);
+          const float SoftError =
+            FMath::Max(0.0f, SoftPairDistance - Distance);
+          if (SoftError > 0.0f)
+            SoftErrors.Add(SoftError);
+          if ((OffsetA.IsNearlyZero() && OffsetB.IsNearlyZero())
+            || Distance > SoftPairDistance + 1.0f)
+            continue;
+          FCrowdDemoParticleSoftPairInfluence& Influence =
+            Influences.AddDefaulted_GetRef();
+          Influence.MinAgentId = FMath::Min(
+            AgentIds[A], AgentIds[B]);
+          Influence.MaxAgentId = FMath::Max(
+            AgentIds[A], AgentIds[B]);
+          Influence.RealizedCorrectionA = OffsetA;
+          Influence.RealizedCorrectionB = OffsetB;
+        }
+      }
+      const float SoftP95 = Percentile(SoftErrors, 0.95f);
+      FCrowdDemoOpenSpawnRelaxationKernel::RecordParticleStep(
+        FixedStepIndex, Influences, MaxCorrection, SoftP95,
+        OpenSpawnRelaxationRuntime);
+      FCrowdDemoOpenSpawnRelaxationKernel::RecordFinalLocations(
+        AgentIds, Locations, OpenSpawnRelaxationRuntime);
+      const int64 ScenarioObservationTick = AbsoluteSimulationTick
+        - OpenSpawnScenarioAbsoluteOriginTick;
+      if (ScenarioObservationTick >= 0
+        && ScenarioObservationTick % 30 == 0)
+      {
+        int32 NonzeroOffsetCount = 0;
+        for (const float Value : OffsetSizes)
+          NonzeroOffsetCount += Value > KINDA_SMALL_NUMBER ? 1 : 0;
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoT1ObserverCheckpoint worker_absolute_tick=%lld scenario_tick=%lld phase=%d active=%d offsets=%d influences=%d cumulative_edges=%d layer_max=%d correction_max=%.3f soft_p95=%.3f settle_window=%d source=CommittedWorkerResult"),
+          AbsoluteSimulationTick, ScenarioObservationTick,
+          static_cast<int32>(OpenSpawnRelaxationRuntime.Phase),
+          ActiveAgentIds.Num(), NonzeroOffsetCount, Influences.Num(),
+          OpenSpawnRelaxationRuntime.CumulativeInfluenceEdges.Num(),
+          OpenSpawnRelaxationRuntime.PressurePropagationLayerMax,
+          MaxCorrection, SoftP95,
+          OpenSpawnRelaxationRuntime.InsertSettling.
+            ConsecutiveSettledSampleCount);
+      }
+      bObserved = true;
+    }
+  }
+
+  if (bObserved)
+  {
+    LastScenarioObservationPublishSequence = PublishSequence;
+    LastScenarioObservationAbsoluteTick = AbsoluteSimulationTick;
+  }
 }
 
 bool UCrowdDemoRoundSimPipelineSubsystem::
@@ -4032,6 +4908,19 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     Template.Input = MoveTemp(FacingInput);
   }
 
+  if (State->bUseWorkerNativeScenarioBusiness)
+  {
+    State->BusinessOutput =
+      BuildWorkerNativeScenarioBusinessBootstrap(
+        State->BusinessInput);
+    if (!State->BusinessOutput.bCompleted)
+      return false;
+    State->MovementShadowInput = State->GraphInput.Movement;
+    State->bMovementShadowInputValid = true;
+    State->bCompleted = true;
+    return true;
+  }
+
   const uint64 SnapshotHash = BoundarySnapshot.StableHash;
   const auto AddHashTask = [&BootstrapGraph, SnapshotHash](
     const FCrowdBootstrapTaskKey Key,
@@ -4067,7 +4956,10 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       [State]
       {
         State->BusinessOutput =
-          RunBoundaryBusinessWork(State->BusinessInput);
+          State->bUseWorkerNativeScenarioBusiness
+          ? BuildWorkerNativeScenarioBusinessBootstrap(
+              State->BusinessInput)
+          : RunBoundaryBusinessWork(State->BusinessInput);
         return State->BusinessOutput.bCompleted
           ? FCrowdBootstrapTaskResult::Success(
               State->BusinessOutput.StableHash)
@@ -4455,7 +5347,10 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DispatchBoundaryFacingWork(
       [State]
       {
         State->BusinessOutput =
-          RunBoundaryBusinessWork(State->BusinessInput);
+          State->bUseWorkerNativeScenarioBusiness
+          ? BuildWorkerNativeScenarioBusinessBootstrap(
+              State->BusinessInput)
+          : RunBoundaryBusinessWork(State->BusinessInput);
         return State->BusinessOutput.bCompleted
           ? FCrowdBootstrapTaskResult::Success(
               State->BusinessOutput.StableHash)
@@ -5706,6 +6601,16 @@ bool UCrowdDemoRoundSimPipelineSubsystem::DequeueProjectileVisualEvents(
     return false;
   OutEvents = MoveTemp(OutgoingProjectileVisualEvents);
   OutgoingProjectileVisualEvents.Reset();
+  return true;
+}
+
+bool UCrowdDemoRoundSimPipelineSubsystem::DequeueT7PresentationEvents(
+  TArray<FCrowdDemoT7PresentationEvent>& OutEvents)
+{
+  if (OutgoingT7PresentationEvents.IsEmpty())
+    return false;
+  OutEvents = MoveTemp(OutgoingT7PresentationEvents);
+  OutgoingT7PresentationEvents.Reset();
   return true;
 }
 

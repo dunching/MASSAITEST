@@ -51,7 +51,7 @@ OPEN    尚未达到最终完成定义
 | Runtime Owner Commit Barrier | DONE | Token → Proxy validate → Host FinalValidate → Dirty Mass Apply → Proxy commit → no-fail side effects。 |
 | Legacy Round Transaction 退出 | DONE | `FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator 等已从 Production source 物理删除。 |
 | Prepared second-pass commit 退出 | DONE | Movement、Target/Resource、Particle Diagnostic 的旧 Prepared transaction channels 已删除。 |
-| Post-cut runtime regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap/direct-intent、minimal T8、Target observer 已通过；T1/T2/T3/T4/T6/T7、network/late join、双端 T8 等仍需正式回归。 |
+| Post-cut runtime regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap/direct-intent、T1/T2/T3/T4、T7 client presentation + sparse correction recovery、T5 与 T8 server-only 已通过；T6、LateJoin、完整双端 T8 等仍需正式回归。 |
 
 ---
 
@@ -156,7 +156,7 @@ OPEN    尚未达到最终完成定义
 | Sparse correction / digest | DONE | 普通一致性不要求每帧全量 Transform authority。 |
 | Late Join contract | DONE | Checkpoint → Resource Revisions → Event Baseline → Delta。 |
 | Relevancy | DONE | Relevant set/snapshot 位于公共 Networking。 |
-| Post-cut network/checkpoint regression | OPEN | live server execution path 已改写，必须重新跑 correction/late join/checkpoint evidence。 |
+| Post-cut network/checkpoint regression | PARTIAL | Worker codec/packet transport 3/3、T7 authority digest + sparse correction recovery 已通过 canonical 2/2 和 extended 3/3；LateJoin 与其它正式 network 场景仍 OPEN。 |
 | 双端 T8 runner | PARTIAL | 历史业务日志存在但正式 runner 有误判/超时；post-cut 双端 formal evidence 仍未关闭。 |
 
 ---
@@ -167,7 +167,7 @@ OPEN    尚未达到最终完成定义
 |---|---|---|
 | Stable slot table | DONE | StableEntityRef ↔ instance slot 独立生命周期。 |
 | Spawn/Update/Despawn | DONE | 表现层拥有自己的幂等实例生命周期。 |
-| VAT / Hit response | DONE / capability | Demo 表现路径存在；完整 post-cut 场景证据仍需补。 |
+| VAT / Hit response | DONE / POST-CUT | T7 Worker combat authority 已在 client presentation 消费 Idle/Move/Attack/HitReact/Knockback/KnockUp/Death；canonical 2/2、extended correction soak 3/3 PASS。 |
 | Presentation 非 Simulation Authority | DONE | 不反向推进 Worker 状态。 |
 | 10k 完整客户端表现门 | OPEN | WA9。 |
 
@@ -182,7 +182,7 @@ OPEN    尚未达到最终完成定义
 | 旧 PostFinalize diagnostics | DONE / removed | 依赖旧 Stage / Prepared Particle second-pass 的路径已经删除。 |
 | Worker Target observability | DONE | `Target` / `TargetCohort` 只读 checkpoint + runner rejection gate 已进入 current path。 |
 | Particle/其它 special metrics current completeness | PARTIAL | 继续确认哪些指标由 Worker retained state 产生、哪些 checkpoint derive、哪些 test-only observer。 |
-| post-cut Golden/perf baseline | PARTIAL | minimal T8 与 T5 有当前数据；其它 T1–T7、network、双端和规模仍需更新。 |
+| post-cut Golden/perf baseline | PARTIAL | T1/T2/T3/T4、T5、T7 与 T8 server-only 有当前数据；T6、LateJoin、完整双端 T8、规模与最终性能仍需更新。 |
 
 ---
 
@@ -231,7 +231,7 @@ Performance
 
 ## 15. 当前主要 OPEN Gate
 
-1. **Post-cut Runtime Regression remainder**：T1/T2/T3/T4/T6/T7、checkpoint/network/late join、双端 T8、剩余 diagnostics。
+1. **Post-cut Runtime Regression remainder**：T6、LateJoin/剩余 network、完整双端 T8、剩余 diagnostics。
 2. **Duplicate Kernel / Host Shell Cleanup**：删无消费者实现，拆大型 RoundSim host subsystem。
 3. **Particle Scaling**：Island-level tasks + 单大型 Island Cell-Pair/per-round barrier。
 4. **WA9 Full-Scale Acceptance**：1k→2k→5k→10k 同一 Production path，双端网络/表现/性能。
