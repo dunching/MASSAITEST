@@ -908,6 +908,13 @@ public:
       && ActivePlan.Rules.SoftPressureTestCase
         == ECrowdDemoSoftPressureTestCase::HeterogeneousTransit;
   }
+  bool IsHeterogeneousTargetStatic() const
+  {
+    return IsActive()
+      && ActivePlan.Rules.Scenario == ECrowdDemoScenario::SimRoundSoftPressure
+      && ActivePlan.Rules.SoftPressureTestCase
+        == ECrowdDemoSoftPressureTestCase::HeterogeneousTargetStatic;
+  }
   bool IsCorridorTransitProgressScenario() const
   { return IsValidCorridorTransit() || IsHeterogeneousTransit(); }
   bool IsTargetRegionExecutionActive() const

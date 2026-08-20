@@ -401,4 +401,151 @@ bool FMassCrowdTargetRegionBoundaryCapacityTest::RunTest(
   return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FMassCrowdHeterogeneousStaticTargetContractTest,
+  "MassCrowd.Core.TargetRegionTransport.HeterogeneousStaticTargetContract",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMassCrowdHeterogeneousStaticTargetContractTest::RunTest(
+  const FString& Parameters)
+{
+  using namespace MassCrowdTargetRegionTransportTests;
+  (void)Parameters;
+  const FCrowdSharedFlowFieldConfig Flow = MakeFlowConfig();
+  auto MakeProfileSettings = [](const float Radius)
+  {
+    FCrowdTargetRegionTransportSettings Settings = MakeSettings();
+    Settings.PhysicalRadiusCm = Radius;
+    Settings.HardSafetyGapCm = 10.0f;
+    Settings.SoftMarginCm = 17.0f;
+    Settings.RadialBandWidthCm = 300.0f;
+    Settings.MaximumCenterDistanceCm = 1000.0f;
+    return Settings;
+  };
+
+  const FCrowdTargetRegionTransportSettings Small =
+    MakeProfileSettings(30.0f);
+  const FCrowdTargetRegionTransportSettings Standard =
+    MakeProfileSettings(42.0f);
+  const FCrowdTargetRegionTransportSettings Heavy =
+    MakeProfileSettings(60.0f);
+  FCrowdTargetPolarTopology SmallTopology;
+  FCrowdTargetPolarTopology StandardTopology;
+  FCrowdTargetPolarTopology HeavyTopology;
+  FCrowdTargetPolarTopologySummary SmallSummary;
+  FCrowdTargetPolarTopologySummary StandardSummary;
+  FCrowdTargetPolarTopologySummary HeavySummary;
+  FCrowdTargetRegionTransportKernel::BuildTopology(
+    Small, Flow, SmallTopology, SmallSummary);
+  FCrowdTargetRegionTransportKernel::BuildTopology(
+    Standard, Flow, StandardTopology, StandardSummary);
+  FCrowdTargetRegionTransportKernel::BuildTopology(
+    Heavy, Flow, HeavyTopology, HeavySummary);
+  FCrowdTargetPolarTopology RebuiltHeavyTopology;
+  FCrowdTargetPolarTopologySummary RebuiltHeavySummary;
+  FCrowdTargetRegionTransportKernel::BuildTopology(
+    Heavy, Flow, RebuiltHeavyTopology, RebuiltHeavySummary);
+  TestTrue(TEXT("heterogeneous profile topologies are valid"),
+    SmallTopology.bValid && StandardTopology.bValid
+      && HeavyTopology.bValid);
+  AddInfo(FString::Printf(
+    TEXT("heterogeneous capacity diagnostic small=%d standard=%d heavy=%d"),
+    SmallSummary.TotalFeasibleCapacity,
+    StandardSummary.TotalFeasibleCapacity,
+    HeavySummary.TotalFeasibleCapacity));
+  TestTrue(TEXT("Small capacity is not below Standard capacity"),
+    SmallSummary.TotalFeasibleCapacity
+      >= StandardSummary.TotalFeasibleCapacity);
+  TestTrue(TEXT("Standard capacity is not below Heavy capacity"),
+    StandardSummary.TotalFeasibleCapacity
+      >= HeavySummary.TotalFeasibleCapacity);
+  TestTrue(TEXT("Small and Heavy capacities differ"),
+    SmallSummary.TotalFeasibleCapacity
+      > HeavySummary.TotalFeasibleCapacity);
+  TestNotEqual(TEXT("Small and Heavy topology hashes differ"),
+    SmallTopology.TopologyHash, HeavyTopology.TopologyHash);
+
+  const FCrowdTargetPolarCell* SourceCell =
+    HeavyTopology.Cells.FindByPredicate(
+      [](const FCrowdTargetPolarCell& Cell)
+      { return Cell.bFeasible && !Cell.bTerminal; });
+  TestNotNull(TEXT("Heavy source cell exists"), SourceCell);
+  if (!SourceCell) return false;
+  const int32 HeavyCapacity = HeavySummary.TotalFeasibleCapacity;
+  TArray<FCrowdTargetRegionTransportAgent> Agents =
+    MakeAgentsAt(HeavyCapacity + 2, SourceCell->WorldAnchorCm);
+  for (FCrowdTargetRegionTransportAgent& Agent : Agents)
+  {
+    Agent.PhysicalRadiusCm = Heavy.PhysicalRadiusCm;
+    Agent.HardSafetyGapCm = Heavy.HardSafetyGapCm;
+    Agent.SoftMarginCm = Heavy.SoftMarginCm;
+  }
+
+  FCrowdTargetRegionDemandResult Demand;
+  FCrowdTargetRegionTransportKernel::BuildDemand(
+    Agents, Heavy, Flow, nullptr, HeavyTopology, Demand);
+  TestTrue(TEXT("Heavy overflow is a legal demand"), Demand.bValid);
+  TestEqual(TEXT("Heavy desired population is preserved"),
+    Demand.DesiredPopulationTotal, HeavyCapacity + 2);
+  TestEqual(TEXT("Heavy assignable population is capacity bounded"),
+    Demand.AssignablePopulation, HeavyCapacity);
+  TestEqual(TEXT("Heavy overflow population is retained"),
+    Demand.OverflowPopulation, 2);
+
+  FCrowdTargetRegionFlowPlan Plan;
+  FCrowdTargetRegionTransportKernel::SolveTransport(
+    HeavyTopology, Demand, nullptr, 1, 0, 1, Plan);
+  FCrowdTargetRegionQuotaExecutionState Execution;
+  FCrowdTargetRegionTransportKernel::InitializeQuotaExecutionState(
+    Plan, Execution);
+  TArray<FCrowdTargetRegionGuidanceResult> Guidance;
+  FCrowdTargetRegionGuidanceSummary GuidanceSummary;
+  FCrowdTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    Agents, Heavy, HeavyTopology, Demand, Plan, Execution,
+    Guidance, GuidanceSummary);
+  FCrowdTargetRegionPlanValidationResult Validation;
+  FCrowdTargetRegionTransportKernel::ValidateQuotaExecutionState(
+    HeavyTopology, Demand, Plan, Execution, 1, Validation);
+  TestTrue(TEXT("Heavy plan remains valid"), Plan.bValid);
+  TestTrue(TEXT("Heavy execution prevents cell overbooking"),
+    Validation.bValid && Validation.OverbookedCellCount == 0);
+  TestEqual(TEXT("Heavy overflow becomes CapacityHold"),
+    GuidanceSummary.CapacityHoldAgentCount, 2);
+  for (const FCrowdTargetRegionGuidanceResult& Result : Guidance)
+    if (Result.Mode == ECrowdTargetRegionGuidanceMode::CapacityHold)
+      TestTrue(TEXT("CapacityHold has no Target inward movement"),
+        Result.DesiredVelocity.IsNearlyZero());
+
+  TArray<FCrowdTargetRegionTransportAgent> ReversedAgents = Agents;
+  Algo::Reverse(ReversedAgents);
+  FCrowdTargetRegionDemandResult ReversedDemand;
+  FCrowdTargetRegionTransportKernel::BuildDemand(
+    ReversedAgents, Heavy, Flow, nullptr,
+    HeavyTopology, ReversedDemand);
+  FCrowdTargetRegionFlowPlan ReversedPlan;
+  FCrowdTargetRegionTransportKernel::SolveTransport(
+    HeavyTopology, ReversedDemand, nullptr, 1, 0, 1,
+    ReversedPlan);
+  FCrowdTargetRegionQuotaExecutionState ReversedExecution;
+  FCrowdTargetRegionTransportKernel::InitializeQuotaExecutionState(
+    ReversedPlan, ReversedExecution);
+  TArray<FCrowdTargetRegionGuidanceResult> ReversedGuidance;
+  FCrowdTargetRegionGuidanceSummary ReversedGuidanceSummary;
+  FCrowdTargetRegionTransportKernel::BuildGuidanceWithExecution(
+    ReversedAgents, Heavy, HeavyTopology, ReversedDemand,
+    ReversedPlan, ReversedExecution, ReversedGuidance,
+    ReversedGuidanceSummary);
+  TestEqual(TEXT("heterogeneous Target topology hash deterministic"),
+    RebuiltHeavyTopology.TopologyHash, HeavyTopology.TopologyHash);
+  TestEqual(TEXT("heterogeneous Target demand hash deterministic"),
+    ReversedDemand.DemandHash, Demand.DemandHash);
+  TestEqual(TEXT("heterogeneous Target plan hash deterministic"),
+    ReversedPlan.TransportHash, Plan.TransportHash);
+  TestEqual(TEXT("heterogeneous Target execution hash deterministic"),
+    ReversedExecution.ExecutionHash, Execution.ExecutionHash);
+  TestEqual(TEXT("heterogeneous Target guidance hash deterministic"),
+    ReversedGuidanceSummary.GuidanceHash, GuidanceSummary.GuidanceHash);
+  return true;
+}
+
 #endif

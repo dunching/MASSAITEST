@@ -183,11 +183,22 @@ bool FCrowdWorkerTargetObserver::Build(
       Builder.State.Plan.AssignablePopulation;
     Cohort.OverflowPopulation =
       Builder.State.Plan.OverflowPopulation;
+    Cohort.ActiveClaimCount =
+      Builder.State.Execution.ActiveClaims.Num();
+    Cohort.CompletedTransitionCount =
+      Builder.State.Execution.CompletedTransitionCount;
+    Cohort.ReleasedClaimCount = Builder.State.ReleasedClaimCount;
+    Cohort.OverbookedCellCount = Builder.State.OverbookedCellCount;
     OutObservation.TotalFeasibleCapacity +=
       Cohort.TotalFeasibleCapacity;
     OutObservation.AssignablePopulation +=
       Cohort.AssignablePopulation;
     OutObservation.OverflowPopulation += Cohort.OverflowPopulation;
+    OutObservation.ActiveClaimCount += Cohort.ActiveClaimCount;
+    OutObservation.CompletedTransitionCount +=
+      Cohort.CompletedTransitionCount;
+    OutObservation.ReleasedClaimCount += Cohort.ReleasedClaimCount;
+    OutObservation.OverbookedCellCount += Cohort.OverbookedCellCount;
     Cohort.ExecutionHash = Builder.State.Execution.ExecutionHash;
     Cohort.GuidanceHash = Builder.GuidanceHash;
     Cohort.TargetStateCount = Builder.TargetStateCount;
@@ -227,6 +238,11 @@ bool FCrowdWorkerTargetObserver::Build(
   FoldObservationValue(StableHash, OutObservation.TotalFeasibleCapacity);
   FoldObservationValue(StableHash, OutObservation.AssignablePopulation);
   FoldObservationValue(StableHash, OutObservation.OverflowPopulation);
+  FoldObservationValue(StableHash, OutObservation.ActiveClaimCount);
+  FoldObservationValue(
+    StableHash, OutObservation.CompletedTransitionCount);
+  FoldObservationValue(StableHash, OutObservation.ReleasedClaimCount);
+  FoldObservationValue(StableHash, OutObservation.OverbookedCellCount);
   FoldObservationValue(
     StableHash, OutObservation.CapacityHoldTargetStateCount);
   FoldObservationEntity(StableHash, OutObservation.FirstInvalidEntityRef);
@@ -266,6 +282,10 @@ bool FCrowdWorkerTargetObserver::Build(
     FoldObservationValue(StableHash, Cohort.TotalFeasibleCapacity);
     FoldObservationValue(StableHash, Cohort.AssignablePopulation);
     FoldObservationValue(StableHash, Cohort.OverflowPopulation);
+    FoldObservationValue(StableHash, Cohort.ActiveClaimCount);
+    FoldObservationValue(StableHash, Cohort.CompletedTransitionCount);
+    FoldObservationValue(StableHash, Cohort.ReleasedClaimCount);
+    FoldObservationValue(StableHash, Cohort.OverbookedCellCount);
     FoldObservationValue(
       StableHash, Cohort.CapacityHoldTargetStateCount);
   }

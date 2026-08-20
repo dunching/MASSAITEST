@@ -139,6 +139,13 @@ $ServerArgs = "`"$ProjectPath`" $Map -server -port=$Port -NullRHI -log -AbsLog=`
 Write-Host "[CrowdDemo] Starting server: $ServerArgs"
 $ServerProcess = Start-Process -FilePath $EditorPath -ArgumentList $ServerArgs -PassThru -WindowStyle Hidden
 $EffectiveRunSeconds = if ($RunSeconds -gt 0) { $RunSeconds } else { $DurationSeconds }
+$ScenarioCompletionPattern = switch -Regex ($Map) {
+  'T1OpenSpawnRelaxationSmall$' { 'CrowdDemoT1Checkpoint role=server'; break }
+  'T2OpenCohortMovementSmall$' { 'CrowdDemoT2Checkpoint role=server'; break }
+  'T3OpenBidirectionalSwapSmall$' { 'CrowdDemoT3Checkpoint role=server'; break }
+  'T4ValidCorridorTransitSmall$' { 'CrowdDemoT4Checkpoint role=server'; break }
+  default { '' }
+}
 $ClientProcess = $null
 
 try {
@@ -168,6 +175,25 @@ try {
       }
       Start-Sleep -Seconds $ClientHoldSeconds
     }
+    elseif ($ScenarioCompletionPattern) {
+      $Deadline = (Get-Date).AddSeconds([Math]::Max(
+        $ResultWaitTimeoutSeconds, $EffectiveRunSeconds))
+      $ScenarioComplete = $false
+      while ((Get-Date) -lt $Deadline -and
+        !$ClientProcess.HasExited -and !$ServerProcess.HasExited) {
+        if ((Test-Path -LiteralPath $ServerLog) -and
+          (Select-String -Path $ServerLog `
+            -Pattern $ScenarioCompletionPattern -Quiet)) {
+          $ScenarioComplete = $true
+          break
+        }
+        Start-Sleep -Milliseconds 500
+      }
+      if (!$ScenarioComplete) {
+        throw "CrowdDemo scenario run timed out before $ScenarioCompletionPattern"
+      }
+      Start-Sleep -Seconds $ClientHoldSeconds
+    }
     else {
       Start-Sleep -Seconds ($EffectiveRunSeconds + $ClientHoldSeconds)
     }
@@ -176,11 +202,21 @@ try {
     }
   }
   else {
-    if ($RequirePerformanceGate) {
+    if ($RequirePerformanceGate -or $TargetRegionTransportDiagnostic -or
+      $RangedProjectileGolden) {
       $Deadline = (Get-Date).AddSeconds([Math]::Max($ResultWaitTimeoutSeconds, $EffectiveRunSeconds))
+      $CompletionPattern = if ($RequirePerformanceGate) {
+        "CrowdDemoPerformanceCheckpoint role=server"
+      }
+      elseif ($TargetRegionTransportDiagnostic) {
+        "CrowdWorkerTargetCheckpoint role=server"
+      }
+      else {
+        "CrowdDemoProjectileCheckpoint role=server round_id=1"
+      }
       while ((Get-Date) -lt $Deadline -and !$ServerProcess.HasExited) {
         if ((Test-Path -LiteralPath $ServerLog) -and
-          (Select-String -Path $ServerLog -Pattern "CrowdDemoPerformanceCheckpoint role=server" -Quiet)) {
+          (Select-String -Path $ServerLog -Pattern $CompletionPattern -Quiet)) {
           break
         }
         Start-Sleep -Milliseconds 500
@@ -218,6 +254,11 @@ if ($TargetRegionTransportDiagnostic) {
   $WorkerTargetMetrics =
     Assert-CrowdDemoWorkerTargetGate $ServerLog $EntityCount
   Write-Host "[CrowdDemo] Worker Target gate passed: fixed_step=$($WorkerTargetMetrics.fixed_step) generation=$($WorkerTargetMetrics.generation) input=$($WorkerTargetMetrics.input_sequence) publish=$($WorkerTargetMetrics.publish_sequence) hash=$($WorkerTargetMetrics.worker_state_hash)"
+  if ($Map -match 'T6HeterogeneousTargetStaticSmall$') {
+    $T6BMetrics = Assert-CrowdDemoT6BStaticTargetGate `
+      $ServerLog $EntityCount 7
+    Write-Host "[CrowdDemo] T6-B acceptance gate passed: valid=$($T6BMetrics.valid) profiles=$($T6BMetrics.capability_profiles)"
+  }
 }
 
 $ScenarioAcceptance = switch -Regex ($Map) {

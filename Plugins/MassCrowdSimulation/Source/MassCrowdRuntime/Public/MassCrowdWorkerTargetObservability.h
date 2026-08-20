@@ -27,6 +27,10 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortObservation
   int32 TotalFeasibleCapacity = 0;
   int32 AssignablePopulation = 0;
   int32 OverflowPopulation = 0;
+  int32 ActiveClaimCount = 0;
+  int32 CompletedTransitionCount = 0;
+  int32 ReleasedClaimCount = 0;
+  int32 OverbookedCellCount = 0;
   uint32 ExecutionHash = 0;
   uint32 GuidanceHash = 0;
   int32 TargetStateCount = 0;
@@ -53,6 +57,10 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerTargetObservation
   int32 TotalFeasibleCapacity = 0;
   int32 AssignablePopulation = 0;
   int32 OverflowPopulation = 0;
+  int32 ActiveClaimCount = 0;
+  int32 CompletedTransitionCount = 0;
+  int32 ReleasedClaimCount = 0;
+  int32 OverbookedCellCount = 0;
   int32 CapacityHoldTargetStateCount = 0;
   FCrowdStableEntityRef FirstInvalidEntityRef;
   FCrowdStableEntityRef FirstUnroutedEntityRef;

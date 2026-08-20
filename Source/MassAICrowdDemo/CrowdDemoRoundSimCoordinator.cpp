@@ -65,7 +65,7 @@ namespace
       Observation.Cohorts)
     {
       UE_LOG(LogTemp, Display,
-        TEXT("CrowdWorkerTargetCohortCheckpoint role=server round_id=%d cohort=%u valid=%d topology_revision=%u target_revision=%d feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d execution_hash=%u guidance_hash=%u target_state_count=%d unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u source=WorkerResultApply"),
+        TEXT("CrowdWorkerTargetCohortCheckpoint role=server round_id=%d cohort=%u valid=%d topology_revision=%u target_revision=%d feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d active_claim_count=%d completed_transition_count=%d released_claim_count=%d overbooked_cell_count=%d execution_hash=%u guidance_hash=%u target_state_count=%d unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u source=WorkerResultApply"),
         RoundId, Cohort.CohortKey, Cohort.bValid ? 1 : 0,
         Cohort.TopologyRevision, Cohort.TargetRevision,
         Cohort.FeasibleGraphHash, Cohort.PlanEpoch,
@@ -74,12 +74,48 @@ namespace
         Cohort.RoutedAgentCount, Cohort.PlanUnroutedAgentCount,
         Cohort.TotalFeasibleCapacity, Cohort.AssignablePopulation,
         Cohort.OverflowPopulation,
+        Cohort.ActiveClaimCount, Cohort.CompletedTransitionCount,
+        Cohort.ReleasedClaimCount, Cohort.OverbookedCellCount,
         Cohort.ExecutionHash, Cohort.GuidanceHash,
         Cohort.TargetStateCount, Cohort.UnroutedTargetStateCount,
         Cohort.CapacityHoldTargetStateCount,
         Cohort.FirstUnroutedEntityRef.ProviderId,
         Cohort.FirstUnroutedEntityRef.StableEntityId,
         Cohort.FirstUnroutedEntityRef.LifecycleSerial);
+      const FCrowdDemoTargetRegionCapabilityCohortRuntime* ProfileRuntime =
+        Pipeline.GetCapabilityCohorts().FindByPredicate(
+          [&Cohort](
+            const FCrowdDemoTargetRegionCapabilityCohortRuntime& Candidate)
+          {
+            return Candidate.Cohort.CapabilityProfileKey
+              == Cohort.CohortKey;
+          });
+      if (ProfileRuntime)
+      {
+        const FCrowdDemoCapabilityProfile& Profile =
+          ProfileRuntime->Cohort.Profile;
+        UE_LOG(LogTemp, Display,
+          TEXT("CrowdDemoT6TargetProfileCheckpoint role=server round_id=%d profile=%u agents=%d radius_cm=%.1f mobility=%.2f hard_gap_cm=%.1f soft_margin_cm=%.1f feasible_cells=%d feasible_regions=%d coverage=%d terminal_population=%d total_capacity=%d desired=%d assignable=%d overflow=%d routed=%d unrouted=%d active_claims=%d completed_transitions=%d released_claims=%d capacity_holds=%d overbooked_cells=%d topology_hash=%u transport_hash=%u execution_hash=%u guidance_hash=%u source=WorkerResultApply"),
+          RoundId, Cohort.CohortKey,
+          ProfileRuntime->Cohort.AgentIds.Num(),
+          Profile.Particle.PhysicalRadiusCm,
+          Profile.Particle.Mobility,
+          Profile.Particle.HardSafetyGapCm,
+          Profile.Particle.SoftMarginCm,
+          Cohort.FeasibleCellCount, Cohort.FeasibleRegionCount,
+          Cohort.FeasibleRegionCoverageCount,
+          Cohort.CurrentTerminalPopulation,
+          Cohort.TotalFeasibleCapacity,
+          Cohort.DesiredPopulationTotal,
+          Cohort.AssignablePopulation, Cohort.OverflowPopulation,
+          Cohort.RoutedAgentCount, Cohort.PlanUnroutedAgentCount,
+          Cohort.ActiveClaimCount, Cohort.CompletedTransitionCount,
+          Cohort.ReleasedClaimCount,
+          Cohort.CapacityHoldTargetStateCount,
+          Cohort.OverbookedCellCount,
+          Cohort.FeasibleGraphHash, Cohort.TransportHash,
+          Cohort.ExecutionHash, Cohort.GuidanceHash);
+      }
     }
     const bool bObjectiveRevisionMatches =
       Observation.TargetRevision == Target.TargetRevision;
@@ -1459,7 +1495,9 @@ void ACrowdDemoRoundSimCoordinator::PublishServerResult(UCrowdDemoMassSubsystem&
           TEXT("CrowdDemoT6TargetCheckpoint role=server round_id=%d testcase=%d valid=%d capability_profiles=%d membership_hash=%u profiles=[%s] cross_profile_hard=%d cross_profile_swept=%d source=MassPipeline"),
           RoundResultPacket.RoundId,
           static_cast<int32>(Pipeline->GetRules().SoftPressureTestCase),
-          Particle.bCapabilityProfilesValid, Particle.CapabilityProfileCount,
+          (Particle.bCapabilityProfilesValid != 0
+            && Particle.bTargetRegionTransportValid != 0) ? 1 : 0,
+          Particle.CapabilityProfileCount,
           Particle.CapabilityMembershipHash, *Profiles,
           Particle.CrossProfileHardViolationCount,
           Particle.CrossProfileSweptViolationCount);
