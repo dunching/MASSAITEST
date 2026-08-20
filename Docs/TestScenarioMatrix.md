@@ -49,9 +49,9 @@ RETIRED       验收对象/机制已从当前架构物理删除，不再作为�
 | TargetRegionTransport automation | PASS ON MAIN | Core 2/2（含 BoundaryCapacity 1/1）、`CrowdDemo.SoftPressure.TargetRegionTransport` 7/7、Plugin/Core equivalence 1/1、WorkPipeline 1/1。 | 后续 Target 变更继续全量回归。 |
 | RuntimeV2 Target | PASS ON MAIN | RuntimeV2 Target 4/4、TargetObservability 2/2、Dynamic SharedFlow 1/1；既有 GuidanceShard10k 1/1（505.870s）证据保留。 | 保持 scoped invalidation/determinism。 |
 | T6-A HeterogeneousTransit | PASS / 2X DETERMINISTIC | 最终 `8147/8148`：20/20/20/20，hard/swept/deadlock/unreachable=0；Worker hash `17016630613422674083`，progress/topology/demand/transport/guidance/validation hashes 全部 MATCH；RuntimeV2 42/42。 | 保持 heterogeneous Profile、Particle safety、Target handoff 与 future-effective Objective fence。 |
-| T6-B HeterogeneousTargetStatic | OPEN / SMOKE ONLY | 单次 `8149` smoke：自身 checkpoint `valid=1`、Worker Target valid、hard failure=0；未按正式重复验收关闭。 | 独立任务建立正式 deterministic acceptance。 |
+| T6-B HeterogeneousTargetStatic | PASS / READY PR | `8165/8166` 2x canonical deterministic PASS；20/20 inside、7 profile、capacity/assignable/overflow/hold=`238/20/0/0`、unrouted/overbook/hard failure=`0/0/0`；Worker 与 Target 五组语义 hash 全部 MATCH。 | 保持 profile-aware capacity、Worker-only authority 与 T6-B runner gate。 |
 | T6-C HeterogeneousTargetMoving | OPEN | 单次 `8150` smoke 到 server t=61.43 仍缺 Worker Target checkpoint；hard failure=0，未修复、未重试。 | 独立调查 moving heterogeneous completion/source attachment/demand。 |
-| Lifecycle | BASELINE / REVALIDATE | 旧 2/2 证据存在；T1 与 T6-A 已有 post-cut evidence。 | T6-B/T6-C 与完整 LateJoin lifecycle 继续回归。 |
+| Lifecycle | BASELINE / REVALIDATE | 旧 2/2 证据存在；T1、T6-A、T6-B 已有 post-cut evidence。 | T6-C 与完整 LateJoin lifecycle 继续回归。 |
 | WorkRing / TimeWheel / Spatial 10k | BASELINE | 1k/2k/5k/10k scheduler、10k sparse wakeup、10k dirty spatial 专项已有记录。 | WA9 前最终源码重跑。 |
 | Target 10k 双 Cohort scoped invalidation | PASS / regression invariant | 受影响 Cohort 执行，未受影响 Cohort 无 Dirty/Topology rebuild。 | finite capacity / claim 改动后必须保持。 |
 | Particle 多闭合 Island | BASELINE | independent sub-solve + stable merge + global exact validation 已有专项证据。 | Particle scaling 改动前后都需 reference regression。 |
@@ -79,7 +79,7 @@ T1/T2/T3/T4 canonical                          PASS / POST-CUT
 T7 client presentation + correction recovery  PASS / POST-CUT
 ```
 
-这些结果证明 Worker-only live path、T1–T4、T6-A 和 T7 sparse correction recovery 可运行，但不自动关闭 T6-B/T6-C、LateJoin/其余 network 场景或完整双端 T8。
+这些结果证明 Worker-only live path、T1–T4、T6-A、T6-B 和 T7 sparse correction recovery 可运行，但不自动关闭 T6-C、LateJoin/其余 network 场景或完整双端 T8。
 
 ## 3.2 First-step bootstrap 合同
 
@@ -143,7 +143,7 @@ Target capacity 实现不得恢复 Demo Target/Resource Prepared Transaction。
 | T3 | 双向交换、Local Predictive、公平让行、安全穿越 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 direct intent、local prediction 与 determinism。 |
 | T4 | 窄通道/出口安全、环境约束 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 non-particle/obstacle bootstrap + Worker movement。 |
 | T5 | Static/Moving Target、Polar Transport、长期稳定 | CLOSED ON MAIN | PR #18 已合并；`main@182f4d8` Static/Moving 均 1199-step 2/2 deterministic PASS。Correctness CLOSED，performance OPEN。 |
-| T6 | 异构 Radius/Mobility/Distance Band 联合运行 | T6-A PASS；T6-B/T6-C OPEN | T6-A 已完成 2x deterministic；不得外推为整个 T6 PASS。T6-B 单次 smoke valid，T6-C smoke checkpoint missing，均留给独立任务。 |
+| T6 | 异构 Radius/Mobility/Distance Band 联合运行 | T6-A/T6-B PASS；T6-C OPEN | T6-A 与 T6-B 均完成 2x deterministic；不得外推为整个 T6 PASS。T6-C 仍留给独立任务。 |
 | T7 | VAT、多视觉状态、HitReact/Knockback/Death | PASS / POST-CUT / CORRECTION RECOVERY VERIFIED | Worker combat result → client presentation；canonical 2/2 + extended 3/3，correction 后最终 converge。 |
 | T8 | Combat、Projectile、Impact/Hit、Damage、Event、Golden | SERVER PASS / DUAL REVALIDATE | server-only 当前 PASS；双端 formal runner 仍需关闭。 |
 
@@ -437,7 +437,7 @@ Golden              = 439379904 / 1411313634 / 6141440
 # 15. 当前推荐执行顺序
 
 ```text
-1. T6-B/T6-C formal regression
+1. T6-C formal regression
 2. network / checkpoint / late join
 3. 双端 T8 runner
 4. Duplicate Kernel / Host cleanup

@@ -869,6 +869,8 @@ bool FCrowdWorkerTargetCohortState::IsValid() const
     && CurrentTerminalPopulation >= 0
     && MaximumRegionPopulation >= 0
     && DesiredPopulationTotal >= 0
+    && ReleasedClaimCount >= 0
+    && OverbookedCellCount >= 0
     && Plan.bValid
     && Execution.bValid
     && Plan.TargetRevision == TargetRevision
@@ -896,6 +898,8 @@ bool FCrowdWorkerTargetCohortStateCodec::Encode(
   AppendSigned(OutPayload.Bytes, State.CurrentTerminalPopulation);
   AppendSigned(OutPayload.Bytes, State.MaximumRegionPopulation);
   AppendSigned(OutPayload.Bytes, State.DesiredPopulationTotal);
+  AppendSigned(OutPayload.Bytes, State.ReleasedClaimCount);
+  AppendSigned(OutPayload.Bytes, State.OverbookedCellCount);
   AppendPlan(OutPayload.Bytes, State.Plan);
   AppendExecution(OutPayload.Bytes, State.Execution);
   OutPayload.RecalculateStableHash();
@@ -927,6 +931,10 @@ bool FCrowdWorkerTargetCohortStateCodec::Decode(
       Payload.Bytes, Offset, OutState.MaximumRegionPopulation)
     && ReadSigned(
       Payload.Bytes, Offset, OutState.DesiredPopulationTotal)
+    && ReadSigned(
+      Payload.Bytes, Offset, OutState.ReleasedClaimCount)
+    && ReadSigned(
+      Payload.Bytes, Offset, OutState.OverbookedCellCount)
     && ReadPlan(Payload.Bytes, Offset, OutState.Plan)
     && ReadExecution(Payload.Bytes, Offset, OutState.Execution)
     && Offset == Payload.Bytes.Num()
@@ -1468,6 +1476,11 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
       Demand.Demand.CurrentTerminalPopulation;
     CohortState.DesiredPopulationTotal =
       Demand.Demand.DesiredPopulationTotal;
+    CohortState.ReleasedClaimCount =
+      (bHasPreviousCohort ? PreviousCohort.ReleasedClaimCount : 0)
+      + Plan.Replacement.ReleasedClaimCount;
+    CohortState.OverbookedCellCount =
+      Plan.Validation.OverbookedCellCount;
     for (const FCrowdTargetDemandRegion& Region : Demand.Demand.Regions)
     {
       CohortState.MaximumRegionPopulation = FMath::Max(

@@ -65,7 +65,7 @@ namespace
     return Hash;
   }
 
-  bool ProjectHeterogeneousTransitWorkerTargetMetrics(
+  bool ProjectHeterogeneousWorkerTargetMetrics(
     const UCrowdDemoRoundSimPipelineSubsystem& Pipeline,
     const FCrowdWorkerResultApplyProxy& Proxy,
     TConstArrayView<FCrowdDemoRoundAgentState> FinalStates,
@@ -3912,8 +3912,9 @@ static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, F
           }
           Metrics.bTargetRegionTransportValid = bAllValid
             && Metrics.bCapabilityProfilesValid != 0 ? 1 : 0;
-          if (Pipeline->IsHeterogeneousTransit()
-            && !ProjectHeterogeneousTransitWorkerTargetMetrics(
+          if ((Pipeline->IsHeterogeneousTransit()
+              || Pipeline->IsHeterogeneousTargetStatic())
+            && !ProjectHeterogeneousWorkerTargetMetrics(
               *Pipeline, Proxy, States, Metrics))
           {
             UE_LOG(LogTemp, Error,

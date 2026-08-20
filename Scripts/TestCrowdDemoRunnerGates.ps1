@@ -90,7 +90,28 @@ try {
     { Assert-CrowdDemoScenarioAcceptanceGate $FalsePositiveT3Log T3 20 } `
     "T3 zero-progress checkpoint cannot pass"
 
-  Write-Host "CrowdDemo runner gate tests PASS 15/15"
+  $T6BLog = Join-Path $TestRoot "t6b.log"
+  $T6BLines = @(
+    "LogTemp: Display: CrowdDemoTargetRegionTransportCheckpoint role=server round_id=1 valid=1 inside_band=20 plan_unrouted=0",
+    "LogTemp: Display: CrowdDemoT6TargetCheckpoint role=server round_id=1 testcase=8 valid=1 capability_profiles=7 cross_profile_hard=0 cross_profile_swept=0")
+  for ($Index = 0; $Index -lt 7; ++$Index) {
+    $Radius = @(30, 42, 60)[$Index % 3]
+    $Agents = if ($Index -eq 6) { 2 } else { 3 }
+    $T6BLines += "LogTemp: Display: CrowdDemoT6TargetProfileCheckpoint role=server round_id=1 profile=$Index agents=$Agents radius_cm=$Radius mobility=1.0 hard_gap_cm=10.0 soft_margin_cm=17.0 feasible_cells=10 feasible_regions=10 coverage=$Agents terminal_population=$Agents total_capacity=10 desired=$Agents assignable=$Agents overflow=0 routed=0 unrouted=0 active_claims=0 completed_transitions=1 released_claims=0 capacity_holds=0 overbooked_cells=0"
+  }
+  Set-Content -LiteralPath $T6BLog -Value $T6BLines
+  $T6BMetrics = Assert-CrowdDemoT6BStaticTargetGate $T6BLog 20 7
+  Assert-RunnerGateTest ($T6BMetrics.valid -eq '1') `
+    "T6-B complete profile acceptance passes"
+
+  $T6BInvalidLog = Join-Path $TestRoot "t6b_invalid.log"
+  $T6BLines[-1] = $T6BLines[-1] -replace 'overbooked_cells=0', 'overbooked_cells=1'
+  Set-Content -LiteralPath $T6BInvalidLog -Value $T6BLines
+  Assert-RunnerGateThrows `
+    { Assert-CrowdDemoT6BStaticTargetGate $T6BInvalidLog 20 7 } `
+    "T6-B overbooked profile cannot pass"
+
+  Write-Host "CrowdDemo runner gate tests PASS 17/17"
 }
 finally {
   Remove-Item -LiteralPath $TestRoot -Recurse -Force

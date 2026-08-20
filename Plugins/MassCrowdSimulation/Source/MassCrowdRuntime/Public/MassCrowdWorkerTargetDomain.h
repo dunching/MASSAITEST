@@ -174,6 +174,10 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortState
   int32 CurrentTerminalPopulation = 0;
   int32 MaximumRegionPopulation = 0;
   int32 DesiredPopulationTotal = 0;
+  // Cumulative read-only acceptance counters. They do not participate in
+  // admission or claim ownership.
+  int32 ReleasedClaimCount = 0;
+  int32 OverbookedCellCount = 0;
   FCrowdTargetRegionFlowPlan Plan;
   FCrowdTargetRegionQuotaExecutionState Execution;
 
@@ -184,7 +188,7 @@ class MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortStateCodec
 {
 public:
   static constexpr uint32 SchemaId = 0x43575448u;
-  static constexpr uint16 SchemaVersion = 3;
+  static constexpr uint16 SchemaVersion = 4;
 
   static bool Encode(
     const FCrowdWorkerTargetCohortState& State,

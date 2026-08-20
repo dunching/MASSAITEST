@@ -58,8 +58,10 @@ namespace CrowdWorkerTargetObservabilityTests
     Cohort.Plan.bValid = true;
     Cohort.Execution.PlanEpoch = 4;
     Cohort.Execution.PlanTransportHash = 104;
+    Cohort.Execution.CompletedTransitionCount = 4;
     Cohort.Execution.ExecutionHash = 105;
     Cohort.Execution.bValid = true;
+    Cohort.ReleasedClaimCount = 3;
     FCrowdWorkerTargetState Target;
     Target.CohortKey = 3;
     Target.TargetRevision = 9;
@@ -179,6 +181,14 @@ bool FCrowdWorkerTargetObservationReadOnlyTest::RunTest(
     First.AssignablePopulation, 2);
   TestEqual(TEXT("Worker Target observation exposes overflow"),
     First.OverflowPopulation, 0);
+  TestEqual(TEXT("Worker Target observation exposes active claims"),
+    First.ActiveClaimCount, 0);
+  TestEqual(TEXT("Worker Target observation exposes completed transitions"),
+    First.CompletedTransitionCount, 4);
+  TestEqual(TEXT("Worker Target observation exposes released claims"),
+    First.ReleasedClaimCount, 3);
+  TestEqual(TEXT("Worker Target observation exposes overbook count"),
+    First.OverbookedCellCount, 0);
   TestEqual(TEXT("Worker Target observation has no capacity hold"),
     First.CapacityHoldTargetStateCount, 0);
 
