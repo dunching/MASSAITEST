@@ -11,6 +11,7 @@ public class MassCrowdProjectiles : ModuleRules
       "Core",
       "CoreUObject",
       "Engine",
+      "MassCore",
       "MassCrowdCore",
       "MassCrowdSpatial",
       "MassCrowdCombat",
