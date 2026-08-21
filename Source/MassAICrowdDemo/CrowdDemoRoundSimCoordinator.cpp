@@ -61,13 +61,22 @@ namespace
     const int32 FixedStep = FMath::Max(
       0, Pipeline.GetCurrentFixedStepIndex() - 1);
     const FCrowdDemoTargetFact& Target = Pipeline.GetTargetFact();
+    const FVector InitialTargetLocation =
+      Pipeline.GetRules().TargetMotion.InitialLocation;
+    const double TargetDisplacementCm = FVector::Dist2D(
+      FVector(Target.Location.X, Target.Location.Y, 0.0f),
+      InitialTargetLocation);
     for (const FCrowdWorkerTargetCohortObservation& Cohort :
       Observation.Cohorts)
     {
       UE_LOG(LogTemp, Display,
-        TEXT("CrowdWorkerTargetCohortCheckpoint role=server round_id=%d cohort=%u valid=%d topology_revision=%u target_revision=%d feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d active_claim_count=%d completed_transition_count=%d released_claim_count=%d overbooked_cell_count=%d execution_hash=%u guidance_hash=%u target_state_count=%d unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u source=WorkerResultApply"),
+        TEXT("CrowdWorkerTargetCohortCheckpoint role=server round_id=%d cohort=%u valid=%d topology_revision=%u target_revision=%d objective_resource_revision=%llu objective_effective_fixed_step=%d effective_target_x=%.3f effective_target_y=%.3f effective_target_velocity_x=%.3f effective_target_velocity_y=%.3f feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d active_claim_count=%d completed_transition_count=%d released_claim_count=%d overbooked_cell_count=%d execution_hash=%u guidance_hash=%u target_state_count=%d unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u source=WorkerResultApply"),
         RoundId, Cohort.CohortKey, Cohort.bValid ? 1 : 0,
         Cohort.TopologyRevision, Cohort.TargetRevision,
+        Cohort.ObjectiveResourceRevision,
+        Cohort.ObjectiveEffectiveFixedStep,
+        Cohort.EffectiveTargetLocation.X, Cohort.EffectiveTargetLocation.Y,
+        Cohort.EffectiveTargetVelocity.X, Cohort.EffectiveTargetVelocity.Y,
         Cohort.FeasibleGraphHash, Cohort.PlanEpoch,
         Cohort.PlanBuildFixedStep, Cohort.MembershipHash,
         Cohort.ExternalPopulationHash, Cohort.TransportHash,
@@ -130,7 +139,7 @@ namespace
       Observation.Cohorts.Num() == 1
         ? &Observation.Cohorts[0] : nullptr;
     UE_LOG(LogTemp, Display,
-      TEXT("CrowdWorkerTargetCheckpoint role=server round_id=%d valid=%d fixed_step=%d generation=%llu runtime_worker_epoch=%llu retained_target_worker_epoch=%llu input_sequence=%llu publish_sequence=%llu target_revision=%d target_x=%.3f target_y=%.3f target_velocity_x=%.3f target_velocity_y=%.3f objective_revision_match=%d expected_target_agent_count=%d target_agent_count=%d valid_target_state_count=%d cohort_count=%d topology_revision=%u feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d execution_hash=%u guidance_hash=%u unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_invalid_provider=%u first_invalid_stable_entity=%llu first_invalid_lifecycle=%u first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u target_metrics_available=0 topology_build_count=-1 plan_build_count=-1 plan_cache_hit_count=-1 membership_change_count=-1 published_patch_count=-1 worker_state_hash=%llu source=WorkerResultApply"),
+      TEXT("CrowdWorkerTargetCheckpoint role=server round_id=%d valid=%d fixed_step=%d generation=%llu runtime_worker_epoch=%llu retained_target_worker_epoch=%llu input_sequence=%llu publish_sequence=%llu target_revision=%d target_x=%.3f target_y=%.3f target_velocity_x=%.3f target_velocity_y=%.3f target_displacement_cm=%.3f target_moved=%d objective_revision_match=%d objective_resource_revision=%llu objective_effective_fixed_step=%d effective_target_x=%.3f effective_target_y=%.3f effective_target_velocity_x=%.3f effective_target_velocity_y=%.3f expected_target_agent_count=%d target_agent_count=%d valid_target_state_count=%d cohort_count=%d topology_revision=%u feasible_graph_hash=%u plan_epoch=%d plan_build_step=%d membership_hash=%u external_population_hash=%u transport_hash=%u routed_agent_count=%d plan_unrouted_agent_count=%d total_feasible_capacity=%d assignable_population=%d overflow_population=%d active_claim_count=%d completed_transition_count=%d released_claim_count=%d overbooked_cell_count=%d execution_hash=%u guidance_hash=%u unrouted_target_state_count=%d capacity_hold_target_state_count=%d first_invalid_provider=%u first_invalid_stable_entity=%llu first_invalid_lifecycle=%u first_unrouted_provider=%u first_unrouted_stable_entity=%llu first_unrouted_lifecycle=%u target_metrics_available=0 topology_build_count=-1 plan_build_count=-1 plan_cache_hit_count=-1 membership_change_count=-1 published_patch_count=-1 worker_state_hash=%llu source=WorkerResultApply"),
       RoundId, bValid ? 1 : 0, FixedStep,
       Observation.Generation, RuntimeWorkerEpoch,
       Observation.WorkerEpoch,
@@ -138,7 +147,14 @@ namespace
       Observation.PublishSequence, Observation.TargetRevision,
       Target.Location.X, Target.Location.Y,
       Target.Velocity.X, Target.Velocity.Y,
+      TargetDisplacementCm, TargetDisplacementCm > KINDA_SMALL_NUMBER ? 1 : 0,
       bObjectiveRevisionMatches ? 1 : 0,
+      Observation.ObjectiveResourceRevision,
+      Observation.ObjectiveEffectiveFixedStep,
+      Observation.EffectiveTargetLocation.X,
+      Observation.EffectiveTargetLocation.Y,
+      Observation.EffectiveTargetVelocity.X,
+      Observation.EffectiveTargetVelocity.Y,
       Observation.ExpectedTargetAgentCount,
       Observation.TargetAgentCount,
       Observation.ValidTargetStateCount,
@@ -155,6 +171,10 @@ namespace
       Observation.TotalFeasibleCapacity,
       Observation.AssignablePopulation,
       Observation.OverflowPopulation,
+      Observation.ActiveClaimCount,
+      Observation.CompletedTransitionCount,
+      Observation.ReleasedClaimCount,
+      Observation.OverbookedCellCount,
       SingleCohort ? SingleCohort->ExecutionHash : 0,
       SingleCohort ? SingleCohort->GuidanceHash : 0,
       Observation.UnroutedTargetStateCount,

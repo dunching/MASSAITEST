@@ -209,7 +209,12 @@ try {
         "CrowdDemoPerformanceCheckpoint role=server"
       }
       elseif ($TargetRegionTransportDiagnostic) {
-        "CrowdWorkerTargetCheckpoint role=server"
+        if ($Map -match 'T6HeterogeneousTargetMovingSmall$') {
+          "CrowdDemoT6TargetCheckpoint role=server"
+        }
+        else {
+          "CrowdWorkerTargetCheckpoint role=server"
+        }
       }
       else {
         "CrowdDemoProjectileCheckpoint role=server round_id=1"
@@ -258,6 +263,11 @@ if ($TargetRegionTransportDiagnostic) {
     $T6BMetrics = Assert-CrowdDemoT6BStaticTargetGate `
       $ServerLog $EntityCount 7
     Write-Host "[CrowdDemo] T6-B acceptance gate passed: valid=$($T6BMetrics.valid) profiles=$($T6BMetrics.capability_profiles)"
+  }
+  elseif ($Map -match 'T6HeterogeneousTargetMovingSmall$') {
+    $T6CMetrics = Assert-CrowdDemoT6CHeterogeneousMovingTargetGate `
+      $ServerLog $EntityCount 7
+    Write-Host "[CrowdDemo] T6-C acceptance gate passed: valid=$($T6CMetrics.valid) profiles=$($T6CMetrics.capability_profiles)"
   }
 }
 

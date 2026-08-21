@@ -111,7 +111,32 @@ try {
     { Assert-CrowdDemoT6BStaticTargetGate $T6BInvalidLog 20 7 } `
     "T6-B overbooked profile cannot pass"
 
-  Write-Host "CrowdDemo runner gate tests PASS 17/17"
+  $T6CLog = Join-Path $TestRoot "t6c.log"
+  $T6CLines = @(
+    "LogTemp: Display: CrowdDemoT6TargetCheckpoint role=server round_id=1 testcase=9 valid=1 capability_profiles=7 cross_profile_hard=0 cross_profile_swept=0",
+    "LogTemp: Display: CrowdDemoTargetRegionTransportCheckpoint role=server round_id=1 valid=1 inside_band=20 plan_unrouted=0",
+    "LogTemp: Display: CrowdWorkerTargetCheckpoint role=server round_id=1 valid=1 objective_revision_match=1 objective_resource_revision=31 objective_effective_fixed_step=11 target_moved=1 target_displacement_cm=80 expected_target_agent_count=20 target_agent_count=20 valid_target_state_count=20 unrouted_target_state_count=0 overbooked_cell_count=0 active_claim_count=1 completed_transition_count=14 released_claim_count=12",
+    "LogTemp: Display: CrowdDemoParticleCheckpoint role=server hard_pair_violation_count=0 swept_pair_violation_count=0 obstacle_penetration_count=0 bounds_violation_count=0",
+    "LogTemp: Display: CrowdDemoFullWorkerProductionFastPathCheckpoint objective_published=2",
+    "LogTemp: Display: CrowdDemoFullWorkerProductionFastPathCheckpoint objective_published=301",
+    "LogTemp: Display: CrowdDemoDynamicSharedFlowCheckpoint anchor_cell=2730 integration_rebuild_count=1",
+    "LogTemp: Display: CrowdDemoDynamicSharedFlowCheckpoint anchor_cell=2716 integration_rebuild_count=37")
+  for ($Index = 0; $Index -lt 7; ++$Index) {
+    $Agents = if ($Index -eq 6) { 2 } else { 3 }
+    $T6CLines += "LogTemp: Display: CrowdDemoT6TargetProfileCheckpoint role=server round_id=1 profile=$Index agents=$Agents total_capacity=10 assignable=$Agents overflow=0 capacity_holds=0 unrouted=0 overbooked_cells=0 released_claims=1 completed_transitions=1"
+  }
+  Set-Content -LiteralPath $T6CLog -Value $T6CLines
+  $T6CMetrics = Assert-CrowdDemoT6CHeterogeneousMovingTargetGate $T6CLog 20 7
+  Assert-RunnerGateTest ($T6CMetrics.valid -eq '1') `
+    "T6-C moving acceptance passes"
+
+  $T6CLines[3] = $T6CLines[3] -replace 'swept_pair_violation_count=0', 'swept_pair_violation_count=1'
+  Set-Content -LiteralPath $T6CLog -Value $T6CLines
+  Assert-RunnerGateThrows `
+    { Assert-CrowdDemoT6CHeterogeneousMovingTargetGate $T6CLog 20 7 } `
+    "T6-C swept particle violation cannot pass"
+
+  Write-Host "CrowdDemo runner gate tests PASS 19/19"
 }
 finally {
   Remove-Item -LiteralPath $TestRoot -Recurse -Force
