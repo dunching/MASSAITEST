@@ -230,6 +230,7 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerWorkItem
 
   bool IsValid() const;
   void NormalizePair();
+  bool operator==(const FCrowdWorkerWorkItem& Other) const = default;
 };
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerWorkRingStats
@@ -420,7 +421,12 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerDependencyRecord
 {
   FCrowdWorkerDependencyKey Source;
   FCrowdWorkerWorkItem Dependent;
+
+  bool operator==(
+    const FCrowdWorkerDependencyRecord& Other) const = default;
 };
+
+struct FCrowdWorkerDependencyDeclaration;
 
 class MASSCROWDRUNTIME_API FCrowdWorkerDependencyIndex
 {
@@ -429,6 +435,9 @@ public:
   ECrowdWorkerQueueResult AddDependency(
     const FCrowdWorkerDependencyKey& Source,
     FCrowdWorkerWorkItem Dependent);
+  ECrowdWorkerQueueResult ReplaceDependenciesForDependents(
+    TConstArrayView<FCrowdWorkerDependencyDeclaration>
+      Declarations);
   int32 CollectDependents(
     const FCrowdWorkerDependencyKey& Source,
     TArray<FCrowdWorkerWorkItem>& OutItems) const;
@@ -441,6 +450,7 @@ public:
     TArray<FCrowdWorkerDependencyRecord>& OutRecords) const;
   bool RestoreRecords(
     TConstArrayView<FCrowdWorkerDependencyRecord> Records);
+  bool ValidateInvariants() const;
   int32 NumEdges() const { return EdgeCount; }
   int32 GetHighWatermark() const { return HighWatermark; }
 
@@ -448,9 +458,21 @@ private:
   int32 MaxEdges = 0;
   int32 EdgeCount = 0;
   int32 HighWatermark = 0;
-  TMap<FCrowdWorkerDependencyKey, TArray<FCrowdWorkerWorkItem>>
-    Edges;
+  TMap<
+    FCrowdWorkerDependencyKey,
+    TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>> ForwardEdges;
+  TMap<
+    FCrowdWorkerWorkKey,
+    TSet<FCrowdWorkerDependencyKey>> ReverseEdges;
 };
+
+MASSCROWDRUNTIME_API ECrowdWorkerQueueResult
+CrowdWorkerRuntimeV2EnqueueResourceDependents(
+  uint64 ResourceId,
+  uint64 WorkerEpoch,
+  const FCrowdWorkerDependencyIndex& DependencyIndex,
+  FCrowdWorkerWorkRing& WorkRing,
+  int32& OutDependentCount);
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerResourceRevisionEvent
 {

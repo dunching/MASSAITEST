@@ -79,7 +79,8 @@ enum class ECrowdWorkerExternalGameplayInputType : uint16
   Objective = 2,
   GameplayFact = 3,
   MovementProfileRevision = 4,
-  FlowBindingRevision = 5
+  FlowBindingRevision = 5,
+  FlowBindingClear = 6
 };
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerExternalGameplayInput

@@ -49,7 +49,10 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerObjectiveRef
 };
 
 // Entity-level association describing which objective/cohort navigation
-// context supplies SharedFlow. Movement capability remains in MovementProfile.
+// context supplies SharedFlow. CohortKey is explicit, stable grouping metadata
+// for a shared macro objective/navigation context; it is not an AgentId or a
+// FormationIndex and does not own scheduling or capacity. Movement capability
+// remains in MovementProfile.
 struct MASSCROWDRUNTIME_API FCrowdWorkerFlowBinding
 {
   FCrowdStableEntityRef EntityRef;
@@ -61,6 +64,7 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerFlowBinding
   {
     return EntityRef.IsValid()
       && ObjectiveRef.IsValid()
+      && CohortKey != 0
       && CrowdWorkerResourceIds::IsFlowResource(FlowResourceId);
   }
 
@@ -72,6 +76,7 @@ class MASSCROWDRUNTIME_API FCrowdWorkerFlowBindingCodec
 public:
   static constexpr uint32 SchemaId = 0x43574642u;
   static constexpr uint16 SchemaVersion = 1;
+  static constexpr uint32 ClearSchemaId = 0x43574643u;
 
   static bool Encode(
     const FCrowdWorkerFlowBinding& Binding,
@@ -79,4 +84,6 @@ public:
   static bool Decode(
     const FCrowdWorkerPayload& Payload,
     FCrowdWorkerFlowBinding& OutBinding);
+  static bool EncodeClear(FCrowdWorkerPayload& OutPayload);
+  static bool IsClearPayload(const FCrowdWorkerPayload& Payload);
 };

@@ -162,7 +162,7 @@ bool FCrowdWorkerFlowFieldResource::Sample(
 {
   OutDirection = FVector::ZeroVector;
   bOutReachable = false;
-  if (!IsValid() || Position.ContainsNaN())
+  if (!bStructurallyValidated || Position.ContainsNaN())
     return false;
   const FCrowdSharedFlowSample SampleResult =
     FCrowdSharedFlowFieldKernel::Sample(Field, Position);
@@ -469,6 +469,44 @@ bool FCrowdWorkerFlowFieldResourceCodec::Decode(
   OutResource.FlowDirections = Field.FlowDirection;
   OutResource.Blocked = Field.Blocked;
   OutResource.Unreachable = Field.Unreachable;
-  return Offset == Payload.Bytes.Num()
-    && OutResource.IsValid();
+  if (Offset != Payload.Bytes.Num() || !OutResource.IsValid())
+    return false;
+  OutResource.bStructurallyValidated = true;
+  return true;
+}
+
+bool FCrowdWorkerFlowResourceCache::Resolve(
+  const uint64 ResourceId,
+  const uint64 Revision,
+  const FCrowdWorkerPayload& Payload,
+  const FCrowdWorkerFlowFieldResource*& OutResource)
+{
+  OutResource = nullptr;
+  if (ResourceId == 0 || Revision == 0) return false;
+  const FCrowdWorkerFlowResourceCacheKey Key{
+    ResourceId, Revision};
+  if (const FEntry* Existing = Entries.Find(Key))
+  {
+    if (Existing->PayloadStableHash != Payload.StableHash
+      || !Existing->Resource)
+      return false;
+    OutResource = Existing->Resource.Get();
+    return true;
+  }
+
+  ++DecodeCount;
+  TSharedPtr<FCrowdWorkerFlowFieldResource> Decoded =
+    MakeShared<FCrowdWorkerFlowFieldResource>();
+  if (!FCrowdWorkerFlowFieldResourceCodec::Decode(
+      Payload, *Decoded))
+    return false;
+  ++ValidationCount;
+  if (Decoded->Revision != Revision) return false;
+
+  FEntry Entry;
+  Entry.PayloadStableHash = Payload.StableHash;
+  Entry.Resource = MoveTemp(Decoded);
+  FEntry& Stored = Entries.Add(Key, MoveTemp(Entry));
+  OutResource = Stored.Resource.Get();
+  return true;
 }

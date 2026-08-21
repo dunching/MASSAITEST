@@ -24,6 +24,11 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerFlowFieldResource
     const FVector& Position,
     FVector& OutDirection,
     bool& bOutReachable) const;
+
+private:
+  bool bStructurallyValidated = false;
+
+  friend class FCrowdWorkerFlowFieldResourceCodec;
 };
 
 class MASSCROWDRUNTIME_API FCrowdWorkerFlowFieldResourceCodec
@@ -40,4 +45,46 @@ public:
   static bool Decode(
     const FCrowdWorkerPayload& Payload,
     FCrowdWorkerFlowFieldResource& OutResource);
+};
+
+struct MASSCROWDRUNTIME_API FCrowdWorkerFlowResourceCacheKey
+{
+  uint64 ResourceId = 0;
+  uint64 Revision = 0;
+
+  bool operator==(
+    const FCrowdWorkerFlowResourceCacheKey& Other) const = default;
+
+  friend uint32 GetTypeHash(
+    const FCrowdWorkerFlowResourceCacheKey& Key)
+  {
+    return HashCombineFast(
+      ::GetTypeHash(Key.ResourceId),
+      ::GetTypeHash(Key.Revision));
+  }
+};
+
+class MASSCROWDRUNTIME_API FCrowdWorkerFlowResourceCache
+{
+public:
+  bool Resolve(
+    uint64 ResourceId,
+    uint64 Revision,
+    const FCrowdWorkerPayload& Payload,
+    const FCrowdWorkerFlowFieldResource*& OutResource);
+
+  int32 NumDecodedResources() const { return Entries.Num(); }
+  int32 GetDecodeCount() const { return DecodeCount; }
+  int32 GetValidationCount() const { return ValidationCount; }
+
+private:
+  struct FEntry
+  {
+    uint64 PayloadStableHash = 0;
+    TSharedPtr<FCrowdWorkerFlowFieldResource> Resource;
+  };
+
+  TMap<FCrowdWorkerFlowResourceCacheKey, FEntry> Entries;
+  int32 DecodeCount = 0;
+  int32 ValidationCount = 0;
 };

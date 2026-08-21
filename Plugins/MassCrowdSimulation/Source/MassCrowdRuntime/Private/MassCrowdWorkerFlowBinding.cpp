@@ -77,3 +77,22 @@ bool FCrowdWorkerFlowBindingCodec::Decode(
   }
   return true;
 }
+
+bool FCrowdWorkerFlowBindingCodec::EncodeClear(
+  FCrowdWorkerPayload& OutPayload)
+{
+  OutPayload = {};
+  OutPayload.SchemaId = ClearSchemaId;
+  OutPayload.SchemaVersion = SchemaVersion;
+  OutPayload.RecalculateStableHash();
+  return OutPayload.IsValid(1);
+}
+
+bool FCrowdWorkerFlowBindingCodec::IsClearPayload(
+  const FCrowdWorkerPayload& Payload)
+{
+  return Payload.SchemaId == ClearSchemaId
+    && Payload.SchemaVersion == SchemaVersion
+    && Payload.Bytes.IsEmpty()
+    && Payload.StableHash == Payload.CalculateStableHash();
+}

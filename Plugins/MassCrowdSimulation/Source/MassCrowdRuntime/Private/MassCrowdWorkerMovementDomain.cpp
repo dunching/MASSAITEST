@@ -258,6 +258,7 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
   const TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
   FCrowdWorkerDomainOutput& OutOutput)
 {
+  if (ExecutionStats) *ExecutionStats = {};
   auto Reject = [&Context](
     const TCHAR* Stage,
     const FCrowdStableEntityRef& EntityRef = {},
@@ -376,16 +377,21 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
   const int32 CurrentFixedStepIndex =
     static_cast<int32>(Context.AbsoluteSimulationTick);
 
-  FCrowdWorkerFlowFieldResource DefaultFlowField;
+  FCrowdWorkerFlowResourceCache FlowCache;
+  const FCrowdWorkerResourceRecord* DefaultFlowRecord = nullptr;
   bool bHasDefaultFlowField = false;
   if (const FCrowdWorkerResourceRecord* Environment =
     Context.Resources->FindCurrent(
       CrowdWorkerResourceIds::Environment))
   {
-    if (!FCrowdWorkerFlowFieldResourceCodec::Decode(
-        Environment->Payload, DefaultFlowField)
-      || DefaultFlowField.Revision != Environment->Revision)
+    const FCrowdWorkerFlowFieldResource* DefaultFlowField = nullptr;
+    if (!FlowCache.Resolve(
+        CrowdWorkerResourceIds::Environment,
+        Environment->Revision,
+        Environment->Payload,
+        DefaultFlowField))
       return Reject(TEXT("flow_field"));
+    DefaultFlowRecord = Environment;
     bHasDefaultFlowField = true;
   }
 
@@ -541,7 +547,6 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       Context.EntityStates->Find(
         Entry.EntityRef, ECrowdWorkerField::FlowBinding);
     const FCrowdWorkerFlowFieldResource* ResolvedFlow = nullptr;
-    FCrowdWorkerFlowFieldResource BoundFlow;
     uint64 ResolvedFlowResourceId =
       CrowdWorkerResourceIds::Environment;
     bool bHasExplicitBinding = false;
@@ -563,13 +568,14 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       if (!Objective)
         return Reject(TEXT("flow_binding_objective"), Entry.EntityRef);
       if (!Flow
-        || !FCrowdWorkerFlowFieldResourceCodec::Decode(
-          Flow->Payload, BoundFlow)
-        || BoundFlow.Revision != Flow->Revision)
+        || !FlowCache.Resolve(
+          Binding.FlowResourceId,
+          Flow->Revision,
+          Flow->Payload,
+          ResolvedFlow))
         return Reject(TEXT("flow_binding_resource"), Entry.EntityRef);
       bHasExplicitBinding = true;
       ResolvedFlowResourceId = Binding.FlowResourceId;
-      ResolvedFlow = &BoundFlow;
 
       FCrowdWorkerDependencyKey ObjectiveDependency;
       ObjectiveDependency.Kind = ECrowdWorkerDependencyKind::Resource;
@@ -579,7 +585,13 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     }
     else if (bHasDefaultFlowField)
     {
-      ResolvedFlow = &DefaultFlowField;
+      if (!DefaultFlowRecord
+        || !FlowCache.Resolve(
+          CrowdWorkerResourceIds::Environment,
+          DefaultFlowRecord->Revision,
+          DefaultFlowRecord->Payload,
+          ResolvedFlow))
+        return Reject(TEXT("flow_field"), Entry.EntityRef);
     }
 
     FCrowdWorkerDependencyKey FlowDependency;
@@ -983,6 +995,14 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     Wakeup.Priority = ECrowdWorkerWorkPriority::Normal;
     Wakeup.ReasonMask = 1ull << 11;
     OutOutput.Wakeups.Add(MoveTemp(Wakeup));
+  }
+  if (ExecutionStats)
+  {
+    ExecutionStats->FlowDecodeCount = FlowCache.GetDecodeCount();
+    ExecutionStats->FlowValidationCount =
+      FlowCache.GetValidationCount();
+    ExecutionStats->DistinctFlowResourceCount =
+      FlowCache.NumDecodedResources();
   }
   return true;
 }
