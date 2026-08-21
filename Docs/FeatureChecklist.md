@@ -51,7 +51,7 @@ OPEN    尚未达到最终完成定义
 | Runtime Owner Commit Barrier | DONE | Token → Proxy validate → Host FinalValidate → Dirty Mass Apply → Proxy commit → no-fail side effects。 |
 | Legacy Round Transaction 退出 | DONE | `FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator 等已从 Production source 物理删除。 |
 | Prepared second-pass commit 退出 | DONE | Movement、Target/Resource、Particle Diagnostic 的旧 Prepared transaction channels 已删除。 |
-| Post-cut runtime regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap/direct-intent、T1/T2/T3/T4、T6-A/T6-B、T7 client presentation + sparse correction recovery、T5 与 T8 server-only 已通过；T6-C、LateJoin、完整双端 T8 等仍需正式回归。 |
+| Post-cut runtime regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap/direct-intent、T1/T2/T3/T4、T5、T6-A/T6-B/T6-C、T7 client presentation + sparse correction recovery 与 T8 server-only 已通过；LateJoin、完整双端 T8 等仍需正式回归。 |
 
 ---
 
@@ -117,9 +117,9 @@ OPEN    尚未达到最终完成定义
 | 大型单 Island 内部分片 | OPEN | Cell-Pair Owner / per-round barrier 未完成。 |
 | T5 Static >1000 Tick | DONE / PASS ON MAIN | `main@182f4d8` fixed_step=1199 重复 2/2，worker/transport/execution/guidance hash MATCH，capacity/assignable/overflow/hold=162/20/0/0。 |
 | T5 Moving >1000 Tick | DONE / PASS ON MAIN | `main@182f4d8` canonical fixed_step=1199 重复 2/2，capacity/assignable/overflow/hold=16/16/4/4，worker/transport/execution/guidance deterministic，rejection=0。Correctness CLOSED；performance OPEN。 |
-| T6-A HeterogeneousTransit | DONE / PASS | 20 agents、7 profiles、Full Worker Production；最终 8147/8148 2/2 deterministic，Particle/domain/hard overlap/environment/stale failure=0。 |
-| T6-B HeterogeneousTargetStatic | DONE / READY PR | 8165/8166 canonical 2x PASS；Worker hash 与 Target topology/demand/plan/execution/guidance deterministic MATCH；7 profile、20/20 inside、unrouted/overbook/hard failure=0。 |
-| T6-C HeterogeneousTargetMoving | OPEN | 8150 单次 smoke 缺 Worker Target checkpoint，hard failure=0；本分支未处理。 |
+| T6-A HeterogeneousTransit | DONE / PASS ON MAIN | 20 agents、7 profiles、Full Worker Production；最终 8147/8148 2/2 deterministic，Particle/domain/hard overlap/environment/stale failure=0。Correctness CLOSED。 |
+| T6-B HeterogeneousTargetStatic | DONE / PASS ON MAIN | PR #22 已合并；8165/8166 canonical 2x PASS；Worker hash 与 Target topology/demand/plan/execution/guidance deterministic MATCH；7 profile、20/20 inside、unrouted/overbook/hard failure=0。Correctness CLOSED。 |
+| T6-C HeterogeneousTargetMoving | DONE / PASS ON MAIN | PR #23 已合并到 `main@7f0f4247`；correctness CLOSED。 |
 
 ---
 
@@ -159,8 +159,8 @@ OPEN    尚未达到最终完成定义
 | Sparse correction / digest | DONE | 普通一致性不要求每帧全量 Transform authority。 |
 | Late Join contract | DONE | Checkpoint → Resource Revisions → Event Baseline → Delta。 |
 | Relevancy | DONE | Relevant set/snapshot 位于公共 Networking。 |
-| Post-cut network/checkpoint regression | PARTIAL | Worker codec/packet transport 3/3、T7 authority digest + sparse correction recovery 已通过 canonical 2/2 和 extended 3/3；LateJoin 与其它正式 network 场景仍 OPEN。 |
-| 双端 T8 runner | PARTIAL | 历史业务日志存在但正式 runner 有误判/超时；post-cut 双端 formal evidence 仍未关闭。 |
+| Post-cut network/checkpoint regression | PARTIAL / LATEJOIN OPEN | Worker codec/packet transport 3/3、T7 authority digest + sparse correction recovery 已通过 canonical 2/2 和 extended 3/3；LateJoin 与其它正式 network 场景仍 OPEN。 |
+| 双端 T8 runner | OPEN | 历史业务日志存在但正式 runner 有误判/超时；post-cut 双端 formal evidence 仍未关闭。 |
 
 ---
 
@@ -185,7 +185,9 @@ OPEN    尚未达到最终完成定义
 | 旧 PostFinalize diagnostics | DONE / removed | 依赖旧 Stage / Prepared Particle second-pass 的路径已经删除。 |
 | Worker Target observability | DONE | `Target` / `TargetCohort` 只读 checkpoint + runner rejection gate 已进入 current path。 |
 | Particle/其它 special metrics current completeness | PARTIAL | 继续确认哪些指标由 Worker retained state 产生、哪些 checkpoint derive、哪些 test-only observer。 |
-| post-cut Golden/perf baseline | PARTIAL | T1/T2/T3/T4、T5、T6-A/T6-B、T7 与 T8 server-only 有当前数据；T6-C、LateJoin、完整双端 T8、规模与最终性能仍需更新。 |
+| post-cut Golden/perf baseline | PARTIAL | T1/T2/T3/T4、T5、T6-A/T6-B/T6-C、T7 与 T8 server-only 有当前数据；LateJoin、完整双端 T8、规模与最终性能仍需更新。 |
+| Automated Behavior / Visual Acceptance | OPEN | Phase 3；尚未完成。UE 5.8 ProcessingQueue editor issue 延期到此阶段。 |
+| Human Visual Acceptance | OPEN | Phase 4；尚未完成。T2/T3 manual visual abnormality 延期到此阶段。 |
 
 ---
 
@@ -234,10 +236,10 @@ Performance
 
 ## 15. 当前主要 OPEN Gate
 
-1. **Post-cut Runtime Regression remainder**：T6-C、LateJoin/剩余 network、完整双端 T8、剩余 diagnostics。
-2. **Duplicate Kernel / Host Shell Cleanup**：删无消费者实现，拆大型 RoundSim host subsystem。
-3. **Particle Scaling**：Island-level tasks + 单大型 Island Cell-Pair/per-round barrier。
-4. **WA9 Full-Scale Acceptance**：1k→2k→5k→10k 同一 Production path，双端网络/表现/性能。
-5. **Test Harness Reliability**：双端 T8 runner 误判/超时。
+1. **Missing Specialist Correctness Gates**：LateJoin/剩余 network、完整双端 T8、剩余 diagnostics 与已确认 unified-behavior migration debt。
+2. **Performance / Scaling**：1k→2k→5k→10k，同一 Production path；包含 Particle island scaling。
+3. **Automated Behavior / Visual Acceptance**：自动化行为、视觉与 editor/runner gates。
+4. **Human Visual Acceptance**：人工视觉审查。
+5. **Demo Acceptance**：只有前述阶段全部关闭后才可标记 CLOSED。
 
 历史完成过程不在本文累积；正式证据状态以 `TestScenarioMatrix.md` 为准。

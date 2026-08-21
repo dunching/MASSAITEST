@@ -39,7 +39,7 @@ RETIRED       验收对象/机制已从当前架构物理删除，不再作为�
 | Minimal Full Production T8 server-only | PASS | 900 batches、90,940 patches、150 Ordered Events、attack/spawn/impact/damage=50/50/50/50、duplicate=0/0、Golden 一致。 | Target capacity 修改不应影响；后续双端仍需 formal runner。 |
 | T1/T2/T3/T4 post-cut canonical | PASS / POST-CUT | 当前 correction-rebase 源码上各重跑 1 次；Full Worker Production、runner gate valid。 | 后续对应 domain 修改继续回归。 |
 | T7 client authority correction recovery | PASS / POST-CUT | canonical 2/2 + 60 秒 extended 3/3；每次 sparse correction 后 prediction 恢复，runtime hard failure=0、sidecar mismatch=0、最终 authority converge。 | 保持 clean barrier、correction fence、same-revision conflict fail-closed。 |
-| 双端 T8 formal runner | REVALIDATE / tool issue | 业务历史证据存在，但正式 runner completion 仍有误判/超时债。 | 修 runner 后正式双端执行。 |
+| 双端 T8 formal runner | OPEN / tool issue | 业务历史证据存在，但正式 runner completion 仍有误判/超时债。 | Phase 1 修 runner 后正式双端执行。 |
 | T5 Worker Target observability | PASS ON MAIN | ResultApply `Target` / `TargetCohort` 只读 checkpoint valid；Capacity/Assignable/Overflow/CapacityHold machine-readable；absolute Plan build tick 保留可观察但不污染跨进程语义 hash；main landing runner gates PASS 9/9。 | 后续 Target schema/observer 修改继续保持。 |
 | T5 Static long-window | PASS ON MAIN | `main@182f4d8` 20-agent `fixed_step=1199` 重复 2/2 PASS；`worker_state_hash=2552718252579781132`、transport/execution/guidance=`2904239141/215575823/3690210786` 均 MATCH；capacity/assignable/overflow/hold=`162/20/0/0`；unrouted/rejection=0。 | 保持 deterministic regression。 |
 | Moving objective absolute clock | PASS | objective effective tick 与 Worker absolute tick 对齐；pre-round uptime 不进入 objective age。 | 边界能力实现后保持。 |
@@ -48,16 +48,19 @@ RETIRED       验收对象/机制已从当前架构物理删除，不再作为�
 | T5 Moving boundary/corner capacity | PASS / CLOSED ON MAIN | `main@182f4d8` canonical Moving 2/2 PASS，`fixed_step=1199`；capacity/assignable/overflow/CapacityHold=`16/16/4/4`；worker/transport/execution/guidance=`14917583195891517447/1132313112/3830538097/1265691592` 全部 MATCH；rejection/source-attachment/unrouted/overbook/hard failure=0。Correctness CLOSED；realtime `0.662/0.661`，performance OPEN。 | 保持 correctness；性能单独进入后续 gate。 |
 | TargetRegionTransport automation | PASS ON MAIN | Core 2/2（含 BoundaryCapacity 1/1）、`CrowdDemo.SoftPressure.TargetRegionTransport` 7/7、Plugin/Core equivalence 1/1、WorkPipeline 1/1。 | 后续 Target 变更继续全量回归。 |
 | RuntimeV2 Target | PASS ON MAIN | RuntimeV2 Target 4/4、TargetObservability 2/2、Dynamic SharedFlow 1/1；既有 GuidanceShard10k 1/1（505.870s）证据保留。 | 保持 scoped invalidation/determinism。 |
-| T6-A HeterogeneousTransit | PASS / 2X DETERMINISTIC | 最终 `8147/8148`：20/20/20/20，hard/swept/deadlock/unreachable=0；Worker hash `17016630613422674083`，progress/topology/demand/transport/guidance/validation hashes 全部 MATCH；RuntimeV2 42/42。 | 保持 heterogeneous Profile、Particle safety、Target handoff 与 future-effective Objective fence。 |
-| T6-B HeterogeneousTargetStatic | PASS / READY PR | `8165/8166` 2x canonical deterministic PASS；20/20 inside、7 profile、capacity/assignable/overflow/hold=`238/20/0/0`、unrouted/overbook/hard failure=`0/0/0`；Worker 与 Target 五组语义 hash 全部 MATCH。 | 保持 profile-aware capacity、Worker-only authority 与 T6-B runner gate。 |
-| T6-C HeterogeneousTargetMoving | OPEN | 单次 `8150` smoke 到 server t=61.43 仍缺 Worker Target checkpoint；hard failure=0，未修复、未重试。 | 独立调查 moving heterogeneous completion/source attachment/demand。 |
-| Lifecycle | BASELINE / REVALIDATE | 旧 2/2 证据存在；T1、T6-A、T6-B 已有 post-cut evidence。 | T6-C 与完整 LateJoin lifecycle 继续回归。 |
+| T6-A HeterogeneousTransit | PASS / CLOSED ON MAIN | 最终 `8147/8148` 2x deterministic：20/20/20/20，hard/swept/deadlock/unreachable=0；Worker hash `17016630613422674083`，progress/topology/demand/transport/guidance/validation hashes 全部 MATCH；RuntimeV2 42/42。 | 保持 heterogeneous Profile、Particle safety、Target handoff 与 future-effective Objective fence。 |
+| T6-B HeterogeneousTargetStatic | PASS / CLOSED ON MAIN | PR #22 已合并；`8165/8166` 2x canonical deterministic PASS；20/20 inside、7 profile、capacity/assignable/overflow/hold=`238/20/0/0`、unrouted/overbook/hard failure=`0/0/0`；Worker 与 Target 五组语义 hash 全部 MATCH。 | 保持 profile-aware capacity、Worker-only authority 与 T6-B runner gate。 |
+| T6-C HeterogeneousTargetMoving | PASS / CLOSED ON MAIN | Correctness 经 PR #23 合并到 `main@7f0f4247`；旧 `8150` smoke 不再代表当前状态。 | 保持 heterogeneous moving target correctness，不外推为 LateJoin、Dual T8 或 performance PASS。 |
+| Lifecycle | BASELINE / REVALIDATE | 旧 2/2 证据存在；T1、T6-A、T6-B、T6-C 已有 post-cut evidence。 | 完整 LateJoin lifecycle 继续回归。 |
 | WorkRing / TimeWheel / Spatial 10k | BASELINE | 1k/2k/5k/10k scheduler、10k sparse wakeup、10k dirty spatial 专项已有记录。 | WA9 前最终源码重跑。 |
 | Target 10k 双 Cohort scoped invalidation | PASS / regression invariant | 受影响 Cohort 执行，未受影响 Cohort 无 Dirty/Topology rebuild。 | finite capacity / claim 改动后必须保持。 |
 | Particle 多闭合 Island | BASELINE | independent sub-solve + stable merge + global exact validation 已有专项证据。 | Particle scaling 改动前后都需 reference regression。 |
 | Particle 多 Island UE Task 并行 | OPEN | 当前算法分岛不等于每岛独立 UE Task。 | 实现后证明 determinism + speedup。 |
 | Particle 大型单 Island | OPEN | Cell-Pair Owner / per-round Barrier 未完成。 | 1k/2k/5k/10k dense single-island correctness/perf。 |
-| Networking / Late Join post-cut | PARTIAL | Worker network automation 3/3 与 T7 digest/sparse correction recovery 已重验；一次非 canonical late-join client 暴露 objective bootstrap decode fail-closed，未在本轮处理。 | 独立重跑 checkpoint/LateJoin 正式 baseline；不得用 T7 correction PASS 替代。 |
+| Networking / Late Join post-cut | PARTIAL / LATEJOIN OPEN | Worker network automation 3/3 与 T7 digest/sparse correction recovery 已重验；一次非 canonical late-join client 暴露 objective bootstrap decode fail-closed，未在本轮处理。 | 独立重跑 checkpoint/LateJoin 正式 baseline；不得用 T7 correction PASS 替代。 |
+| Performance / Scaling | OPEN | 专项 baseline 不等于完整 production performance gate。 | Phase 2 按 1k→2k→5k→10k 依次建立 correctness-preserving evidence。 |
+| Automated Behavior / Visual Acceptance | OPEN | 尚未执行最终自动化行为/视觉门。 | Phase 3 处理；包含延期的 UE 5.8 ProcessingQueue editor issue。 |
+| Human Visual Acceptance | OPEN | 尚未执行最终人工视觉门。 | Phase 4 处理；包含延期的 T2/T3 manual visual abnormality。 |
 | WA9 完整 10k Production | NOT RUN | 尚无当前完整 gameplay/network/presentation 10k 门。 | 1k→2k→5k→10k 完整验收。 |
 
 ---
@@ -79,7 +82,7 @@ T1/T2/T3/T4 canonical                          PASS / POST-CUT
 T7 client presentation + correction recovery  PASS / POST-CUT
 ```
 
-这些结果证明 Worker-only live path、T1–T4、T6-A、T6-B 和 T7 sparse correction recovery 可运行，但不自动关闭 T6-C、LateJoin/其余 network 场景或完整双端 T8。
+这些结果与 PR #23 landing 证明 Worker-only live path、T1–T4、T6-A、T6-B、T6-C 和 T7 sparse correction recovery 已有当前证据，但不自动关闭 LateJoin/其余 network 场景、完整双端 T8、Performance 或视觉验收。
 
 ## 3.2 First-step bootstrap 合同
 
@@ -143,9 +146,9 @@ Target capacity 实现不得恢复 Demo Target/Resource Prepared Transaction。
 | T3 | 双向交换、Local Predictive、公平让行、安全穿越 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 direct intent、local prediction 与 determinism。 |
 | T4 | 窄通道/出口安全、环境约束 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 non-particle/obstacle bootstrap + Worker movement。 |
 | T5 | Static/Moving Target、Polar Transport、长期稳定 | CLOSED ON MAIN | PR #18 已合并；`main@182f4d8` Static/Moving 均 1199-step 2/2 deterministic PASS。Correctness CLOSED，performance OPEN。 |
-| T6 | 异构 Radius/Mobility/Distance Band 联合运行 | T6-A/T6-B PASS；T6-C OPEN | T6-A 与 T6-B 均完成 2x deterministic；不得外推为整个 T6 PASS。T6-C 仍留给独立任务。 |
+| T6 | 异构 Radius/Mobility/Distance Band 联合运行 | T6-A/T6-B/T6-C CORRECTNESS CLOSED | T6-A、T6-B、T6-C correctness 均已进入 main；T6-C 经 PR #23 合并。不得外推为 LateJoin、Dual T8、performance 或 visual acceptance PASS。 |
 | T7 | VAT、多视觉状态、HitReact/Knockback/Death | PASS / POST-CUT / CORRECTION RECOVERY VERIFIED | Worker combat result → client presentation；canonical 2/2 + extended 3/3，correction 后最终 converge。 |
-| T8 | Combat、Projectile、Impact/Hit、Damage、Event、Golden | SERVER PASS / DUAL REVALIDATE | server-only 当前 PASS；双端 formal runner 仍需关闭。 |
+| T8 | Combat、Projectile、Impact/Hit、Damage、Event、Golden | SERVER PASS / DUAL OPEN | server-only 当前 PASS；双端 formal runner 仍需关闭。 |
 
 场景不能互相替代。
 
@@ -437,12 +440,12 @@ Golden              = 439379904 / 1411313634 / 6141440
 # 15. 当前推荐执行顺序
 
 ```text
-1. T6-C formal regression
-2. network / checkpoint / late join
-3. 双端 T8 runner
-4. Duplicate Kernel / Host cleanup
-5. Particle scaling
-6. WA9 1k→2k→5k→10k
+Phase 0  Unified Behavior / Development Rule Cut
+Phase 1  Missing Specialist Correctness Gates
+Phase 2  Performance / Scaling 1k → 2k → 5k → 10k
+Phase 3  Automated Behavior / Visual Acceptance
+Phase 4  Human Visual Acceptance
+Phase 5  Demo Acceptance CLOSED
 ```
 
 后续 main regression 若重新出现 Target correctness failure，重新打开 T5 gate；不通过反弹 Target、减少 Agent、关闭安全约束或删除 Demand gate 伪造 PASS。

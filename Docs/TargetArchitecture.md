@@ -143,6 +143,114 @@ metrics
 永久 compatibility writer
 ```
 
+### 3.7 统一 Behavior 开发硬规则
+
+> **A TEST NAME MAY DECIDE WHAT TO CONFIGURE AND WHAT TO ASSERT.**
+>
+> **A TEST NAME MUST NEVER DECIDE HOW THE SIMULATION BEHAVES.**
+
+`Objective`、`Profile`、`Environment`、`Capability`、`Behavior Source` 输入无论来自 T1、T2、T3、T4、T5、T6、map name、runner name 或 scenario helper，都必须进入同一条 Worker Domain production path。
+
+场景代码可以拥有：
+
+```text
+Fixture
+  - spawn / initial layout / obstacle geometry / agent count
+
+External Behavior Configuration
+  - Objective / Target / Target motion / Cohort / Behavior Source
+
+Capability / Profile
+  - radius / speed / mobility / hard gap / soft margin / TargetRegion enabled
+
+Acceptance
+  - completion / deadlock / unrouted / hard overlap / capacity / determinism
+
+Diagnostic / Presentation
+  - logs / markers / labels / runner gates
+```
+
+场景代码不得拥有：
+
+```text
+SharedFlow algorithm
+Target capacity / admission / Demand / Plan / Claim
+Guidance algorithm
+Movement algorithm
+Local Predictive algorithm
+Particle solver behavior
+Worker scheduling semantics
+```
+
+### 3.8 Formation / Objective / Cohort 合同
+
+`FormationIndex` **不是 production movement contract**。
+
+允许用途：
+
+```text
+initial spawn layout
+fixture identity
+acceptance grouping
+debug / presentation label
+```
+
+禁止用途：
+
+```text
+continuous Flow selection
+per-tick destination
+preferred velocity
+Target Cell / Target Claim
+persistent movement slot
+rigid formation translation
+```
+
+多方向人群必须使用显式 `ObjectiveRef`、`CohortKey` 与 Flow resource association，例如：
+
+```text
+Cohort A → Objective North
+Cohort B → Objective South
+```
+
+两者消费同一套通用 Runtime machinery；禁止 `FormationIndex → Flow selection`。
+
+`TargetRegion` 是 spatial capacity / transport，不是 formation slots，也不建立永久 Agent→Cell ownership。
+
+### 3.9 Dynamic Flow / TargetRegion activation 合同
+
+Dynamic SharedFlow refresh 只能由以下语义变化驱动：
+
+```text
+Objective semantic change
+Environment semantic change
+resolved Flow anchor change
+```
+
+不得由 `PursuitAndSettleMoving`、`HeterogeneousTargetMoving` 或任何 scenario enum 驱动。
+
+TargetRegion activation 必须通过显式 `Behavior state`、`Objective state` 或 `Capability / TargetRegion activation input` 表达；不得依赖 test progress、acceptance progress 或 scenario identity。
+
+### 3.10 Acceptance Harness 合同
+
+以下行为属于 Acceptance Harness / Runner，而不是 production navigation behavior：
+
+```text
+completion hold
+recording settle window
+visual pause
+test shutdown
+checkpoint wait
+```
+
+T4 `group_exit_hold` 是已知迁移债，不是 corridor navigation logic。
+
+### 3.11 MovementProfile 合同
+
+`MovementProfile` 只承载稳定运动事实，例如 maximum speed、radius、mobility 与 navigation-related profile data。
+
+长期不得通过 `MovementProfileRevision` 混载 lifecycle、spawn/despawn、temporary hold、movement lock、impulse 或 correction；这些变化必须使用显式通用合同或 Behavior Sources。
+
 ---
 
 ## 4. 模块边界与依赖方向
@@ -450,19 +558,21 @@ Source 通过通用 Channel 贡献并由 Resolver 合并。
 ```text
 Behavior / Objective
         ↓
-Macro Guidance
-   ├── Shared Flow
-   └── Target Region Transport（可选）
+Flow / Resource
         ↓
-Preferred Movement
+Target Region（按需）
         ↓
-Local Predictive Interaction
+Movement Planning
+        ↓
+Local Predictive
         ↓
 Movement Predict
         ↓
-Particle / Environment Safety
+Particle / Interaction
         ↓
 Facing / Finalize
+        ↓
+Publish
 ```
 
 ### Shared Flow
@@ -471,17 +581,25 @@ Facing / Finalize
 
 ### Target Region Transport
 
-解决接近目标后的目标相对宏观分布、有限容量和 admission。
+解决接近目标后的有限容量空间分布、transport 和 admission。
 
 ### Local Predictive
 
-解决短时间尺度局部速度冲突和公平让行。
+解决 short-horizon local yielding / conflict resolution。
+
+### Movement
+
+负责 provisional kinematic progression。
 
 ### Particle
 
 最终保证 Hard / Swept / Obstacle / Bounds / Environment Safety。
 
-这四层不能互相吞并职责。
+### Facing / Finalize
+
+负责 final committed motion/facing state，之后才可 Publish。
+
+各层不能互相吞并职责。
 
 ---
 

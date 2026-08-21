@@ -391,27 +391,33 @@ Execution Rank 是全局推进顺序；Executor `GetDependencies()` 是显式 pr
 ```text
 Behavior / Objective
         ↓
-Macro Guidance
-   ├── Shared Flow
-   └── Target Region Transport（按需）
+Flow / Resource
+        ↓
+Target Region（按需）
         ↓
 Movement Planning
         ↓
-Local Predictive Interaction
+Local Predictive
         ↓
 Movement Predict
         ↓
-Particle / Environment Safety
+Particle / Interaction
         ↓
 Facing / Finalize
+        ↓
+Publish
 ```
 
 职责：
 
-- Shared Flow：世界空间宏观路线与障碍方向。
-- Target Region：目标附近宏观人口分布和运输。
-- Local Predictive：短时间尺度可执行速度修正。
-- Particle：最终 Hard / Swept / Environment / Bounds 安全。
+- SharedFlow：macro route / world-space navigation guidance。
+- TargetRegion：near-target finite-capacity spatial distribution，不是 formation slots。
+- Local Predictive：short-horizon local yielding / conflict resolution。
+- Movement：provisional kinematic progression。
+- Particle / Interaction：最终 Hard / Swept / Obstacle / Bounds / Environment Safety。
+- Facing / Finalize：final committed motion/facing state。
+
+所有 `Objective`、`Profile`、`Environment`、`Capability`、`Behavior Source` 必须进入这条统一 Worker Domain path。测试名可以决定配置与断言，不得决定模拟算法或调度语义。完整责任合同见 `TargetArchitecture.md` §3.7–§3.11。
 
 ---
 
@@ -622,6 +628,19 @@ Demo-specific test and visualization support
 
 ## 19. 当前剩余 Legacy / Migration Debt
 
+`MassCrowdSimulation` Plugin production Core/Runtime 当前没有 Demo scenario/test/map-name simulation branch；已确认的 scenario-driven simulation coupling 位于 Demo host/bootstrap。它们是后续代码迁移债，本轮文档切片不修改其行为：
+
+| 范围 | 已确认迁移债 | 目标合同 |
+|---|---|---|
+| T3 | `FormationIndex` 选择 Flow；authoritative preferred-velocity bypass | 显式 `ObjectiveRef` / `CohortKey` / Flow association，进入通用 Movement Planning |
+| T1 | scenario-name Flow bypass；zero authoritative velocity path | 通用 lifecycle / capability / Behavior Source / movement-lock 输入 |
+| Moving Flow | SharedFlow refresh 由 scenario enum 驱动 | Objective / Environment / resolved Flow anchor 语义变化 |
+| T6-A | TargetRegion activation 由 scenario progress 驱动 | 显式 Behavior / Objective / Capability activation input |
+| T4 | `group_exit_hold` 位于 runtime host | 移至 Acceptance Harness / Runner |
+| T7 | `FormationIndex` 驱动 continuous movement | 显式 Objective / Cohort / Profile / Behavior Source |
+
+`FormationIndex` 只允许用于 initial spawn layout、fixture identity、acceptance grouping 和 debug/presentation label；不得持续决定 Flow、destination、preferred velocity、Target Cell/Claim、movement slot 或 rigid translation。
+
 ### 19.1 Demo generic duplicate implementations
 
 Plugin Core 与 Demo 仍存在 LocalPredictive / Particle / SharedFlow / Target 等重复或兼容实现。
@@ -675,12 +694,14 @@ Moving objective clock                      PASS
 Runtime-owned dynamic SharedFlow            PASS
 Target boundary/corner capacity automation  PASS ON MAIN
 Moving T5 fixed_step=1199 repeat             PASS ON MAIN
+T6-A heterogeneous transit                   CLOSED
+T6-B heterogeneous static target             CLOSED
+T6-C heterogeneous moving target             CLOSED / PR #23 MERGED
 ```
 
 当前尚未关闭：
 
 ```text
-T1/T2/T3/T4/T6/T7 post-cut regression
 Networking / Late Join regression
 双端 T8 formal runner
 remaining diagnostics
@@ -696,12 +717,12 @@ WA9
 
 ```text
 1. Post-cut Regression Remainder
-   - T1/T2/T3/T4/T6/T7
    - network / checkpoint / late join
    - 双端 T8
    - remaining diagnostics
 
-2. Duplicate Kernel / Host Shell Cleanup
+2. Unified Behavior Migration Debt
+   - T1/T3/T4/T6-A/T7 与 Moving Flow 的已确认 scenario coupling
    - 删除确认失去消费者的 Demo generic implementation
    - 拆 RoundSimPipeline host responsibilities
 
@@ -720,6 +741,6 @@ WA9
 
 ## 22. 当前总体结论
 
-当前 main 的架构结论：
+当前 `main@7f0f42478b731b6f4d9147163d9a8f61d1ae39aa` 的架构结论：
 
-> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；第一代跨帧 Round Transaction、旧 Stage surface 和 Prepared second-pass commit channels 已从 Production source 物理删除。PR #18 已合并到 `main@182f4d8dc856102b3a80ade0dc6506ff678c1d6a`，Moving Objective absolute clock、Runtime-owned dynamic SharedFlow refresh 与 clipped finite-capacity / Overflow 已在 main 上通过 Build、Automation 与 Static/Moving 1199-step deterministic repeat。T5 correctness 已关闭；Moving realtime `0.662/0.661` 仍未达到最终 performance gate，不能写成 performance closed。**
+> **Persistent Worker 已经成为 Demo live server 的持续模拟权威；Plugin production Core/Runtime 当前无 Demo scenario/test/map-name simulation branch，但 Demo host/bootstrap 仍有已列出的 scenario-driven simulation coupling。T6-A、T6-B、T6-C correctness 均已关闭，其中 T6-C 经 PR #23 合并。LateJoin、完整双端 T8、Performance、Automated Behavior / Visual Acceptance 与 Human Visual Acceptance 仍为 OPEN。**
