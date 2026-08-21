@@ -9,6 +9,7 @@
 #include "MassCrowdWorkerInteractionDomain.h"
 #include "MassCrowdWorkerLifecycleBehaviorDomain.h"
 #include "MassCrowdWorkerFlowResource.h"
+#include "MassCrowdWorkerFlowBinding.h"
 #include "MassCrowdLocalPredictiveWork.h"
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerMovementControlResource.h"
@@ -1003,6 +1004,277 @@ bool FCrowdWorkerTimeWheelTest::RunTest(
     Wheel.InvalidateEntityRevision(
       Baseline.Key.EntityRef, 1),
     1);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerDependencyBidirectionalBatchTest,
+  "MassCrowd.RuntimeV2.DependencyIndex.BidirectionalBatch",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerDependencyBidirectionalBatchTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  const auto Source = [](const uint64 ScopeKey)
+  {
+    return FCrowdWorkerDependencyKey{
+      ECrowdWorkerDependencyKind::Resource, {}, ScopeKey};
+  };
+  const auto Declaration = [&Source](
+    const uint64 ScopeKey, const uint64 EntityId)
+  {
+    FCrowdWorkerDependencyDeclaration Result;
+    Result.Source = Source(ScopeKey);
+    Result.Dependent = MakeEntityWork(
+      ECrowdWorkerDomainId::MovementPlanning, EntityId);
+    return Result;
+  };
+
+  // D1/D2: one dependent changes only its source edge.
+  FCrowdWorkerDependencyIndex Single;
+  TestTrue(TEXT("D1 reset"), Single.Reset(8));
+  TArray<FCrowdWorkerDependencyDeclaration> Batch{
+    Declaration(101, 1)};
+  TestEqual(TEXT("D1 initial replace"),
+    Single.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TestTrue(TEXT("D1 invariant"), Single.ValidateInvariants());
+  Batch = {Declaration(102, 1)};
+  TestEqual(TEXT("D2 rebind"),
+    Single.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TestFalse(TEXT("D2 old edge removed"),
+    Single.ContainsDependency(Source(101), Batch[0].Dependent.Key));
+  TestTrue(TEXT("D2 new edge present"),
+    Single.ContainsDependency(Source(102), Batch[0].Dependent.Key));
+  TestEqual(TEXT("D2 exact edge count"), Single.NumEdges(), 1);
+
+  // D3: changing one member of a shared source does not touch the other 99.
+  FCrowdWorkerDependencyIndex Shared;
+  TestTrue(TEXT("D3 reset"), Shared.Reset(256));
+  Batch.Reset();
+  for (uint64 EntityId = 1; EntityId <= 100; ++EntityId)
+    Batch.Add(Declaration(201, EntityId));
+  TestEqual(TEXT("D3 build"),
+    Shared.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerDependencyDeclaration> One{
+    Declaration(202, 1)};
+  TestEqual(TEXT("D3 replace one"),
+    Shared.ReplaceDependenciesForDependents(One),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerWorkItem> Collected;
+  TestEqual(TEXT("D3 99 remain"),
+    Shared.CollectDependents(Source(201), Collected), 99);
+  Collected.Reset();
+  TestEqual(TEXT("D3 one rebound"),
+    Shared.CollectDependents(Source(202), Collected), 1);
+  TestTrue(TEXT("D3 invariant"), Shared.ValidateInvariants());
+
+  // D4: entity-owned dependent and entity source edges are removed both ways.
+  FCrowdWorkerDependencyIndex Lifecycle;
+  TestTrue(TEXT("D4 reset"), Lifecycle.Reset(8));
+  const FCrowdStableEntityRef RemovedEntity{1, 41, 1};
+  FCrowdWorkerDependencyDeclaration EntityDependent;
+  EntityDependent.Source = Source(301);
+  EntityDependent.Dependent = MakeEntityWork(
+    ECrowdWorkerDomainId::MovementPlanning, 41);
+  FCrowdWorkerDependencyDeclaration EntitySource;
+  EntitySource.Source = {
+    ECrowdWorkerDependencyKind::Entity, RemovedEntity, 7};
+  EntitySource.Dependent = MakeEntityWork(
+    ECrowdWorkerDomainId::MovementPlanning, 42);
+  Batch = {EntityDependent, EntitySource};
+  TestEqual(TEXT("D4 build"),
+    Lifecycle.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("D4 removes both edge roles"),
+    Lifecycle.RemoveEntity(RemovedEntity), 2);
+  TestEqual(TEXT("D4 empty"), Lifecycle.NumEdges(), 0);
+  TestTrue(TEXT("D4 invariant"), Lifecycle.ValidateInvariants());
+
+  // D5/D6: restore and reversed declaration order have identical records.
+  TArray<FCrowdWorkerDependencyRecord> Records;
+  Shared.GetRecords(Records);
+  FCrowdWorkerDependencyIndex Restored;
+  TestTrue(TEXT("D5 reset"), Restored.Reset(256));
+  TestTrue(TEXT("D5 restore"), Restored.RestoreRecords(Records));
+  TArray<FCrowdWorkerDependencyRecord> RestoredRecords;
+  Restored.GetRecords(RestoredRecords);
+  TestTrue(TEXT("D5 records preserved"), Records == RestoredRecords);
+  TestTrue(TEXT("D5 invariant"), Restored.ValidateInvariants());
+  Algo::Reverse(Batch);
+  FCrowdWorkerDependencyIndex ReverseOrder;
+  TestTrue(TEXT("D6 reset"), ReverseOrder.Reset(8));
+  TestEqual(TEXT("D6 reverse build"),
+    ReverseOrder.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerDependencyRecord> ReverseRecords;
+  ReverseOrder.GetRecords(ReverseRecords);
+  FCrowdWorkerDependencyIndex ForwardOrder;
+  TestTrue(TEXT("D6 forward reset"), ForwardOrder.Reset(8));
+  Algo::Reverse(Batch);
+  TestEqual(TEXT("D6 forward build"),
+    ForwardOrder.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerDependencyRecord> ForwardRecords;
+  ForwardOrder.GetRecords(ForwardRecords);
+  TestTrue(TEXT("D6 deterministic records"),
+    ForwardRecords == ReverseRecords);
+
+  // D7: a large three-edge-per-dependent batch has an exact count.
+  FCrowdWorkerDependencyIndex Many;
+  constexpr int32 DependentCount = 1000;
+  TestTrue(TEXT("D7 reset"), Many.Reset(DependentCount * 3));
+  Batch.Reset(DependentCount * 3);
+  for (int32 Index = 0; Index < DependentCount; ++Index)
+  {
+    const uint64 EntityId = static_cast<uint64>(Index + 1);
+    Batch.Add(Declaration(401, EntityId));
+    Batch.Add(Declaration(402 + (Index & 1), EntityId));
+    Batch.Add(Declaration(404 + (Index & 1), EntityId));
+  }
+  TestEqual(TEXT("D7 batch replace"),
+    Many.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("D7 exact edge count"),
+    Many.NumEdges(), DependentCount * 3);
+  TestEqual(TEXT("D7 high watermark"),
+    Many.GetHighWatermark(), DependentCount * 3);
+  TestTrue(TEXT("D7 invariant"), Many.ValidateInvariants());
+
+  // D8: capacity preflight rejects without mutating either direction.
+  FCrowdWorkerDependencyIndex Capacity;
+  TestTrue(TEXT("D8 reset"), Capacity.Reset(2));
+  Batch = {Declaration(501, 1), Declaration(502, 2)};
+  TestEqual(TEXT("D8 initial build"),
+    Capacity.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TArray<FCrowdWorkerDependencyRecord> Before;
+  Capacity.GetRecords(Before);
+  Batch = {Declaration(501, 1), Declaration(503, 1)};
+  TestEqual(TEXT("D8 capacity reject"),
+    Capacity.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::RejectedCapacity);
+  TArray<FCrowdWorkerDependencyRecord> After;
+  Capacity.GetRecords(After);
+  TestTrue(TEXT("D8 state atomic"), Before == After);
+  TestTrue(TEXT("D8 invariant"), Capacity.ValidateInvariants());
+
+  // D8 also covers a full-capacity redistribution whose final count fits.
+  // All stale edges must be removed before any new edge is inserted, or the
+  // first dependent can encounter a transient capacity rejection.
+  FCrowdWorkerDependencyIndex CapacityRedistribution;
+  TestTrue(TEXT("D8 redistribution reset"),
+    CapacityRedistribution.Reset(3));
+  Batch = {
+    Declaration(601, 1),
+    Declaration(603, 2),
+    Declaration(604, 2)};
+  TestEqual(TEXT("D8 redistribution initial build"),
+    CapacityRedistribution.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  Batch = {
+    Declaration(601, 1),
+    Declaration(602, 1),
+    Declaration(603, 2)};
+  TestEqual(TEXT("D8 redistribution at capacity"),
+    CapacityRedistribution.ReplaceDependenciesForDependents(Batch),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("D8 redistribution exact edge count"),
+    CapacityRedistribution.NumEdges(), 3);
+  TestTrue(TEXT("D8 redistribution new edge"),
+    CapacityRedistribution.ContainsDependency(
+      Source(602), Batch[1].Dependent.Key));
+  TestFalse(TEXT("D8 redistribution stale edge"),
+    CapacityRedistribution.ContainsDependency(
+      Source(604), Batch[2].Dependent.Key));
+  TestTrue(TEXT("D8 redistribution invariant"),
+    CapacityRedistribution.ValidateInvariants());
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdWorkerGenericResourceDependencyPropagationTest,
+  "MassCrowd.RuntimeV2.ResourceDependencyPropagation",
+  EAutomationTestFlags::EditorContext
+    | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdWorkerGenericResourceDependencyPropagationTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  constexpr uint64 ObjectiveAId = 701;
+  constexpr uint64 ObjectiveBId = 702;
+  constexpr uint64 FlowAId =
+    CrowdWorkerResourceIds::FlowResource(801);
+  constexpr uint64 FlowBId =
+    CrowdWorkerResourceIds::FlowResource(802);
+  const uint64 ObjectiveAResource =
+    CrowdWorkerResourceIds::ObjectiveRevision(ObjectiveAId);
+  const uint64 ObjectiveBResource =
+    CrowdWorkerResourceIds::ObjectiveRevision(ObjectiveBId);
+
+  const FCrowdWorkerWorkItem WorkA = MakeEntityWork(
+    ECrowdWorkerDomainId::MovementPlanning, 1);
+  const FCrowdWorkerWorkItem WorkB = MakeEntityWork(
+    ECrowdWorkerDomainId::MovementPlanning, 2);
+  TArray<FCrowdWorkerDependencyDeclaration> Declarations;
+  for (const TPair<uint64, FCrowdWorkerWorkItem>& Pair : {
+      TPair<uint64, FCrowdWorkerWorkItem>(ObjectiveAResource, WorkA),
+      TPair<uint64, FCrowdWorkerWorkItem>(FlowAId, WorkA),
+      TPair<uint64, FCrowdWorkerWorkItem>(ObjectiveBResource, WorkB),
+      TPair<uint64, FCrowdWorkerWorkItem>(FlowBId, WorkB)})
+  {
+    FCrowdWorkerDependencyDeclaration Declaration;
+    Declaration.Source = {
+      ECrowdWorkerDependencyKind::Resource, {}, Pair.Key};
+    Declaration.Dependent = Pair.Value;
+    Declarations.Add(Declaration);
+  }
+  FCrowdWorkerDependencyIndex Index;
+  TestTrue(TEXT("resource propagation index reset"), Index.Reset(8));
+  TestEqual(TEXT("resource propagation dependencies register"),
+    Index.ReplaceDependenciesForDependents(Declarations),
+    ECrowdWorkerQueueResult::Added);
+
+  FCrowdWorkerWorkRing Ring;
+  TestTrue(TEXT("resource propagation ring reset"), Ring.Reset(8, 1));
+  int32 DependentCount = 0;
+  TestEqual(TEXT("Objective A propagates generically"),
+    CrowdWorkerRuntimeV2EnqueueResourceDependents(
+      ObjectiveAResource, 1, Index, Ring, DependentCount),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("Objective A wakes one"), DependentCount, 1);
+  FCrowdWorkerWorkItem Popped;
+  TestTrue(TEXT("Objective A work pops"), Ring.PopCurrent(Popped));
+  TestTrue(TEXT("Objective A wakes only A"),
+    Popped.Key == WorkA.Key);
+  TestFalse(TEXT("Objective B remains untouched"),
+    Ring.PopCurrent(Popped));
+
+  TestEqual(TEXT("Flow A propagates generically"),
+    CrowdWorkerRuntimeV2EnqueueResourceDependents(
+      FlowAId, 1, Index, Ring, DependentCount),
+    ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("Flow A wakes one"), DependentCount, 1);
+  TestTrue(TEXT("Flow A work pops"), Ring.PopCurrent(Popped));
+  TestTrue(TEXT("Flow A wakes only A"),
+    Popped.Key == WorkA.Key);
+  TestFalse(TEXT("Flow B remains untouched"),
+    Ring.PopCurrent(Popped));
+
+  TestEqual(TEXT("explicit owner schedules A"),
+    Ring.EnqueueCurrent(WorkA), ECrowdWorkerQueueResult::Added);
+  TestEqual(TEXT("generic path merges explicit duplicate"),
+    CrowdWorkerRuntimeV2EnqueueResourceDependents(
+      FlowAId, 1, Index, Ring, DependentCount),
+    ECrowdWorkerQueueResult::Added);
+  TestTrue(TEXT("merged A work pops"), Ring.PopCurrent(Popped));
+  TestFalse(TEXT("duplicate does not execute twice"),
+    Ring.PopCurrent(Popped));
   return true;
 }
 

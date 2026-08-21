@@ -630,6 +630,12 @@ Demo-specific test and visualization support
 
 `MassCrowdSimulation` Plugin production Core/Runtime 当前没有 Demo scenario/test/map-name simulation branch；已确认的 scenario-driven simulation coupling 位于 Demo host/bootstrap。它们是后续代码迁移债，本轮文档切片不修改其行为：
 
+Worker Runtime 现已具备并通过 headless/server correctness 回归验证的、独立于 `MovementProfile` 的 entity-level `FlowBinding`：稳定 `ObjectiveRef`、显式非零 `CohortKey` 与 generic `FlowResourceId` 共同选择独立 versioned SharedFlow。`CohortKey` 是调用方显式提供的稳定宏观 Objective/navigation 分组元数据，不从 `AgentId` 或 `FormationIndex` 派生，也不拥有 scheduler、Flow resource 或 capacity。MovementPlanning 对显式绑定从当前 Worker kinematic position 采样对应 Flow；一次 planning execution 按 `(FlowResourceId, Revision)` 只解码/结构验证一次，验证后的每 Agent sample 不再扫描完整 Flow 数组。显式 clear/unbind 删除 `FlowBinding` authoritative field，并恢复既有 `Environment` fallback。
+
+DependencyIndex 以 Source→Dependent forward map 与 Dependent→Source reverse map 保持双向不变量。merged output 使用原子容量预检后的批量差分替换：只删除 stale edges、只添加 new edges，未变化关系不重建；`RemoveDependent` 与 replacement 的成本与受影响旧/新边相关，不再为每个 dependent 扫描完整索引。任意已提交 Resource revision 都通过 DependencyIndex 泛型唤醒已注册 work；Flow 与 Objective 使用同一传播机制，和显式 domain work 重合时由 WorkRing 合并。
+
+Slice B.5 synthetic 100/1k/10k 回归覆盖三边/Agent dependency graph、1%/100% rebind、clear、lifecycle removal、Flow/Objective scoped revision 与 typed Flow reuse。一次本机 headless final run 的 10k 证据为 30,000 edges、2 个 decoded Flow resources、初始批量替换 25.703 ms、Flow/Objective revision propagation 0.315/0.304 ms、1% rebind 0.282 ms、100% rebind 30.078 ms；相对 1k 的主要倍率为 8.70x–16.89x，未出现 quadratic 的约 100x shape。该能力只完成通用路由合同，T3 尚未迁移，仍保留旧 `FormationIndex` / authoritative preferred-velocity path，后续 Slice C 才迁移 Demo fixture。UE 5.8 rendered Editor/client Mass ProcessingQueue assertion 继续延期到 Phase 3，不属于 Slice B Runtime correctness blocker。
+
 | 范围 | 已确认迁移债 | 目标合同 |
 |---|---|---|
 | T3 | `FormationIndex` 选择 Flow；authoritative preferred-velocity bypass | 显式 `ObjectiveRef` / `CohortKey` / Flow association，进入通用 Movement Planning |

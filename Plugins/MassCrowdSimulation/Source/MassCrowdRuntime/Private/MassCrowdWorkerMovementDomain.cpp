@@ -4,6 +4,7 @@
 #include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerInteractionDomain.h"
 #include "MassCrowdWorkerLifecycleBehaviorDomain.h"
+#include "MassCrowdWorkerFlowBinding.h"
 #include "MassCrowdWorkerFlowResource.h"
 #include "MassCrowdWorkerMovementControlResource.h"
 #include "MassCrowdWorkerNavigationResource.h"
@@ -219,6 +220,18 @@ bool FCrowdWorkerFlowResourceDomainExecutor::Execute(
         return false;
       }
     }
+    else if (Work.Key.ScopeKey == CrowdWorkerResourceIds::Environment
+      || CrowdWorkerResourceIds::IsFlowResource(Work.Key.ScopeKey))
+    {
+      const FCrowdWorkerResourceRecord* Resource =
+        Context.Resources->FindCurrent(Work.Key.ScopeKey);
+      FCrowdWorkerFlowFieldResource Flow;
+      if (!Resource
+        || !FCrowdWorkerFlowFieldResourceCodec::Decode(
+          Resource->Payload, Flow)
+        || Flow.Revision != Resource->Revision)
+        return false;
+    }
   }
   return true;
 }
@@ -245,6 +258,7 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
   const TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
   FCrowdWorkerDomainOutput& OutOutput)
 {
+  if (ExecutionStats) *ExecutionStats = {};
   auto Reject = [&Context](
     const TCHAR* Stage,
     const FCrowdStableEntityRef& EntityRef = {},
@@ -270,6 +284,7 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     || WorkItems.IsEmpty())
     return Reject(TEXT("context"));
   const FCrowdWorkerWorkItem* ResourceWork = nullptr;
+  TSet<FCrowdStableEntityRef> RequestedEntities;
   for (const FCrowdWorkerWorkItem& Work : WorkItems)
   {
     if (Work.Key.Domain
@@ -285,26 +300,11 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     }
     else if (Work.Key.Kind != ECrowdWorkerWorkKind::Entity)
       return Reject(TEXT("context"));
-  }
-  if (!ResourceWork)
-  {
-    if (WorkItems.Num() != 1)
+    else if (!Work.Key.PrimaryEntity.IsValid()
+      || RequestedEntities.Contains(Work.Key.PrimaryEntity))
       return Reject(TEXT("context"));
-    const FCrowdStableEntityRef EntityRef =
-      WorkItems[0].Key.PrimaryEntity;
-    const FCrowdWorkerDirtyStateRecord* ProfileRecord =
-      Context.EntityStates->Find(
-        EntityRef, ECrowdWorkerField::MovementProfile);
-    FCrowdWorkerMovementControlEntry Profile;
-    if (!ProfileRecord
-      || ProfileRecord->SourceInputSequence
-        > Context.LastAppliedInputSequence
-      || !FCrowdWorkerMovementProfileCodec::Decode(
-        ProfileRecord->Payload, Profile)
-      || Profile.EntityRef != EntityRef)
-      return Reject(TEXT("movement_profile"), EntityRef,
-        ProfileRecord ? ProfileRecord->SourceInputSequence : 0);
-    return true;
+    else
+      RequestedEntities.Add(Work.Key.PrimaryEntity);
   }
   // A new complete MovementControl resource invalidates the whole closed
   // planning set. Per-entity invalidations and an anchored TimeWheel resource
@@ -313,9 +313,44 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
   const FCrowdWorkerResourceRecord* Record =
     Context.Resources->FindCurrent(
       CrowdWorkerResourceIds::MovementControl);
+  if (!Record)
+  {
+    if (ResourceWork) return Reject(TEXT("movement_control"));
+    for (const FCrowdStableEntityRef& EntityRef : RequestedEntities)
+    {
+      if (!Context.EntityStates->Contains(EntityRef))
+        return Reject(TEXT("entity"), EntityRef);
+      if (const FCrowdWorkerDirtyStateRecord* ProfileRecord =
+        Context.EntityStates->Find(
+          EntityRef, ECrowdWorkerField::MovementProfile))
+      {
+        FCrowdWorkerMovementControlEntry Profile;
+        if (ProfileRecord->SourceInputSequence
+              > Context.LastAppliedInputSequence
+          || !FCrowdWorkerMovementProfileCodec::Decode(
+            ProfileRecord->Payload, Profile)
+          || Profile.EntityRef != EntityRef)
+          return Reject(TEXT("movement_profile"), EntityRef,
+            ProfileRecord->SourceInputSequence);
+      }
+      if (const FCrowdWorkerDirtyStateRecord* BindingRecord =
+        Context.EntityStates->Find(
+          EntityRef, ECrowdWorkerField::FlowBinding))
+      {
+        FCrowdWorkerFlowBinding Binding;
+        if (BindingRecord->SourceInputSequence
+              > Context.LastAppliedInputSequence
+          || !FCrowdWorkerFlowBindingCodec::Decode(
+            BindingRecord->Payload, Binding)
+          || Binding.EntityRef != EntityRef)
+          return Reject(TEXT("flow_binding"), EntityRef,
+            BindingRecord->SourceInputSequence);
+      }
+    }
+    return true;
+  }
   FCrowdWorkerMovementControlResource Control;
-  if (!Record
-    || !FCrowdWorkerMovementControlResourceCodec::Decode(
+  if (!FCrowdWorkerMovementControlResourceCodec::Decode(
       Record->Payload, Control)
     || Control.Revision != Record->Revision)
     return Reject(TEXT("movement_control"));
@@ -326,23 +361,38 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       Control,
       Profiles))
     return Reject(TEXT("movement_profiles"));
+  if (!ResourceWork && !Control.bRunLocalPredictive)
+  {
+    Profiles.RemoveAll([&RequestedEntities](
+      const FCrowdWorkerMovementControlEntry& Entry)
+    {
+      return !RequestedEntities.Contains(Entry.EntityRef);
+    });
+    if (Profiles.Num() != RequestedEntities.Num())
+      return Reject(TEXT("movement_profile_selection"));
+  }
   if (Context.AbsoluteSimulationTick
       > static_cast<uint64>(MAX_int32))
     return Reject(TEXT("simulation_tick"));
   const int32 CurrentFixedStepIndex =
     static_cast<int32>(Context.AbsoluteSimulationTick);
 
-  FCrowdWorkerFlowFieldResource FlowField;
-  bool bHasFlowField = false;
+  FCrowdWorkerFlowResourceCache FlowCache;
+  const FCrowdWorkerResourceRecord* DefaultFlowRecord = nullptr;
+  bool bHasDefaultFlowField = false;
   if (const FCrowdWorkerResourceRecord* Environment =
     Context.Resources->FindCurrent(
       CrowdWorkerResourceIds::Environment))
   {
-    if (!FCrowdWorkerFlowFieldResourceCodec::Decode(
-        Environment->Payload, FlowField)
-      || FlowField.Revision != Environment->Revision)
+    const FCrowdWorkerFlowFieldResource* DefaultFlowField = nullptr;
+    if (!FlowCache.Resolve(
+        CrowdWorkerResourceIds::Environment,
+        Environment->Revision,
+        Environment->Payload,
+        DefaultFlowField))
       return Reject(TEXT("flow_field"));
-    bHasFlowField = true;
+    DefaultFlowRecord = Environment;
+    bHasDefaultFlowField = true;
   }
 
   TMap<int32, const FCrowdLocalPredictiveResult*> ResultByAgentId;
@@ -351,6 +401,12 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
   FCrowdMassLocalPredictiveWorkOutput LocalOutput;
   TMap<FCrowdStableEntityRef, FVector> TargetVelocityByEntity;
   TMap<FCrowdStableEntityRef, FVector> FlowVelocityByEntity;
+  TMap<FCrowdStableEntityRef, FCrowdWorkerBoundaryKinematicState>
+    KinematicByEntity;
+  TMap<FCrowdStableEntityRef, FVector> FlowDirectionByEntity;
+  TSet<FCrowdStableEntityRef> FlowPresentEntities;
+  TSet<FCrowdStableEntityRef> FlowSampledEntities;
+  TSet<FCrowdStableEntityRef> FlowReachableEntities;
   TMap<FCrowdStableEntityRef, FCrowdWorkerBehaviorState>
     BehaviorByEntity;
   TMap<FCrowdStableEntityRef, FCrowdWorkerCombatState>
@@ -398,6 +454,183 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
         TargetRecord->SourceInputSequence);
     TargetVelocityByEntity.Add(
       Entry.EntityRef, TargetState.DesiredVelocity);
+  }
+  const auto LoadCurrentKinematic = [
+    &Context, &Control, &KinematicByEntity, &Reject](
+      const FCrowdWorkerMovementControlEntry& Entry)
+      -> const FCrowdWorkerBoundaryKinematicState*
+  {
+    if (const FCrowdWorkerBoundaryKinematicState* Existing =
+      KinematicByEntity.Find(Entry.EntityRef))
+      return Existing;
+    const FCrowdWorkerDirtyStateRecord* Snapshot =
+      Context.EntityStates->Find(
+        Entry.EntityRef, ECrowdWorkerField::InputSnapshot);
+    FCrowdWorkerBoundaryKinematicState Kinematic;
+    if (!Snapshot
+      || !FCrowdWorkerBoundaryStateCodec::DecodeKinematicState(
+        Snapshot->Payload, Kinematic)
+      || Kinematic.PlanRevision != Control.PlanRevision
+      || Snapshot->SourceInputSequence
+        > Context.LastAppliedInputSequence)
+    {
+      Reject(TEXT("kinematic_state"), Entry.EntityRef,
+        Snapshot ? Snapshot->SourceInputSequence : 0,
+        Kinematic.PlanRevision, Control.PlanRevision);
+      return nullptr;
+    }
+    const bool bSnapshotIsCurrent =
+      Snapshot->SourceInputSequence
+        == Context.LastAppliedInputSequence;
+    if (Context.RuntimeMode == ECrowdWorkerRuntimeV2Mode::Production
+      || !bSnapshotIsCurrent)
+    {
+      const FCrowdWorkerDirtyStateRecord* FinalRecord =
+        Context.EntityStates->Find(
+          Entry.EntityRef, ECrowdWorkerField::Facing);
+      if (!FinalRecord)
+      {
+        FinalRecord = Context.EntityStates->Find(
+          Entry.EntityRef, ECrowdWorkerField::Movement);
+      }
+      if (FinalRecord)
+      {
+        FCrowdWorkerMovementState FinalState;
+        if (!FCrowdWorkerMovementStateCodec::Decode(
+            FinalRecord->Payload, FinalState))
+          return nullptr;
+        Kinematic.Position = FinalState.Position;
+        Kinematic.Velocity = FinalState.Velocity;
+        Kinematic.YawDegrees = FinalState.YawDegrees;
+      }
+    }
+    return &KinematicByEntity.Add(Entry.EntityRef, MoveTemp(Kinematic));
+  };
+  const auto AddDependency = [&OutOutput](
+    const FCrowdWorkerDependencyKey& Source,
+    const FCrowdWorkerWorkItem& Dependent)
+  {
+    FCrowdWorkerDependencyDeclaration Declaration;
+    Declaration.Source = Source;
+    Declaration.Dependent = Dependent;
+    OutOutput.DeclaredDependencies.Add(Declaration);
+    FCrowdWorkerDependencyObservation Observation;
+    Observation.Source = Source;
+    Observation.Dependent = Dependent.Key;
+    OutOutput.ObservedDependencies.Add(Observation);
+  };
+  for (const FCrowdWorkerMovementControlEntry& Entry : Profiles)
+  {
+    FCrowdWorkerWorkItem Dependent;
+    Dependent.Key.Domain = ECrowdWorkerDomainId::MovementPlanning;
+    Dependent.Key.Kind = Control.bRunLocalPredictive
+      ? ECrowdWorkerWorkKind::Resource
+      : ECrowdWorkerWorkKind::Entity;
+    Dependent.Key.PrimaryEntity = Control.bRunLocalPredictive
+      ? FCrowdStableEntityRef{}
+      : Entry.EntityRef;
+    Dependent.Key.ScopeKey = Control.bRunLocalPredictive
+      ? CrowdWorkerResourceIds::MovementControl
+      : 0;
+    Dependent.Priority = ECrowdWorkerWorkPriority::High;
+    Dependent.ReasonMask = 1ull << 20;
+
+    FCrowdWorkerDependencyKey BindingDependency;
+    BindingDependency.Kind = ECrowdWorkerDependencyKind::Entity;
+    BindingDependency.EntityRef = Entry.EntityRef;
+    BindingDependency.ScopeKey =
+      CrowdWorkerRuntimeV2DependencyScopeForField(
+        ECrowdWorkerField::FlowBinding);
+    AddDependency(BindingDependency, Dependent);
+
+    const FCrowdWorkerDirtyStateRecord* BindingRecord =
+      Context.EntityStates->Find(
+        Entry.EntityRef, ECrowdWorkerField::FlowBinding);
+    const FCrowdWorkerFlowFieldResource* ResolvedFlow = nullptr;
+    uint64 ResolvedFlowResourceId =
+      CrowdWorkerResourceIds::Environment;
+    bool bHasExplicitBinding = false;
+    if (BindingRecord)
+    {
+      FCrowdWorkerFlowBinding Binding;
+      if (BindingRecord->SourceInputSequence
+            > Context.LastAppliedInputSequence
+        || !FCrowdWorkerFlowBindingCodec::Decode(
+          BindingRecord->Payload, Binding)
+        || Binding.EntityRef != Entry.EntityRef)
+        return Reject(TEXT("flow_binding"), Entry.EntityRef,
+          BindingRecord->SourceInputSequence);
+      const FCrowdWorkerResourceRecord* Objective =
+        Context.Resources->FindCurrent(
+          Binding.ObjectiveRef.ResolveResourceId());
+      const FCrowdWorkerResourceRecord* Flow =
+        Context.Resources->FindCurrent(Binding.FlowResourceId);
+      if (!Objective)
+        return Reject(TEXT("flow_binding_objective"), Entry.EntityRef);
+      if (!Flow
+        || !FlowCache.Resolve(
+          Binding.FlowResourceId,
+          Flow->Revision,
+          Flow->Payload,
+          ResolvedFlow))
+        return Reject(TEXT("flow_binding_resource"), Entry.EntityRef);
+      bHasExplicitBinding = true;
+      ResolvedFlowResourceId = Binding.FlowResourceId;
+
+      FCrowdWorkerDependencyKey ObjectiveDependency;
+      ObjectiveDependency.Kind = ECrowdWorkerDependencyKind::Resource;
+      ObjectiveDependency.ScopeKey =
+        Binding.ObjectiveRef.ResolveResourceId();
+      AddDependency(ObjectiveDependency, Dependent);
+    }
+    else if (bHasDefaultFlowField)
+    {
+      if (!DefaultFlowRecord
+        || !FlowCache.Resolve(
+          CrowdWorkerResourceIds::Environment,
+          DefaultFlowRecord->Revision,
+          DefaultFlowRecord->Payload,
+          ResolvedFlow))
+        return Reject(TEXT("flow_field"), Entry.EntityRef);
+    }
+
+    FCrowdWorkerDependencyKey FlowDependency;
+    FlowDependency.Kind = ECrowdWorkerDependencyKind::Resource;
+    FlowDependency.ScopeKey = ResolvedFlowResourceId;
+    AddDependency(FlowDependency, Dependent);
+    if (ResolvedFlow)
+      FlowPresentEntities.Add(Entry.EntityRef);
+
+    const bool bMaySampleFlow =
+      !Entry.bUseAuthoritativePreferredVelocity
+      && !TargetVelocityByEntity.Contains(Entry.EntityRef)
+      && ResolvedFlow
+      // Preserve the legacy no-binding/non-local planning path exactly.
+      && (bHasExplicitBinding || Control.bRunLocalPredictive);
+    if (Control.bRunLocalPredictive || bMaySampleFlow)
+    {
+      const FCrowdWorkerBoundaryKinematicState* Kinematic =
+        LoadCurrentKinematic(Entry);
+      if (!Kinematic)
+        return Reject(TEXT("kinematic_state"), Entry.EntityRef);
+      if (bMaySampleFlow)
+      {
+        FVector FlowDirection;
+        bool bReachable = false;
+        if (!ResolvedFlow->Sample(
+            Kinematic->Position, FlowDirection, bReachable))
+          return Reject(TEXT("flow_sample"), Entry.EntityRef);
+        FlowDirectionByEntity.Add(Entry.EntityRef, FlowDirection);
+        FlowSampledEntities.Add(Entry.EntityRef);
+        if (bReachable)
+        {
+          FlowReachableEntities.Add(Entry.EntityRef);
+          FlowVelocityByEntity.Add(
+            Entry.EntityRef,
+            FlowDirection * Entry.MaximumSpeedCmps);
+        }
+      }
+    }
   }
   for (const FCrowdWorkerMovementControlEntry& Entry :
     Profiles)
@@ -504,81 +737,33 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     for (const FCrowdWorkerMovementControlEntry& Entry :
       Profiles)
     {
-      const FCrowdWorkerDirtyStateRecord* Snapshot =
-        Context.EntityStates->Find(
-          Entry.EntityRef, ECrowdWorkerField::InputSnapshot);
-      FCrowdWorkerBoundaryKinematicState Kinematic;
-      if (!Snapshot
-        || !FCrowdWorkerBoundaryStateCodec::DecodeKinematicState(
-          Snapshot->Payload, Kinematic)
-        || Kinematic.PlanRevision != Control.PlanRevision
-        || Snapshot->SourceInputSequence
-          > Context.LastAppliedInputSequence)
-        return Reject(TEXT("kinematic_state"), Entry.EntityRef,
-          Snapshot ? Snapshot->SourceInputSequence : 0,
-          Kinematic.PlanRevision, Control.PlanRevision);
-      const bool bSnapshotIsCurrent =
-        Snapshot->SourceInputSequence
-          == Context.LastAppliedInputSequence;
-      if (Context.RuntimeMode
-          == ECrowdWorkerRuntimeV2Mode::Production
-        || !bSnapshotIsCurrent)
-      {
-        const FCrowdWorkerDirtyStateRecord* FinalRecord =
-          Context.EntityStates->Find(
-            Entry.EntityRef, ECrowdWorkerField::Facing);
-        if (!FinalRecord)
-        {
-          FinalRecord = Context.EntityStates->Find(
-            Entry.EntityRef, ECrowdWorkerField::Movement);
-        }
-        if (FinalRecord)
-        {
-          FCrowdWorkerMovementState FinalState;
-          if (!FCrowdWorkerMovementStateCodec::Decode(
-              FinalRecord->Payload, FinalState))
-            return false;
-          Kinematic.Position = FinalState.Position;
-          Kinematic.Velocity = FinalState.Velocity;
-          Kinematic.YawDegrees = FinalState.YawDegrees;
-        }
-      }
+      const FCrowdWorkerBoundaryKinematicState* Kinematic =
+        KinematicByEntity.Find(Entry.EntityRef);
+      if (!Kinematic)
+        return Reject(TEXT("kinematic_state"), Entry.EntityRef);
       FCrowdLocalPredictiveAgent& Agent =
         Input.Agents.AddDefaulted_GetRef();
       Agent.AgentId = Entry.AgentId;
       Agent.InteractionLayer = Entry.InteractionLayer;
       Agent.Position = FVector2f(
-        Kinematic.Position.X, Kinematic.Position.Y);
+        Kinematic->Position.X, Kinematic->Position.Y);
       Agent.Velocity = FVector2f(
-        Kinematic.Velocity.X, Kinematic.Velocity.Y);
+        Kinematic->Velocity.X, Kinematic->Velocity.Y);
       const FVector* TargetVelocity =
         TargetVelocityByEntity.Find(Entry.EntityRef);
       FVector PreferredVelocity =
         TargetVelocity
           ? *TargetVelocity
           : Entry.AutonomousPreferredVelocity;
-      FVector DiagnosticFlowDirection = FVector::ZeroVector;
-      bool bDiagnosticFlowReachable = false;
-      bool bDiagnosticFlowSampled = false;
-      if (!Entry.bUseAuthoritativePreferredVelocity
-        && !TargetVelocity && bHasFlowField)
-      {
-        FVector FlowDirection;
-        bool bReachable = false;
-        if (!FlowField.Sample(
-            Kinematic.Position, FlowDirection, bReachable))
-          return Reject(TEXT("flow_sample"), Entry.EntityRef);
-        DiagnosticFlowDirection = FlowDirection;
-        bDiagnosticFlowReachable = bReachable;
-        bDiagnosticFlowSampled = true;
-        if (bReachable)
-        {
-          PreferredVelocity =
-            FlowDirection * Entry.MaximumSpeedCmps;
-          FlowVelocityByEntity.Add(
-            Entry.EntityRef, PreferredVelocity);
-        }
-      }
+      const FVector DiagnosticFlowDirection =
+        FlowDirectionByEntity.FindRef(Entry.EntityRef);
+      const bool bDiagnosticFlowReachable =
+        FlowReachableEntities.Contains(Entry.EntityRef);
+      const bool bDiagnosticFlowSampled =
+        FlowSampledEntities.Contains(Entry.EntityRef);
+      if (const FVector* FlowVelocity =
+        FlowVelocityByEntity.Find(Entry.EntityRef))
+        PreferredVelocity = *FlowVelocity;
       float EffectiveMaximumSpeedCmps =
         Entry.MaximumSpeedCmps;
       bool bMovementLocked = false;
@@ -641,8 +826,8 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
           Entry.EntityRef.ProviderId,
           Entry.EntityRef.StableEntityId,
           Entry.EntityRef.LifecycleSerial,
-          Kinematic.Position.X, Kinematic.Position.Y,
-          Kinematic.Position.Z,
+          Kinematic->Position.X, Kinematic->Position.Y,
+          Kinematic->Position.Z,
           Entry.ParticlePhysicalRadiusCm,
           Entry.ParticleHardSafetyGapCm,
           Entry.ParticleSoftMarginCm,
@@ -652,7 +837,7 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
           Entry.bUseAuthoritativePreferredVelocity ? 1 : 0,
           Entry.bUseWorkerTargetGuidance ? 1 : 0,
           TargetVelocity ? 1 : 0,
-          bHasFlowField ? 1 : 0,
+          FlowPresentEntities.Contains(Entry.EntityRef) ? 1 : 0,
           bDiagnosticFlowSampled ? 1 : 0,
           bDiagnosticFlowReachable ? 1 : 0,
           DiagnosticFlowDirection.X,
@@ -667,8 +852,8 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       }
       Agent.PreferredVelocity = FVector2f(
         PreferredVelocity.X, PreferredVelocity.Y);
-      Agent.PhysicalRadiusCm = Kinematic.PhysicalRadiusCm;
-      Agent.HardSafetyGapCm = Kinematic.HardSafetyGapCm;
+      Agent.PhysicalRadiusCm = Kinematic->PhysicalRadiusCm;
+      Agent.HardSafetyGapCm = Kinematic->HardSafetyGapCm;
       Agent.MaxSpeedCmps = EffectiveMaximumSpeedCmps;
       const FPlanState* PreviousPlan =
         PreviousPlanByEntity.Find(Entry.EntityRef);
@@ -799,7 +984,7 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     Movement.ReasonMask = 1ull << 9;
     OutOutput.NextWork.Add(MoveTemp(Movement));
   }
-  if (!Profiles.IsEmpty())
+  if (ResourceWork && !Profiles.IsEmpty())
   {
     FCrowdWorkerWakeup Wakeup;
     Wakeup.Key.Domain = ECrowdWorkerDomainId::MovementPlanning;
@@ -810,6 +995,14 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     Wakeup.Priority = ECrowdWorkerWorkPriority::Normal;
     Wakeup.ReasonMask = 1ull << 11;
     OutOutput.Wakeups.Add(MoveTemp(Wakeup));
+  }
+  if (ExecutionStats)
+  {
+    ExecutionStats->FlowDecodeCount = FlowCache.GetDecodeCount();
+    ExecutionStats->FlowValidationCount =
+      FlowCache.GetValidationCount();
+    ExecutionStats->DistinctFlowResourceCount =
+      FlowCache.NumDecodedResources();
   }
   return true;
 }

@@ -42,6 +42,20 @@ namespace CrowdWorkerRuntimeV2Private
       return A.Priority < B.Priority;
     return A.Key < B.Key;
   }
+
+  void V2MergeWorkItem(
+    FCrowdWorkerWorkItem& Existing,
+    const FCrowdWorkerWorkItem& Incoming)
+  {
+    Existing.ReasonMask |= Incoming.ReasonMask;
+    Existing.Priority = FMath::Min(
+      Existing.Priority, Incoming.Priority);
+    Existing.EnqueueEpoch = FMath::Max(
+      Existing.EnqueueEpoch, Incoming.EnqueueEpoch);
+    Existing.CorrectionRevision = FMath::Max(
+      Existing.CorrectionRevision,
+      Incoming.CorrectionRevision);
+  }
 }
 
 using namespace CrowdWorkerRuntimeV2Private;
@@ -678,7 +692,8 @@ bool FCrowdWorkerDependencyIndex::Reset(const int32 InMaxEdges)
   MaxEdges = InMaxEdges;
   EdgeCount = 0;
   HighWatermark = 0;
-  Edges.Reset();
+  ForwardEdges.Reset();
+  ReverseEdges.Reset();
   return true;
 }
 
@@ -690,27 +705,141 @@ FCrowdWorkerDependencyIndex::AddDependency(
   Dependent.NormalizePair();
   if (!Source.IsValid() || !Dependent.IsValid())
     return ECrowdWorkerQueueResult::RejectedInvalid;
-  TArray<FCrowdWorkerWorkItem>& Dependents =
-    Edges.FindOrAdd(Source);
-  for (FCrowdWorkerWorkItem& Existing : Dependents)
+  TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>& Dependents =
+    ForwardEdges.FindOrAdd(Source);
+  if (FCrowdWorkerWorkItem* Existing =
+    Dependents.Find(Dependent.Key))
   {
-    if (Existing.Key != Dependent.Key) continue;
-    Existing.ReasonMask |= Dependent.ReasonMask;
-    Existing.Priority = FMath::Min(
-      Existing.Priority, Dependent.Priority);
-    Existing.EnqueueEpoch = FMath::Max(
-      Existing.EnqueueEpoch, Dependent.EnqueueEpoch);
-    Existing.CorrectionRevision = FMath::Max(
-      Existing.CorrectionRevision,
-      Dependent.CorrectionRevision);
+    V2MergeWorkItem(*Existing, Dependent);
     return ECrowdWorkerQueueResult::MergedDuplicate;
   }
   if (EdgeCount >= MaxEdges)
+  {
+    if (Dependents.IsEmpty()) ForwardEdges.Remove(Source);
     return ECrowdWorkerQueueResult::RejectedCapacity;
-  Dependents.Add(MoveTemp(Dependent));
-  Dependents.Sort(V2WorkStableLess);
+  }
+  const FCrowdWorkerWorkKey DependentKey = Dependent.Key;
+  Dependents.Add(DependentKey, MoveTemp(Dependent));
+  ReverseEdges.FindOrAdd(DependentKey).Add(Source);
   ++EdgeCount;
   HighWatermark = FMath::Max(HighWatermark, EdgeCount);
+  return ECrowdWorkerQueueResult::Added;
+}
+
+ECrowdWorkerQueueResult
+FCrowdWorkerDependencyIndex::ReplaceDependenciesForDependents(
+  const TConstArrayView<FCrowdWorkerDependencyDeclaration>
+    Declarations)
+{
+  if (Declarations.IsEmpty())
+    return ECrowdWorkerQueueResult::MergedDuplicate;
+
+  TMap<
+    FCrowdWorkerWorkKey,
+    TMap<FCrowdWorkerDependencyKey, FCrowdWorkerWorkItem>> Desired;
+  for (const FCrowdWorkerDependencyDeclaration& Declaration :
+    Declarations)
+  {
+    FCrowdWorkerWorkItem Dependent = Declaration.Dependent;
+    Dependent.NormalizePair();
+    if (!Declaration.Source.IsValid() || !Dependent.IsValid())
+      return ECrowdWorkerQueueResult::RejectedInvalid;
+    TMap<FCrowdWorkerDependencyKey, FCrowdWorkerWorkItem>& Sources =
+      Desired.FindOrAdd(Dependent.Key);
+    if (FCrowdWorkerWorkItem* Existing =
+      Sources.Find(Declaration.Source))
+      V2MergeWorkItem(*Existing, Dependent);
+    else
+      Sources.Add(Declaration.Source, MoveTemp(Dependent));
+  }
+
+  int64 FinalEdgeCount = EdgeCount;
+  for (const TPair<
+    FCrowdWorkerWorkKey,
+    TMap<FCrowdWorkerDependencyKey, FCrowdWorkerWorkItem>>& Pair :
+    Desired)
+  {
+    const TSet<FCrowdWorkerDependencyKey>* ExistingSources =
+      ReverseEdges.Find(Pair.Key);
+    FinalEdgeCount -= ExistingSources ? ExistingSources->Num() : 0;
+    FinalEdgeCount += Pair.Value.Num();
+  }
+  if (FinalEdgeCount > MaxEdges)
+    return ECrowdWorkerQueueResult::RejectedCapacity;
+
+  TArray<FCrowdWorkerWorkKey> DesiredDependents;
+  Desired.GenerateKeyArray(DesiredDependents);
+  DesiredDependents.Sort([](
+    const FCrowdWorkerWorkKey& A,
+    const FCrowdWorkerWorkKey& B)
+  {
+    return A < B;
+  });
+
+  // Remove every stale edge before adding any new edge. This keeps a valid
+  // final graph within capacity even when a full-capacity batch swaps sources
+  // across dependents and avoids mutation-order-dependent transient overflow.
+  for (const FCrowdWorkerWorkKey& DependentKey : DesiredDependents)
+  {
+    const TMap<FCrowdWorkerDependencyKey, FCrowdWorkerWorkItem>&
+      DesiredSources = Desired.FindChecked(DependentKey);
+    TArray<FCrowdWorkerDependencyKey> PreviousSources;
+    if (const TSet<FCrowdWorkerDependencyKey>* ExistingSources =
+      ReverseEdges.Find(DependentKey))
+      PreviousSources = ExistingSources->Array();
+    PreviousSources.Sort([](
+      const FCrowdWorkerDependencyKey& A,
+      const FCrowdWorkerDependencyKey& B)
+    {
+      return A < B;
+    });
+    for (const FCrowdWorkerDependencyKey& Source : PreviousSources)
+    {
+      if (DesiredSources.Contains(Source)) continue;
+      TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>* Dependents =
+        ForwardEdges.Find(Source);
+      check(Dependents && Dependents->Remove(DependentKey) == 1);
+      if (Dependents->IsEmpty()) ForwardEdges.Remove(Source);
+      TSet<FCrowdWorkerDependencyKey>* ExistingSources =
+        ReverseEdges.Find(DependentKey);
+      check(ExistingSources && ExistingSources->Remove(Source) == 1);
+      if (ExistingSources->IsEmpty()) ReverseEdges.Remove(DependentKey);
+      --EdgeCount;
+    }
+  }
+
+  for (const FCrowdWorkerWorkKey& DependentKey : DesiredDependents)
+  {
+    TMap<FCrowdWorkerDependencyKey, FCrowdWorkerWorkItem>&
+      DesiredSources = Desired.FindChecked(DependentKey);
+    TArray<FCrowdWorkerDependencyKey> DesiredSourceKeys;
+    DesiredSources.GenerateKeyArray(DesiredSourceKeys);
+    DesiredSourceKeys.Sort([](
+      const FCrowdWorkerDependencyKey& A,
+      const FCrowdWorkerDependencyKey& B)
+    {
+      return A < B;
+    });
+    for (const FCrowdWorkerDependencyKey& Source : DesiredSourceKeys)
+    {
+      FCrowdWorkerWorkItem& DesiredDependent =
+        DesiredSources.FindChecked(Source);
+      if (TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>* Dependents =
+        ForwardEdges.Find(Source))
+      {
+        if (FCrowdWorkerWorkItem* Existing =
+          Dependents->Find(DependentKey))
+        {
+          *Existing = MoveTemp(DesiredDependent);
+          continue;
+        }
+      }
+      const ECrowdWorkerQueueResult Result = AddDependency(
+        Source, MoveTemp(DesiredDependent));
+      check(Result == ECrowdWorkerQueueResult::Added);
+    }
+  }
+  check(EdgeCount == FinalEdgeCount);
   return ECrowdWorkerQueueResult::Added;
 }
 
@@ -718,10 +847,15 @@ int32 FCrowdWorkerDependencyIndex::CollectDependents(
   const FCrowdWorkerDependencyKey& Source,
   TArray<FCrowdWorkerWorkItem>& OutItems) const
 {
-  const TArray<FCrowdWorkerWorkItem>* Dependents =
-    Edges.Find(Source);
+  const TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>* Dependents =
+    ForwardEdges.Find(Source);
   if (!Dependents) return 0;
-  OutItems.Append(*Dependents);
+  const int32 InitialCount = OutItems.Num();
+  OutItems.Reserve(InitialCount + Dependents->Num());
+  for (const TPair<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>& Pair :
+    *Dependents)
+    OutItems.Add(Pair.Value);
+  OutItems.Sort(V2WorkStableLess);
   return Dependents->Num();
 }
 
@@ -729,43 +863,81 @@ bool FCrowdWorkerDependencyIndex::ContainsDependency(
   const FCrowdWorkerDependencyKey& Source,
   const FCrowdWorkerWorkKey& Dependent) const
 {
-  const TArray<FCrowdWorkerWorkItem>* Dependents =
-    Edges.Find(Source);
-  if (!Dependents) return false;
-  return Dependents->ContainsByPredicate([
-    &Dependent](const FCrowdWorkerWorkItem& Item)
+  const TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>* Dependents =
+    ForwardEdges.Find(Source);
+  return Dependents && Dependents->Contains(Dependent);
+}
+
+int32 FCrowdWorkerDependencyIndex::RemoveDependent(
+  const FCrowdWorkerWorkKey& Dependent)
+{
+  const TSet<FCrowdWorkerDependencyKey>* Sources =
+    ReverseEdges.Find(Dependent);
+  if (!Sources) return 0;
+  TArray<FCrowdWorkerDependencyKey> SourceKeys = Sources->Array();
+  int32 Removed = 0;
+  for (const FCrowdWorkerDependencyKey& Source : SourceKeys)
   {
-    return Item.Key == Dependent;
-  });
+    TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>* Dependents =
+      ForwardEdges.Find(Source);
+    if (!Dependents) continue;
+    Removed += Dependents->Remove(Dependent);
+    if (Dependents->IsEmpty()) ForwardEdges.Remove(Source);
+  }
+  ReverseEdges.Remove(Dependent);
+  EdgeCount -= Removed;
+  check(EdgeCount >= 0);
+  return Removed;
 }
 
 int32 FCrowdWorkerDependencyIndex::RemoveEntity(
   const FCrowdStableEntityRef& EntityRef)
 {
+  TArray<FCrowdWorkerWorkKey> DependentKeys;
+  for (const TPair<
+    FCrowdWorkerWorkKey,
+    TSet<FCrowdWorkerDependencyKey>>& Pair : ReverseEdges)
+  {
+    if (Pair.Key.PrimaryEntity == EntityRef
+      || Pair.Key.SecondaryEntity == EntityRef)
+      DependentKeys.Add(Pair.Key);
+  }
   int32 Removed = 0;
-  TArray<FCrowdWorkerDependencyKey> EmptyKeys;
-  for (TPair<
+  for (const FCrowdWorkerWorkKey& Dependent : DependentKeys)
+    Removed += RemoveDependent(Dependent);
+
+  TArray<FCrowdWorkerDependencyKey> SourceKeys;
+  for (const TPair<
     FCrowdWorkerDependencyKey,
-    TArray<FCrowdWorkerWorkItem>>& Pair : Edges)
+    TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>>& Pair :
+    ForwardEdges)
   {
     if (Pair.Key.Kind == ECrowdWorkerDependencyKind::Entity
       && Pair.Key.EntityRef == EntityRef)
-    {
-      Removed += Pair.Value.Num();
-      EmptyKeys.Add(Pair.Key);
-      continue;
-    }
-    Removed += Pair.Value.RemoveAll(
-      [&EntityRef](const FCrowdWorkerWorkItem& Item)
-      {
-        return Item.Key.PrimaryEntity == EntityRef
-          || Item.Key.SecondaryEntity == EntityRef;
-      });
-    if (Pair.Value.IsEmpty()) EmptyKeys.Add(Pair.Key);
+      SourceKeys.Add(Pair.Key);
   }
-  for (const FCrowdWorkerDependencyKey& Key : EmptyKeys)
-    Edges.Remove(Key);
-  EdgeCount -= Removed;
+  int32 RemovedSourceEdges = 0;
+  for (const FCrowdWorkerDependencyKey& Source : SourceKeys)
+  {
+    TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>* Dependents =
+      ForwardEdges.Find(Source);
+    if (!Dependents) continue;
+    TArray<FCrowdWorkerWorkKey> Keys;
+    Dependents->GenerateKeyArray(Keys);
+    for (const FCrowdWorkerWorkKey& Dependent : Keys)
+    {
+      if (TSet<FCrowdWorkerDependencyKey>* Sources =
+        ReverseEdges.Find(Dependent))
+      {
+        Sources->Remove(Source);
+        if (Sources->IsEmpty()) ReverseEdges.Remove(Dependent);
+      }
+      ++Removed;
+      ++RemovedSourceEdges;
+    }
+    ForwardEdges.Remove(Source);
+  }
+  EdgeCount -= RemovedSourceEdges;
   check(EdgeCount >= 0);
   return Removed;
 }
@@ -777,10 +949,12 @@ void FCrowdWorkerDependencyIndex::GetRecords(
   OutRecords.Reserve(EdgeCount);
   for (const TPair<
     FCrowdWorkerDependencyKey,
-    TArray<FCrowdWorkerWorkItem>>& Pair : Edges)
+    TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>>& Pair :
+    ForwardEdges)
   {
-    for (const FCrowdWorkerWorkItem& Dependent : Pair.Value)
-      OutRecords.Add({Pair.Key, Dependent});
+    for (const TPair<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>&
+      DependentPair : Pair.Value)
+      OutRecords.Add({Pair.Key, DependentPair.Value});
   }
   OutRecords.Sort([](
     const FCrowdWorkerDependencyRecord& A,
@@ -805,6 +979,79 @@ bool FCrowdWorkerDependencyIndex::RestoreRecords(
   }
   *this = MoveTemp(Candidate);
   return true;
+}
+
+bool FCrowdWorkerDependencyIndex::ValidateInvariants() const
+{
+  int32 ForwardCount = 0;
+  for (const TPair<
+    FCrowdWorkerDependencyKey,
+    TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>>& Pair :
+    ForwardEdges)
+  {
+    if (!Pair.Key.IsValid() || Pair.Value.IsEmpty()) return false;
+    ForwardCount += Pair.Value.Num();
+    for (const TPair<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>&
+      DependentPair : Pair.Value)
+    {
+      if (!DependentPair.Value.IsValid()
+        || DependentPair.Key != DependentPair.Value.Key)
+        return false;
+      const TSet<FCrowdWorkerDependencyKey>* Sources =
+        ReverseEdges.Find(DependentPair.Key);
+      if (!Sources || !Sources->Contains(Pair.Key)) return false;
+    }
+  }
+  int32 ReverseCount = 0;
+  for (const TPair<
+    FCrowdWorkerWorkKey,
+    TSet<FCrowdWorkerDependencyKey>>& Pair : ReverseEdges)
+  {
+    if (Pair.Value.IsEmpty()) return false;
+    ReverseCount += Pair.Value.Num();
+    for (const FCrowdWorkerDependencyKey& Source : Pair.Value)
+    {
+      const TMap<FCrowdWorkerWorkKey, FCrowdWorkerWorkItem>*
+        Dependents = ForwardEdges.Find(Source);
+      if (!Dependents || !Dependents->Contains(Pair.Key)) return false;
+    }
+  }
+  return ForwardCount == EdgeCount
+    && ReverseCount == EdgeCount
+    && EdgeCount >= 0
+    && EdgeCount <= MaxEdges;
+}
+
+ECrowdWorkerQueueResult
+CrowdWorkerRuntimeV2EnqueueResourceDependents(
+  const uint64 ResourceId,
+  const uint64 WorkerEpoch,
+  const FCrowdWorkerDependencyIndex& DependencyIndex,
+  FCrowdWorkerWorkRing& WorkRing,
+  int32& OutDependentCount)
+{
+  OutDependentCount = 0;
+  if (ResourceId == 0 || WorkerEpoch == 0)
+    return ECrowdWorkerQueueResult::RejectedInvalid;
+  FCrowdWorkerDependencyKey Source;
+  Source.Kind = ECrowdWorkerDependencyKind::Resource;
+  Source.ScopeKey = ResourceId;
+  TArray<FCrowdWorkerWorkItem> Dependents;
+  OutDependentCount =
+    DependencyIndex.CollectDependents(Source, Dependents);
+  for (FCrowdWorkerWorkItem& Dependent : Dependents)
+  {
+    Dependent.EnqueueEpoch = WorkerEpoch;
+    Dependent.Priority = FMath::Min(
+      Dependent.Priority, ECrowdWorkerWorkPriority::High);
+    Dependent.ReasonMask |= 1ull << 20;
+    const ECrowdWorkerQueueResult Result =
+      WorkRing.EnqueueCurrent(MoveTemp(Dependent));
+    if (Result != ECrowdWorkerQueueResult::Added
+      && Result != ECrowdWorkerQueueResult::MergedDuplicate)
+      return Result;
+  }
+  return ECrowdWorkerQueueResult::Added;
 }
 
 bool FCrowdWorkerResourceStore::Reset(

@@ -45,6 +45,19 @@ FCrowdWorkerMovementPlanningDomainExecutor final
   : public ICrowdWorkerDomainExecutor
 {
 public:
+  struct FExecutionStats
+  {
+    int32 FlowDecodeCount = 0;
+    int32 FlowValidationCount = 0;
+    int32 DistinctFlowResourceCount = 0;
+  };
+
+  explicit FCrowdWorkerMovementPlanningDomainExecutor(
+    FExecutionStats* InExecutionStats = nullptr)
+    : ExecutionStats(InExecutionStats)
+  {
+  }
+
   ECrowdWorkerDomainId GetDomainId() const override
   {
     return ECrowdWorkerDomainId::MovementPlanning;
@@ -55,4 +68,7 @@ public:
     const FCrowdWorkerDomainContext& Context,
     TConstArrayView<FCrowdWorkerWorkItem> WorkItems,
     FCrowdWorkerDomainOutput& OutOutput) override;
+
+private:
+  FExecutionStats* ExecutionStats = nullptr;
 };
