@@ -95,6 +95,14 @@ public:
     uint64 SourceInputSequence,
     uint64 InitialStateHash,
     FCrowdWorkerLifecycleState& OutState);
+
+  // A new authoritative InputSnapshot may rebase kinematics without
+  // changing entity identity or Lifecycle phase/revision.
+  static bool RebaseInitialState(
+    const FCrowdWorkerLifecycleState& Current,
+    uint64 SourceInputSequence,
+    uint64 InitialStateHash,
+    FCrowdWorkerLifecycleState& OutState);
 };
 
 enum class ECrowdWorkerParticipationChannel : uint8

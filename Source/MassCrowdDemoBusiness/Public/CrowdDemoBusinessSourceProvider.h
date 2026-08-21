@@ -42,6 +42,7 @@ namespace CrowdDemoBehaviorControllerIds
   inline constexpr FCrowdBehaviorControllerId Interaction{3};
   inline constexpr FCrowdBehaviorControllerId Presentation{4};
   inline constexpr FCrowdBehaviorControllerId Reaction{5};
+  inline constexpr FCrowdBehaviorControllerId SemanticState{6};
 }
 
 struct FCrowdDemoBehaviorSourcePayload

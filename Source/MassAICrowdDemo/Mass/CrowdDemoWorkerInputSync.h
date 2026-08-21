@@ -35,7 +35,9 @@ public:
       AdditionalResources = {},
     const FCrowdBehaviorPreparedBoundary* StagedBehavior = nullptr,
     TConstArrayView<FCrowdWorkerExternalGameplayInput>
-      ExternalGameplayInputs = {});
+      ExternalGameplayInputs = {},
+    TConstArrayView<FCrowdBehaviorSourceCommand>
+      WorkerBehaviorCommands = {});
 
   // Ordinary frames submit only ordered intent and resource revisions. The
   // complete Mass snapshot is legal exclusively on the bootstrap path above.
@@ -52,7 +54,9 @@ public:
       ExternalGameplayInputs = {},
     const FCrowdBehaviorPreparedBoundary* StagedBehavior = nullptr,
     TConstArrayView<FCrowdWorkerObjectiveRevisionDelta>
-      ObjectiveRevisions = {});
+      ObjectiveRevisions = {},
+    TConstArrayView<FCrowdBehaviorSourceCommand>
+      WorkerBehaviorCommands = {});
 
   static bool Poll(UWorld& World);
 

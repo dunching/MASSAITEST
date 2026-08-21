@@ -622,6 +622,21 @@ namespace
     }
   };
 
+  class FSemanticStateEvaluator final
+    : public ICrowdBehaviorSourceEvaluator
+  {
+  public:
+    bool Evaluate(
+      const FCrowdBehaviorSourceEvaluationContext& Context,
+      FCrowdBehaviorContributionWriter&) const override
+    {
+      FCrowdSemanticBehaviorStatePayload Payload;
+      return ReadPayload(
+          Context, CrowdStandardSources::SemanticState, Payload)
+        && Payload.State < ECrowdSemanticBehaviorState::Count;
+    }
+  };
+
   class FStandardSourcesProvider final
     : public ICrowdBehaviorSourceProvider
   {
@@ -764,7 +779,15 @@ namespace
             Policy::Predictable,
             CrowdStandardSources::ImpulseCapability,
             0, 300),
-          MakeShared<FTimedImpulseEvaluator, ESPMode::ThreadSafe>());
+          MakeShared<FTimedImpulseEvaluator, ESPMode::ThreadSafe>())
+        && Source(
+          MakeSpec(
+            CrowdStandardSources::SemanticState,
+            ECrowdBehaviorChannel::Presentation, 0,
+            ECrowdBehaviorBlendMode::Override,
+            Policy::Predictable,
+            CrowdStandardSources::SemanticStateCapability),
+          MakeShared<FSemanticStateEvaluator, ESPMode::ThreadSafe>());
     }
   };
 }

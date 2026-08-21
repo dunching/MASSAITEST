@@ -1203,6 +1203,7 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
         if (!Snapshot) return false;
         FCrowdWorkerLifecycleState CurrentState;
         const FCrowdWorkerLifecycleState* Current = nullptr;
+        uint64 CurrentRecordRevision = 0;
         if (const FCrowdWorkerDirtyStateRecord* Existing =
           EntityStateStore.Find(
             Delta.EntityRef, ECrowdWorkerField::Lifecycle))
@@ -1212,6 +1213,7 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
             || CurrentState.EntityRef != Delta.EntityRef)
             return false;
           Current = &CurrentState;
+          CurrentRecordRevision = Existing->StateRevision;
         }
         FCrowdWorkerLifecycleState NextState;
         if (!FCrowdWorkerLifecycleStateMachine::Apply(
@@ -1232,7 +1234,10 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
         StateRecord.Generation = Batch.Generation;
         StateRecord.WorkerEpoch =
           FMath::Max<uint64>(1, WorkerEpoch);
-        StateRecord.StateRevision = NextState.Revision;
+        if (CurrentRecordRevision == MAX_uint64)
+          return false;
+        StateRecord.StateRevision = FMath::Max(
+          CurrentRecordRevision + 1, Delta.InputSequence);
         StateRecord.SourceInputSequence = Delta.InputSequence;
         if (!FCrowdWorkerLifecycleStateCodec::Encode(
             NextState, StateRecord.Payload))
@@ -1242,6 +1247,13 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
         if (StateResult != ECrowdWorkerQueueResult::Added
           && StateResult != ECrowdWorkerQueueResult::Replaced
           && StateResult
+            != ECrowdWorkerQueueResult::MergedDuplicate)
+          return false;
+        const ECrowdWorkerQueueResult DirtyResult =
+          DirtyStateStore.MarkDirty(MoveTemp(StateRecord));
+        if (DirtyResult != ECrowdWorkerQueueResult::Added
+          && DirtyResult != ECrowdWorkerQueueResult::Replaced
+          && DirtyResult
             != ECrowdWorkerQueueResult::MergedDuplicate)
           return false;
         if (DomainRegistry && DomainRegistry->HasDomain(
@@ -1755,6 +1767,53 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
           Delta.EntityRef, Incoming.Field, &Incoming,
           EntityStateStore.Find(Delta.EntityRef, Incoming.Field));
         return false;
+      }
+      // A custom LifecycleInput domain may own a different field schema.
+      // Only the generic lifecycle contract is coupled to InputSnapshot's
+      // authoritative state hash.
+      if (const FCrowdWorkerDirtyStateRecord* ExistingLifecycle =
+          EntityStateStore.Find(
+            Delta.EntityRef, ECrowdWorkerField::Lifecycle);
+        ExistingLifecycle
+          && ExistingLifecycle->Payload.SchemaId
+            == FCrowdWorkerLifecycleStateCodec::SchemaId)
+      {
+        FCrowdWorkerLifecycleState CurrentLifecycle;
+        FCrowdWorkerLifecycleState RebasedLifecycle;
+        FCrowdWorkerDirtyStateRecord LifecycleRecord;
+        if (!FCrowdWorkerLifecycleStateCodec::Decode(
+              ExistingLifecycle->Payload, CurrentLifecycle)
+          || CurrentLifecycle.EntityRef != Delta.EntityRef
+          || !FCrowdWorkerLifecycleStateMachine::RebaseInitialState(
+            CurrentLifecycle, Delta.InputSequence,
+            Delta.FullState.StableHash, RebasedLifecycle))
+          return false;
+        if (ExistingLifecycle->StateRevision == MAX_uint64)
+          return false;
+        LifecycleRecord = *ExistingLifecycle;
+        LifecycleRecord.WorkerEpoch =
+          FMath::Max<uint64>(1, WorkerEpoch);
+        LifecycleRecord.StateRevision = FMath::Max(
+          ExistingLifecycle->StateRevision + 1,
+          Delta.InputSequence);
+        LifecycleRecord.SourceInputSequence = Delta.InputSequence;
+        if (!FCrowdWorkerLifecycleStateCodec::Encode(
+            RebasedLifecycle, LifecycleRecord.Payload))
+          return false;
+        const ECrowdWorkerQueueResult LifecycleResult =
+          EntityStateStore.ApplyDirty(LifecycleRecord);
+        if (LifecycleResult != ECrowdWorkerQueueResult::Added
+          && LifecycleResult != ECrowdWorkerQueueResult::Replaced
+          && LifecycleResult
+            != ECrowdWorkerQueueResult::MergedDuplicate)
+          return false;
+        const ECrowdWorkerQueueResult LifecycleDirtyResult =
+          DirtyStateStore.MarkDirty(MoveTemp(LifecycleRecord));
+        if (LifecycleDirtyResult != ECrowdWorkerQueueResult::Added
+          && LifecycleDirtyResult != ECrowdWorkerQueueResult::Replaced
+          && LifecycleDirtyResult
+            != ECrowdWorkerQueueResult::MergedDuplicate)
+          return false;
       }
       if (!bHasMovementPlanningInput
         && !EnqueueEntity(
