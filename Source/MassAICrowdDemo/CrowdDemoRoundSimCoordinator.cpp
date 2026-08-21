@@ -2244,7 +2244,8 @@ FCrowdDemoRoundRules ACrowdDemoRoundSimCoordinator::BuildRoundRules(
       == ECrowdDemoSoftPressureTestCase::BidirectionalSwap)
     {
       CompactRules.FlowFieldConfig =
-        FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(0);
+        FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(
+          FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey);
       CompactRules.SpawnOrigin = FVector::ZeroVector;
       CompactRules.FormationColumns = 10;
       CompactRules.FormationSpacingCm = 128.0f;

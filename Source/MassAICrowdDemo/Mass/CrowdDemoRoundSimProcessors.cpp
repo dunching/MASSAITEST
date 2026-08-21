@@ -1372,7 +1372,9 @@ static void ExecuteRoundPlanApply(
           {
             State.Location = LayoutAgent->SpawnLocation;
             State.Velocity = FVector::ZeroVector;
-            State.YawDegrees = LayoutAgent->CohortId == 0 ? 90.0f : -90.0f;
+            State.YawDegrees = LayoutAgent->CohortKey
+              == FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey
+              ? 90.0f : -90.0f;
             Formation.LocalOffset = State.Location - FVector(DuePlan.Rules.SpawnOrigin);
           }
         }
@@ -1643,7 +1645,7 @@ static void ExecuteRoundSharedFlowFieldBuild(
   }
   if (Pipeline->IsBidirectionalSwap())
   {
-    if (!Pipeline->EnsureBidirectionalSwapFlowFields())
+    if (!Pipeline->EnsureBidirectionalSwapFlowResources())
       UE_LOG(LogTemp, Error, TEXT("VIOLATION CrowdDemoT3FlowFieldBuildFailed"));
   }
   Pipeline->LogStageOnce(TEXT("02_shared_flow_field_build"), 0);
@@ -1670,11 +1672,6 @@ static void ExecuteRoundFlowPreferredVelocity(
   WorkInput.PlanRevision = Pipeline->GetCurrentPlanRevision();
   WorkInput.FixedStepSeconds = Rules.FixedStepSeconds;
   WorkInput.Fields.Add(&RuntimeSubsystem->GetSharedFlowResource().Field);
-  if (Pipeline->IsBidirectionalSwap())
-  {
-    WorkInput.Fields.Add(Pipeline->FindRuntimeBidirectionalSwapFlowField(0));
-    WorkInput.Fields.Add(Pipeline->FindRuntimeBidirectionalSwapFlowField(10));
-  }
   const bool bTransitExitHold = Pipeline->IsValidCorridorTransit()
     && FCrowdDemoValidCorridorTransitKernel::ShouldHoldCompletedGroup(
       Pipeline->GetValidCorridorTransitProgress());
@@ -1689,13 +1686,6 @@ static void ExecuteRoundFlowPreferredVelocity(
   for (const FCrowdMassBoundaryAgentRecord& Record
     : Pipeline->GetBoundarySnapshot().Agents)
   {
-    const auto* Formation = Pipeline->FindBoundaryFormationFact(
-      Record.Identity.AgentId);
-    if (!Formation)
-    {
-      bGatherValid = false;
-      continue;
-    }
     FCrowdMassSharedFlowAgentInput Agent;
     Agent.AgentId = Record.Identity.AgentId;
     Agent.LifecycleSerial = Record.Identity.LifecycleSerial;
@@ -1704,14 +1694,6 @@ static void ExecuteRoundFlowPreferredVelocity(
     Agent.MaximumSpeedCmps = Rules.MaxSpeedCmPerSecond;
     Agent.FieldIndex = 0;
     FVector Goal = FVector(Rules.FlowFieldConfig.GoalLocation);
-    if (Pipeline->IsBidirectionalSwap())
-    {
-      const int32 CohortId = FCrowdDemoBidirectionalSwapKernel::
-        CohortIdForFormationIndex(Formation->FormationIndex);
-      Agent.FieldIndex = CohortId + 1;
-      Goal = FVector(FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(
-        CohortId).GoalLocation);
-    }
     if (Agent.AgentId == INDEX_NONE || Agent.LifecycleSerial <= 0
       || Agent.FieldIndex < 0 || Agent.FieldIndex >= WorkInput.Fields.Num()
       || !WorkInput.Fields[Agent.FieldIndex])
@@ -4092,17 +4074,21 @@ static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, F
         Metrics.T3LastFixedStep = Progress.LastFixedStepIndex;
         for (const auto& Agent : Layout.Agents)
         {
-          if (Agent.CohortId == 0) ++Metrics.T3Cohort0AgentCount;
-          else if (Agent.CohortId == 1) ++Metrics.T3Cohort1AgentCount;
+          const bool bNorthbound = Agent.CohortKey
+            == FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey;
+          if (bNorthbound) ++Metrics.T3Cohort0AgentCount;
+          else if (Agent.CohortKey
+            == FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey)
+            ++Metrics.T3Cohort1AgentCount;
           if (Progress.CenterCrossedAgentIds.Contains(Agent.AgentId))
           {
-            if (Agent.CohortId == 0) ++Metrics.T3Cohort0CenterCrossedCount;
-            else if (Agent.CohortId == 1) ++Metrics.T3Cohort1CenterCrossedCount;
+            if (bNorthbound) ++Metrics.T3Cohort0CenterCrossedCount;
+            else ++Metrics.T3Cohort1CenterCrossedCount;
           }
           if (Progress.CompletedAgentIds.Contains(Agent.AgentId))
           {
-            if (Agent.CohortId == 0) ++Metrics.T3Cohort0CompletedCount;
-            else if (Agent.CohortId == 1) ++Metrics.T3Cohort1CompletedCount;
+            if (bNorthbound) ++Metrics.T3Cohort0CompletedCount;
+            else ++Metrics.T3Cohort1CompletedCount;
           }
         }
         Metrics.T3CompletedCount = Metrics.T3Cohort0CompletedCount
@@ -4113,9 +4099,11 @@ static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, F
           Metrics.T3CompletionStepMax = FMath::Max(
             Metrics.T3CompletionStepMax, Pair.Value);
         const FCrowdDemoSharedFlowField* Cohort0Field =
-          Pipeline->FindBidirectionalSwapFlowField(0);
+          Pipeline->FindBidirectionalSwapFlowField(
+            FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey);
         const FCrowdDemoSharedFlowField* Cohort1Field =
-          Pipeline->FindBidirectionalSwapFlowField(10);
+          Pipeline->FindBidirectionalSwapFlowField(
+            FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey);
         Metrics.T3Cohort0FlowHash = Cohort0Field ? Cohort0Field->BuildHash : 0;
         Metrics.T3Cohort1FlowHash = Cohort1Field ? Cohort1Field->BuildHash : 0;
         Metrics.bT3Valid = Layout.bValid && Progress.bValid

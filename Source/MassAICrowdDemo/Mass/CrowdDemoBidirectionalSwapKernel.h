@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "CrowdDemoSharedFlowFieldKernel.h"
+#include "MassCrowdWorkerFlowBinding.h"
 
 struct FCrowdDemoBidirectionalSwapLayoutInput
 {
@@ -13,7 +14,9 @@ struct FCrowdDemoBidirectionalSwapLayoutAgent
 {
   int32 AgentId = INDEX_NONE;
   int32 FormationIndex = INDEX_NONE;
-  int32 CohortId = INDEX_NONE;
+  uint32 CohortKey = 0;
+  FCrowdWorkerObjectiveRef ObjectiveRef;
+  uint64 FlowResourceId = 0;
   FVector SpawnLocation = FVector::ZeroVector;
 };
 
@@ -28,6 +31,7 @@ struct FCrowdDemoBidirectionalSwapStepAgent
 {
   int32 AgentId = INDEX_NONE;
   int32 FormationIndex = INDEX_NONE;
+  uint32 CohortKey = 0;
   FVector Location = FVector::ZeroVector;
   FVector Velocity = FVector::ZeroVector;
   ECrowdDemoFlowLocationStatus FlowStatus = ECrowdDemoFlowLocationStatus::OutOfBounds;
@@ -56,9 +60,19 @@ public:
   static constexpr float SouthCompletionPlaneY = -2200.0f;
   static constexpr float NorthCompletionPlaneY = 2200.0f;
   static constexpr float GoalLateralOffsetCm = 400.0f;
+  static constexpr uint32 NorthboundCohortKey = 1;
+  static constexpr uint32 SouthboundCohortKey = 2;
+  static constexpr uint64 NorthObjectiveId = 0x330001ull;
+  static constexpr uint64 SouthObjectiveId = 0x330002ull;
+  static constexpr uint64 NorthFlowResourceId =
+    CrowdWorkerResourceIds::FlowResource(0x330101ull);
+  static constexpr uint64 SouthFlowResourceId =
+    CrowdWorkerResourceIds::FlowResource(0x330102ull);
 
-  static int32 CohortIdForFormationIndex(int32 FormationIndex);
-  static FCrowdDemoSharedFlowFieldConfig MakeFlowConfig(int32 CohortId);
+  static bool IsCohortKeyValid(uint32 CohortKey);
+  static FCrowdWorkerObjectiveRef ObjectiveForCohort(uint32 CohortKey);
+  static uint64 FlowResourceForCohort(uint32 CohortKey);
+  static FCrowdDemoSharedFlowFieldConfig MakeFlowConfig(uint32 CohortKey);
 
   static FCrowdDemoBidirectionalSwapLayout BuildLayout(
     TConstArrayView<FCrowdDemoBidirectionalSwapLayoutInput> Inputs,

@@ -878,11 +878,11 @@ public:
     BidirectionalSwapLayout = Layout;
     BidirectionalSwapProgress = {};
   }
-  bool EnsureBidirectionalSwapFlowFields();
+  bool EnsureBidirectionalSwapFlowResources();
   const FCrowdDemoSharedFlowField* FindBidirectionalSwapFlowField(
-    int32 FormationIndex) const;
+    uint32 CohortKey) const;
   const FCrowdSharedFlowField* FindRuntimeBidirectionalSwapFlowField(
-    int32 FormationIndex) const;
+    uint32 CohortKey) const;
   void RecordBidirectionalSwapStep(
     TConstArrayView<FCrowdDemoBidirectionalSwapStepAgent> Agents)
   {

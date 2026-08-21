@@ -35,9 +35,9 @@ RETIRED       验收对象/机制已从当前架构物理删除，不再作为�
 | PR12 Source Architecture Cut | STATIC PASS / CLOSED | 旧 transaction / Stage / Prepared second-pass production symbols 为 0；Processor surface 仅 2 个 `UMassProcessor`；Owner Barrier 在 Checkpoint 前。 | 保持不回归。 |
 | Persistent Worker Production structure automation | PASS | `CrowdDemo.Architecture.PersistentWorkerProductionStructure` PASS 1/1。 | 后续 Target/host 改动继续回归。 |
 | Runtime Worker Result Apply / Owner Barrier | PASS | `MassCrowd.Runtime.WorkerResultApply` PASS 4/4；Host atomicity fixture PASS。 | 后续 ownership 改动继续回归。 |
-| Default Unity / DisableUnity | PASS | `main@5865125` landing：Default 105/105、DisableUnity 35/35；T6-A 最终源码 Default 8/8 incremental、DisableUnity 96/96、ForceUnity/NoAdaptiveUnity 17/17，且此前 clean ForceUnity/NoAdaptiveUnity 205/205。 | 后续 Runtime/Target TU 修改继续三模式回归。 |
+| Default Unity / DisableUnity | PASS | Slice C final source：UE 5.8 Development Editor Default full rebuild 199/199，DisableUnity/NoAdaptiveUnity full rebuild 262/262，均真实链接。 | 后续 Runtime/Target TU 修改继续多模式回归。 |
 | Minimal Full Production T8 server-only | PASS | 900 batches、90,940 patches、150 Ordered Events、attack/spawn/impact/damage=50/50/50/50、duplicate=0/0、Golden 一致。 | Target capacity 修改不应影响；后续双端仍需 formal runner。 |
-| T1/T2/T3/T4 post-cut canonical | PASS / POST-CUT | 当前 correction-rebase 源码上各重跑 1 次；Full Worker Production、runner gate valid。 | 后续对应 domain 修改继续回归。 |
+| T1/T2/T3/T4 post-cut canonical | PASS / POST-CUT | Slice C final source：T3 generic FlowBinding path 2/2 deterministic PASS；T2/T4 各 1/1 Full Worker Production runner gate PASS。T1 未在 Slice C 改动。 | 后续对应 domain 修改继续回归。 |
 | T7 client authority correction recovery | PASS / POST-CUT | canonical 2/2 + 60 秒 extended 3/3；每次 sparse correction 后 prediction 恢复，runtime hard failure=0、sidecar mismatch=0、最终 authority converge。 | 保持 clean barrier、correction fence、same-revision conflict fail-closed。 |
 | 双端 T8 formal runner | OPEN / tool issue | 业务历史证据存在，但正式 runner completion 仍有误判/超时债。 | Phase 1 修 runner 后正式双端执行。 |
 | T5 Worker Target observability | PASS ON MAIN | ResultApply `Target` / `TargetCohort` 只读 checkpoint valid；Capacity/Assignable/Overflow/CapacityHold machine-readable；absolute Plan build tick 保留可观察但不污染跨进程语义 hash；main landing runner gates PASS 9/9。 | 后续 Target schema/observer 修改继续保持。 |
@@ -143,7 +143,7 @@ Target capacity 实现不得恢复 Demo Target/Resource Prepared Transaction。
 |---|---|---|---|
 | T1 | 参与集切换、压力传播、staging reset、新平衡 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 bootstrap scratch、Lifecycle、Particle state reset。 |
 | T2 | 开放区域群体移动、Macro Guidance、自然落位 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 Shared Flow → MovementPlanning → Worker Result。 |
-| T3 | 双向交换、Local Predictive、公平让行、安全穿越 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 direct intent、local prediction 与 determinism。 |
+| T3 | 双向交换、Local Predictive、公平让行、安全穿越 | PASS / SLICE C GENERIC FLOWBINDING | 20 explicit FlowBindings、2 CohortKeys、2 ObjectiveRefs、2 generic FlowResourceIds；2x canonical acceptance/FlowBinding hashes MATCH，10/10 crossed/completed，deadlock/unreachable/hard/swept/rejection=0。`FormationIndex` 不再连续选择 Flow，authoritative preferred-velocity bypass=0。 | 保持 common Worker MovementPlanning、LocalPredictive、Particle 与 determinism；视觉/性能仍 OPEN。 |
 | T4 | 窄通道/出口安全、环境约束 | PASS / POST-CUT | 当前 correction-rebase 源码 canonical PASS；保持 non-particle/obstacle bootstrap + Worker movement。 |
 | T5 | Static/Moving Target、Polar Transport、长期稳定 | CLOSED ON MAIN | PR #18 已合并；`main@182f4d8` Static/Moving 均 1199-step 2/2 deterministic PASS。Correctness CLOSED，performance OPEN。 |
 | T6 | 异构 Radius/Mobility/Distance Band 联合运行 | T6-A/T6-B/T6-C CORRECTNESS CLOSED | T6-A、T6-B、T6-C correctness 均已进入 main；T6-C 经 PR #23 合并。不得外推为 LateJoin、Dual T8、performance 或 visual acceptance PASS。 |

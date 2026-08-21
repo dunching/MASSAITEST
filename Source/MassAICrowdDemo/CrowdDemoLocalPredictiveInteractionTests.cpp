@@ -378,14 +378,20 @@ bool FCrowdDemoLocalPredictiveT3InitialFixtureTest::RunTest(const FString& Param
   const FCrowdDemoBidirectionalSwapLayout Layout =
     FCrowdDemoBidirectionalSwapKernel::BuildLayout(LayoutInputs);
   FCrowdDemoSharedFlowField Fields[2];
-  for (int32 CohortId = 0; CohortId < 2; ++CohortId)
+  const uint32 CohortKeys[] = {
+    FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey,
+    FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey};
+  for (int32 CohortIndex = 0; CohortIndex < 2; ++CohortIndex)
     FCrowdDemoSharedFlowFieldKernel::Build(
-      FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(CohortId), Fields[CohortId]);
+      FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(
+        CohortKeys[CohortIndex]), Fields[CohortIndex]);
   TArray<FCrowdDemoLocalPredictiveAgent> Agents;
   for (const FCrowdDemoBidirectionalSwapLayoutAgent& LayoutAgent : Layout.Agents)
   {
+    const int32 CohortIndex = LayoutAgent.CohortKey
+      == FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey ? 0 : 1;
     const FCrowdDemoSharedFlowSample Sample = FCrowdDemoSharedFlowFieldKernel::Sample(
-      Fields[LayoutAgent.CohortId], LayoutAgent.SpawnLocation);
+      Fields[CohortIndex], LayoutAgent.SpawnLocation);
     FCrowdDemoLocalPredictiveAgent Agent = MakeAgent(
       LayoutAgent.AgentId,
       FVector2f(LayoutAgent.SpawnLocation.X, LayoutAgent.SpawnLocation.Y),
@@ -394,7 +400,8 @@ bool FCrowdDemoLocalPredictiveT3InitialFixtureTest::RunTest(const FString& Param
     Agents.Add(Agent);
   }
   const FSolveFixture Fixture = Solve(
-    Agents, FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(0));
+    Agents, FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(
+      FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey));
   AddInfo(FString::Printf(
     TEXT("T3 initial local summary valid=%d candidates=%d conflicts=%d infeasible=%d quantization=%d joint=%d hash=%u"),
     Fixture.Summary.bValid ? 1 : 0, Fixture.Summary.CandidatePairCount,
@@ -440,21 +447,27 @@ bool FCrowdDemoLocalPredictiveT3RolloutTest::RunTest(const FString& Parameters)
   const FCrowdDemoBidirectionalSwapLayout Layout =
     FCrowdDemoBidirectionalSwapKernel::BuildLayout(LayoutInputs);
   FCrowdDemoSharedFlowField Fields[2];
-  for (int32 CohortId = 0; CohortId < 2; ++CohortId)
+  const uint32 CohortKeys[] = {
+    FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey,
+    FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey};
+  for (int32 CohortIndex = 0; CohortIndex < 2; ++CohortIndex)
     FCrowdDemoSharedFlowFieldKernel::Build(
-      FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(CohortId), Fields[CohortId]);
+      FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(
+        CohortKeys[CohortIndex]), Fields[CohortIndex]);
   TArray<FCrowdDemoBidirectionalSwapStepAgent> States;
   for (const FCrowdDemoBidirectionalSwapLayoutAgent& LayoutAgent : Layout.Agents)
   {
     FCrowdDemoBidirectionalSwapStepAgent& State = States.AddDefaulted_GetRef();
     State.AgentId = LayoutAgent.AgentId;
     State.FormationIndex = LayoutAgent.FormationIndex;
+    State.CohortKey = LayoutAgent.CohortKey;
     State.Location = LayoutAgent.SpawnLocation;
   }
   FCrowdDemoLocalPredictiveSettings LocalSettings;
   FCrowdDemoParticleConstraintSettings ParticleSettings;
   FCrowdDemoParticleConstraintEnvironment Environment;
-  Environment.FlowConfig = FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(0);
+  Environment.FlowConfig = FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(
+    FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey);
   Environment.FlowConfig.AgentInflateCm = 52.0f;
   TArray<FCrowdDemoLocalPredictiveGrantState> PreviousGrants;
   TMap<int32, int32> BlockedAges;
@@ -464,11 +477,11 @@ bool FCrowdDemoLocalPredictiveT3RolloutTest::RunTest(const FString& Parameters)
     TArray<FCrowdDemoLocalPredictiveAgent> LocalAgents;
     for (const FCrowdDemoBidirectionalSwapStepAgent& State : States)
     {
-      const int32 CohortId =
-        FCrowdDemoBidirectionalSwapKernel::CohortIdForFormationIndex(
-          State.FormationIndex);
+      const int32 CohortIndex = State.CohortKey
+        == FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey ? 0 : 1;
       const FCrowdDemoSharedFlowSample Sample =
-        FCrowdDemoSharedFlowFieldKernel::Sample(Fields[CohortId], State.Location);
+        FCrowdDemoSharedFlowFieldKernel::Sample(
+          Fields[CohortIndex], State.Location);
       const FVector Preferred = Sample.bUnreachable
         ? FVector::ZeroVector : Sample.FlowDirection * 800.0f;
       FCrowdDemoLocalPredictiveAgent Agent = MakeAgent(

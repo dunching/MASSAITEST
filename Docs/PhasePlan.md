@@ -34,7 +34,7 @@ Reference/TargetRegionBoundaryCapacityContract.md
 
 | Phase | 名称 | 状态 | 关闭条件 |
 |---:|---|---|---|
-| 0 | Unified Behavior / Development Rule Cut | CURRENT / SLICE B.5 VALIDATED | 规则合同已进入 main；generic Objective/Cohort/Flow binding foundation 已完成双向批量依赖、typed Flow reuse、泛型 Resource revision propagation 与 clear fallback，并通过 100/1k/10k synthetic regression。T3 与其余 Demo migration debt 仍待后续 Slice C。 |
+| 0 | Unified Behavior / Development Rule Cut | SLICE B/B.5 CLOSED ON MAIN / SLICE C VALIDATED | 规则合同与 generic Objective/Cohort/Flow binding foundation 已进入 main；Slice C 已将 T3 迁移到显式 Cohort/Objective/FlowBinding 与 common current-position Worker MovementPlanning，并通过 2x canonical 与相邻场景回归。其余 Demo migration debt 仍 OPEN。 |
 | 1 | Missing Specialist Correctness Gates | OPEN | LateJoin、完整双端 T8、剩余 specialist correctness 与已确认 scenario-coupling migration debt关闭。 |
 | 2 | Performance / Scaling | OPEN | 同一 Production path 依次通过 1k → 2k → 5k → 10k correctness-preserving performance gates。 |
 | 3 | Automated Behavior / Visual Acceptance | OPEN | 自动化行为/视觉指标与相关 editor/runner gates 建立并通过。 |
@@ -47,6 +47,7 @@ Reference/TargetRegionBoundaryCapacityContract.md
 T6-A                         CLOSED
 T6-B                         CLOSED
 T6-C                         CLOSED / merged via PR #23
+T3 generic Flow migration    IMPLEMENTED / VALIDATED IN SLICE C
 LateJoin                     OPEN
 Dual T8                      OPEN
 Performance                  OPEN
@@ -57,7 +58,6 @@ Human Visual                 OPEN
 Phase 1 的已确认代码迁移债：
 
 ```text
-T3          FormationIndex Flow selection + authoritative preferred-velocity bypass
 T1          scenario-name Flow bypass + zero authoritative velocity path
 Moving Flow scenario-enum-driven refresh
 T6-A        scenario-progress-driven TargetRegion activation
@@ -65,7 +65,7 @@ T4          group_exit_hold living in runtime host
 T7          FormationIndex-driven continuous movement
 ```
 
-这些项必须收敛到 `TargetArchitecture.md` 定义的统一 Worker movement contract。Slice B 已提供不依赖 scenario identity 的 Objective/Cohort/Flow binding、独立 Flow revisions、current-position sampling 与 `Environment` fallback；它没有迁移 T3，Slice C 仍 OPEN。
+这些项必须收敛到 `TargetArchitecture.md` 定义的统一 Worker movement contract。Slice B/B.5 已在 main 提供不依赖 scenario identity 的 Objective/Cohort/Flow binding、独立 Flow revisions、current-position sampling 与 `Environment` fallback；Slice C 已迁移 T3，但未外推到 T1、T4、T6-A、T7 或 moving-objective Flow refresh。
 
 ---
 
