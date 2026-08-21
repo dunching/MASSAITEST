@@ -36,6 +36,10 @@ namespace CrowdWorkerTargetObservabilityTests
     Cohort.CohortKey = 3;
     Cohort.TopologyRevision = 77;
     Cohort.TargetRevision = 9;
+    Cohort.ObjectiveResourceRevision = 31;
+    Cohort.ObjectiveEffectiveFixedStep = 11;
+    Cohort.EffectiveTargetLocation = FVector2f(120.0f, -80.0f);
+    Cohort.EffectiveTargetVelocity = FVector2f(-80.0f, 0.0f);
     Cohort.FeasibleCellCount = 12;
     Cohort.EdgeCount = 24;
     Cohort.FeasibleRegionCount = 4;
@@ -191,6 +195,14 @@ bool FCrowdWorkerTargetObservationReadOnlyTest::RunTest(
     First.OverbookedCellCount, 0);
   TestEqual(TEXT("Worker Target observation has no capacity hold"),
     First.CapacityHoldTargetStateCount, 0);
+  TestEqual(TEXT("Worker Target observation retains Objective revision"),
+    First.ObjectiveResourceRevision, uint64{31});
+  TestEqual(TEXT("Worker Target observation retains Objective effective tick"),
+    First.ObjectiveEffectiveFixedStep, 11);
+  TestEqual(TEXT("Worker Target observation retains effective target location"),
+    First.EffectiveTargetLocation, FVector2f(120.0f, -80.0f));
+  TestEqual(TEXT("Worker Target observation retains effective target velocity"),
+    First.EffectiveTargetVelocity, FVector2f(-80.0f, 0.0f));
 
   FCrowdWorkerTargetObservation Repeat;
   TestTrue(TEXT("Repeated Worker Target observation is valid"),

@@ -3912,8 +3912,7 @@ static void ExecuteRoundCheckpointPublisher(FMassEntityManager& EntityManager, F
           }
           Metrics.bTargetRegionTransportValid = bAllValid
             && Metrics.bCapabilityProfilesValid != 0 ? 1 : 0;
-          if ((Pipeline->IsHeterogeneousTransit()
-              || Pipeline->IsHeterogeneousTargetStatic())
+          if (Pipeline->HasHeterogeneousTargetRegionCapabilities()
             && !ProjectHeterogeneousWorkerTargetMetrics(
               *Pipeline, Proxy, States, Metrics))
           {

@@ -187,6 +187,131 @@ function Assert-CrowdDemoT6BStaticTargetGate {
   return $T6
 }
 
+function Assert-CrowdDemoT6CHeterogeneousMovingTargetGate {
+  param(
+    [string]$ServerLog,
+    [int]$ExpectedAgentCount = 20,
+    [int]$ExpectedProfileCount = 7
+  )
+
+  if (!(Test-Path -LiteralPath $ServerLog)) {
+    throw "CrowdDemo T6-C acceptance gate: server log missing"
+  }
+  $T6Match = Select-String -Path $ServerLog `
+    -Pattern 'CrowdDemoT6TargetCheckpoint role=server ' | Select-Object -Last 1
+  $TargetMatch = Select-String -Path $ServerLog `
+    -Pattern 'CrowdDemoTargetRegionTransportCheckpoint role=server ' | Select-Object -Last 1
+  $WorkerMatch = Select-String -Path $ServerLog `
+    -Pattern 'CrowdWorkerTargetCheckpoint role=server ' | Select-Object -Last 1
+  $Profiles = @(Select-String -Path $ServerLog `
+    -Pattern 'CrowdDemoT6TargetProfileCheckpoint role=server ')
+  $ObjectiveProgress = @(Select-String -Path $ServerLog `
+    -Pattern 'CrowdDemoFullWorkerProductionFastPathCheckpoint ')
+  $Flows = @(Select-String -Path $ServerLog `
+    -Pattern 'CrowdDemoDynamicSharedFlowCheckpoint ')
+  if (!$T6Match -or !$TargetMatch -or !$WorkerMatch) {
+    throw "CrowdDemo T6-C acceptance gate: final aggregate checkpoint missing"
+  }
+  if ($Profiles.Count -ne $ExpectedProfileCount) {
+    throw "CrowdDemo T6-C acceptance gate: profile checkpoints=$($Profiles.Count)!=$ExpectedProfileCount"
+  }
+  if ($ObjectiveProgress.Count -lt 2 -or $Flows.Count -lt 2) {
+    throw "CrowdDemo T6-C acceptance gate: insufficient moving evidence objectives=$($ObjectiveProgress.Count) flows=$($Flows.Count)"
+  }
+
+  $Failures = [System.Collections.Generic.List[string]]::new()
+  $T6 = ConvertFrom-CrowdDemoGateMetricLine $T6Match.Line
+  $Target = ConvertFrom-CrowdDemoGateMetricLine $TargetMatch.Line
+  $Worker = ConvertFrom-CrowdDemoGateMetricLine $WorkerMatch.Line
+  if ($T6.valid -ne '1' -or [int]$T6.testcase -ne 9) {
+    $Failures.Add("T6 valid/testcase=$($T6.valid)/$($T6.testcase)")
+  }
+  if ([int]$T6.capability_profiles -ne $ExpectedProfileCount) {
+    $Failures.Add("capability_profiles=$($T6.capability_profiles)")
+  }
+  if ([int]$T6.cross_profile_hard -ne 0 -or [int]$T6.cross_profile_swept -ne 0) {
+    $Failures.Add("cross_profile_hard/swept=$($T6.cross_profile_hard)/$($T6.cross_profile_swept)")
+  }
+  if ($Target.valid -ne '1' -or [int]$Target.plan_unrouted -ne 0) {
+    $Failures.Add("Target valid/plan_unrouted=$($Target.valid)/$($Target.plan_unrouted)")
+  }
+  foreach ($Name in @('valid', 'objective_revision_match')) {
+    if ($Worker[$Name] -ne '1') { $Failures.Add("Worker $Name=$($Worker[$Name])") }
+  }
+  foreach ($Name in @('expected_target_agent_count', 'target_agent_count', 'valid_target_state_count')) {
+    if ([int]$Worker[$Name] -ne $ExpectedAgentCount) {
+      $Failures.Add("Worker $Name=$($Worker[$Name])")
+    }
+  }
+  if ([int64]$Worker.objective_resource_revision -le 0 -or
+      [int]$Worker.objective_effective_fixed_step -lt 0) {
+    $Failures.Add("Worker objective freshness=$($Worker.objective_resource_revision)/$($Worker.objective_effective_fixed_step)")
+  }
+  if ($Worker.target_moved -ne '1' -or
+      [double]$Worker.target_displacement_cm -le 0.0) {
+    $Failures.Add("target_moved/displacement=$($Worker.target_moved)/$($Worker.target_displacement_cm)")
+  }
+  if ([int]$Worker.unrouted_target_state_count -ne 0 -or
+      [int]$Worker.overbooked_cell_count -ne 0) {
+    $Failures.Add("Worker unrouted/overbook=$($Worker.unrouted_target_state_count)/$($Worker.overbooked_cell_count)")
+  }
+  if ([int]$Worker.active_claim_count -lt 0 -or
+      [int]$Worker.completed_transition_count -le 0 -or
+      [int]$Worker.released_claim_count -le 0) {
+    $Failures.Add("Worker claim lifecycle=$($Worker.active_claim_count)/$($Worker.completed_transition_count)/$($Worker.released_claim_count)")
+  }
+
+  $ParticleMatch = Select-String -Path $ServerLog `
+    -Pattern 'CrowdDemoParticleCheckpoint role=server ' | Select-Object -Last 1
+  if (!$ParticleMatch) {
+    $Failures.Add('Particle checkpoint missing')
+  }
+  else {
+    $Particle = ConvertFrom-CrowdDemoGateMetricLine $ParticleMatch.Line
+    foreach ($Name in @('hard_pair_violation_count', 'swept_pair_violation_count', 'obstacle_penetration_count', 'bounds_violation_count')) {
+      if ([int]$Particle[$Name] -ne 0) { $Failures.Add("Particle $Name=$($Particle[$Name])") }
+    }
+  }
+  $ObjectiveFailure = Select-String -Path $ServerLog `
+    -Pattern 'objective_decode_failure=[1-9]|objective_sequence_gap=[1-9]|duplicate_wakeup=[1-9]|early_application=[1-9]|source_attachment_failure=[1-9]|SourceAttachment.*(?:Failed|failure)' `
+    -CaseSensitive:$false
+  if ($ObjectiveFailure) { $Failures.Add('objective_or_source_attachment_failure') }
+
+  $AgentTotal = 0
+  $MovingClaimActivity = 0
+  foreach ($ProfileMatch in $Profiles) {
+    $Profile = ConvertFrom-CrowdDemoGateMetricLine $ProfileMatch.Line
+    $Agents = [int]$Profile.agents
+    $AgentTotal += $Agents
+    if ([int]$Profile.assignable + [int]$Profile.overflow -ne $Agents -or
+        [int]$Profile.assignable -gt [int]$Profile.total_capacity -or
+        [int]$Profile.capacity_holds -ne [int]$Profile.overflow -or
+        [int]$Profile.unrouted -ne 0 -or [int]$Profile.overbooked_cells -ne 0) {
+      $Failures.Add("profile=$($Profile.profile) capacity/route invalid")
+    }
+    $MovingClaimActivity += [int]$Profile.released_claims
+    $MovingClaimActivity += [int]$Profile.completed_transitions
+  }
+  if ($AgentTotal -ne $ExpectedAgentCount) { $Failures.Add("profile_agent_total=$AgentTotal") }
+  if ($MovingClaimActivity -le 0) { $Failures.Add('moving_claim_activity=0') }
+
+  $FirstObjective = ConvertFrom-CrowdDemoGateMetricLine $ObjectiveProgress[0].Line
+  $LastObjective = ConvertFrom-CrowdDemoGateMetricLine $ObjectiveProgress[-1].Line
+  if ([int64]$LastObjective.objective_published -le [int64]$FirstObjective.objective_published) {
+    $Failures.Add('objective_progression_missing')
+  }
+  $FirstFlow = ConvertFrom-CrowdDemoGateMetricLine $Flows[0].Line
+  $LastFlow = ConvertFrom-CrowdDemoGateMetricLine $Flows[-1].Line
+  if ([int]$LastFlow.integration_rebuild_count -le [int]$FirstFlow.integration_rebuild_count -or
+      [int]$LastFlow.anchor_cell -eq [int]$FirstFlow.anchor_cell) {
+    $Failures.Add('dynamic_flow_anchor_progression_missing')
+  }
+  if ($Failures.Count -gt 0) {
+    throw "CrowdDemo T6-C acceptance gate failed: $($Failures -join '; ')"
+  }
+  return $T6
+}
+
 function Assert-CrowdDemoScenarioAcceptanceGate {
   param(
     [string]$ServerLog,

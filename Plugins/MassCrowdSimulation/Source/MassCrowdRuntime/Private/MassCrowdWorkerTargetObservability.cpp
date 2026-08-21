@@ -153,6 +153,12 @@ bool FCrowdWorkerTargetObserver::Build(
     Cohort.CohortKey = CohortKey;
     Cohort.TopologyRevision = Builder.State.TopologyRevision;
     Cohort.TargetRevision = Builder.State.TargetRevision;
+    Cohort.ObjectiveResourceRevision =
+      Builder.State.ObjectiveResourceRevision;
+    Cohort.ObjectiveEffectiveFixedStep =
+      Builder.State.ObjectiveEffectiveFixedStep;
+    Cohort.EffectiveTargetLocation = Builder.State.EffectiveTargetLocation;
+    Cohort.EffectiveTargetVelocity = Builder.State.EffectiveTargetVelocity;
     Cohort.PlanEpoch = Builder.State.Plan.PlanEpoch;
     Cohort.PlanBuildFixedStep =
       Builder.State.Plan.BuildFixedStepIndex;
@@ -199,6 +205,28 @@ bool FCrowdWorkerTargetObserver::Build(
       Cohort.CompletedTransitionCount;
     OutObservation.ReleasedClaimCount += Cohort.ReleasedClaimCount;
     OutObservation.OverbookedCellCount += Cohort.OverbookedCellCount;
+    if (OutObservation.ObjectiveResourceRevision == 0)
+    {
+      OutObservation.ObjectiveResourceRevision =
+        Cohort.ObjectiveResourceRevision;
+      OutObservation.ObjectiveEffectiveFixedStep =
+        Cohort.ObjectiveEffectiveFixedStep;
+      OutObservation.EffectiveTargetLocation =
+        Cohort.EffectiveTargetLocation;
+      OutObservation.EffectiveTargetVelocity =
+        Cohort.EffectiveTargetVelocity;
+    }
+    else if (OutObservation.ObjectiveResourceRevision
+        != Cohort.ObjectiveResourceRevision
+      || OutObservation.ObjectiveEffectiveFixedStep
+        != Cohort.ObjectiveEffectiveFixedStep
+      || OutObservation.EffectiveTargetLocation
+        != Cohort.EffectiveTargetLocation
+      || OutObservation.EffectiveTargetVelocity
+        != Cohort.EffectiveTargetVelocity)
+    {
+      MarkInvalid({});
+    }
     Cohort.ExecutionHash = Builder.State.Execution.ExecutionHash;
     Cohort.GuidanceHash = Builder.GuidanceHash;
     Cohort.TargetStateCount = Builder.TargetStateCount;
@@ -254,6 +282,14 @@ bool FCrowdWorkerTargetObserver::Build(
     FoldObservationValue(StableHash, Cohort.TopologyRevision);
     FoldObservationValue(
       StableHash, static_cast<uint64>(Cohort.TargetRevision));
+    FoldObservationValue(
+      StableHash, Cohort.ObjectiveResourceRevision);
+    // ObjectiveEffectiveFixedStep has the same absolute-clock property as
+    // PlanBuildFixedStep, so it remains observable but not cross-run hashed.
+    FoldObservationValue(
+      StableHash, GetTypeHash(Cohort.EffectiveTargetLocation));
+    FoldObservationValue(
+      StableHash, GetTypeHash(Cohort.EffectiveTargetVelocity));
     FoldObservationValue(
       StableHash, static_cast<uint64>(Cohort.PlanEpoch));
     // PlanBuildFixedStep is an absolute Runtime tick. It remains observable

@@ -891,6 +891,11 @@ bool FCrowdWorkerTargetCohortStateCodec::Encode(
   CrowdWorkerTargetPrivate::AppendUnsigned(
     OutPayload.Bytes, State.TopologyRevision);
   AppendSigned(OutPayload.Bytes, State.TargetRevision);
+  CrowdWorkerTargetPrivate::AppendUnsigned(
+    OutPayload.Bytes, State.ObjectiveResourceRevision);
+  AppendSigned(OutPayload.Bytes, State.ObjectiveEffectiveFixedStep);
+  AppendVector2(OutPayload.Bytes, State.EffectiveTargetLocation);
+  AppendVector2(OutPayload.Bytes, State.EffectiveTargetVelocity);
   AppendSigned(OutPayload.Bytes, State.FeasibleCellCount);
   AppendSigned(OutPayload.Bytes, State.EdgeCount);
   AppendSigned(OutPayload.Bytes, State.FeasibleRegionCount);
@@ -920,6 +925,14 @@ bool FCrowdWorkerTargetCohortStateCodec::Decode(
     && ReadUnsigned(
       Payload.Bytes, Offset, OutState.TopologyRevision)
     && ReadSigned(Payload.Bytes, Offset, OutState.TargetRevision)
+    && ReadUnsigned(
+      Payload.Bytes, Offset, OutState.ObjectiveResourceRevision)
+    && ReadSigned(
+      Payload.Bytes, Offset, OutState.ObjectiveEffectiveFixedStep)
+    && ReadVector2(
+      Payload.Bytes, Offset, OutState.EffectiveTargetLocation)
+    && ReadVector2(
+      Payload.Bytes, Offset, OutState.EffectiveTargetVelocity)
     && ReadSigned(Payload.Bytes, Offset, OutState.FeasibleCellCount)
     && ReadSigned(Payload.Bytes, Offset, OutState.EdgeCount)
     && ReadSigned(Payload.Bytes, Offset, OutState.FeasibleRegionCount)
@@ -1468,6 +1481,11 @@ bool FCrowdWorkerTargetDomainExecutor::Execute(
     CohortState.CohortKey = Input.CohortKey;
     CohortState.TopologyRevision = Input.TopologyRevision;
     CohortState.TargetRevision = Objective.TargetRevision;
+    CohortState.ObjectiveResourceRevision = ObjectiveRecord->Revision;
+    CohortState.ObjectiveEffectiveFixedStep =
+      Objective.EffectiveFixedStepIndex;
+    CohortState.EffectiveTargetLocation = EffectiveSettings.TargetLocation;
+    CohortState.EffectiveTargetVelocity = EffectiveSettings.TargetVelocity;
     CohortState.FeasibleCellCount =
       Runtime.Topology.Summary.FeasibleCellCount;
     CohortState.EdgeCount = Runtime.Topology.Summary.EdgeCount;

@@ -9,6 +9,10 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerTargetCohortObservation
   uint32 CohortKey = 0;
   uint32 TopologyRevision = 0;
   int32 TargetRevision = INDEX_NONE;
+  uint64 ObjectiveResourceRevision = 0;
+  int32 ObjectiveEffectiveFixedStep = INDEX_NONE;
+  FVector2f EffectiveTargetLocation = FVector2f::ZeroVector;
+  FVector2f EffectiveTargetVelocity = FVector2f::ZeroVector;
   int32 PlanEpoch = 0;
   int32 PlanBuildFixedStep = INDEX_NONE;
   uint32 FeasibleGraphHash = 0;
@@ -50,6 +54,10 @@ struct MASSCROWDRUNTIME_API FCrowdWorkerTargetObservation
   uint64 LastAppliedInputSequence = 0;
   uint64 PublishSequence = 0;
   int32 TargetRevision = INDEX_NONE;
+  uint64 ObjectiveResourceRevision = 0;
+  int32 ObjectiveEffectiveFixedStep = INDEX_NONE;
+  FVector2f EffectiveTargetLocation = FVector2f::ZeroVector;
+  FVector2f EffectiveTargetVelocity = FVector2f::ZeroVector;
   int32 ExpectedTargetAgentCount = 0;
   int32 TargetAgentCount = 0;
   int32 ValidTargetStateCount = 0;
