@@ -34,7 +34,7 @@ Reference/TargetRegionBoundaryCapacityContract.md
 
 | Phase | 名称 | 状态 | 关闭条件 |
 |---:|---|---|---|
-| 0 | Unified Behavior / Development Rule Cut | CURRENT / SLICE B VALIDATED | 规则合同已进入 main；generic Objective/Cohort/Flow binding 已通过 headless/server correctness 验证，T3 与其余 Demo migration debt 仍待后续切片。 |
+| 0 | Unified Behavior / Development Rule Cut | CURRENT / SLICE B.5 VALIDATED | 规则合同已进入 main；generic Objective/Cohort/Flow binding foundation 已完成双向批量依赖、typed Flow reuse、泛型 Resource revision propagation 与 clear fallback，并通过 100/1k/10k synthetic regression。T3 与其余 Demo migration debt 仍待后续 Slice C。 |
 | 1 | Missing Specialist Correctness Gates | OPEN | LateJoin、完整双端 T8、剩余 specialist correctness 与已确认 scenario-coupling migration debt关闭。 |
 | 2 | Performance / Scaling | OPEN | 同一 Production path 依次通过 1k → 2k → 5k → 10k correctness-preserving performance gates。 |
 | 3 | Automated Behavior / Visual Acceptance | OPEN | 自动化行为/视觉指标与相关 editor/runner gates 建立并通过。 |
