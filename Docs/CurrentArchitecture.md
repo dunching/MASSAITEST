@@ -638,12 +638,12 @@ Slice B.5 synthetic 100/1k/10k 回归覆盖三边/Agent dependency graph、1%/10
 
 Lifecycle、Behavior Source、Movement Constraint、Interaction Participation、Correction 与 Acceptance 的目标所有权边界见 [`Reference/CrowdLifecycleBehaviorContract.md`](Reference/CrowdLifecycleBehaviorContract.md)；该 Reference 不改变下表所列当前实现状态。
 
-Slice D1-A 已补齐 scenario-neutral Worker foundation：显式 versioned `SpawnPending / Active / Suspended / Removed` lifecycle transition、独立的 Particle / Combat / Presentation participation field，以及通用 movement/interaction consumer。Behavior 与 Movement Constraint 继续复用既有 Behavior Source resolved channels；Correction 继续复用 versioned authoritative dirty-state/correction barrier，不引入平行状态存储。T1 `OpenSpawnRelaxation` 尚未迁移，现有 T1 runtime branch 与 authoritative preferred-velocity compatibility path 仍属下表迁移债。
+Slice D1-A 已补齐 scenario-neutral Worker foundation：显式 versioned `SpawnPending / Active / Suspended / Removed` lifecycle transition、独立的 Particle / Combat / Presentation participation field，以及通用 movement/interaction consumer。Behavior 与 Movement Constraint 继续复用既有 Behavior Source resolved channels；Correction 继续复用 versioned authoritative dirty-state/correction barrier，不引入平行状态存储。Slice D1-B1 现将 T1 phase 经 stateless fixture adapter 翻译为通用 Lifecycle 输入与零 Movement 输出的 `Waiting / Relaxing / Settling` semantic Behavior Source；Worker 验证 revision/order、执行 transition 并通过 ResultApply 暴露状态。该 slice 仅迁移 state ownership；现有 T1 movement、Flow bypass、preferred-velocity compatibility、Particle participation、boundary reset/correction 与 acceptance 逻辑均未迁移。
 
 | 范围 | 已确认迁移债 | 目标合同 |
 |---|---|---|
 | T3（Slice C 已迁移） | 旧 `FormationIndex` 连续选 Flow 与 authoritative preferred-velocity bypass 已移除 | 显式 `ObjectiveRef` / `CohortKey` / `FlowResourceId` / `FCrowdWorkerFlowBinding`，进入通用 current-position MovementPlanning |
-| T1 | scenario-name Flow bypass；zero authoritative velocity path | 通用 lifecycle / capability / Behavior Source / movement-lock 输入 |
+| T1（D1-B1 state path 已迁移） | scenario-name Flow bypass；zero authoritative velocity、Particle participation 与 reset/correction compatibility path | 后续通用 movement-lock / participation / correction 输入；不得把 state migration 外推为 movement migration |
 | Moving Flow | SharedFlow refresh 由 scenario enum 驱动 | Objective / Environment / resolved Flow anchor 语义变化 |
 | T6-A | TargetRegion activation 由 scenario progress 驱动 | 显式 Behavior / Objective / Capability activation input |
 | T4 | `group_exit_hold` 位于 runtime host | 移至 Acceptance Harness / Runner |

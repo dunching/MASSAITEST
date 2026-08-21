@@ -127,7 +127,8 @@ namespace
         CrowdStandardSources::MoveCapability,
         CrowdStandardSources::FaceCapability,
         CrowdStandardSources::FormationCapability,
-        CrowdStandardSources::ImpulseCapability};
+        CrowdStandardSources::ImpulseCapability,
+        CrowdStandardSources::SemanticStateCapability};
       Profile.CapabilityIds.Sort();
       if (!Builder.RegisterProfile(MoveTemp(Profile)))
         return false;

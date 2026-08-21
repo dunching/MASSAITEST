@@ -204,6 +204,23 @@ bool FCrowdWorkerLifecycleStateMachine::Apply(
   return OutState.IsValid();
 }
 
+bool FCrowdWorkerLifecycleStateMachine::RebaseInitialState(
+  const FCrowdWorkerLifecycleState& Current,
+  const uint64 SourceInputSequence,
+  const uint64 InitialStateHash,
+  FCrowdWorkerLifecycleState& OutState)
+{
+  OutState = {};
+  if (!Current.IsValid()
+    || SourceInputSequence <= Current.SourceInputSequence
+    || InitialStateHash == 0)
+    return false;
+  OutState = Current;
+  OutState.SourceInputSequence = SourceInputSequence;
+  OutState.InitialStateHash = InitialStateHash;
+  return OutState.IsValid();
+}
+
 bool FCrowdWorkerParticipationStateCodec::Encode(
   const FCrowdWorkerParticipationState& State,
   FCrowdWorkerPayload& OutPayload)

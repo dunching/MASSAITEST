@@ -13,6 +13,7 @@ namespace CrowdStandardSources
   inline constexpr FCrowdCapabilityId FaceCapability{10002};
   inline constexpr FCrowdCapabilityId FormationCapability{10003};
   inline constexpr FCrowdCapabilityId ImpulseCapability{10004};
+  inline constexpr FCrowdCapabilityId SemanticStateCapability{10005};
 
   inline constexpr FCrowdBehaviorContextTypeId
     TargetKinematicsContextType{10101};
@@ -33,6 +34,7 @@ namespace CrowdStandardSources
   inline constexpr FCrowdBehaviorSourceTypeId WanderSteering{11301};
   inline constexpr FCrowdBehaviorSourceTypeId FormationOffset{11302};
   inline constexpr FCrowdBehaviorSourceTypeId TimedImpulse{11303};
+  inline constexpr FCrowdBehaviorSourceTypeId SemanticState{11401};
 
   constexpr uint32 PayloadSchema(
     const FCrowdBehaviorSourceTypeId TypeId)
@@ -182,6 +184,24 @@ struct FCrowdTimedImpulsePayload
   ECrowdImpulseDecayMode DecayMode = ECrowdImpulseDecayMode::Linear;
 };
 
+// A Worker-owned semantic state marker. It deliberately contributes no
+// Movement, Constraint, Particle, or Presentation output; consumers observe
+// it through the ordered Behavior source set.
+enum class ECrowdSemanticBehaviorState : uint8
+{
+  Waiting = 0,
+  Relaxing,
+  Settling,
+  Count
+};
+
+struct FCrowdSemanticBehaviorStatePayload
+{
+  ECrowdSemanticBehaviorState State =
+    ECrowdSemanticBehaviorState::Waiting;
+  uint8 Reserved[7] = {};
+};
+
 #define CROWD_STANDARD_POD(Type) \
   static_assert(std::is_trivially_copyable_v<Type>); \
   static_assert(sizeof(Type) <= CrowdBehavior::MaxPayloadBytes)
@@ -203,6 +223,7 @@ CROWD_STANDARD_POD(FCrowdWanderSteeringPayload);
 CROWD_STANDARD_POD(FCrowdWanderSteeringState);
 CROWD_STANDARD_POD(FCrowdFormationOffsetPayload);
 CROWD_STANDARD_POD(FCrowdTimedImpulsePayload);
+CROWD_STANDARD_POD(FCrowdSemanticBehaviorStatePayload);
 
 #undef CROWD_STANDARD_POD
 

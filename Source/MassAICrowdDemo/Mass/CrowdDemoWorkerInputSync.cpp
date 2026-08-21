@@ -11,6 +11,7 @@
 #include "MassCrowdWorkerNavigationResource.h"
 #include "MassCrowdWorkerTargetDomain.h"
 #include "MassCrowdWorkerProjectileDomain.h"
+#include "MassCrowdStandardSources.h"
 #include "Mass/CrowdDemoWorkerCombatExtension.h"
 #include "Mass/CrowdDemoMassSubsystem.h"
 #include "CrowdDemoBusinessSourceProvider.h"
@@ -22,6 +23,30 @@ namespace CrowdDemoWorkerInputSyncPrivate
   constexpr int32 MaxQueuedShadowBatches = 8;
   constexpr int32 MaxShadowBatchesPerPump = 8;
   constexpr int32 MaxShadowStepsPerPump = 32;
+
+  bool ContainsOnlySemanticStateCommands(
+    const TConstArrayView<FCrowdBehaviorSourceCommand> Commands)
+  {
+    return !Commands.IsEmpty()
+      && !Commands.ContainsByPredicate([](
+        const FCrowdBehaviorSourceCommand& Command)
+      {
+        return Command.SourceTypeId
+          != CrowdStandardSources::SemanticState;
+      });
+  }
+
+  bool IsSemanticStateOrderedEvent(
+    const FCrowdWorkerGameplayEvent& Ordered)
+  {
+    if (Ordered.Payload.SchemaId
+      != FCrowdWorkerBehaviorEventCodec::SchemaId)
+      return false;
+    FCrowdBehaviorSourceEvent Event;
+    return FCrowdWorkerBehaviorEventCodec::Decode(
+        Ordered.Payload, Event)
+      && Event.SourceTypeId == CrowdStandardSources::SemanticState;
+  }
 
   bool RegisterDomainExecutors(
     FCrowdAsyncSimulationRuntime& Runtime,
@@ -490,7 +515,9 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
     AdditionalResources,
   const FCrowdBehaviorPreparedBoundary* StagedBehavior,
   const TConstArrayView<FCrowdWorkerExternalGameplayInput>
-    ExternalGameplayInputs)
+    ExternalGameplayInputs,
+  const TConstArrayView<FCrowdBehaviorSourceCommand>
+    WorkerBehaviorCommands)
 {
   check(IsInGameThread());
   UMassCrowdRuntimeSubsystem* RuntimeSubsystem =
@@ -510,6 +537,14 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
   for (const FCrowdMassBoundaryAgentRecord& Agent :
     Snapshot.Agents)
     CurrentEntityRefs.Add(Agent.AgentFacts.StableEntityRef);
+  for (const FCrowdBehaviorSourceCommand& Command :
+    WorkerBehaviorCommands)
+  {
+    if (!Command.IsValid()
+      || Command.EffectiveFixedStep != Snapshot.FixedStepIndex
+      || !CurrentEntityRefs.Contains(Command.Handle.EntityRef))
+      return false;
+  }
   if (!Shadow.IsStarted())
   {
     FCrowdWorkerShadowSyncConfig Config;
@@ -633,9 +668,12 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
   const bool bHasStagedBehavior = StagedBehavior
     && StagedBehavior->bValid
     && StagedBehavior->FixedStepIndex == Snapshot.FixedStepIndex;
+  const bool bHasWorkerBehaviorCommands =
+    !WorkerBehaviorCommands.IsEmpty();
   if (bBehaviorProduction)
   {
-    if (StagedBehavior && !bHasStagedBehavior)
+    if ((StagedBehavior && !bHasStagedBehavior)
+      || (bHasStagedBehavior && bHasWorkerBehaviorCommands))
       return false;
     if (bHasStagedBehavior)
     {
@@ -655,6 +693,10 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
       BehaviorCommands = BehaviorRuntime.GetPendingCommands();
       BehaviorBindingUpdates =
         BehaviorRuntime.GetPendingBindingUpdates();
+    }
+    else if (bHasWorkerBehaviorCommands)
+    {
+      BehaviorCommands = WorkerBehaviorCommands;
     }
     else if (!BehaviorRuntime.GetPendingCommands().IsEmpty()
       || !BehaviorRuntime.GetPendingBindingUpdates().IsEmpty())
@@ -696,6 +738,8 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
   }
   else
   {
+    if (bHasWorkerBehaviorCommands)
+      return false;
     BehaviorContexts =
       BehaviorRuntime.GetWorkerInputContextJournal();
     BehaviorCommands =
@@ -751,7 +795,10 @@ bool FCrowdDemoWorkerInputSync::SubmitBoundarySnapshot(
         Shadow.GetGeneration(),
         Shadow.GetMetrics().LastSubmittedInputSequence,
         EntityRefs,
-        bHasStagedBehavior))
+        bHasStagedBehavior
+          || (bHasWorkerBehaviorCommands
+            && !ContainsOnlySemanticStateCommands(
+              WorkerBehaviorCommands))))
       return false;
     if (!BehaviorAuthority.MarkSubmittedBindings(
         Shadow.GetGeneration(), BehaviorBindingUpdates))
@@ -798,7 +845,9 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
     ExternalGameplayInputs,
   const FCrowdBehaviorPreparedBoundary* StagedBehavior,
   const TConstArrayView<FCrowdWorkerObjectiveRevisionDelta>
-    ObjectiveRevisions)
+    ObjectiveRevisions,
+  const TConstArrayView<FCrowdBehaviorSourceCommand>
+    WorkerBehaviorCommands)
 {
   check(IsInGameThread());
   if (SimulationTick < 0 || PlanRevision < 0
@@ -875,6 +924,17 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
             == INDEX_NONE)))
       return false;
   }
+  for (const FCrowdBehaviorSourceCommand& Command :
+    WorkerBehaviorCommands)
+  {
+    if (!Command.IsValid()
+      || Command.EffectiveFixedStep != SimulationTick
+      || (bLifecycleChanged
+        ? !CandidateEntityRefs.Contains(Command.Handle.EntityRef)
+        : ResultApplyProxy.FindStableEntitySlot(
+            Command.Handle.EntityRef) == INDEX_NONE))
+      return false;
+  }
   if (CurrentEntityRefs.IsEmpty()
     || (bLifecycleChanged && CandidateEntityRefs.IsEmpty())
     || (bLifecycleChanged
@@ -918,9 +978,12 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
   const bool bHasStagedBehavior = StagedBehavior
     && StagedBehavior->bValid
     && StagedBehavior->FixedStepIndex == SimulationTick;
+  const bool bHasWorkerBehaviorCommands =
+    !WorkerBehaviorCommands.IsEmpty();
   if (bBehaviorProduction)
   {
-    if (StagedBehavior && !bHasStagedBehavior)
+    if ((StagedBehavior && !bHasStagedBehavior)
+      || (bHasStagedBehavior && bHasWorkerBehaviorCommands))
       return false;
     if (bHasStagedBehavior)
     {
@@ -945,6 +1008,10 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
       BehaviorCommands = BehaviorRuntime.GetPendingCommands();
       BehaviorBindingUpdates =
         BehaviorRuntime.GetPendingBindingUpdates();
+    }
+    else if (bHasWorkerBehaviorCommands)
+    {
+      BehaviorCommands = WorkerBehaviorCommands;
     }
     else if (!BehaviorRuntime.GetPendingCommands().IsEmpty()
       || !BehaviorRuntime.GetPendingBindingUpdates().IsEmpty())
@@ -1005,6 +1072,8 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
   }
   else
   {
+    if (bHasWorkerBehaviorCommands)
+      return false;
     BehaviorContexts =
       BehaviorRuntime.GetWorkerInputContextJournal();
     BehaviorCommands =
@@ -1085,12 +1154,21 @@ bool FCrowdDemoWorkerInputSync::SubmitIntentBatch(
     Shadow.GetMetrics().LastSubmittedBindingRecordCount);
   if (bBehaviorProduction)
   {
+    const TConstArrayView<FCrowdStableEntityRef>
+      BehaviorExpectationEntities = bHasWorkerBehaviorCommands
+      ? (bLifecycleChanged
+        ? TConstArrayView<FCrowdStableEntityRef>(CandidateEntityRefs)
+        : CurrentEntityRefs)
+      : TConstArrayView<FCrowdStableEntityRef>(CandidateEntityRefs);
     const bool bExpectationQueued =
       BehaviorAuthority.QueueAutonomousExpectation(
         Shadow.GetGeneration(),
         Shadow.GetMetrics().LastSubmittedInputSequence,
-        CandidateEntityRefs,
-        bHasStagedBehavior);
+        BehaviorExpectationEntities,
+        bHasStagedBehavior
+          || (bHasWorkerBehaviorCommands
+            && !ContainsOnlySemanticStateCommands(
+              WorkerBehaviorCommands)));
     if (!bExpectationQueued
       || !BehaviorAuthority.MarkSubmittedBindings(
         Shadow.GetGeneration(), BehaviorBindingUpdates))
@@ -1450,7 +1528,14 @@ bool FCrowdDemoWorkerInputSync::FinalizeCommittedResults(
   }
   FCrowdWorkerBehaviorAuthority& BehaviorAuthority =
     RuntimeSubsystem->GetWorkerBehaviorAuthority();
-  if (!BehaviorAuthority.IngestOrderedEvents(Batch.OrderedEvents))
+  TArray<FCrowdWorkerGameplayEvent> ObservableBehaviorEvents;
+  ObservableBehaviorEvents.Reserve(Batch.OrderedEvents.Num());
+  for (const FCrowdWorkerGameplayEvent& Event : Batch.OrderedEvents)
+    if (!CrowdDemoWorkerInputSyncPrivate::
+        IsSemanticStateOrderedEvent(Event))
+      ObservableBehaviorEvents.Add(Event);
+  if (!BehaviorAuthority.IngestOrderedEvents(
+      ObservableBehaviorEvents))
     return false;
   for (int32 Index = 0; Index < MaxQueuedShadowBatches; ++Index)
   {

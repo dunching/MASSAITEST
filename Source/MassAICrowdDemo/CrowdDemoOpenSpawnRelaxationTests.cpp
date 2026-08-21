@@ -4,6 +4,10 @@
 
 #include "Misc/AutomationTest.h"
 #include "Mass/CrowdDemoOpenSpawnRelaxationKernel.h"
+#include "Mass/CrowdDemoOpenSpawnStateTranslation.h"
+#include "CrowdDemoBusinessSourceProvider.h"
+#include "MassCrowdBehaviorSourceRuntime.h"
+#include "MassCrowdWorkerLifecycleBehaviorDomain.h"
 
 namespace
 {
@@ -30,6 +34,31 @@ namespace
     FCrowdDemoOpenSpawnRelaxationKernel::PrepareBoundary(30, Layout, Runtime);
     FCrowdDemoOpenSpawnRelaxationKernel::PrepareBoundary(45, Layout, Runtime);
     FCrowdDemoOpenSpawnRelaxationKernel::PrepareBoundary(60, Layout, Runtime);
+  }
+
+  FCrowdBehaviorSourceCommand MakeSemanticStateCommand(
+    const FCrowdStableEntityRef EntityRef,
+    const int64 FixedStepIndex,
+    const uint32 CommandSequence,
+    const ECrowdBehaviorSourceCommandKind Kind,
+    const ECrowdSemanticBehaviorState State)
+  {
+    FCrowdSemanticBehaviorStatePayload StatePayload;
+    StatePayload.State = State;
+    FCrowdBehaviorSourceCommand Command;
+    Command.EffectiveFixedStep = FixedStepIndex;
+    Command.Handle = {
+      EntityRef,
+      CrowdDemoBehaviorControllerIds::SemanticState,
+      1};
+    Command.CommandSequence = CommandSequence;
+    Command.Kind = Kind;
+    Command.SourceTypeId = CrowdStandardSources::SemanticState;
+    Command.Payload.Set(
+      CrowdStandardSources::PayloadSchema(
+        CrowdStandardSources::SemanticState),
+      StatePayload);
+    return Command;
   }
 }
 
@@ -263,6 +292,207 @@ bool FCrowdDemoOpenSpawnPreparedBoundaryFactsTest::RunTest(const FString& Parame
       0, AgentIds, Runtime, RestoredFacts));
   for (const auto& Fact : RestoredFacts)
     TestFalse(TEXT("consumed reset remains cleared"), Fact.bPendingBoundaryReset);
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoOpenSpawnStateTranslationTest,
+  "CrowdDemo.SoftPressure.T1.GenericStateTranslation",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoOpenSpawnStateTranslationTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  FCrowdDemoOpenSpawnRelaxationAgentState Agent;
+  Agent.AgentId = 100;
+  Agent.FormationIndex = 0;
+  ECrowdWorkerLifecyclePhase Lifecycle;
+  ECrowdSemanticBehaviorState Behavior;
+  const auto Translate = [&]()
+  {
+    return FCrowdDemoOpenSpawnStateTranslation::Translate(
+      Agent.bParticleActive
+        ? ECrowdDemoOpenSpawnRelaxationPhase::BatchActivation
+        : ECrowdDemoOpenSpawnRelaxationPhase::Staging,
+      Agent, 110, Lifecycle, Behavior);
+  };
+  TestTrue(TEXT("staged state translates"), Translate());
+  TestEqual(TEXT("staged lifecycle is spawn pending"),
+    static_cast<uint8>(Lifecycle),
+    static_cast<uint8>(ECrowdWorkerLifecyclePhase::SpawnPending));
+  TestEqual(TEXT("staged behavior is waiting"),
+    static_cast<uint8>(Behavior),
+    static_cast<uint8>(ECrowdSemanticBehaviorState::Waiting));
+
+  const ECrowdWorkerLifecyclePhase PreviouslyActive =
+    ECrowdWorkerLifecyclePhase::Active;
+  TestTrue(TEXT("reused staged state translates"),
+    FCrowdDemoOpenSpawnStateTranslation::Translate(
+      ECrowdDemoOpenSpawnRelaxationPhase::Staging,
+      Agent, 110, Lifecycle, Behavior, &PreviouslyActive));
+  TestEqual(TEXT("reused staged lifecycle is suspended"),
+    static_cast<uint8>(Lifecycle),
+    static_cast<uint8>(ECrowdWorkerLifecyclePhase::Suspended));
+  TestEqual(TEXT("reused staged behavior remains waiting"),
+    static_cast<uint8>(Behavior),
+    static_cast<uint8>(ECrowdSemanticBehaviorState::Waiting));
+
+  Agent.bParticleActive = true;
+  TestTrue(TEXT("active relaxation translates"), Translate());
+  TestEqual(TEXT("active relaxation lifecycle is active"),
+    static_cast<uint8>(Lifecycle),
+    static_cast<uint8>(ECrowdWorkerLifecyclePhase::Active));
+  TestEqual(TEXT("active relaxation behavior is relaxing"),
+    static_cast<uint8>(Behavior),
+    static_cast<uint8>(ECrowdSemanticBehaviorState::Relaxing));
+
+  Agent.AgentId = 101;
+  TestTrue(TEXT("post-removal settler translates"),
+    FCrowdDemoOpenSpawnStateTranslation::Translate(
+      ECrowdDemoOpenSpawnRelaxationPhase::PostRemovalSettle,
+      Agent, 110, Lifecycle, Behavior));
+  TestEqual(TEXT("post-removal settler behavior is settling"),
+    static_cast<uint8>(Behavior),
+    static_cast<uint8>(ECrowdSemanticBehaviorState::Settling));
+
+  Agent.AgentId = 110;
+  Agent.bParticleActive = false;
+  TestTrue(TEXT("particle-removed agent translates"),
+    FCrowdDemoOpenSpawnStateTranslation::Translate(
+      ECrowdDemoOpenSpawnRelaxationPhase::PostRemovalSettle,
+      Agent, 110, Lifecycle, Behavior));
+  TestEqual(TEXT("particle removal does not destroy lifecycle"),
+    static_cast<uint8>(Lifecycle),
+    static_cast<uint8>(ECrowdWorkerLifecyclePhase::Active));
+  TestEqual(TEXT("particle-removed behavior is waiting"),
+    static_cast<uint8>(Behavior),
+    static_cast<uint8>(ECrowdSemanticBehaviorState::Waiting));
+
+  const FCrowdStableEntityRef EntityRef{1, 100, 1};
+  FCrowdWorkerLifecycleTransition Transition;
+  Transition.EntityRef = EntityRef;
+  Transition.Revision = 1;
+  Transition.TargetPhase = ECrowdWorkerLifecyclePhase::SpawnPending;
+  FCrowdWorkerLifecycleState First;
+  FCrowdWorkerLifecycleState Replay;
+  TestTrue(TEXT("translated lifecycle applies"),
+    FCrowdWorkerLifecycleStateMachine::Apply(
+      nullptr, Transition, 7, 99, First));
+  TestTrue(TEXT("same translated lifecycle deterministically applies"),
+    FCrowdWorkerLifecycleStateMachine::Apply(
+      nullptr, Transition, 7, 99, Replay));
+  FCrowdWorkerPayload FirstPayload;
+  FCrowdWorkerPayload ReplayPayload;
+  TestTrue(TEXT("translated lifecycle encodes"),
+    FCrowdWorkerLifecycleStateCodec::Encode(First, FirstPayload));
+  TestTrue(TEXT("translated lifecycle replay encodes"),
+    FCrowdWorkerLifecycleStateCodec::Encode(Replay, ReplayPayload));
+  TestEqual(TEXT("same input has same lifecycle state hash"),
+    FirstPayload.StableHash, ReplayPayload.StableHash);
+
+  FCrowdWorkerLifecycleTransition Activate;
+  Activate.EntityRef = EntityRef;
+  Activate.ExpectedRevision = 1;
+  Activate.Revision = 2;
+  Activate.TargetPhase = ECrowdWorkerLifecyclePhase::Active;
+  FCrowdWorkerLifecycleState Active;
+  TestTrue(TEXT("fresh activation applies"),
+    FCrowdWorkerLifecycleStateMachine::Apply(
+      &First, Activate, 8, 99, Active));
+  FCrowdWorkerLifecycleState Rejected;
+  TestFalse(TEXT("stale translated activation is rejected"),
+    FCrowdWorkerLifecycleStateMachine::Apply(
+      &Active, Activate, 9, 99, Rejected));
+
+  FCrowdWorkerLifecycleState Rebased;
+  TestTrue(TEXT("new authoritative snapshot rebases lifecycle"),
+    FCrowdWorkerLifecycleStateMachine::RebaseInitialState(
+      Active, 10, 100, Rebased));
+  TestEqual(TEXT("rebase preserves lifecycle revision"),
+    Rebased.Revision, Active.Revision);
+  TestEqual(TEXT("rebase preserves lifecycle phase"),
+    static_cast<uint8>(Rebased.Phase),
+    static_cast<uint8>(Active.Phase));
+  TestEqual(TEXT("rebase advances lifecycle source input"),
+    Rebased.SourceInputSequence, uint64{10});
+  TestEqual(TEXT("rebase adopts authoritative state hash"),
+    Rebased.InitialStateHash, uint64{100});
+  TestFalse(TEXT("stale lifecycle rebase is rejected"),
+    FCrowdWorkerLifecycleStateMachine::RebaseInitialState(
+      Rebased, 9, 101, Rejected));
+  return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+  FCrowdDemoOpenSpawnBehaviorOrderingTest,
+  "CrowdDemo.SoftPressure.T1.GenericBehaviorOrdering",
+  EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCrowdDemoOpenSpawnBehaviorOrderingTest::RunTest(
+  const FString& Parameters)
+{
+  (void)Parameters;
+  FCrowdBehaviorSourceRuntime Runtime;
+  TestTrue(TEXT("behavior providers initialize"),
+    Runtime.InitializeFromRegisteredProviders());
+  const FCrowdStableEntityRef EntityRef{1, 100, 1};
+  FCrowdCapabilityBinding Binding;
+  Binding.ProfileKey = CrowdDemoBehaviorSchemas::FullProfile;
+  TestTrue(TEXT("T1 behavior entity registers"),
+    Runtime.RegisterEntity(EntityRef, Binding));
+  FCrowdBehaviorEntityEvaluationContext Context;
+  Context.EntityRef = EntityRef;
+  Context.FixedStepIndex = 5;
+  Context.Facing = FVector::ForwardVector;
+  Context.RecalculateStableHash();
+  TestTrue(TEXT("waiting context stages"),
+    Runtime.SetEvaluationContext(Context));
+  TestTrue(TEXT("waiting command queues"),
+    Runtime.QueueCommand(MakeSemanticStateCommand(
+      EntityRef, 5, 1, ECrowdBehaviorSourceCommandKind::Start,
+      ECrowdSemanticBehaviorState::Waiting)));
+  FCrowdBehaviorPreparedBoundary Waiting;
+  TestTrue(TEXT("waiting behavior prepares"),
+    Runtime.PrepareBoundary(5, Waiting));
+  TestTrue(TEXT("waiting behavior commits"),
+    Runtime.CommitPrepared(Waiting));
+  TestTrue(TEXT("waiting command journal acknowledges"),
+    Runtime.AcknowledgeWorkerInputCommands(1));
+  TestTrue(TEXT("waiting context journal acknowledges"),
+    Runtime.AcknowledgeWorkerInputContexts(1));
+  TestTrue(TEXT("waiting binding journal acknowledges"),
+    Runtime.AcknowledgeWorkerInputBindings(1));
+
+  Context.FixedStepIndex = 6;
+  Context.RecalculateStableHash();
+  TestTrue(TEXT("relaxing context stages"),
+    Runtime.SetEvaluationContext(Context));
+  TestTrue(TEXT("ordered relaxing update queues"),
+    Runtime.QueueCommand(MakeSemanticStateCommand(
+      EntityRef, 6, 2, ECrowdBehaviorSourceCommandKind::Update,
+      ECrowdSemanticBehaviorState::Relaxing)));
+  FCrowdBehaviorPreparedBoundary Relaxing;
+  TestTrue(TEXT("ordered relaxing update prepares"),
+    Runtime.PrepareBoundary(6, Relaxing));
+  TestTrue(TEXT("semantic marker produces no movement"),
+    Relaxing.Entities[0].ResolvedChannels.DesiredVelocity.IsZero());
+  TestEqual(TEXT("semantic marker produces no presentation output"),
+    Relaxing.Entities[0].ResolvedChannels.Presentation.Num(), 0);
+  TestTrue(TEXT("ordered relaxing update commits"),
+    Runtime.CommitPrepared(Relaxing));
+
+  Context.FixedStepIndex = 7;
+  Context.RecalculateStableHash();
+  TestTrue(TEXT("stale context stages"),
+    Runtime.SetEvaluationContext(Context));
+  TestTrue(TEXT("well-formed stale behavior update queues"),
+    Runtime.QueueCommand(MakeSemanticStateCommand(
+      EntityRef, 7, 2, ECrowdBehaviorSourceCommandKind::Update,
+      ECrowdSemanticBehaviorState::Settling)));
+  FCrowdBehaviorPreparedBoundary Stale;
+  TestFalse(TEXT("stale behavior ordering is rejected"),
+    Runtime.PrepareBoundary(7, Stale));
   return true;
 }
 

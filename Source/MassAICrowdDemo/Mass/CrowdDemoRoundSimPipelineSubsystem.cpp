@@ -4,12 +4,15 @@
 #include "Mass/CrowdDemoCapabilityProfileKernel.h"
 #include "Mass/CrowdDemoCombatStateKernel.h"
 #include "Mass/CrowdDemoMassCrowdRuntimeAdapter.h"
+#include "Mass/CrowdDemoOpenSpawnStateTranslation.h"
 #include "Mass/CrowdDemoWorkerInputSync.h"
+#include "CrowdDemoBusinessSourceProvider.h"
 #include "CrowdDemoVatShowcasePlanner.h"
 #include "MassCrowdRuntimeSubsystem.h"
 #include "MassCrowdWorkerConsistencyDomains.h"
 #include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerInteractionDomain.h"
+#include "MassCrowdWorkerLifecycleBehaviorDomain.h"
 #include "MassCrowdWorkerFlowBinding.h"
 #include "MassCrowdWorkerFlowResource.h"
 #include "MassCrowdWorkerMovementControlResource.h"
@@ -25,6 +28,265 @@
 
 namespace
 {
+enum class ECrowdSemanticCommandBuildResult : uint8
+{
+  Invalid = 0,
+  Unchanged,
+  Built
+};
+
+ECrowdSemanticCommandBuildResult BuildSemanticStateCommand(
+  const int64 FixedStepIndex,
+  const FCrowdStableEntityRef EntityRef,
+  const FCrowdBehaviorSourceSet* CurrentSet,
+  const ECrowdSemanticBehaviorState State,
+  FCrowdBehaviorSourceCommand& OutCommand)
+{
+  OutCommand = {};
+  if (FixedStepIndex < 0 || !EntityRef.IsValid()
+    || State >= ECrowdSemanticBehaviorState::Count
+    || (CurrentSet
+      && (CurrentSet->EntityRef != EntityRef
+        || !CurrentSet->IsValid())))
+    return ECrowdSemanticCommandBuildResult::Invalid;
+
+  FCrowdSemanticBehaviorStatePayload StatePayload;
+  StatePayload.State = State;
+  FCrowdBehaviorSourcePayload Payload;
+  if (!Payload.Set(
+      CrowdStandardSources::PayloadSchema(
+        CrowdStandardSources::SemanticState),
+      StatePayload))
+    return ECrowdSemanticCommandBuildResult::Invalid;
+
+  const FCrowdBehaviorSourceHandle Handle = {
+    EntityRef,
+    CrowdDemoBehaviorControllerIds::SemanticState,
+    1};
+  const FCrowdBehaviorSourceInstance* Existing = CurrentSet
+    ? CurrentSet->Instances.FindByPredicate(
+      [&Handle](const FCrowdBehaviorSourceInstance& Instance)
+      {
+        return Instance.Handle == Handle;
+      })
+    : nullptr;
+  if (Existing
+    && Existing->SourceTypeId == CrowdStandardSources::SemanticState
+    && Existing->Payload == Payload)
+    return ECrowdSemanticCommandBuildResult::Unchanged;
+
+  const FCrowdBehaviorControllerCursor* Cursor = CurrentSet
+    ? CurrentSet->ControllerCursors.FindByPredicate(
+      [](const FCrowdBehaviorControllerCursor& Candidate)
+      {
+        return Candidate.ControllerId
+          == CrowdDemoBehaviorControllerIds::SemanticState;
+      })
+    : nullptr;
+  if ((Existing
+      && Existing->SourceTypeId
+        != CrowdStandardSources::SemanticState)
+    || (Cursor && Cursor->LastCommandSequence == MAX_uint32))
+    return ECrowdSemanticCommandBuildResult::Invalid;
+
+  OutCommand.EffectiveFixedStep = FixedStepIndex;
+  OutCommand.Handle = Handle;
+  OutCommand.CommandSequence = Cursor
+    ? Cursor->LastCommandSequence + 1 : 1;
+  OutCommand.Kind = Existing
+    ? ECrowdBehaviorSourceCommandKind::Update
+    : ECrowdBehaviorSourceCommandKind::Start;
+  OutCommand.SourceTypeId = CrowdStandardSources::SemanticState;
+  OutCommand.Payload = Payload;
+  return OutCommand.IsValid()
+    ? ECrowdSemanticCommandBuildResult::Built
+    : ECrowdSemanticCommandBuildResult::Invalid;
+}
+
+bool AppendOpenSpawnBootstrapStateInputs(
+  const int32 FixedStepIndex,
+  const FCrowdMassBoundarySnapshot& Snapshot,
+  const FCrowdDemoOpenSpawnRelaxationRuntime& Runtime,
+  TArray<FCrowdWorkerExternalGameplayInput>& OutLifecycleInputs,
+  TArray<FCrowdBehaviorSourceCommand>& OutBehaviorCommands)
+{
+  if (FixedStepIndex < 0 || !Snapshot.bValid || !Runtime.bValid
+    || Snapshot.Agents.Num() != Runtime.Agents.Num())
+    return false;
+  for (const FCrowdDemoOpenSpawnRelaxationAgentState& Agent :
+    Runtime.Agents)
+  {
+    const FCrowdMassBoundaryAgentRecord* BoundaryAgent =
+      Snapshot.Agents.FindByPredicate(
+        [&Agent](const FCrowdMassBoundaryAgentRecord& Candidate)
+        {
+          return Candidate.Identity.AgentId == Agent.AgentId;
+        });
+    ECrowdWorkerLifecyclePhase Lifecycle;
+    ECrowdSemanticBehaviorState Behavior;
+    if (!BoundaryAgent
+      || !FCrowdDemoOpenSpawnStateTranslation::Translate(
+        Runtime.Phase, Agent, Runtime.RemovedAgentId,
+        Lifecycle, Behavior))
+      return false;
+    const FCrowdStableEntityRef EntityRef =
+      BoundaryAgent->AgentFacts.StableEntityRef;
+    if (Lifecycle == ECrowdWorkerLifecyclePhase::SpawnPending)
+    {
+      FCrowdWorkerLifecycleTransition Transition;
+      Transition.EntityRef = EntityRef;
+      Transition.ExpectedRevision = 0;
+      Transition.Revision = 1;
+      Transition.TargetPhase = Lifecycle;
+      FCrowdWorkerExternalGameplayInput& Input =
+        OutLifecycleInputs.AddDefaulted_GetRef();
+      Input.EntityRef = EntityRef;
+      Input.InputTypeId = static_cast<uint16>(
+        ECrowdWorkerExternalGameplayInputType::LifecycleRevision);
+      Input.DirtyMask = 1;
+      if (!FCrowdWorkerLifecycleTransitionCodec::Encode(
+          Transition, Input.FullState))
+        return false;
+    }
+    else if (Lifecycle != ECrowdWorkerLifecyclePhase::Active)
+      return false;
+
+    // SpawnPending already carries the generic waiting semantics. Behavior
+    // execution starts when Lifecycle admits the entity as Active, so do not
+    // create a parallel dormant Behavior state for staged agents.
+    if (Lifecycle == ECrowdWorkerLifecyclePhase::Active)
+    {
+      FCrowdBehaviorSourceCommand Command;
+      if (BuildSemanticStateCommand(
+          FixedStepIndex, EntityRef, nullptr, Behavior, Command)
+        != ECrowdSemanticCommandBuildResult::Built)
+        return false;
+      OutBehaviorCommands.Add(MoveTemp(Command));
+    }
+  }
+  OutLifecycleInputs.Sort([](
+    const FCrowdWorkerExternalGameplayInput& A,
+    const FCrowdWorkerExternalGameplayInput& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
+  OutBehaviorCommands.Sort([](
+    const FCrowdBehaviorSourceCommand& A,
+    const FCrowdBehaviorSourceCommand& B)
+  {
+    return A.Handle < B.Handle;
+  });
+  return true;
+}
+
+bool AppendOpenSpawnWorkerStateInputs(
+  const int32 FixedStepIndex,
+  const FCrowdMassBoundarySnapshot& Snapshot,
+  const FCrowdDemoOpenSpawnRelaxationRuntime& Runtime,
+  const FCrowdWorkerResultApplyProxy& WorkerState,
+  TArray<FCrowdWorkerExternalGameplayInput>& OutLifecycleInputs,
+  TArray<FCrowdBehaviorSourceCommand>& OutBehaviorCommands)
+{
+  if (FixedStepIndex < 0 || !Snapshot.bValid || !Runtime.bValid
+    || Snapshot.Agents.Num() != Runtime.Agents.Num())
+    return false;
+  for (const FCrowdDemoOpenSpawnRelaxationAgentState& Agent :
+    Runtime.Agents)
+  {
+    const FCrowdMassBoundaryAgentRecord* BoundaryAgent =
+      Snapshot.Agents.FindByPredicate(
+        [&Agent](const FCrowdMassBoundaryAgentRecord& Candidate)
+        {
+          return Candidate.Identity.AgentId == Agent.AgentId;
+        });
+    if (!BoundaryAgent)
+      return false;
+    const FCrowdStableEntityRef EntityRef =
+      BoundaryAgent->AgentFacts.StableEntityRef;
+
+    const FCrowdWorkerDomainProxyState* LifecycleProxy =
+      WorkerState.FindDomain(
+        EntityRef, ECrowdWorkerField::Lifecycle);
+    FCrowdWorkerLifecycleState CurrentLifecycle;
+    if (!LifecycleProxy
+      || !FCrowdWorkerLifecycleStateCodec::Decode(
+        LifecycleProxy->State.Payload, CurrentLifecycle)
+      || CurrentLifecycle.EntityRef != EntityRef)
+      return false;
+    ECrowdWorkerLifecyclePhase DesiredLifecycle;
+    ECrowdSemanticBehaviorState DesiredBehavior;
+    if (!FCrowdDemoOpenSpawnStateTranslation::Translate(
+        Runtime.Phase, Agent, Runtime.RemovedAgentId,
+        DesiredLifecycle, DesiredBehavior, &CurrentLifecycle.Phase))
+      return false;
+    if (CurrentLifecycle.Phase != DesiredLifecycle)
+    {
+      if (CurrentLifecycle.Revision == MAX_uint64
+        || !FCrowdWorkerLifecycleStateMachine::CanTransition(
+          CurrentLifecycle.Phase, DesiredLifecycle))
+        return false;
+      FCrowdWorkerLifecycleTransition Transition;
+      Transition.EntityRef = EntityRef;
+      Transition.ExpectedRevision = CurrentLifecycle.Revision;
+      Transition.Revision = CurrentLifecycle.Revision + 1;
+      Transition.TargetPhase = DesiredLifecycle;
+      FCrowdWorkerExternalGameplayInput& Input =
+        OutLifecycleInputs.AddDefaulted_GetRef();
+      Input.EntityRef = EntityRef;
+      Input.InputTypeId = static_cast<uint16>(
+        ECrowdWorkerExternalGameplayInputType::LifecycleRevision);
+      Input.DirtyMask = 1;
+      if (!FCrowdWorkerLifecycleTransitionCodec::Encode(
+          Transition, Input.FullState))
+        return false;
+    }
+
+    const FCrowdWorkerDomainProxyState* BehaviorProxy =
+      WorkerState.FindDomain(EntityRef, ECrowdWorkerField::Behavior);
+    FCrowdWorkerBehaviorState CurrentBehavior;
+    const FCrowdBehaviorSourceSet* CurrentSourceSet = nullptr;
+    if (BehaviorProxy)
+    {
+      if (!FCrowdWorkerBehaviorStateCodec::Decode(
+          BehaviorProxy->State.Payload, CurrentBehavior)
+        || CurrentBehavior.SourceSet.EntityRef != EntityRef)
+        return false;
+      CurrentSourceSet = &CurrentBehavior.SourceSet;
+    }
+    else if (CurrentLifecycle.Phase
+        != ECrowdWorkerLifecyclePhase::SpawnPending
+      || (DesiredLifecycle == ECrowdWorkerLifecyclePhase::SpawnPending
+        && DesiredBehavior
+          != ECrowdSemanticBehaviorState::Waiting))
+      return false;
+    if (!CurrentSourceSet
+      && DesiredLifecycle == ECrowdWorkerLifecyclePhase::SpawnPending)
+      continue;
+    FCrowdBehaviorSourceCommand Command;
+    const ECrowdSemanticCommandBuildResult CommandResult =
+      BuildSemanticStateCommand(
+        FixedStepIndex, EntityRef, CurrentSourceSet,
+        DesiredBehavior, Command);
+    if (CommandResult == ECrowdSemanticCommandBuildResult::Invalid)
+      return false;
+    if (CommandResult == ECrowdSemanticCommandBuildResult::Built)
+      OutBehaviorCommands.Add(MoveTemp(Command));
+  }
+  OutLifecycleInputs.Sort([](
+    const FCrowdWorkerExternalGameplayInput& A,
+    const FCrowdWorkerExternalGameplayInput& B)
+  {
+    return A.EntityRef < B.EntityRef;
+  });
+  OutBehaviorCommands.Sort([](
+    const FCrowdBehaviorSourceCommand& A,
+    const FCrowdBehaviorSourceCommand& B)
+  {
+    return A.Handle < B.Handle;
+  });
+  return true;
+}
+
 struct FCrowdBootstrapStageId
 {
   uint32 Value = 0;
@@ -3912,10 +4174,18 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   if (bSubmitIntentOnly && !FlowBindingInputs.IsEmpty())
     PlanRevisionInputs.Append(MoveTemp(FlowBindingInputs));
   TArray<FCrowdWorkerExternalGameplayInput> BootstrapExternalInputs;
+  TArray<FCrowdBehaviorSourceCommand> BootstrapBehaviorCommands;
   if (!bSubmitIntentOnly)
   {
     BootstrapExternalInputs.Append(MovementProfileInputs);
     BootstrapExternalInputs.Append(FlowBindingInputs);
+    if (IsOpenSpawnRelaxation()
+      && !AppendOpenSpawnBootstrapStateInputs(
+        GetCurrentFixedStepIndex(), BoundarySnapshot,
+        OpenSpawnRelaxationRuntime, BootstrapExternalInputs,
+        BootstrapBehaviorCommands))
+      return RejectWorkerV2Input(
+        TEXT("open_spawn_state_bootstrap"));
   }
   const bool bWorkerInputAccepted = bSubmitIntentOnly
     ? FCrowdDemoWorkerInputSync::SubmitIntentBatch(
@@ -3927,7 +4197,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         *GetWorld(), BoundarySnapshot,
         GetCurrentFixedStepSeconds(),
         GetCurrentStepEndServerTimeSeconds(),
-        ResourceInputs, nullptr, BootstrapExternalInputs);
+        ResourceInputs, nullptr, BootstrapExternalInputs,
+        BootstrapBehaviorCommands);
   if (!bWorkerInputAccepted)
     return RejectWorkerV2Input(TEXT("boundary_submit"));
   const uint64 AcceptedInputSequence =
@@ -4315,6 +4586,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   TSet<FCrowdStableEntityRef> CandidateFrozenProfiles;
   TArray<int32> ConsumedOpenSpawnResetAgentIds;
   TArray<FCrowdWorkerExternalGameplayInput> ScenarioInputs;
+  TArray<FCrowdBehaviorSourceCommand> ScenarioBehaviorCommands;
   int32 ScenarioCommandTick = INDEX_NONE;
   int32 CandidateVatMovementHalfCycle =
     VatShowcaseLastMovementHalfCycle;
@@ -4414,6 +4686,12 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         ScenarioInputs.Num(), ActiveParticipantCount,
         static_cast<int32>(CandidateOpenSpawnRuntime.Phase));
     }
+    if (!AppendOpenSpawnWorkerStateInputs(
+        GetCurrentFixedStepIndex(), BoundarySnapshot,
+        CandidateOpenSpawnRuntime,
+        RuntimeSubsystem->GetWorkerResultApplyProxy(),
+        ScenarioInputs, ScenarioBehaviorCommands))
+      return false;
   }
   else if (bVatShowcase)
   {
@@ -4520,7 +4798,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       GetCurrentPlanRevision(),
       GetCurrentStepEndServerTimeSeconds(), {}, {}, {}, ScenarioInputs,
       nullptr,
-      TargetObjectives))
+      TargetObjectives,
+      ScenarioBehaviorCommands))
   {
     UE_LOG(LogTemp, Error,
       TEXT("VIOLATION CrowdDemoFullWorkerProductionIntentRejected step=%d previous_sequence=%llu"),

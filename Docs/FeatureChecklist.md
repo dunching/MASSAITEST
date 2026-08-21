@@ -91,6 +91,7 @@ OPEN    尚未达到最终完成定义
 | Capability / Faction 分离 | DONE | Faction 不直接等于 Capability。 |
 | Behavior Source Registry / World State | DONE | 多 Source、稳定 Handle、Schema/Hash 合同已存在。 |
 | Behavior Worker executor | DONE | Behavior 是 Worker Domain。 |
+| T1 generic Lifecycle / Behavior state path | IMPLEMENTED / VALIDATED / SLICE D1-B1 | T1 scenario 仅发布通用 versioned Lifecycle 输入和零 Movement 输出的 semantic Behavior Source；Worker 拥有 transition/order/revision，ResultApply 提供可观察状态。Focused translation/determinism/stale/order tests 与 T1–T4 server-only gates PASS；movement、Flow、Particle participation、reset/correction、acceptance 均保持后续 slice。 |
 | Demo Business 独立模块 | DONE | 攻击/物流等项目语义与通用 Runtime 分离。 |
 
 ---

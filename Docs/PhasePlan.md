@@ -48,6 +48,7 @@ T6-A                         CLOSED
 T6-B                         CLOSED
 T6-C                         CLOSED / merged via PR #23
 T3 generic Flow migration    IMPLEMENTED / VALIDATED IN SLICE C
+T1 generic state ownership   IMPLEMENTED / VALIDATED IN SLICE D1-B1
 LateJoin                     OPEN
 Dual T8                      OPEN
 Performance                  OPEN
@@ -58,14 +59,14 @@ Human Visual                 OPEN
 Phase 1 的已确认代码迁移债：
 
 ```text
-T1          scenario-name Flow bypass + zero authoritative velocity path
+T1          state ownership migrated in D1-B1; Flow bypass + zero authoritative velocity + participation/correction remain
 Moving Flow scenario-enum-driven refresh
 T6-A        scenario-progress-driven TargetRegion activation
 T4          group_exit_hold living in runtime host
 T7          FormationIndex-driven continuous movement
 ```
 
-这些项必须收敛到 `TargetArchitecture.md` 定义的统一 Worker movement contract。Slice B/B.5 已在 main 提供不依赖 scenario identity 的 Objective/Cohort/Flow binding、独立 Flow revisions、current-position sampling 与 `Environment` fallback；Slice C 已迁移 T3，但未外推到 T1、T4、T6-A、T7 或 moving-objective Flow refresh。
+这些项必须收敛到 `TargetArchitecture.md` 定义的统一 Worker movement contract。Slice B/B.5 已在 main 提供不依赖 scenario identity 的 Objective/Cohort/Flow binding、独立 Flow revisions、current-position sampling 与 `Environment` fallback；Slice C 已迁移 T3；Slice D1-B1 只迁移 T1 Lifecycle/Behavior state ownership，不外推为 T1 movement、T4、T6-A、T7 或 moving-objective Flow refresh 已迁移。
 
 ---
 
