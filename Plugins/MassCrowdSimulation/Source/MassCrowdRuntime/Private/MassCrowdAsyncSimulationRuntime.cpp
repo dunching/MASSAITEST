@@ -1351,6 +1351,12 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
         const bool bHasObjective =
           ResourceStore.FindCurrent(
             Binding.ObjectiveRef.ResolveResourceId()) != nullptr
+          || Batch.ResourceDeltas.ContainsByPredicate([
+            &Binding](const FCrowdWorkerResourceDelta& Resource)
+          {
+            return Resource.ResourceId
+              == Binding.ObjectiveRef.ResolveResourceId();
+          })
           || Batch.ObjectiveRevisions.ContainsByPredicate([
             &Binding](const FCrowdWorkerObjectiveRevisionDelta& Revision)
           {

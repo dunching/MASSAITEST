@@ -10,7 +10,10 @@
 #include "MassCrowdWorkerConsistencyDomains.h"
 #include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerInteractionDomain.h"
+#include "MassCrowdWorkerFlowBinding.h"
+#include "MassCrowdWorkerFlowResource.h"
 #include "MassCrowdWorkerMovementControlResource.h"
+#include "MassCrowdWorkerNavigationObjective.h"
 #include "MassCrowdWorkerNavigationResource.h"
 #include "MassCrowdWorkerTargetDomain.h"
 #include "MassCrowdWorkerProjectileDomain.h"
@@ -3034,6 +3037,32 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
       Agent.Identity.AgentId,
       Agent.AgentFacts.StableEntityRef);
   }
+  TMap<int32, const FCrowdDemoBidirectionalSwapLayoutAgent*>
+    ExplicitFlowFixtureByAgentId;
+  if (IsBidirectionalSwap())
+  {
+    if (!BidirectionalSwapLayout.bValid
+      || !EnsureBidirectionalSwapFlowResources())
+      return RejectWorkerV2Input(TEXT("flow_fixture"));
+    ExplicitFlowFixtureByAgentId.Reserve(
+      BidirectionalSwapLayout.Agents.Num());
+    for (const FCrowdDemoBidirectionalSwapLayoutAgent& Agent :
+      BidirectionalSwapLayout.Agents)
+    {
+      if (!Agent.ObjectiveRef.IsValid()
+        || !FCrowdDemoBidirectionalSwapKernel::IsCohortKeyValid(
+          Agent.CohortKey)
+        || !CrowdWorkerResourceIds::IsFlowResource(
+          Agent.FlowResourceId)
+        || !EntityRefByAgentId.Contains(Agent.AgentId)
+        || ExplicitFlowFixtureByAgentId.Contains(Agent.AgentId))
+        return RejectWorkerV2Input(TEXT("flow_fixture_binding"));
+      ExplicitFlowFixtureByAgentId.Add(Agent.AgentId, &Agent);
+    }
+    if (ExplicitFlowFixtureByAgentId.Num()
+      != BoundarySnapshot.Agents.Num())
+      return RejectWorkerV2Input(TEXT("flow_fixture_membership"));
+  }
 
   FCrowdWorkerTargetControlResource TargetControl;
   TSet<FCrowdStableEntityRef> WorkerTargetGuidanceEntities;
@@ -3574,8 +3603,13 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         && ((*Guidance)->SelectedProvider
           == ECrowdGuidanceProvider::BusinessOverride
         || (*Guidance)->SelectedProvider
-          == ECrowdGuidanceProvider::Stop
-        || IsBidirectionalSwap());
+          == ECrowdGuidanceProvider::Stop);
+      if (ExplicitFlowFixtureByAgentId.Contains(Overlay.AgentId))
+      {
+        Entry.AutonomousPreferredVelocity = FVector::ZeroVector;
+        Entry.bUseWorkerTargetGuidance = false;
+        Entry.bUseAuthoritativePreferredVelocity = false;
+      }
       if (IsOpenSpawnRelaxation())
       {
         Entry.AutonomousPreferredVelocity = FVector::ZeroVector;
@@ -3652,7 +3686,8 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     (bPublishMovementControl ? 1 : 0)
       + (bPublishTargetControl ? 1 : 0)
       + (bPublishProjectileControl ? 1 : 0)
-      + (!bSubmitIntentOnly && bRequiresTargetObjective ? 1 : 0));
+      + (!bSubmitIntentOnly && bRequiresTargetObjective ? 1 : 0)
+      + (ExplicitFlowFixtureByAgentId.IsEmpty() ? 0 : 4));
   if (bPublishMovementControl)
   {
     FCrowdWorkerVersionedResourceInput& ResourceInput =
@@ -3663,6 +3698,78 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     if (!FCrowdWorkerMovementControlResourceCodec::Encode(
         Control, ResourceInput.Payload))
       return RejectWorkerV2Input(TEXT("movement_encode"));
+  }
+  if (!ExplicitFlowFixtureByAgentId.IsEmpty())
+  {
+    const uint32 CohortKeys[] = {
+      FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey,
+      FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey};
+    for (const uint32 CohortKey : CohortKeys)
+    {
+      const FCrowdSharedFlowField* Flow =
+        FindRuntimeBidirectionalSwapFlowField(CohortKey);
+      const FCrowdWorkerObjectiveRef ObjectiveRef =
+        FCrowdDemoBidirectionalSwapKernel::ObjectiveForCohort(CohortKey);
+      const uint64 FlowResourceId =
+        FCrowdDemoBidirectionalSwapKernel::FlowResourceForCohort(CohortKey);
+      const FCrowdDemoSharedFlowFieldConfig FlowConfig =
+        FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(CohortKey);
+      if (!Flow || !Flow->IsValid() || !ObjectiveRef.IsValid()
+        || !CrowdWorkerResourceIds::IsFlowResource(FlowResourceId)
+        || FlowConfig.Revision <= 0)
+        return RejectWorkerV2Input(TEXT("flow_fixture_resource"));
+
+      FCrowdWorkerNavigationObjectiveResource Objective;
+      Objective.GoalLocation = FVector(FlowConfig.GoalLocation);
+      FCrowdWorkerPayload ObjectiveIdentity;
+      if (!FCrowdWorkerNavigationObjectiveResourceCodec::Encode(
+          Objective, ObjectiveIdentity))
+        return RejectWorkerV2Input(TEXT("flow_fixture_objective_encode"));
+      const uint64 ObjectiveResourceId = ObjectiveRef.ResolveResourceId();
+      uint64 ObjectiveRevision = 0;
+      bool bPublishObjective = false;
+      if (!RuntimeSubsystem->ResolveWorkerResourceRevision(
+          ObjectiveResourceId,
+          static_cast<uint64>(FlowConfig.Revision),
+          ObjectiveIdentity.StableHash,
+          ObjectiveRevision, bPublishObjective))
+        return RejectWorkerV2Input(TEXT("flow_fixture_objective_revision"));
+      if (bPublishObjective)
+      {
+        FCrowdWorkerVersionedResourceInput& ObjectiveInput =
+          ResourceInputs.AddDefaulted_GetRef();
+        ObjectiveInput.ResourceId = ObjectiveResourceId;
+        ObjectiveInput.Revision = ObjectiveRevision;
+        ObjectiveInput.Payload = MoveTemp(ObjectiveIdentity);
+      }
+
+      FCrowdWorkerPayload FlowIdentity;
+      if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
+          *Flow, FlowIdentity))
+        return RejectWorkerV2Input(TEXT("flow_fixture_flow_encode"));
+      uint64 FlowRevision = 0;
+      bool bPublishFlow = false;
+      if (!RuntimeSubsystem->ResolveWorkerResourceRevision(
+          FlowResourceId,
+          static_cast<uint64>(Flow->Config.Revision),
+          FlowIdentity.StableHash,
+          FlowRevision, bPublishFlow)
+        || FlowRevision > static_cast<uint64>(MAX_int32))
+        return RejectWorkerV2Input(TEXT("flow_fixture_flow_revision"));
+      if (bPublishFlow)
+      {
+        FCrowdSharedFlowField PublishedFlow = *Flow;
+        PublishedFlow.Config.Revision = static_cast<int32>(FlowRevision);
+        FCrowdWorkerVersionedResourceInput& FlowInput =
+          ResourceInputs.AddDefaulted_GetRef();
+        FlowInput.ResourceId = FlowResourceId;
+        FlowInput.Revision = FlowRevision;
+        if (!FCrowdWorkerFlowFieldResourceCodec::Encode(
+            PublishedFlow, FlowInput.Payload))
+          return RejectWorkerV2Input(
+            TEXT("flow_fixture_flow_publish_encode"));
+      }
+    }
   }
   if (bPublishTargetControl)
   {
@@ -3739,6 +3846,43 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         return RejectWorkerV2Input(TEXT("movement_profile_encode"));
     }
   }
+  TArray<FCrowdWorkerExternalGameplayInput> FlowBindingInputs;
+  uint64 FlowBindingMappingHash = 14695981039346656037ull;
+  if (bPublishMovementControl
+    && !ExplicitFlowFixtureByAgentId.IsEmpty())
+  {
+    FlowBindingInputs.Reserve(ExplicitFlowFixtureByAgentId.Num());
+    for (const FCrowdDemoBidirectionalSwapLayoutAgent& LayoutAgent :
+      BidirectionalSwapLayout.Agents)
+    {
+      const FCrowdStableEntityRef* EntityRef =
+        EntityRefByAgentId.Find(LayoutAgent.AgentId);
+      if (!EntityRef)
+        return RejectWorkerV2Input(TEXT("flow_binding_entity"));
+      FCrowdWorkerFlowBinding Binding;
+      Binding.EntityRef = *EntityRef;
+      Binding.ObjectiveRef = LayoutAgent.ObjectiveRef;
+      Binding.CohortKey = LayoutAgent.CohortKey;
+      Binding.FlowResourceId = LayoutAgent.FlowResourceId;
+      FCrowdWorkerExternalGameplayInput& Input =
+        FlowBindingInputs.AddDefaulted_GetRef();
+      Input.EntityRef = *EntityRef;
+      Input.InputTypeId = static_cast<uint16>(
+        ECrowdWorkerExternalGameplayInputType::FlowBindingRevision);
+      Input.DirtyMask = 1;
+      if (!FCrowdWorkerFlowBindingCodec::Encode(
+          Binding, Input.FullState))
+        return RejectWorkerV2Input(TEXT("flow_binding_encode"));
+      FlowBindingMappingHash ^= Input.FullState.StableHash;
+      FlowBindingMappingHash *= 1099511628211ull;
+    }
+    FlowBindingInputs.Sort([](
+      const FCrowdWorkerExternalGameplayInput& A,
+      const FCrowdWorkerExternalGameplayInput& B)
+    {
+      return A.EntityRef < B.EntityRef;
+    });
+  }
   TArray<FCrowdWorkerExternalGameplayInput>
     PlanRevisionInputs;
   if (bSubmitIntentOnly && bPublishMovementControl)
@@ -3765,6 +3909,14 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
   }
   if (bSubmitIntentOnly && !MovementProfileInputs.IsEmpty())
     PlanRevisionInputs.Append(MoveTemp(MovementProfileInputs));
+  if (bSubmitIntentOnly && !FlowBindingInputs.IsEmpty())
+    PlanRevisionInputs.Append(MoveTemp(FlowBindingInputs));
+  TArray<FCrowdWorkerExternalGameplayInput> BootstrapExternalInputs;
+  if (!bSubmitIntentOnly)
+  {
+    BootstrapExternalInputs.Append(MovementProfileInputs);
+    BootstrapExternalInputs.Append(FlowBindingInputs);
+  }
   const bool bWorkerInputAccepted = bSubmitIntentOnly
     ? FCrowdDemoWorkerInputSync::SubmitIntentBatch(
         *GetWorld(), GetCurrentFixedStepIndex(),
@@ -3775,7 +3927,7 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
         *GetWorld(), BoundarySnapshot,
         GetCurrentFixedStepSeconds(),
         GetCurrentStepEndServerTimeSeconds(),
-        ResourceInputs, nullptr, MovementProfileInputs);
+        ResourceInputs, nullptr, BootstrapExternalInputs);
   if (!bWorkerInputAccepted)
     return RejectWorkerV2Input(TEXT("boundary_submit"));
   const uint64 AcceptedInputSequence =
@@ -3792,6 +3944,30 @@ bool UCrowdDemoRoundSimPipelineSubsystem::
     bPublishMovementControl ? 1 : 0,
     bPublishTargetControl ? 1 : 0,
     bPublishProjectileControl ? 1 : 0);
+  if (!ExplicitFlowFixtureByAgentId.IsEmpty()
+    && bPublishMovementControl)
+  {
+    const FCrowdSharedFlowField* NorthFlow =
+      FindRuntimeBidirectionalSwapFlowField(
+        FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey);
+    const FCrowdSharedFlowField* SouthFlow =
+      FindRuntimeBidirectionalSwapFlowField(
+        FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey);
+    UE_LOG(LogTemp, Display,
+      TEXT("CrowdDemoT3FlowBindingCheckpoint bindings=%d cohort_keys=%u,%u objective_refs=%llu,%llu flow_resources=%llu,%llu flow_revisions=%d,%d flow_hashes=%u,%u mapping_hash=%llu authoritative_preferred_velocity=0 worker_planning_sample=1 t3_bypass=0 formation_flow_selection=0 source=GenericFlowBinding"),
+      ExplicitFlowFixtureByAgentId.Num(),
+      FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey,
+      FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey,
+      FCrowdDemoBidirectionalSwapKernel::NorthObjectiveId,
+      FCrowdDemoBidirectionalSwapKernel::SouthObjectiveId,
+      FCrowdDemoBidirectionalSwapKernel::NorthFlowResourceId,
+      FCrowdDemoBidirectionalSwapKernel::SouthFlowResourceId,
+      NorthFlow ? NorthFlow->Config.Revision : 0,
+      SouthFlow ? SouthFlow->Config.Revision : 0,
+      NorthFlow ? NorthFlow->BuildHash : 0,
+      SouthFlow ? SouthFlow->BuildHash : 0,
+      FlowBindingMappingHash);
+  }
   if (bPublishMovementControl
     && (IsOpenSpawnRelaxation() || IsValidCorridorTransit()
       || bVatShowcase))
@@ -4520,9 +4696,8 @@ void UCrowdDemoRoundSimPipelineSubsystem::
             return Value.AgentId == Agent.Identity.AgentId;
           });
       FCrowdWorkerMovementState State;
-      const FCrowdDemoSharedFlowField* Field =
-        LayoutAgent ? FindBidirectionalSwapFlowField(
-          LayoutAgent->FormationIndex) : nullptr;
+      const FCrowdDemoSharedFlowField* Field = LayoutAgent
+        ? FindBidirectionalSwapFlowField(LayoutAgent->CohortKey) : nullptr;
       if (!LayoutAgent || !Field || !DecodeMovement(
           Agent.AgentFacts.StableEntityRef, State))
       {
@@ -4533,6 +4708,7 @@ void UCrowdDemoRoundSimPipelineSubsystem::
         Results.AddDefaulted_GetRef();
       Result.AgentId = Agent.Identity.AgentId;
       Result.FormationIndex = LayoutAgent->FormationIndex;
+      Result.CohortKey = LayoutAgent->CohortKey;
       Result.Location = State.Position;
       Result.Velocity = State.Velocity;
       Result.FlowStatus = FCrowdDemoSharedFlowFieldKernel::Sample(
@@ -5673,22 +5849,27 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureDynamicSharedFlowField(
 }
 
 
-bool UCrowdDemoRoundSimPipelineSubsystem::EnsureBidirectionalSwapFlowFields()
+bool UCrowdDemoRoundSimPipelineSubsystem::EnsureBidirectionalSwapFlowResources()
 {
   if (!IsBidirectionalSwap()) return false;
   bool bAllValid = true;
-  for (int32 CohortId = 0; CohortId < 2; ++CohortId)
+  const uint32 CohortKeys[] = {
+    FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey,
+    FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey};
+  for (int32 CohortIndex = 0; CohortIndex < 2; ++CohortIndex)
   {
+    const uint32 CohortKey = CohortKeys[CohortIndex];
     const FCrowdDemoSharedFlowFieldConfig Config =
-      FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(CohortId);
+      FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(CohortKey);
     FCrowdMassSharedFlowBuildInput Input;
     Input.Config = FCrowdDemoMassCrowdRuntimeAdapter::BuildCoreFlowConfig(Config);
     FCrowdMassSharedFlowResource& Resource =
-      RuntimeBidirectionalSwapFlowResources[CohortId];
+      RuntimeBidirectionalSwapFlowResources[CohortIndex];
     const FCrowdMassSharedFlowBuildOutput Output =
       FCrowdMassSharedFlowWork::EnsureResource(Input, Resource);
     bAllValid &= Output.bValid;
-    FCrowdDemoSharedFlowField& Field = BidirectionalSwapFlowFields[CohortId];
+    FCrowdDemoSharedFlowField& Field =
+      BidirectionalSwapFlowFields[CohortIndex];
     if (Output.bValid && (Output.bFieldRebuilt || !Field.IsValid()
       || Field.BuildHash != Resource.Field.BuildHash))
       Field = FCrowdDemoMassCrowdRuntimeAdapter::BuildDemoFlowField(Resource.Field);
@@ -5698,22 +5879,27 @@ bool UCrowdDemoRoundSimPipelineSubsystem::EnsureBidirectionalSwapFlowFields()
 
 const FCrowdSharedFlowField*
 UCrowdDemoRoundSimPipelineSubsystem::FindRuntimeBidirectionalSwapFlowField(
-  const int32 FormationIndex) const
+  const uint32 CohortKey) const
 {
-  const int32 CohortId =
-    FCrowdDemoBidirectionalSwapKernel::CohortIdForFormationIndex(FormationIndex);
-  return CohortId >= 0 && CohortId < RuntimeBidirectionalSwapFlowResources.Num()
-    ? &RuntimeBidirectionalSwapFlowResources[CohortId].Field : nullptr;
+  const int32 CohortIndex =
+    CohortKey == FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey ? 0
+    : CohortKey == FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey ? 1
+    : INDEX_NONE;
+  return CohortIndex >= 0
+      && CohortIndex < RuntimeBidirectionalSwapFlowResources.Num()
+    ? &RuntimeBidirectionalSwapFlowResources[CohortIndex].Field : nullptr;
 }
 
 const FCrowdDemoSharedFlowField*
 UCrowdDemoRoundSimPipelineSubsystem::FindBidirectionalSwapFlowField(
-  const int32 FormationIndex) const
+  const uint32 CohortKey) const
 {
-  const int32 CohortId =
-    FCrowdDemoBidirectionalSwapKernel::CohortIdForFormationIndex(FormationIndex);
-  return CohortId >= 0 && CohortId < BidirectionalSwapFlowFields.Num()
-    ? &BidirectionalSwapFlowFields[CohortId] : nullptr;
+  const int32 CohortIndex =
+    CohortKey == FCrowdDemoBidirectionalSwapKernel::NorthboundCohortKey ? 0
+    : CohortKey == FCrowdDemoBidirectionalSwapKernel::SouthboundCohortKey ? 1
+    : INDEX_NONE;
+  return CohortIndex >= 0 && CohortIndex < BidirectionalSwapFlowFields.Num()
+    ? &BidirectionalSwapFlowFields[CohortIndex] : nullptr;
 }
 
 

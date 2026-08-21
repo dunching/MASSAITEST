@@ -45,23 +45,42 @@ namespace
   }
 }
 
-int32 FCrowdDemoBidirectionalSwapKernel::CohortIdForFormationIndex(
-  const int32 FormationIndex)
+bool FCrowdDemoBidirectionalSwapKernel::IsCohortKeyValid(
+  const uint32 CohortKey)
 {
-  if (FormationIndex < 0 || FormationIndex >= AgentCount) return INDEX_NONE;
-  return FormationIndex < AgentsPerCohort ? 0 : 1;
+  return CohortKey == NorthboundCohortKey
+    || CohortKey == SouthboundCohortKey;
+}
+
+FCrowdWorkerObjectiveRef
+FCrowdDemoBidirectionalSwapKernel::ObjectiveForCohort(
+  const uint32 CohortKey)
+{
+  return {CohortKey == NorthboundCohortKey
+    ? NorthObjectiveId
+    : CohortKey == SouthboundCohortKey ? SouthObjectiveId : 0};
+}
+
+uint64 FCrowdDemoBidirectionalSwapKernel::FlowResourceForCohort(
+  const uint32 CohortKey)
+{
+  return CohortKey == NorthboundCohortKey
+    ? NorthFlowResourceId
+    : CohortKey == SouthboundCohortKey ? SouthFlowResourceId : 0;
 }
 
 FCrowdDemoSharedFlowFieldConfig FCrowdDemoBidirectionalSwapKernel::MakeFlowConfig(
-  const int32 CohortId)
+  const uint32 CohortKey)
 {
+  const int32 CohortIndex = CohortKey == NorthboundCohortKey ? 0 : 1;
   FCrowdDemoSharedFlowFieldConfig Config =
-    FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(310 + CohortId);
+    FCrowdDemoSharedFlowFieldKernel::MakeSf1Config(310 + CohortIndex);
   Config.BoundsMin = FVector(-2600.0f, -3300.0f, 0.0f);
   Config.BoundsMax = FVector(2600.0f, 3300.0f, 0.0f);
   Config.GoalLocation = FVector(
-    CohortId == 0 ? GoalLateralOffsetCm : -GoalLateralOffsetCm,
-    CohortId == 0 ? NorthSpawnY : SouthSpawnY, 60.0f);
+    CohortKey == NorthboundCohortKey
+      ? GoalLateralOffsetCm : -GoalLateralOffsetCm,
+    CohortKey == NorthboundCohortKey ? NorthSpawnY : SouthSpawnY, 60.0f);
   Config.ObstacleSpecs.Reset();
   Config.ConnectivityContractVersion = 2;
   return Config;
@@ -94,18 +113,23 @@ FCrowdDemoBidirectionalSwapLayout FCrowdDemoBidirectionalSwapKernel::BuildLayout
     if (Sorted[Index].AgentId == INDEX_NONE || Sorted[Index].FormationIndex != Index
       || (Index > 0 && Sorted[Index - 1].AgentId == Sorted[Index].AgentId))
       return Out;
-    const int32 CohortId = CohortIdForFormationIndex(Index);
+    // FormationIndex is fixture-only here: it assigns the explicit cohort once
+    // at spawn and is never consulted by runtime flow routing.
+    const uint32 CohortKey = Index < AgentsPerCohort
+      ? NorthboundCohortKey : SouthboundCohortKey;
     const int32 LocalIndex = Index % AgentsPerCohort;
     auto& Agent = Out.Agents.AddDefaulted_GetRef();
     Agent.AgentId = Sorted[Index].AgentId;
     Agent.FormationIndex = Index;
-    Agent.CohortId = CohortId;
+    Agent.CohortKey = CohortKey;
+    Agent.ObjectiveRef = ObjectiveForCohort(CohortKey);
+    Agent.FlowResourceId = FlowResourceForCohort(CohortKey);
     Agent.SpawnLocation = FVector(
       (static_cast<float>(LocalIndex) - HalfWidth) * FormationSpacingCm
-        + (CohortId == 1 ? CohortOneOffset : 0.0f),
-      CohortId == 0 ? SouthSpawnY : NorthSpawnY,
+        + (CohortKey == SouthboundCohortKey ? CohortOneOffset : 0.0f),
+      CohortKey == NorthboundCohortKey ? SouthSpawnY : NorthSpawnY,
       60.0f);
-    const FCrowdDemoSharedFlowFieldConfig Config = MakeFlowConfig(CohortId);
+    const FCrowdDemoSharedFlowFieldConfig Config = MakeFlowConfig(CohortKey);
     const float Clearance = PhysicalRadiusCm + HardSafetyGapCm;
     if (Agent.SpawnLocation.X < FVector(Config.BoundsMin).X + Clearance
       || Agent.SpawnLocation.X > FVector(Config.BoundsMax).X - Clearance
@@ -122,7 +146,11 @@ FCrowdDemoBidirectionalSwapLayout FCrowdDemoBidirectionalSwapKernel::BuildLayout
   {
     Out.LayoutHash = Fold(Out.LayoutHash, Agent.AgentId);
     Out.LayoutHash = Fold(Out.LayoutHash, Agent.FormationIndex);
-    Out.LayoutHash = Fold(Out.LayoutHash, Agent.CohortId);
+    Out.LayoutHash = Fold(Out.LayoutHash, static_cast<int32>(Agent.CohortKey));
+    Out.LayoutHash = Fold(
+      Out.LayoutHash, static_cast<int32>(Agent.ObjectiveRef.ObjectiveId));
+    Out.LayoutHash = Fold(
+      Out.LayoutHash, static_cast<int32>(Agent.FlowResourceId));
     Out.LayoutHash = FoldVector(Out.LayoutHash, Agent.SpawnLocation);
   }
   Out.bValid = true;
@@ -141,14 +169,14 @@ void FCrowdDemoBidirectionalSwapKernel::UpdateProgress(
   for (int32 Index = 0; Index < Sorted.Num(); ++Index)
   {
     const auto& Agent = Sorted[Index];
-    const int32 CohortId = CohortIdForFormationIndex(Agent.FormationIndex);
-    if (Agent.AgentId == INDEX_NONE || CohortId == INDEX_NONE
+    if (Agent.AgentId == INDEX_NONE || !IsCohortKeyValid(Agent.CohortKey)
       || (Index > 0 && Sorted[Index - 1].AgentId == Agent.AgentId))
     {
       bStepValid = false;
       continue;
     }
-    const float DirectionSign = CohortId == 0 ? 1.0f : -1.0f;
+    const float DirectionSign =
+      Agent.CohortKey == NorthboundCohortKey ? 1.0f : -1.0f;
     const float ForwardPosition = Agent.Location.Y * DirectionSign;
     const float ForwardSpeed = Agent.Velocity.Y * DirectionSign;
     if (ForwardPosition >= 0.0f)
