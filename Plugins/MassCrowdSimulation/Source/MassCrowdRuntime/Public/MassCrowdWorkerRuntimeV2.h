@@ -74,7 +74,8 @@ enum class ECrowdWorkerField : uint8
   TargetCohort = 12,
   MovementProfile = 13,
   FlowBinding = 14,
-  Count = 15
+  Participation = 15,
+  Count = 16
 };
 
 // Stable public domain IDs are append-only and therefore cannot also encode

@@ -31,6 +31,27 @@ namespace CrowdWorkerMovementPlanPrivate
     int32 GrantRemainingSteps = 0;
   };
 
+  bool ResolveLifecycleActive(
+    const FCrowdWorkerEntityStateStore& States,
+    const FCrowdStableEntityRef& EntityRef,
+    const uint64 LastAppliedInputSequence,
+    bool& bOutActive)
+  {
+    bOutActive = true;
+    const FCrowdWorkerDirtyStateRecord* Record =
+      States.Find(EntityRef, ECrowdWorkerField::Lifecycle);
+    if (!Record) return true;
+    FCrowdWorkerLifecycleState State;
+    if (Record->SourceInputSequence > LastAppliedInputSequence
+      || !FCrowdWorkerLifecycleStateCodec::Decode(
+        Record->Payload, State)
+      || State.EntityRef != EntityRef)
+      return false;
+    bOutActive =
+      State.Phase == ECrowdWorkerLifecyclePhase::Active;
+    return true;
+  }
+
   void MovementPlanAppendUnsigned(TArray<uint8>& Bytes, const uint32 Value)
   {
     for (uint32 Byte = 0; Byte < sizeof(Value); ++Byte)
@@ -542,6 +563,13 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       CrowdWorkerRuntimeV2DependencyScopeForField(
         ECrowdWorkerField::FlowBinding);
     AddDependency(BindingDependency, Dependent);
+    FCrowdWorkerDependencyKey LifecycleDependency;
+    LifecycleDependency.Kind = ECrowdWorkerDependencyKind::Entity;
+    LifecycleDependency.EntityRef = Entry.EntityRef;
+    LifecycleDependency.ScopeKey =
+      CrowdWorkerRuntimeV2DependencyScopeForField(
+        ECrowdWorkerField::Lifecycle);
+    AddDependency(LifecycleDependency, Dependent);
 
     const FCrowdWorkerDirtyStateRecord* BindingRecord =
       Context.EntityStates->Find(
@@ -767,6 +795,11 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
       float EffectiveMaximumSpeedCmps =
         Entry.MaximumSpeedCmps;
       bool bMovementLocked = false;
+      bool bLifecycleActive = true;
+      if (!ResolveLifecycleActive(
+          *Context.EntityStates, Entry.EntityRef,
+          Context.LastAppliedInputSequence, bLifecycleActive))
+        return Reject(TEXT("lifecycle"), Entry.EntityRef);
       if (const FCrowdWorkerBehaviorState* Behavior =
         BehaviorByEntity.Find(Entry.EntityRef))
       {
@@ -809,6 +842,11 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
           PreferredVelocity = FVector::ZeroVector;
           bMovementLocked = true;
         }
+      }
+      if (!bLifecycleActive)
+      {
+        PreferredVelocity = FVector::ZeroVector;
+        bMovementLocked = true;
       }
       if (bMovementLocked)
         EffectiveMaximumSpeedCmps = 0.0f;
@@ -885,6 +923,11 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
     Profiles)
   {
     FPlanState Plan;
+    bool bLifecycleActive = true;
+    if (!ResolveLifecycleActive(
+        *Context.EntityStates, Entry.EntityRef,
+        Context.LastAppliedInputSequence, bLifecycleActive))
+      return false;
     if (const FVector* TargetVelocity =
       TargetVelocityByEntity.Find(Entry.EntityRef))
       Plan.AutonomousPreferredVelocity = *TargetVelocity;
@@ -937,6 +980,11 @@ bool FCrowdWorkerMovementPlanningDomainExecutor::Execute(
         Plan.AutonomousPreferredVelocity = FVector::ZeroVector;
         Plan.bMovementLocked = true;
       }
+    }
+    if (!bLifecycleActive)
+    {
+      Plan.AutonomousPreferredVelocity = FVector::ZeroVector;
+      Plan.bMovementLocked = true;
     }
     Plan.bUseLocalVelocity = Control.bRunLocalPredictive;
     if (Control.bRunLocalPredictive)
@@ -1111,6 +1159,11 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
         || !FCrowdWorkerCombatStateCodec::Decode(
           CombatRecord->Payload, Combat)))
       return false;
+    bool bLifecycleActive = true;
+    if (!ResolveLifecycleActive(
+        *Context.EntityStates, Work.Key.PrimaryEntity,
+        Context.LastAppliedInputSequence, bLifecycleActive))
+      return false;
 
     FCrowdWorkerMovementState Movement;
     uint64 PreviousStateRevision = 0;
@@ -1221,6 +1274,8 @@ bool FCrowdWorkerMovementDomainExecutor::Execute(
         Movement.Velocity =
           FlowDirection * MaximumSpeedCmps;
     }
+    if (!bLifecycleActive)
+      Movement.Velocity = FVector::ZeroVector;
     const FVector MovementStartPosition = Movement.Position;
     Movement.StartPosition = MovementStartPosition;
     Movement.Position +=

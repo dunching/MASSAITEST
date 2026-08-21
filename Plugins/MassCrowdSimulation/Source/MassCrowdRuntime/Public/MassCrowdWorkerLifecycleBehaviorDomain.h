@@ -3,37 +3,9 @@
 #include "CoreMinimal.h"
 #include "MassCrowdBehaviorSource.h"
 #include "MassCrowdBehaviorSourceRuntime.h"
+#include "MassCrowdWorkerAgentState.h"
 #include "MassCrowdWorkerResultApply.h"
 #include "MassCrowdWorkerRuntimeV2.h"
-
-struct MASSCROWDRUNTIME_API FCrowdWorkerLifecycleState
-{
-  FCrowdStableEntityRef EntityRef;
-  uint64 SourceInputSequence = 0;
-  uint64 InitialStateHash = 0;
-
-  bool IsValid() const
-  {
-    return EntityRef.IsValid()
-      && SourceInputSequence != 0
-      && InitialStateHash != 0;
-  }
-};
-
-class MASSCROWDRUNTIME_API FCrowdWorkerLifecycleStateCodec
-{
-public:
-  static constexpr uint32 SchemaId = 0x43574C46u;
-  static constexpr uint16 SchemaVersion = 1;
-  static constexpr int32 EncodedByteCount = 32;
-
-  static bool Encode(
-    const FCrowdWorkerLifecycleState& State,
-    FCrowdWorkerPayload& OutPayload);
-  static bool Decode(
-    const FCrowdWorkerPayload& Payload,
-    FCrowdWorkerLifecycleState& OutState);
-};
 
 struct MASSCROWDRUNTIME_API FCrowdWorkerBehaviorState
 {
