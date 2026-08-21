@@ -21,6 +21,7 @@ Reference（精确边界）
 | `WorkerOwnershipMatrix.md` | Simulation field、Host business、Mass proxy、Network、Presentation 的 owner / writer 边界。 |
 | `PluginModuleBoundary.md` | 插件各模块当前编译依赖方向、长期职责与 Demo/Host 边界。 |
 | `TargetRegionBoundaryCapacityContract.md` | Target 靠近 NavMesh / Environment 边缘与角落时的 clipped Polar Topology、有限 Cell Capacity、Plan/Claim 与 Overflow/CapacityHold 合同。 |
+| `CrowdLifecycleBehaviorContract.md` | Lifecycle、Behavior Source、Movement Constraint、Interaction Participation、Correction 与 Acceptance 的通用所有权边界。 |
 | `../MassCrowdUnifiedRuntimeAndReplicationContract.md` | Agent、Lifecycle、Behavior Source、Replication、Result Commit 的长期详细合同。 |
 
 ## 使用规则
@@ -28,6 +29,7 @@ Reference（精确边界）
 - `WorkerOwnershipMatrix.md` 解决“这个状态到底谁有权推进”。
 - `PluginModuleBoundary.md` 解决“这段能力应该放在哪个模块、允许依赖谁”。
 - `TargetRegionBoundaryCapacityContract.md` 解决“目标附近有效 Cell 怎么被环境裁剪、容量满后谁能继续进入、谁应进入 Overflow/CapacityHold”。
+- `CrowdLifecycleBehaviorContract.md` 解决“Agent 是否存在/参与、当前意图、临时运动约束与权威修复分别由谁拥有”。
 - Runtime/Replication Contract 解决“跨模块与跨网络的数据合同是什么”。
 - 当前是否已经实现，以 `../CurrentArchitecture.md` 和 `../FeatureChecklist.md` 为准。
 - 当前下一步，以 `../PhasePlan.md` 为准。

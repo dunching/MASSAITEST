@@ -636,6 +636,8 @@ DependencyIndex 以 Source→Dependent forward map 与 Dependent→Source revers
 
 Slice B.5 synthetic 100/1k/10k 回归覆盖三边/Agent dependency graph、1%/100% rebind、clear、lifecycle removal、Flow/Objective scoped revision 与 typed Flow reuse。Slice C final regression 的 10k 证据为 30,000 edges/high-watermark、2 个 decoded Flow resources、初始批量替换 21.063 ms、Flow/Objective revision propagation 0.300/0.259 ms、1% rebind 0.233 ms、100% rebind 21.649 ms。T3 现由 fixture 一次性发布 2 个显式 CohortKey、2 个 ObjectiveRef、2 个 generic Flow resources 与 20 个 `FlowBindingRevision`；Worker MovementPlanning 从当前 Worker position 采样绑定 Flow，T3 不再以 `FormationIndex` 连续选 Flow，也不再使用 scenario-owned authoritative preferred velocity。UE 5.8 rendered Editor/client Mass ProcessingQueue assertion 继续延期到 Phase 3，不属于 Slice C Runtime correctness blocker。
 
+Lifecycle、Behavior Source、Movement Constraint、Interaction Participation、Correction 与 Acceptance 的目标所有权边界见 [`Reference/CrowdLifecycleBehaviorContract.md`](Reference/CrowdLifecycleBehaviorContract.md)；该 Reference 不改变下表所列当前实现状态。
+
 | 范围 | 已确认迁移债 | 目标合同 |
 |---|---|---|
 | T3（Slice C 已迁移） | 旧 `FormationIndex` 连续选 Flow 与 authoritative preferred-velocity bypass 已移除 | 显式 `ObjectiveRef` / `CohortKey` / `FlowResourceId` / `FCrowdWorkerFlowBinding`，进入通用 current-position MovementPlanning |
