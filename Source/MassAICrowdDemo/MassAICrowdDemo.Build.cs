@@ -19,6 +19,7 @@ public class MassAICrowdDemo : ModuleRules
       "Core",
       "CoreUObject",
       "Engine",
+      "MassCore",
       "MassCommon",
       "MassEntity",
       "MassLOD",
