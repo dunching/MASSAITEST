@@ -598,41 +598,6 @@ namespace CrowdWorkerLifecycleBehaviorPrivate
 
 using namespace CrowdWorkerLifecycleBehaviorPrivate;
 
-bool FCrowdWorkerLifecycleStateCodec::Encode(
-  const FCrowdWorkerLifecycleState& State,
-  FCrowdWorkerPayload& OutPayload)
-{
-  OutPayload = {};
-  if (!State.IsValid()) return false;
-  OutPayload.SchemaId = SchemaId;
-  OutPayload.SchemaVersion = SchemaVersion;
-  WriteRef(OutPayload.Bytes, State.EntityRef);
-  WritePod(OutPayload.Bytes, State.SourceInputSequence);
-  WritePod(OutPayload.Bytes, State.InitialStateHash);
-  OutPayload.RecalculateStableHash();
-  return OutPayload.Bytes.Num() == EncodedByteCount;
-}
-
-bool FCrowdWorkerLifecycleStateCodec::Decode(
-  const FCrowdWorkerPayload& Payload,
-  FCrowdWorkerLifecycleState& OutState)
-{
-  OutState = {};
-  if (Payload.SchemaId != SchemaId
-    || Payload.SchemaVersion != SchemaVersion
-    || Payload.Bytes.Num() != EncodedByteCount
-    || Payload.StableHash != Payload.CalculateStableHash())
-    return false;
-  int32 Offset = 0;
-  return ReadRef(Payload.Bytes, Offset, OutState.EntityRef)
-    && LifecycleReadPod(
-      Payload.Bytes, Offset, OutState.SourceInputSequence)
-    && LifecycleReadPod(
-      Payload.Bytes, Offset, OutState.InitialStateHash)
-    && Offset == Payload.Bytes.Num()
-    && OutState.IsValid();
-}
-
 bool FCrowdWorkerBehaviorInputCodec::Encode(
   const FCrowdBehaviorEntityEvaluationContext& Context,
   FCrowdWorkerPayload& OutPayload)
@@ -1134,11 +1099,30 @@ bool FCrowdWorkerLifecycleDomainExecutor::Execute(
       // Despawn already invalidated every state owned by this lifecycle.
       continue;
     }
+    if (const FCrowdWorkerDirtyStateRecord* Existing =
+      Context.EntityStates->Find(
+        Work.Key.PrimaryEntity, ECrowdWorkerField::Lifecycle))
+    {
+      FCrowdWorkerLifecycleState ExistingState;
+      if (!FCrowdWorkerLifecycleStateCodec::Decode(
+          Existing->Payload, ExistingState)
+        || ExistingState.EntityRef != Work.Key.PrimaryEntity
+        || ExistingState.InitialStateHash
+          != Input->Payload.StableHash
+        || Existing->SourceInputSequence
+          > Context.LastAppliedInputSequence)
+        return false;
+      // Explicit lifecycle revisions remain authoritative until another
+      // revision or a Despawn input replaces this lifecycle.
+      continue;
+    }
     FCrowdWorkerLifecycleState State;
     State.EntityRef = Work.Key.PrimaryEntity;
+    State.Revision = Input->SourceInputSequence;
     State.SourceInputSequence =
       Input->SourceInputSequence;
     State.InitialStateHash = Input->Payload.StableHash;
+    State.Phase = ECrowdWorkerLifecyclePhase::Active;
     FCrowdWorkerDirtyStateRecord Dirty;
     Dirty.EntityRef = State.EntityRef;
     Dirty.Field = ECrowdWorkerField::Lifecycle;

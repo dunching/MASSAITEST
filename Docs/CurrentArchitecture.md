@@ -638,6 +638,8 @@ Slice B.5 synthetic 100/1k/10k 回归覆盖三边/Agent dependency graph、1%/10
 
 Lifecycle、Behavior Source、Movement Constraint、Interaction Participation、Correction 与 Acceptance 的目标所有权边界见 [`Reference/CrowdLifecycleBehaviorContract.md`](Reference/CrowdLifecycleBehaviorContract.md)；该 Reference 不改变下表所列当前实现状态。
 
+Slice D1-A 已补齐 scenario-neutral Worker foundation：显式 versioned `SpawnPending / Active / Suspended / Removed` lifecycle transition、独立的 Particle / Combat / Presentation participation field，以及通用 movement/interaction consumer。Behavior 与 Movement Constraint 继续复用既有 Behavior Source resolved channels；Correction 继续复用 versioned authoritative dirty-state/correction barrier，不引入平行状态存储。T1 `OpenSpawnRelaxation` 尚未迁移，现有 T1 runtime branch 与 authoritative preferred-velocity compatibility path 仍属下表迁移债。
+
 | 范围 | 已确认迁移债 | 目标合同 |
 |---|---|---|
 | T3（Slice C 已迁移） | 旧 `FormationIndex` 连续选 Flow 与 authoritative preferred-velocity bypass 已移除 | 显式 `ObjectiveRef` / `CohortKey` / `FlowResourceId` / `FCrowdWorkerFlowBinding`，进入通用 current-position MovementPlanning |

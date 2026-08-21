@@ -1,6 +1,7 @@
 ﻿#include "MassCrowdAsyncSimulationRuntime.h"
 
 #include "HAL/PlatformProcess.h"
+#include "MassCrowdWorkerAgentState.h"
 #include "MassCrowdWorkerInteractionDomain.h"
 #include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerFlowBinding.h"
@@ -24,6 +25,7 @@ namespace CrowdAsyncSimulationPrivate
       case ECrowdWorkerField::InputSnapshot:
       case ECrowdWorkerField::MovementProfile:
       case ECrowdWorkerField::FlowBinding:
+      case ECrowdWorkerField::Participation:
         return CrowdWorkerRuntimeV2DomainExecutionRank(
           ECrowdWorkerDomainId::LifecycleInput);
       case ECrowdWorkerField::Behavior:
@@ -68,6 +70,7 @@ namespace CrowdAsyncSimulationPrivate
       case ECrowdWorkerField::InputSnapshot:
       case ECrowdWorkerField::MovementProfile:
       case ECrowdWorkerField::FlowBinding:
+      case ECrowdWorkerField::Participation:
         return ECrowdWorkerDomainId::LifecycleInput;
       case ECrowdWorkerField::Behavior:
         return ECrowdWorkerDomainId::Behavior;
@@ -528,6 +531,31 @@ namespace CrowdAsyncSimulationPrivate
         {
           const FCrowdWorkerExternalGameplayInput& Input =
             Batch.ExternalGameplayInputs[Ref.Index];
+          if (Input.InputTypeId == static_cast<uint16>(
+              ECrowdWorkerExternalGameplayInputType::
+                LifecycleRevision))
+          {
+            FCrowdWorkerLifecycleTransition Transition;
+            if (!FCrowdWorkerLifecycleTransitionCodec::Decode(
+                Input.FullState, Transition)
+              || Transition.EntityRef != Input.EntityRef)
+              break;
+            if (Transition.TargetPhase
+              == ECrowdWorkerLifecyclePhase::Removed)
+            {
+              FCrowdWorkerDespawnDelta Despawn;
+              Despawn.InputSequence = Input.InputSequence;
+              Despawn.EntityRef = Input.EntityRef;
+              Despawn.ReasonId = 1;
+              bApplied = Mirror.Despawn(Despawn);
+            }
+            else
+            {
+              bApplied =
+                Mirror.FindEntity(Input.EntityRef) != INDEX_NONE;
+            }
+            break;
+          }
           bApplied = Input.InputTypeId == static_cast<uint16>(
               ECrowdWorkerExternalGameplayInputType::
                 MovementProfileRevision)
@@ -537,6 +565,9 @@ namespace CrowdAsyncSimulationPrivate
               || Input.InputTypeId == static_cast<uint16>(
                 ECrowdWorkerExternalGameplayInputType::
                   FlowBindingClear)
+              || Input.InputTypeId == static_cast<uint16>(
+                ECrowdWorkerExternalGameplayInputType::
+                  ParticipationRevision)
             ? Mirror.FindEntity(Input.EntityRef) != INDEX_NONE
             : Mirror.ApplyState(Input);
           break;
@@ -566,7 +597,13 @@ namespace CrowdAsyncSimulationPrivate
               FlowBindingRevision)
           && Input.InputTypeId != static_cast<uint16>(
             ECrowdWorkerExternalGameplayInputType::
-              FlowBindingClear);
+              FlowBindingClear)
+          && Input.InputTypeId != static_cast<uint16>(
+            ECrowdWorkerExternalGameplayInputType::
+              LifecycleRevision)
+          && Input.InputTypeId != static_cast<uint16>(
+            ECrowdWorkerExternalGameplayInputType::
+              ParticipationRevision);
       });
   }
 }
@@ -946,35 +983,156 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
       return Result == ECrowdWorkerQueueResult::Added
         || Result == ECrowdWorkerQueueResult::MergedDuplicate;
     };
+    const auto EnqueueLifecycleMovementRefresh =
+      [this, &Batch, &EnqueueEntity](
+        const FCrowdStableEntityRef& EntityRef)
+    {
+      bool bRunLocalPredictive = false;
+      const FCrowdWorkerResourceDelta* BatchControl =
+        Batch.ResourceDeltas.FindByPredicate([](
+          const FCrowdWorkerResourceDelta& Resource)
+        {
+          return Resource.ResourceId
+            == CrowdWorkerResourceIds::MovementControl;
+        });
+      if (BatchControl)
+      {
+        FCrowdWorkerMovementControlResource Control;
+        if (!FCrowdWorkerMovementControlResourceCodec::Decode(
+            BatchControl->Payload, Control)
+          || Control.Revision != BatchControl->Revision)
+          return false;
+        bRunLocalPredictive = Control.bRunLocalPredictive;
+      }
+      else if (const FCrowdWorkerResourceRecord* CurrentControl =
+        ResourceStore.FindCurrent(
+          CrowdWorkerResourceIds::MovementControl))
+      {
+        FCrowdWorkerMovementControlResource Control;
+        if (!FCrowdWorkerMovementControlResourceCodec::Decode(
+            CurrentControl->Payload, Control)
+          || Control.Revision != CurrentControl->Revision)
+          return false;
+        bRunLocalPredictive = Control.bRunLocalPredictive;
+      }
+      if (!DomainRegistry || !DomainRegistry->HasDomain(
+          ECrowdWorkerDomainId::MovementPlanning))
+      {
+        return !DomainRegistry || !DomainRegistry->HasDomain(
+            ECrowdWorkerDomainId::Movement)
+          || EnqueueEntity(
+            ECrowdWorkerDomainId::Movement,
+            EntityRef, 1ull << 21);
+      }
+      FCrowdWorkerWorkItem Planning;
+      Planning.Key.Domain =
+        ECrowdWorkerDomainId::MovementPlanning;
+      Planning.Key.Kind = bRunLocalPredictive
+        ? ECrowdWorkerWorkKind::Resource
+        : ECrowdWorkerWorkKind::Entity;
+      if (bRunLocalPredictive)
+        Planning.Key.ScopeKey =
+          CrowdWorkerResourceIds::MovementControl;
+      else
+        Planning.Key.PrimaryEntity = EntityRef;
+      Planning.Priority = ECrowdWorkerWorkPriority::High;
+      Planning.ReasonMask = 1ull << 20;
+      const ECrowdWorkerQueueResult Result =
+        WorkRing.EnqueueCurrent(MoveTemp(Planning));
+      return Result == ECrowdWorkerQueueResult::Added
+        || Result == ECrowdWorkerQueueResult::MergedDuplicate;
+    };
+    const auto RemoveLifecycleEntity =
+      [this](const FCrowdStableEntityRef& EntityRef,
+        const uint64 InputSequence)
+    {
+      WorkRing.RemoveEntity(EntityRef);
+      TimeWheel.CancelEntity(EntityRef);
+      DependencyIndex.RemoveEntity(EntityRef);
+      DirtyStateStore.RemoveEntity(EntityRef);
+      CommandStore.RemoveEntity(EntityRef);
+      WorkerV2PendingPublishedDirtyStates.RemoveAll(
+        [&EntityRef](const FCrowdWorkerDirtyStateRecord& Record)
+        {
+          return Record.EntityRef == EntityRef;
+        });
+      WorkerV2PendingPublishedEvents.RemoveAll(
+        [&EntityRef](const FCrowdWorkerGameplayEvent& Event)
+        {
+          return Event.EntityRef == EntityRef;
+        });
+      if (!SpatialIndex.Despawn(EntityRef))
+      {
+        LastWorkerV2Failure =
+          ECrowdWorkerRuntimeV2Failure::SpatialIndex;
+        return false;
+      }
+      if (!EntityStateStore.Despawn(EntityRef))
+      {
+        RecordDirtyStateFailure(
+          TEXT("dirty.despawn_state"),
+          ECrowdWorkerQueueResult::RejectedInvalid,
+          EntityRef, ECrowdWorkerField::InputSnapshot,
+          nullptr,
+          EntityStateStore.Find(
+            EntityRef, ECrowdWorkerField::InputSnapshot),
+          InputSequence);
+        return false;
+      }
+      return true;
+    };
 
+    enum class ELifecycleInputKind : uint8
+    {
+      Spawn = 0,
+      Despawn,
+      Revision
+    };
     struct FLifecycleInputRef
     {
       uint64 InputSequence = 0;
       int32 Index = INDEX_NONE;
-      bool bSpawn = false;
+      ELifecycleInputKind Kind = ELifecycleInputKind::Spawn;
     };
     TArray<FLifecycleInputRef> LifecycleInputs;
     LifecycleInputs.Reserve(
-      Batch.Spawns.Num() + Batch.Despawns.Num());
+      Batch.Spawns.Num() + Batch.Despawns.Num()
+      + Batch.ExternalGameplayInputs.Num());
     for (int32 Index = 0; Index < Batch.Spawns.Num(); ++Index)
       LifecycleInputs.Add({
-        Batch.Spawns[Index].InputSequence, Index, true});
+        Batch.Spawns[Index].InputSequence, Index,
+        ELifecycleInputKind::Spawn});
     for (int32 Index = 0; Index < Batch.Despawns.Num(); ++Index)
       LifecycleInputs.Add({
-        Batch.Despawns[Index].InputSequence, Index, false});
+        Batch.Despawns[Index].InputSequence, Index,
+        ELifecycleInputKind::Despawn});
+    for (int32 Index = 0;
+      Index < Batch.ExternalGameplayInputs.Num(); ++Index)
+    {
+      if (Batch.ExternalGameplayInputs[Index].InputTypeId
+        == static_cast<uint16>(
+          ECrowdWorkerExternalGameplayInputType::
+            LifecycleRevision))
+      {
+        LifecycleInputs.Add({
+          Batch.ExternalGameplayInputs[Index].InputSequence,
+          Index, ELifecycleInputKind::Revision});
+      }
+    }
     LifecycleInputs.Sort([](
       const FLifecycleInputRef& A,
       const FLifecycleInputRef& B)
     {
       if (A.InputSequence != B.InputSequence)
         return A.InputSequence < B.InputSequence;
-      if (A.bSpawn != B.bSpawn)
-        return !A.bSpawn;
+      if (A.Kind != B.Kind)
+        return static_cast<uint8>(A.Kind)
+          < static_cast<uint8>(B.Kind);
       return A.Index < B.Index;
     });
     for (const FLifecycleInputRef& LifecycleInput : LifecycleInputs)
     {
-      if (LifecycleInput.bSpawn)
+      if (LifecycleInput.Kind == ELifecycleInputKind::Spawn)
       {
         const FCrowdWorkerSpawnDelta& Delta =
           Batch.Spawns[LifecycleInput.Index];
@@ -1029,41 +1187,79 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
         continue;
       }
 
+      if (LifecycleInput.Kind == ELifecycleInputKind::Revision)
+      {
+        const FCrowdWorkerExternalGameplayInput& Delta =
+          Batch.ExternalGameplayInputs[LifecycleInput.Index];
+        FCrowdWorkerLifecycleTransition Transition;
+        if (!FCrowdWorkerLifecycleTransitionCodec::Decode(
+            Delta.FullState, Transition)
+          || Transition.EntityRef != Delta.EntityRef
+          || !EntityStateStore.Contains(Delta.EntityRef))
+          return false;
+        const FCrowdWorkerDirtyStateRecord* Snapshot =
+          EntityStateStore.Find(
+            Delta.EntityRef, ECrowdWorkerField::InputSnapshot);
+        if (!Snapshot) return false;
+        FCrowdWorkerLifecycleState CurrentState;
+        const FCrowdWorkerLifecycleState* Current = nullptr;
+        if (const FCrowdWorkerDirtyStateRecord* Existing =
+          EntityStateStore.Find(
+            Delta.EntityRef, ECrowdWorkerField::Lifecycle))
+        {
+          if (!FCrowdWorkerLifecycleStateCodec::Decode(
+              Existing->Payload, CurrentState)
+            || CurrentState.EntityRef != Delta.EntityRef)
+            return false;
+          Current = &CurrentState;
+        }
+        FCrowdWorkerLifecycleState NextState;
+        if (!FCrowdWorkerLifecycleStateMachine::Apply(
+            Current, Transition, Delta.InputSequence,
+            Snapshot->Payload.StableHash, NextState))
+          return false;
+        if (NextState.Phase
+          == ECrowdWorkerLifecyclePhase::Removed)
+        {
+          if (!RemoveLifecycleEntity(
+              Delta.EntityRef, Delta.InputSequence))
+            return false;
+          continue;
+        }
+        FCrowdWorkerDirtyStateRecord StateRecord;
+        StateRecord.EntityRef = Delta.EntityRef;
+        StateRecord.Field = ECrowdWorkerField::Lifecycle;
+        StateRecord.Generation = Batch.Generation;
+        StateRecord.WorkerEpoch =
+          FMath::Max<uint64>(1, WorkerEpoch);
+        StateRecord.StateRevision = NextState.Revision;
+        StateRecord.SourceInputSequence = Delta.InputSequence;
+        if (!FCrowdWorkerLifecycleStateCodec::Encode(
+            NextState, StateRecord.Payload))
+          return false;
+        const ECrowdWorkerQueueResult StateResult =
+          EntityStateStore.ApplyDirty(StateRecord);
+        if (StateResult != ECrowdWorkerQueueResult::Added
+          && StateResult != ECrowdWorkerQueueResult::Replaced
+          && StateResult
+            != ECrowdWorkerQueueResult::MergedDuplicate)
+          return false;
+        if (DomainRegistry && DomainRegistry->HasDomain(
+            ECrowdWorkerDomainId::Behavior)
+          && !EnqueueEntity(
+            ECrowdWorkerDomainId::Behavior,
+            Delta.EntityRef, 1ull << 22))
+          return false;
+        if (!EnqueueLifecycleMovementRefresh(Delta.EntityRef))
+          return false;
+        continue;
+      }
+
       const FCrowdWorkerDespawnDelta& Delta =
         Batch.Despawns[LifecycleInput.Index];
-      WorkRing.RemoveEntity(Delta.EntityRef);
-      TimeWheel.CancelEntity(Delta.EntityRef);
-      DependencyIndex.RemoveEntity(Delta.EntityRef);
-      DirtyStateStore.RemoveEntity(Delta.EntityRef);
-      CommandStore.RemoveEntity(Delta.EntityRef);
-      WorkerV2PendingPublishedDirtyStates.RemoveAll(
-        [&Delta](const FCrowdWorkerDirtyStateRecord& Record)
-        {
-          return Record.EntityRef == Delta.EntityRef;
-        });
-      WorkerV2PendingPublishedEvents.RemoveAll(
-        [&Delta](const FCrowdWorkerGameplayEvent& Event)
-        {
-          return Event.EntityRef == Delta.EntityRef;
-        });
-      if (!SpatialIndex.Despawn(Delta.EntityRef))
-      {
-        LastWorkerV2Failure =
-          ECrowdWorkerRuntimeV2Failure::SpatialIndex;
+      if (!RemoveLifecycleEntity(
+          Delta.EntityRef, Delta.InputSequence))
         return false;
-      }
-      if (!EntityStateStore.Despawn(Delta.EntityRef))
-      {
-        RecordDirtyStateFailure(
-          TEXT("dirty.despawn_state"),
-          ECrowdWorkerQueueResult::RejectedInvalid,
-          Delta.EntityRef, ECrowdWorkerField::InputSnapshot,
-          nullptr,
-          EntityStateStore.Find(
-            Delta.EntityRef, ECrowdWorkerField::InputSnapshot),
-          Delta.InputSequence);
-        return false;
-      }
       if (!EnqueueEntity(
         ECrowdWorkerDomainId::LifecycleInput,
         Delta.EntityRef, 1ull << 1))
@@ -1327,6 +1523,13 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
     FCrowdWorkerFlowResourceCache BindingFlowCache;
     for (const FCrowdWorkerExternalGameplayInput& Delta : Batch.ExternalGameplayInputs)
     {
+      if (Delta.InputTypeId == static_cast<uint16>(
+          ECrowdWorkerExternalGameplayInputType::
+            LifecycleRevision))
+      {
+        // Lifecycle revisions are ordered with Spawn/Despawn above.
+        continue;
+      }
       if (Delta.EntityRef.IsUnset())
       {
         const ECrowdWorkerQueueResult StageResult =
@@ -1337,6 +1540,39 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
             Delta.FullState});
         if (StageResult != ECrowdWorkerQueueResult::Added
           && StageResult != ECrowdWorkerQueueResult::MergedDuplicate)
+          return false;
+        continue;
+      }
+      if (Delta.InputTypeId == static_cast<uint16>(
+          ECrowdWorkerExternalGameplayInputType::
+            ParticipationRevision))
+      {
+        FCrowdWorkerParticipationState Participation;
+        if (!FCrowdWorkerParticipationStateCodec::Decode(
+            Delta.FullState, Participation)
+          || Participation.EntityRef != Delta.EntityRef
+          || !EntityStateStore.Contains(Delta.EntityRef))
+          return false;
+        FCrowdWorkerDirtyStateRecord ParticipationRecord;
+        ParticipationRecord.EntityRef = Delta.EntityRef;
+        ParticipationRecord.Field =
+          ECrowdWorkerField::Participation;
+        ParticipationRecord.Generation = Batch.Generation;
+        ParticipationRecord.WorkerEpoch =
+          FMath::Max<uint64>(1, WorkerEpoch);
+        ParticipationRecord.StateRevision =
+          Participation.Revision;
+        ParticipationRecord.SourceInputSequence =
+          Delta.InputSequence;
+        ParticipationRecord.Payload = Delta.FullState;
+        const ECrowdWorkerQueueResult ParticipationResult =
+          EntityStateStore.ApplyDirty(ParticipationRecord);
+        if (ParticipationResult != ECrowdWorkerQueueResult::Added
+          && ParticipationResult != ECrowdWorkerQueueResult::Replaced
+          && ParticipationResult
+            != ECrowdWorkerQueueResult::MergedDuplicate)
+          return false;
+        if (!EnqueueLifecycleMovementRefresh(Delta.EntityRef))
           return false;
         continue;
       }

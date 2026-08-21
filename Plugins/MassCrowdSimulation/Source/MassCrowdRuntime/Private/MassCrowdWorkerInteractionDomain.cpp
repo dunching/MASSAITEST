@@ -1,5 +1,6 @@
 #include "MassCrowdWorkerInteractionDomain.h"
 
+#include "MassCrowdWorkerAgentState.h"
 #include "MassCrowdWorkerCombatState.h"
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerMovementControlResource.h"
@@ -492,6 +493,35 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
     }
     MovementByEntityRef.Add(Entry.EntityRef, Movement);
     bool bParticleActive = Entry.bParticleActive;
+    if (const FCrowdWorkerDirtyStateRecord* LifecycleRecord =
+      Context.EntityStates->Find(
+        Entry.EntityRef, ECrowdWorkerField::Lifecycle))
+    {
+      FCrowdWorkerLifecycleState Lifecycle;
+      if (LifecycleRecord->SourceInputSequence
+          > Context.LastAppliedInputSequence
+        || !FCrowdWorkerLifecycleStateCodec::Decode(
+          LifecycleRecord->Payload, Lifecycle)
+        || Lifecycle.EntityRef != Entry.EntityRef)
+        return false;
+      bParticleActive = bParticleActive
+        && Lifecycle.Phase == ECrowdWorkerLifecyclePhase::Active;
+    }
+    if (const FCrowdWorkerDirtyStateRecord* ParticipationRecord =
+      Context.EntityStates->Find(
+        Entry.EntityRef, ECrowdWorkerField::Participation))
+    {
+      FCrowdWorkerParticipationState Participation;
+      if (ParticipationRecord->SourceInputSequence
+          > Context.LastAppliedInputSequence
+        || !FCrowdWorkerParticipationStateCodec::Decode(
+          ParticipationRecord->Payload, Participation)
+        || Participation.EntityRef != Entry.EntityRef)
+        return false;
+      bParticleActive = bParticleActive
+        && Participation.IsEnabled(
+          ECrowdWorkerParticipationChannel::Particle);
+    }
     if (const FCrowdWorkerDirtyStateRecord* CombatRecord =
       Context.EntityStates->Find(
         Entry.EntityRef, ECrowdWorkerField::Combat))
@@ -814,6 +844,25 @@ bool FCrowdWorkerParticleInteractionDomainExecutor::Execute(
     Observation.Source = Declaration.Source;
     Observation.Dependent = Declaration.Dependent.Key;
     OutOutput.ObservedDependencies.Add(Observation);
+    for (const ECrowdWorkerField Field :
+      {ECrowdWorkerField::Lifecycle,
+       ECrowdWorkerField::Participation})
+    {
+      FCrowdWorkerDependencyDeclaration StateDeclaration;
+      StateDeclaration.Source.Kind =
+        ECrowdWorkerDependencyKind::Entity;
+      StateDeclaration.Source.EntityRef = Entry.EntityRef;
+      StateDeclaration.Source.ScopeKey =
+        CrowdWorkerRuntimeV2DependencyScopeForField(Field);
+      StateDeclaration.Dependent = WorkItems[0];
+      StateDeclaration.Dependent.ReasonMask |= 1ull << 12;
+      OutOutput.DeclaredDependencies.Add(StateDeclaration);
+      FCrowdWorkerDependencyObservation StateObservation;
+      StateObservation.Source = StateDeclaration.Source;
+      StateObservation.Dependent =
+        StateDeclaration.Dependent.Key;
+      OutOutput.ObservedDependencies.Add(StateObservation);
+    }
   }
   if (bUsesPrimaryTargetObjective)
   {
