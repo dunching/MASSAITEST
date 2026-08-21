@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 #include "CrowdDemoTypes.h"
 #include "Mass/CrowdDemoMassFragments.h"
-#include "MassEntityHandle.h"
+#include "Mass/EntityHandle.h"
 #include "MassCrowdProjectileMassStore.h"
 #include "MassCrowdRuntimeBridge.h"
 #include "MassCrowdWorkerContracts.h"

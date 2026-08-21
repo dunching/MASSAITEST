@@ -1,6 +1,6 @@
 {
   "FileVersion": 3,
-  "EngineAssociation": "5.7",
+  "EngineAssociation": "5.8",
   "Category": "Prototype",
   "Description": "Large-scale Mass agent simulation validation host for the reusable MassCrowdSimulation runtime.",
   "Modules": [
