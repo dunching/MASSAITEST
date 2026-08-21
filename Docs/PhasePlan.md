@@ -9,19 +9,17 @@
 当前总方向：
 
 ```text
-WA8 Source Architecture Cut          = CLOSED / structural
+PHASE 0  Unified Behavior / Development Rule Cut
         ↓
-Post-cut Runtime Regression Gate     = PARTIAL
+PHASE 1  Missing Specialist Correctness Gates
         ↓
-T5 Long-Window Correctness           = CLOSED ON MAIN
+PHASE 2  Performance / Scaling: 1k → 2k → 5k → 10k
         ↓
-Duplicate Kernel / Host Shell Cleanup
+PHASE 3  Automated Behavior / Visual Acceptance
         ↓
-Large Particle Island Scaling
+PHASE 4  Human Visual Acceptance
         ↓
-WA9 Full-Scale Acceptance
-        ↓
-Target Architecture
+PHASE 5  Demo Acceptance CLOSED
 ```
 
 T5 的边界/容量精确设计见：
@@ -32,18 +30,42 @@ Reference/TargetRegionBoundaryCapacityContract.md
 
 ---
 
-## 2. 当前优先级
+## 2. 当前阶段与状态
 
-| 顺序 | Gate | 状态 | 关闭条件 |
+| Phase | 名称 | 状态 | 关闭条件 |
 |---:|---|---|---|
-| 0 | WA8 Source Architecture Cut | CLOSED / structural | 第一代跨帧 Round Transaction、完整 rollback source、`FCrowdDemoRoundWorkBatch`、`BeginBoundaryTransaction`、`TryPrepareRoundApply`、BoundaryOrchestrator、旧 Stage surface、Prepared second-pass commit channels 已从 Production source 退出。 |
-| 1 | Post-cut Runtime Regression | PARTIAL | Build、Architecture、OwnerBarrier、Bootstrap、ordinary direct-intent、T1/T2/T3/T4、T6-A/T6-B、T7 client presentation + sparse correction recovery、T5 与 T8 server-only 已取得 post-cut 证据；T6-C、LateJoin、完整双端 T8 与其余 network 场景仍未关闭。 |
-| 2 | T5 Long-Window Correctness | CLOSED ON MAIN | PR #18 已合并；`main@182f4d8dc856102b3a80ade0dc6506ff678c1d6a` 上 Build、Automation、Static/Moving 1199-step 2/2 deterministic PASS。Moving performance 仍 OPEN。 |
-| 3 | Duplicate Kernel / Host Shell Cleanup | OPEN | 删除确认失去消费者的 Demo generic duplicate；把 RoundSimPipeline 按 Host Plan / Bootstrap / Metrics / Checkpoint 职责进一步拆分。 |
-| 4 | Large Particle Island Scaling | OPEN | Island-level task parallelism与单大型 Interaction Island Cell-Pair Owner / per-round barrier 分片获得确定性与性能证据。 |
-| 5 | WA9 Full-Scale Acceptance | OPEN | 同一 Production Runtime 在 1k→2k→5k→10k 完整 Simulation + Network + Presentation + Performance 门通过。 |
+| 0 | Unified Behavior / Development Rule Cut | CURRENT / DOCUMENTATION ONLY | 统一 movement、scenario responsibility、Formation、Objective/Cohort、dynamic Flow、TargetRegion activation、Acceptance Harness 与 MovementProfile 合同进入 main。 |
+| 1 | Missing Specialist Correctness Gates | OPEN | LateJoin、完整双端 T8、剩余 specialist correctness 与已确认 scenario-coupling migration debt关闭。 |
+| 2 | Performance / Scaling | OPEN | 同一 Production path 依次通过 1k → 2k → 5k → 10k correctness-preserving performance gates。 |
+| 3 | Automated Behavior / Visual Acceptance | OPEN | 自动化行为/视觉指标与相关 editor/runner gates 建立并通过。 |
+| 4 | Human Visual Acceptance | OPEN | 人工视觉审查通过，不用表现修饰掩盖模拟问题。 |
+| 5 | Demo Acceptance CLOSED | OPEN | 前述阶段均关闭且最终 Demo acceptance 证据完整。 |
 
-双端 T8 runner 的日志误判/超时属于验收工具可靠性问题，必须在完整 WA9 前关闭。
+当前 correctness 状态：
+
+```text
+T6-A                         CLOSED
+T6-B                         CLOSED
+T6-C                         CLOSED / merged via PR #23
+LateJoin                     OPEN
+Dual T8                      OPEN
+Performance                  OPEN
+Automated Behavior / Visual  OPEN
+Human Visual                 OPEN
+```
+
+Phase 1 的已确认代码迁移债：
+
+```text
+T3          FormationIndex Flow selection + authoritative preferred-velocity bypass
+T1          scenario-name Flow bypass + zero authoritative velocity path
+Moving Flow scenario-enum-driven refresh
+T6-A        scenario-progress-driven TargetRegion activation
+T4          group_exit_hold living in runtime host
+T7          FormationIndex-driven continuous movement
+```
+
+这些项必须收敛到 `TargetArchitecture.md` 定义的统一 Worker movement contract；Phase 0 只记录规则，不实现上述迁移。
 
 ---
 
@@ -102,7 +124,7 @@ WA8 的 source ownership / transaction structure 已关闭。
 
 ---
 
-# 4. Gate 1 — Post-cut Runtime Regression
+# 4. Phase 1 Backlog Detail — Missing Specialist Correctness Gates
 
 当前已经重新证明：
 
@@ -117,19 +139,21 @@ minimal T8 server-only                  PASS
 Worker Target observability             PASS
 T1/T2/T3/T4 post-cut canonical          PASS
 T6-A HeterogeneousTransit                PASS / 2x deterministic
+T6-B HeterogeneousTargetStatic           CLOSED
+T6-C HeterogeneousTargetMoving           CLOSED / PR #23 MERGED
 T7 client presentation                  PASS
 T7 sparse correction recovery           PASS / 5-run soak
 ```
 
 这意味着 Worker-only live path 已从“结构成立”进入“核心链真实可运行”。
 
-Gate 1 尚未整体关闭，因为仍缺：
+Phase 1 尚未整体关闭，因为仍缺：
 
 ```text
-T6-C post-cut formal regression
 network late join / remaining scenarios
 双端 T8 formal runner
 其余被 source cut 影响的 diagnostics
+confirmed unified-behavior migration debt
 ```
 
 ## 4.1 Build / structure
@@ -185,7 +209,7 @@ Worker Target observability 已按只读 ResultApply `Target` / `TargetCohort` o
 
 ---
 
-# 5. Gate 2 — T5 Long-Window Correctness
+# 5. Historical Closed Evidence — T5 Long-Window Correctness
 
 当前状态为 CLOSED ON MAIN：PR #18 已合并，并已在 `main@182f4d8dc856102b3a80ade0dc6506ff678c1d6a` 完成 landing revalidation。
 
@@ -322,7 +346,7 @@ invalid → valid
 
 要求无 stale claim、无超卖、无大规模抢占往返振荡。
 
-## 5.7 Gate 2 验收矩阵
+## 5.7 T5 关闭证据矩阵
 
 至少：
 
@@ -375,7 +399,7 @@ Moving realtime                               0.662 / 0.661 (performance OPEN)
 
 ---
 
-# 6. Gate 3 — Duplicate Kernel / Host Shell Cleanup
+# 6. Phase 1 Migration Backlog — Duplicate Kernel / Host Shell Cleanup
 
 Round Transaction 已删除后，下一类结构债从“跨帧 scheduler”变成了“Demo host 过重与重复实现”。
 
@@ -431,7 +455,7 @@ Diagnostic State
 
 ---
 
-# 7. Gate 4 — Large Particle Island Scaling
+# 7. Phase 2 Prerequisite — Large Particle Island Scaling
 
 当前 Particle 已具备：
 
@@ -479,7 +503,7 @@ Global Exact Validation
 
 ---
 
-# 8. Gate 5 — WA9 Full-Scale Acceptance
+# 8. Phase 2–5 Final Evidence — WA9 Full-Scale Acceptance
 
 WA9 是完整 Production Agent Runtime 验收，不是 WorkRing/Spatial 微基准。
 
@@ -546,7 +570,14 @@ T5 Worker Target runner 当前已能把 demand/plan/guidance/domain rejection �
 - 通过减少实体数量/关闭安全阶段伪造性能 PASS。
 - 没有 profile 证据前重写 Target min-cost flow。
 
-注意：Gate 2 所需的 **finite Cell capacity / transient claim / Overflow** 不属于“永久 Slot 系统”，是当前 Target Region correctness 合同的一部分。
+以下问题明确延期到对应阶段，不在 Phase 0/1 借题调查：
+
+```text
+T2/T3 manual visual abnormality      → Phase 4 Human Visual Acceptance
+UE 5.8 ProcessingQueue editor issue  → Phase 3 Automated Behavior / Visual Acceptance
+```
+
+注意：T5 已关闭所需的 **finite Cell capacity / transient claim / Overflow** 不属于“永久 Slot 系统”，是当前 Target Region correctness 合同的一部分。
 
 `FCrowdTargetRegionTransportKernel::SolveTransport()` 的逐单位增广可能成为大 deficit 热点，但必须先有 profile 证据。
 
@@ -567,4 +598,4 @@ Legacy Round DAG  = physically absent from production
 
 当前最重要的下一动作是：
 
-> **T5 correctness 与 T6-A/T6-B 已关闭；下一步是 T6-C、LateJoin、完整双端 T8，以及后续清理和规模门。Moving realtime 尚未达到最终 performance gate，后续性能工作不得改写为 correctness 回归。**
+> **Phase 0 先把 unified behavior development contract 合入 main；随后 Phase 1 关闭 LateJoin、完整双端 T8、剩余 specialist correctness 与已确认 scenario-coupling migration debt。T6-A、T6-B、T6-C correctness 已关闭；Performance、Automated Behavior / Visual Acceptance、Human Visual Acceptance 均仍 OPEN。**
