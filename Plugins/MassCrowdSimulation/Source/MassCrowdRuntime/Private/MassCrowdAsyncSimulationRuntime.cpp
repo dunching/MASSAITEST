@@ -3,6 +3,8 @@
 #include "HAL/PlatformProcess.h"
 #include "MassCrowdWorkerInteractionDomain.h"
 #include "MassCrowdWorkerCombatState.h"
+#include "MassCrowdWorkerFlowBinding.h"
+#include "MassCrowdWorkerFlowResource.h"
 #include "MassCrowdWorkerMovementAuthority.h"
 #include "MassCrowdWorkerMovementControlResource.h"
 #include "MassCrowdWorkerTargetDomain.h"
@@ -21,6 +23,7 @@ namespace CrowdAsyncSimulationPrivate
       case ECrowdWorkerField::Lifecycle:
       case ECrowdWorkerField::InputSnapshot:
       case ECrowdWorkerField::MovementProfile:
+      case ECrowdWorkerField::FlowBinding:
         return CrowdWorkerRuntimeV2DomainExecutionRank(
           ECrowdWorkerDomainId::LifecycleInput);
       case ECrowdWorkerField::Behavior:
@@ -64,6 +67,7 @@ namespace CrowdAsyncSimulationPrivate
       case ECrowdWorkerField::Lifecycle:
       case ECrowdWorkerField::InputSnapshot:
       case ECrowdWorkerField::MovementProfile:
+      case ECrowdWorkerField::FlowBinding:
         return ECrowdWorkerDomainId::LifecycleInput;
       case ECrowdWorkerField::Behavior:
         return ECrowdWorkerDomainId::Behavior;
@@ -527,6 +531,9 @@ namespace CrowdAsyncSimulationPrivate
           bApplied = Input.InputTypeId == static_cast<uint16>(
               ECrowdWorkerExternalGameplayInputType::
                 MovementProfileRevision)
+              || Input.InputTypeId == static_cast<uint16>(
+                ECrowdWorkerExternalGameplayInputType::
+                  FlowBindingRevision)
             ? Mirror.FindEntity(Input.EntityRef) != INDEX_NONE
             : Mirror.ApplyState(Input);
           break;
@@ -549,8 +556,11 @@ namespace CrowdAsyncSimulationPrivate
         const FCrowdWorkerExternalGameplayInput& Input)
       {
         return Input.InputTypeId != static_cast<uint16>(
-          ECrowdWorkerExternalGameplayInputType::
-            MovementProfileRevision);
+            ECrowdWorkerExternalGameplayInputType::
+              MovementProfileRevision)
+          && Input.InputTypeId != static_cast<uint16>(
+            ECrowdWorkerExternalGameplayInputType::
+              FlowBindingRevision);
       });
   }
 }
@@ -1272,6 +1282,110 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
         continue;
       }
       if (Delta.InputTypeId == static_cast<uint16>(
+          ECrowdWorkerExternalGameplayInputType::FlowBindingRevision))
+      {
+        FCrowdWorkerFlowBinding Binding;
+        if (!FCrowdWorkerFlowBindingCodec::Decode(
+            Delta.FullState, Binding)
+          || Binding.EntityRef != Delta.EntityRef)
+          return false;
+        const bool bHasObjective =
+          ResourceStore.FindCurrent(
+            Binding.ObjectiveRef.ResolveResourceId()) != nullptr
+          || Batch.ObjectiveRevisions.ContainsByPredicate([
+            &Binding](const FCrowdWorkerObjectiveRevisionDelta& Revision)
+          {
+            return Revision.ObjectiveId == Binding.ObjectiveRef.ObjectiveId;
+          });
+        const FCrowdWorkerResourceDelta* BatchFlow =
+          Batch.ResourceDeltas.FindByPredicate([
+            &Binding](const FCrowdWorkerResourceDelta& Resource)
+          {
+            return Resource.ResourceId == Binding.FlowResourceId;
+          });
+        const FCrowdWorkerResourceRecord* CurrentFlow =
+          ResourceStore.FindCurrent(Binding.FlowResourceId);
+        FCrowdWorkerFlowFieldResource DecodedFlow;
+        const bool bHasValidFlow = BatchFlow
+          ? FCrowdWorkerFlowFieldResourceCodec::Decode(
+              BatchFlow->Payload, DecodedFlow)
+            && DecodedFlow.Revision == BatchFlow->Revision
+          : CurrentFlow
+            && FCrowdWorkerFlowFieldResourceCodec::Decode(
+              CurrentFlow->Payload, DecodedFlow)
+            && DecodedFlow.Revision == CurrentFlow->Revision;
+        if (!bHasObjective || !bHasValidFlow)
+          return false;
+
+        FCrowdWorkerDirtyStateRecord BindingRecord;
+        BindingRecord.EntityRef = Delta.EntityRef;
+        BindingRecord.Field = ECrowdWorkerField::FlowBinding;
+        BindingRecord.Generation = Batch.Generation;
+        BindingRecord.WorkerEpoch = FMath::Max<uint64>(1, WorkerEpoch);
+        BindingRecord.StateRevision = Delta.InputSequence;
+        BindingRecord.SourceInputSequence = Delta.InputSequence;
+        BindingRecord.Payload = Delta.FullState;
+        const ECrowdWorkerQueueResult BindingResult =
+          EntityStateStore.ApplyDirty(BindingRecord);
+        if (BindingResult != ECrowdWorkerQueueResult::Added
+          && BindingResult != ECrowdWorkerQueueResult::Replaced
+          && BindingResult != ECrowdWorkerQueueResult::MergedDuplicate)
+          return false;
+
+        bool bRunLocalPredictive = false;
+        const FCrowdWorkerResourceDelta* BatchControl =
+          Batch.ResourceDeltas.FindByPredicate([](
+            const FCrowdWorkerResourceDelta& Resource)
+          {
+            return Resource.ResourceId
+              == CrowdWorkerResourceIds::MovementControl;
+          });
+        if (BatchControl)
+        {
+          FCrowdWorkerMovementControlResource Control;
+          if (!FCrowdWorkerMovementControlResourceCodec::Decode(
+              BatchControl->Payload, Control)
+            || Control.Revision != BatchControl->Revision)
+            return false;
+          bRunLocalPredictive = Control.bRunLocalPredictive;
+        }
+        else if (const FCrowdWorkerResourceRecord* CurrentControl =
+          ResourceStore.FindCurrent(
+            CrowdWorkerResourceIds::MovementControl))
+        {
+          FCrowdWorkerMovementControlResource Control;
+          if (!FCrowdWorkerMovementControlResourceCodec::Decode(
+              CurrentControl->Payload, Control)
+            || Control.Revision != CurrentControl->Revision)
+            return false;
+          bRunLocalPredictive = Control.bRunLocalPredictive;
+        }
+        if (DomainRegistry && DomainRegistry->HasDomain(
+            ECrowdWorkerDomainId::MovementPlanning))
+        {
+          FCrowdWorkerWorkItem Planning;
+          Planning.Key.Domain =
+            ECrowdWorkerDomainId::MovementPlanning;
+          Planning.Key.Kind = bRunLocalPredictive
+            ? ECrowdWorkerWorkKind::Resource
+            : ECrowdWorkerWorkKind::Entity;
+          if (bRunLocalPredictive)
+            Planning.Key.ScopeKey =
+              CrowdWorkerResourceIds::MovementControl;
+          else
+            Planning.Key.PrimaryEntity = Delta.EntityRef;
+          Planning.Priority = ECrowdWorkerWorkPriority::High;
+          Planning.ReasonMask = 1ull << 20;
+          const ECrowdWorkerQueueResult PlanningResult =
+            WorkRing.EnqueueCurrent(MoveTemp(Planning));
+          if (PlanningResult != ECrowdWorkerQueueResult::Added
+            && PlanningResult
+              != ECrowdWorkerQueueResult::MergedDuplicate)
+            return false;
+        }
+        continue;
+      }
+      if (Delta.InputTypeId == static_cast<uint16>(
           ECrowdWorkerExternalGameplayInputType::
             MovementProfileRevision))
       {
@@ -1476,6 +1590,12 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
   bool ApplyWorkerV2MergedOutput(
     FCrowdWorkerDomainOutput& Output)
   {
+    TSet<FCrowdWorkerWorkKey> ReplacedDependents;
+    for (const FCrowdWorkerDependencyDeclaration& Declaration :
+      Output.DeclaredDependencies)
+      ReplacedDependents.Add(Declaration.Dependent.Key);
+    for (const FCrowdWorkerWorkKey& Dependent : ReplacedDependents)
+      DependencyIndex.RemoveDependent(Dependent);
     for (FCrowdWorkerDependencyDeclaration& Declaration :
       Output.DeclaredDependencies)
     {
@@ -2337,6 +2457,32 @@ struct FCrowdAsyncSimulationRuntime::FSharedState
         LastWorkerV2Failure =
           ECrowdWorkerRuntimeV2Failure::ResourceValidation;
         return EWorkerV2AdvanceResult::Failed;
+      }
+      for (const FCrowdWorkerResourceRevisionEvent& Event : ResourceEvents)
+      {
+        if (!CrowdWorkerResourceIds::IsFlowResource(Event.ResourceId))
+          continue;
+        FCrowdWorkerDependencyKey Source;
+        Source.Kind = ECrowdWorkerDependencyKind::Resource;
+        Source.ScopeKey = Event.ResourceId;
+        TArray<FCrowdWorkerWorkItem> Dependents;
+        DependencyIndex.CollectDependents(Source, Dependents);
+        for (FCrowdWorkerWorkItem& Dependent : Dependents)
+        {
+          Dependent.EnqueueEpoch = WorkerEpoch;
+          Dependent.Priority = FMath::Min(
+            Dependent.Priority, ECrowdWorkerWorkPriority::High);
+          Dependent.ReasonMask |= 1ull << 20;
+          const ECrowdWorkerQueueResult Result =
+            WorkRing.EnqueueCurrent(MoveTemp(Dependent));
+          if (Result != ECrowdWorkerQueueResult::Added
+            && Result != ECrowdWorkerQueueResult::MergedDuplicate)
+          {
+            LastWorkerV2Failure =
+              ECrowdWorkerRuntimeV2Failure::WorkQueue;
+            return EWorkerV2AdvanceResult::Failed;
+          }
+        }
       }
 
       TArray<FCrowdWorkerWakeup> DueWakeups;

@@ -100,6 +100,7 @@ OPEN    尚未达到最终完成定义
 | 能力 | 状态 | 当前结论 |
 |---|---|---|
 | Shared Flow | DONE | 世界空间 Macro Guidance。Primary runtime resource 由 `UMassCrowdRuntimeSubsystem` 持有。 |
+| Generic Objective/Cohort/Flow binding | IMPLEMENTED / VALIDATED / SLICE B | Worker entity-level binding 支持多个独立 versioned SharedFlow；MovementPlanning 从当前位置采样；无绑定保留 `Environment` fallback。B1–B7、Core automation 与 headless/server T2–T6 correctness 已通过；T3 迁移仍 OPEN。UE 5.8 rendered Editor/client ProcessingQueue assertion 延期到 Phase 3。 |
 | Moving Objective absolute clock | DONE | Objective effective tick 与 Worker persistent absolute tick 对齐；pre-round uptime 不再混入 objective age。 |
 | Runtime-owned dynamic SharedFlow refresh | DONE | Full Worker Production moving objective 在 intent/resource publish 前刷新 Runtime-owned dynamic SharedFlow；Environment revision 只随语义变化推进。 |
 | Target-relative Polar Transport | DONE / core | Polar Cell / Demand / Plan / Quota / Guidance 已进入 Core + Worker Target Domain。 |

@@ -739,6 +739,29 @@ bool FCrowdWorkerDependencyIndex::ContainsDependency(
   });
 }
 
+int32 FCrowdWorkerDependencyIndex::RemoveDependent(
+  const FCrowdWorkerWorkKey& Dependent)
+{
+  int32 Removed = 0;
+  TArray<FCrowdWorkerDependencyKey> EmptyKeys;
+  for (TPair<
+    FCrowdWorkerDependencyKey,
+    TArray<FCrowdWorkerWorkItem>>& Pair : Edges)
+  {
+    Removed += Pair.Value.RemoveAll(
+      [&Dependent](const FCrowdWorkerWorkItem& Item)
+      {
+        return Item.Key == Dependent;
+      });
+    if (Pair.Value.IsEmpty()) EmptyKeys.Add(Pair.Key);
+  }
+  for (const FCrowdWorkerDependencyKey& Key : EmptyKeys)
+    Edges.Remove(Key);
+  EdgeCount -= Removed;
+  check(EdgeCount >= 0);
+  return Removed;
+}
+
 int32 FCrowdWorkerDependencyIndex::RemoveEntity(
   const FCrowdStableEntityRef& EntityRef)
 {

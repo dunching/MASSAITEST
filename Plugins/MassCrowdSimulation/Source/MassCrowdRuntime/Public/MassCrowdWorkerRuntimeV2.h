@@ -73,7 +73,8 @@ enum class ECrowdWorkerField : uint8
   MovementPlan = 11,
   TargetCohort = 12,
   MovementProfile = 13,
-  Count = 14
+  FlowBinding = 14,
+  Count = 15
 };
 
 // Stable public domain IDs are append-only and therefore cannot also encode
@@ -434,6 +435,7 @@ public:
   bool ContainsDependency(
     const FCrowdWorkerDependencyKey& Source,
     const FCrowdWorkerWorkKey& Dependent) const;
+  int32 RemoveDependent(const FCrowdWorkerWorkKey& Dependent);
   int32 RemoveEntity(const FCrowdStableEntityRef& EntityRef);
   void GetRecords(
     TArray<FCrowdWorkerDependencyRecord>& OutRecords) const;

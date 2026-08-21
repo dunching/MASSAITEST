@@ -630,6 +630,8 @@ Demo-specific test and visualization support
 
 `MassCrowdSimulation` Plugin production Core/Runtime 当前没有 Demo scenario/test/map-name simulation branch；已确认的 scenario-driven simulation coupling 位于 Demo host/bootstrap。它们是后续代码迁移债，本轮文档切片不修改其行为：
 
+Worker Runtime 现已具备并通过 headless/server correctness 回归验证的、独立于 `MovementProfile` 的 entity-level `FlowBinding`：稳定 `ObjectiveRef`、显式 `CohortKey` 与 generic `FlowResourceId` 共同选择独立 versioned SharedFlow。MovementPlanning 对显式绑定从当前 Worker kinematic position 采样对应 Flow；无绑定实体仍使用既有 `Environment` fallback。该能力只完成通用路由合同，T3 尚未迁移，仍保留旧 `FormationIndex` / authoritative preferred-velocity path，后续 Slice C 才迁移 Demo fixture。UE 5.8 rendered Editor/client Mass ProcessingQueue assertion 继续延期到 Phase 3，不属于 Slice B Runtime correctness blocker。
+
 | 范围 | 已确认迁移债 | 目标合同 |
 |---|---|---|
 | T3 | `FormationIndex` 选择 Flow；authoritative preferred-velocity bypass | 显式 `ObjectiveRef` / `CohortKey` / Flow association，进入通用 Movement Planning |
